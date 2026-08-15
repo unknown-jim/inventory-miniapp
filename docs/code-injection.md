@@ -20,7 +20,7 @@
 | JS / WXSS / WXML 压缩 | 已开（`project.config.json`） |
 | 上传过滤无依赖文件 | **关闭**。开发者工具的无依赖分析会漏掉 `require` / `@import` / `<include>` 的送货单文件，主包加载失败后看板白屏 |
 | 必须打进包的文件 | `utils/slip-actions.js`、`utils/slip-image.js`、`styles/slip.wxss`、`pages/common/slip-overlay.wxml` 写在 `packOptions.include` |
-| 不进代码包 | `tests/`、`node_modules`、`docs/`、仓库说明与 npm 清单已在 `packOptions.ignore` |
+| 不进代码包 | `.git/`、`tests/`、`node_modules`、`docs/`、仓库说明与 npm 清单已在 `packOptions.ignore` |
 | 基础库 | `3.8.0`（高于按需注入 2.11.1、用时注入 2.11.2） |
 | 相册权限 | 不要写 `permission["scope.writePhotosAlbum"]`。`permission` 只认地理位置；`requiredPrivateInfos` 也只认地理位置接口。用途说明放后台「用户隐私保护指引」，运行时弹窗在 `utils/slip-image.js` |
 
