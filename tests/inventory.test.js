@@ -216,6 +216,75 @@ assert.throws(function () {
   }, 8400, 'r-pay-over')
 }, /超过/)
 
+assert.throws(function () {
+  inv.applyOpening([], { amount: 80 }, 8410, 'r-open-no-customer')
+}, /客户/)
+assert.throws(function () {
+  inv.applyOpening([], { customerId: 'c1', amount: 0 }, 8415, 'r-open-zero')
+}, /期初欠款/)
+
+const opened = inv.applyOpening(purchased.records, {
+  customerId: 'c-open',
+  customerName: '旧账客户',
+  amount: 80,
+  remark: '上线前欠款'
+}, 8420, 'r-open')
+assert.strictEqual(opened.record.type, 'opening')
+assert.strictEqual(opened.record.profit, 0)
+assert.strictEqual(inv.summarizeCustomerAccount(opened.records, 'c-open').receivable, 80)
+assert.strictEqual(inv.summarizeCustomerAccount(opened.records, 'c-open').count, 0)
+assert.strictEqual(inv.summarizeCustomerAccount(opened.records, 'c-open').amount, 0)
+assert.strictEqual(inv.getTotalReceivable(opened.records), 80)
+assert.strictEqual(purchased.products[0].stock, 15)
+
+const openDash = inv.getDashboard(purchased.products, opened.records, now)
+assert.strictEqual(openDash.todaySalesAmount, 0)
+assert.strictEqual(openDash.todayProfit, 0)
+assert.strictEqual(openDash.totalReceivable, 80)
+
+const openPaid = inv.applyPayment(opened.records, {
+  customerId: 'c-open',
+  customerName: '旧账客户',
+  amount: 30
+}, 8430, 'r-open-pay')
+assert.strictEqual(inv.summarizeCustomerAccount(openPaid.records, 'c-open').receivable, 50)
+assert.throws(function () {
+  inv.applyPayment(openPaid.records, {
+    customerId: 'c-open',
+    amount: 51
+  }, 8440, 'r-open-pay-over')
+}, /超过/)
+
+const openEdited = inv.updateRecord(purchased.products, openPaid.records, {
+  id: 'r-open',
+  amount: 90
+}, 8450, [])
+assert.strictEqual(inv.summarizeCustomerAccount(openEdited.records, 'c-open').receivable, 60)
+
+assert.throws(function () {
+  inv.updateRecord(purchased.products, openPaid.records, {
+    id: 'r-open',
+    amount: 20
+  }, 8460, [])
+}, /超过赊账/)
+
+assert.throws(function () {
+  inv.deleteRecord(purchased.products, openPaid.records, 'r-open', 8470, [])
+}, /超过赊账/)
+
+const openDeleted = inv.deleteRecord(purchased.products, opened.records, 'r-open', 8480, [])
+assert.strictEqual(inv.summarizeCustomerAccount(openDeleted.records, 'c-open').receivable, 0)
+assert.strictEqual(openDeleted.products[0].stock, 15)
+
+const mixedOpen = inv.applyOpening(creditSale.records, {
+  customerId: 'c1',
+  customerName: '张三超市',
+  amount: 10
+}, 8490, 'r-open-c1')
+assert.strictEqual(inv.summarizeCustomerAccount(mixedOpen.records, 'c1').receivable, 19)
+assert.strictEqual(inv.summarizeCustomerAccount(mixedOpen.records, 'c1').amount, 9)
+assert.strictEqual(inv.summarizeCustomerAccount(mixedOpen.records, 'c1').count, 1)
+
 const customerSales = inv.summarizeCustomerAccount(soldToCustomer.records, 'c1')
 assert.strictEqual(customerSales.count, 1)
 assert.strictEqual(customerSales.amount, 4.5)

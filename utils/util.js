@@ -116,6 +116,7 @@ function withRecordView(record) {
   const isIn = record.type === 'in'
   const isOut = record.type === 'out'
   const isPay = record.type === 'pay'
+  const isOpening = record.type === 'opening'
   const isReturn = record.type === 'return'
   const isConvert = record.type === 'convert'
   const isCredit = isOut && record.payType === 'credit'
@@ -126,6 +127,7 @@ function withRecordView(record) {
   let typeText = '销售'
   if (isIn) typeText = '进货'
   else if (isPay) typeText = '收款'
+  else if (isOpening) typeText = '期初'
   else if (isReturn) typeText = '退货'
   else if (isConvert) typeText = '改规格'
   else if (isCredit) typeText = '赊账'
@@ -136,6 +138,7 @@ function withRecordView(record) {
     isIn: isIn,
     isOut: isOut,
     isPay: isPay,
+    isOpening: isOpening,
     isReturn: isReturn,
     isConvert: isConvert,
     isCredit: isCredit,
@@ -144,12 +147,12 @@ function withRecordView(record) {
     typeText: typeText,
     tagClass: isPay
       ? 'tag-pay'
-      : (isIn ? 'tag-in' : (isReturn ? 'tag-return' : (isConvert ? 'tag-convert' : (isCredit ? 'tag-credit' : 'tag-out')))),
+      : (isOpening || isCredit ? 'tag-credit' : (isIn ? 'tag-in' : (isReturn ? 'tag-return' : (isConvert ? 'tag-convert' : 'tag-out')))),
     timeText: formatTime(record.createdAt),
     amountText: money(record.amount),
     priceText: money(record.unitPrice),
     profitText: money(record.profit),
-    qtyText: isPay ? '' : String(record.qty),
+    qtyText: isPay || isOpening ? '' : String(record.qty),
     customerText: record.customerName || '',
     specText: specText,
     hasSpec: !!specText

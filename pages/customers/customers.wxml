@@ -13,7 +13,7 @@
   </view>
 
   <view class="card goods-card" wx:for="{{list}}" wx:key="id">
-    <view class="goods-main" data-id="{{item.id}}" bindtap="goEdit">
+    <view class="goods-main js-customer-item" data-id="{{item.id}}" bindtap="goEdit">
       <view class="goods-top">
         <view class="item-name">{{item.name}}</view>
         <text class="tag {{item.hasDebt ? 'tag-credit' : 'tag-ok'}}">{{item.hasDebt ? '欠款' : item.saleCount + ' 笔'}}</text>
@@ -24,7 +24,7 @@
       <view class="price-row debt" wx:if="{{item.hasDebt}}">欠款 ¥{{item.receivableText}}</view>
     </view>
     <view class="goods-actions">
-      <button wx:if="{{item.hasDebt}}" class="btn-ghost mini" data-id="{{item.id}}" catchtap="goCollect">收款</button>
+      <button wx:if="{{item.hasDebt}}" class="btn-ghost mini js-collect" data-id="{{item.id}}" catchtap="goCollect">收款</button>
       <button class="btn-ghost mini warm" data-id="{{item.id}}" catchtap="goSale">去销售</button>
     </view>
   </view>

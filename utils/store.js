@@ -288,6 +288,23 @@ function addPayment(payload) {
   return result.record
 }
 
+function addOpening(payload) {
+  const customer = getCustomer(payload.customerId)
+  if (!customer) {
+    throw new Error('客户不存在')
+  }
+  const result = inventory.applyOpening(getRecords(), {
+    customerId: customer.id,
+    customerName: customer.name,
+    customerPhone: customer.phone,
+    customerAddress: customer.address,
+    amount: payload.amount,
+    remark: payload.remark
+  }, Date.now(), uid())
+  writeList(KEYS.records, result.records)
+  return result.record
+}
+
 function customerSnapshot(customerId) {
   if (!customerId) {
     return {
@@ -388,6 +405,7 @@ module.exports = {
   addReturn: addReturn,
   addConvert: addConvert,
   addPayment: addPayment,
+  addOpening: addOpening,
   updateRecord: updateRecord,
   deleteRecord: deleteRecord,
   loadSeed: loadSeed,

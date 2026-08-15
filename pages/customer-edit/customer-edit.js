@@ -10,6 +10,7 @@ Page({
     phone: '',
     address: '',
     remark: '',
+    openingAmount: '',
     saleCount: 0,
     saleAmountText: '0.00',
     receivable: 0,
@@ -18,7 +19,9 @@ Page({
     ledger: [],
     showPay: false,
     payAmount: '',
-    payRemark: ''
+    payRemark: '',
+    showOpening: false,
+    openingRemark: ''
   },
 
   onLoad(query) {
@@ -83,6 +86,7 @@ Page({
     }
     this.setData({
       showPay: true,
+      showOpening: false,
       payAmount: util.money(this.data.receivable),
       payRemark: ''
     })
@@ -109,8 +113,46 @@ Page({
     }
   },
 
+  openOpening() {
+    this.setData({
+      showOpening: true,
+      showPay: false,
+      openingAmount: '',
+      openingRemark: ''
+    })
+  },
+
+  closeOpening() {
+    this.setData({ showOpening: false })
+  },
+
+  keepOpening() {},
+
+  submitOpening() {
+    try {
+      store.addOpening({
+        customerId: this.data.id,
+        amount: this.data.openingAmount,
+        remark: this.data.openingRemark
+      })
+      this.setData({ showOpening: false })
+      this.fillCustomer(this.data.id)
+      wx.showToast({ title: '已记账', icon: 'success' })
+    } catch (error) {
+      util.showError(error)
+    }
+  },
+
   save() {
     try {
+      const openingText = String(this.data.openingAmount || '').trim()
+      let opening = 0
+      if (!this.data.isEdit && openingText) {
+        opening = inventory.round2(openingText)
+        if (opening <= 0) {
+          throw new Error('期初欠款必须大于 0')
+        }
+      }
       const saved = store.saveCustomer({
         id: this.data.id,
         name: this.data.name,
@@ -118,6 +160,13 @@ Page({
         address: this.data.address,
         remark: this.data.remark
       })
+      if (opening > 0) {
+        store.addOpening({
+          customerId: saved.id,
+          amount: opening,
+          remark: '上线前欠款'
+        })
+      }
       if (this.selectAfterSave) {
         getApp().setSelectedCustomer(saved.id)
       }

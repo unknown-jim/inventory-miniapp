@@ -159,6 +159,28 @@ async function runRecordSlipExport(miniProgram) {
   await miniProgram.navigateBack()
 }
 
+async function runOpeningSheet(miniProgram) {
+  step('客户页：记期初欠款，弹出层并确认')
+  const list = await miniProgram.navigateTo('/pages/customers/customers')
+  await list.waitFor('.js-customer-item')
+  await tap(list, '.js-customer-item')
+
+  await list.waitFor(800)
+  const edit = await miniProgram.currentPage()
+  assert.ok(edit.path.indexOf('customer-edit') >= 0, '未进入客户编辑页: ' + edit.path)
+  await edit.waitFor('.js-opening')
+  await tapWhen(edit, '.js-opening')
+  await edit.waitFor('.js-opening-sheet')
+  const amount = await edit.$('.js-opening-amount')
+  if (!amount) {
+    throw new Error('找不到期初欠款金额输入框')
+  }
+  await amount.input('20')
+  await tapWhen(edit, '.js-opening-submit')
+  await waitGone(edit, '.js-opening-sheet')
+  await miniProgram.navigateBack()
+}
+
 async function runPaySheet(miniProgram) {
   step('客户页：点收款，弹出收款层并确认')
   const list = await miniProgram.navigateTo('/pages/customers/customers')
@@ -206,6 +228,7 @@ async function run() {
     await seedFromHome(miniProgram)
     await runSalePickerAndSlip(miniProgram)
     await runRecordSlipExport(miniProgram)
+    await runOpeningSheet(miniProgram)
     await runPaySheet(miniProgram)
     await runNativeClearModal(miniProgram)
     console.log('ui tests passed')

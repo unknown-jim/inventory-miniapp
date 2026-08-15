@@ -2,11 +2,11 @@
   <view class="card">
     <view class="field">
       <view class="field-label">客户名称</view>
-      <input class="field-input" data-field="name" value="{{name}}" bindinput="onField" placeholder="例如 张三超市" hidden="{{showPay}}" />
+      <input class="field-input" data-field="name" value="{{name}}" bindinput="onField" placeholder="例如 张三超市" hidden="{{showPay || showOpening}}" />
     </view>
     <view class="field">
       <view class="field-label">电话</view>
-      <input class="field-input" data-field="phone" value="{{phone}}" bindinput="onField" placeholder="可选" hidden="{{showPay}}" />
+      <input class="field-input" data-field="phone" value="{{phone}}" bindinput="onField" placeholder="可选" hidden="{{showPay || showOpening}}" />
     </view>
     <view class="field">
       <view class="field-label">送货地址</view>
@@ -18,14 +18,18 @@
         placeholder="可选"
         maxlength="200"
         auto-height
-        hidden="{{showPay}}"
+        hidden="{{showPay || showOpening}}"
       />
     </view>
-    <view class="field last">
+    <view class="field {{isEdit ? 'last' : ''}}">
       <view class="field-label">内部备注</view>
-      <input class="field-input" data-field="remark" value="{{remark}}" bindinput="onField" placeholder="仅自己可见" hidden="{{showPay}}" />
+      <input class="field-input" data-field="remark" value="{{remark}}" bindinput="onField" placeholder="仅自己可见" hidden="{{showPay || showOpening}}" />
     </view>
-    <view class="muted tip">内部备注不会出现在送货单上。</view>
+    <view class="field last" wx:if="{{!isEdit}}">
+      <view class="field-label">上线前欠款</view>
+      <input class="field-input" type="digit" data-field="openingAmount" value="{{openingAmount}}" bindinput="onField" placeholder="没有就留空" />
+    </view>
+    <view class="muted tip">内部备注不会出现在送货单上。<text wx:if="{{!isEdit}}">上线前欠款只记应收，不改库存、不计入销售。</text></view>
   </view>
 
   <block wx:if="{{isEdit}}">
@@ -33,7 +37,8 @@
       <view class="muted">当前欠款</view>
       <view class="debt-num {{hasDebt ? 'on' : ''}}">¥{{receivableText}}</view>
       <view class="muted">累计销售 {{saleCount}} 笔 · ¥{{saleAmountText}}</view>
-      <button wx:if="{{hasDebt}}" class="btn-primary collect-btn" bindtap="openPay" hidden="{{showPay}}">收款</button>
+      <button wx:if="{{hasDebt}}" class="btn-primary collect-btn js-pay-open" bindtap="openPay" hidden="{{showPay || showOpening}}">收款</button>
+      <button class="btn-ghost opening-btn js-opening" bindtap="openOpening" hidden="{{showPay || showOpening}}">记期初欠款</button>
     </view>
 
     <view class="section-title">
@@ -51,14 +56,14 @@
         </view>
       </view>
     </view>
-    <view wx:else class="card quiet">还没有销售或收款记录</view>
+    <view wx:else class="card quiet">还没有往来记录</view>
   </block>
 
-  <button class="btn-primary save-btn" bindtap="save" hidden="{{showPay}}">保存</button>
-  <button wx:if="{{isEdit && phone}}" class="btn-ghost call-btn" bindtap="callPhone" hidden="{{showPay}}">拨打电话</button>
-  <button wx:if="{{isEdit}}" class="btn-danger" bindtap="remove" hidden="{{showPay}}">删除客户</button>
+  <button class="btn-primary save-btn" bindtap="save" hidden="{{showPay || showOpening}}">保存</button>
+  <button wx:if="{{isEdit && phone}}" class="btn-ghost call-btn" bindtap="callPhone" hidden="{{showPay || showOpening}}">拨打电话</button>
+  <button wx:if="{{isEdit}}" class="btn-danger" bindtap="remove" hidden="{{showPay || showOpening}}">删除客户</button>
 
-  <view wx:if="{{showPay}}" class="mask" bindtap="closePay">
+  <view wx:if="{{showPay}}" class="mask js-pay-sheet" bindtap="closePay">
     <view class="sheet" catchtap="keepPay">
       <view class="sheet-title">收款</view>
       <view class="muted pay-hint">当前欠款 ¥{{receivableText}}，不能超过这个金额。</view>
@@ -70,7 +75,23 @@
         <view class="field-label">备注</view>
         <input class="field-input" data-field="payRemark" value="{{payRemark}}" bindinput="onField" placeholder="可选" />
       </view>
-      <button class="btn-primary" bindtap="submitPay">确认收款</button>
+      <button class="btn-primary js-pay-submit" bindtap="submitPay">确认收款</button>
+    </view>
+  </view>
+
+  <view wx:if="{{showOpening}}" class="mask js-opening-sheet" bindtap="closeOpening">
+    <view class="sheet" catchtap="keepOpening">
+      <view class="sheet-title">期初欠款</view>
+      <view class="muted pay-hint">使用本程序前已经欠的钱。只加欠款，不改库存、不计入销售。</view>
+      <view class="field">
+        <view class="field-label">欠款金额</view>
+        <input class="field-input js-opening-amount" type="digit" data-field="openingAmount" value="{{openingAmount}}" bindinput="onField" placeholder="0.00" />
+      </view>
+      <view class="field">
+        <view class="field-label">备注</view>
+        <input class="field-input" data-field="openingRemark" value="{{openingRemark}}" bindinput="onField" placeholder="例如 上线前旧账" />
+      </view>
+      <button class="btn-primary js-opening-submit" bindtap="submitOpening">确认记账</button>
     </view>
   </view>
 </view>
