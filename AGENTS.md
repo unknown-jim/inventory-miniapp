@@ -6,6 +6,7 @@
 
 1. [docs/git-workflow.md](docs/git-workflow.md)：从 `main` 新建 worktree 和分支。不满足这一条就不要改文件。
 2. [docs/code-injection.md](docs/code-injection.md)：按需注入、用时注入、分包时机、代码质量扫描。
+3. [docs/commit-and-pr.md](docs/commit-and-pr.md)：提交说明和 Pull Request 描述。写 commit 或开 PR 时必须遵守。
 
 ## 硬约束（摘要）
 
@@ -15,6 +16,7 @@
 - 每次任务：`git fetch origin`（有远程时）→ `git worktree add -b <前缀>/<短名> ../inventory-miniapp-<短名> origin/main`（无远程则基线用 `main`）→ **把工作区切到新目录** → 再改文件。
 - 主工作树永远停在 `main`，不要在里面切换分支。
 - 不要复用上一任务的工作树做下一件无关的事。
+- 提交说明和 PR 描述遵守 [docs/commit-and-pr.md](docs/commit-and-pr.md)：祈使句首行、写清为什么改、一次 PR 只做一件自包含的事。
 
 ### 代码注入
 
