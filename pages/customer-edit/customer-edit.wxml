@@ -43,7 +43,7 @@
       <view class="list-item" wx:for="{{ledger}}" wx:key="id" data-id="{{item.id}}" bindtap="goRecord">
         <view>
           <view class="item-name">{{item.productName}}</view>
-          <view class="muted">{{item.timeText}}<text wx:if="{{item.isOut}}"> · {{item.qtyText}} 件</text></view>
+          <view class="muted">{{item.timeText}}<text wx:if="{{item.isOut}}"> · {{item.qtyText}} 件</text><text wx:if="{{item.isMulti}}"> · {{item.lineCount}} 种</text></view>
         </view>
         <view class="item-right">
           <text class="tag {{item.tagClass}}">{{item.typeText}}</text>

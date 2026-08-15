@@ -800,8 +800,12 @@ function summarizeCustomerAccount(records, customerId) {
       return sum + toNumber(item.amount)
     }, 0)
   )
+  const saleOrders = {}
+  sales.forEach(function (item) {
+    saleOrders[saleOrderIdOf(item)] = true
+  })
   return {
-    count: sales.length,
+    count: Object.keys(saleOrders).length,
     amount: saleAmount,
     creditAmount: creditAmount,
     paidAmount: paidAmount,
@@ -1201,6 +1205,64 @@ function buildSaleOrder(records, record) {
   return makeSaleOrder(saleOrderIdOf(first), orderRecords, first, first.createdAt)
 }
 
+function orderProductTitle(orderRecords) {
+  const names = []
+  ;(orderRecords || []).forEach(function (item) {
+    const name = item.productName || ''
+    if (name && names.indexOf(name) < 0) names.push(name)
+  })
+  if (names.length <= 2) return names.join('、')
+  return names[0] + '、' + names[1] + ' 等' + names.length + '种'
+}
+
+function groupRecords(records) {
+  const seen = {}
+  const list = []
+  ;(records || []).forEach(function (item) {
+    if (item.type !== 'out') {
+      list.push(item)
+      return
+    }
+    const orderId = saleOrderIdOf(item)
+    if (seen[orderId]) return
+    seen[orderId] = true
+    const orderRecords = saleOrderRecords(records, item)
+    const first = orderRecords[0] || item
+    const lineCount = orderRecords.length || 1
+    list.push({
+      id: first.id,
+      type: 'out',
+      orderId: orderId,
+      productId: first.productId,
+      productName: orderProductTitle(orderRecords),
+      sku: lineCount === 1 ? first.sku : '',
+      skuId: lineCount === 1 ? first.skuId : '',
+      color: lineCount === 1 ? first.color : '',
+      size: lineCount === 1 ? first.size : '',
+      qty: round2(orderRecords.reduce(function (sum, line) {
+        return sum + toNumber(line.qty)
+      }, 0)),
+      unitPrice: lineCount === 1 ? first.unitPrice : 0,
+      costPrice: first.costPrice,
+      amount: round2(orderRecords.reduce(function (sum, line) {
+        return sum + toNumber(line.amount)
+      }, 0)),
+      profit: round2(orderRecords.reduce(function (sum, line) {
+        return sum + toNumber(line.profit)
+      }, 0)),
+      remark: first.remark,
+      customerId: first.customerId,
+      customerName: first.customerName,
+      customerPhone: first.customerPhone,
+      customerAddress: first.customerAddress,
+      payType: first.payType,
+      createdAt: first.createdAt,
+      lineCount: lineCount
+    })
+  })
+  return list
+}
+
 function receivableAt(records, customerId, at) {
   if (!customerId) return 0
   const ts = toNumber(at)
@@ -1348,6 +1410,44 @@ function updateRecord(products, records, payload, now, skus) {
   }
 
   const existing = records[index]
+
+  if (existing.type === 'out' && payload.items && payload.items.length) {
+    const allowed = {}
+    saleOrderRecords(records, existing).forEach(function (item) {
+      allowed[item.id] = true
+    })
+    let workingProducts = products
+    let workingRecords = records
+    let workingSkus = skus || []
+    let last = existing
+    payload.items.forEach(function (item) {
+      if (!allowed[item.id]) {
+        throw new Error('流水不存在')
+      }
+      const result = updateRecord(workingProducts, workingRecords, {
+        id: item.id,
+        qty: item.qty,
+        unitPrice: item.unitPrice,
+        remark: payload.remark,
+        payType: payload.payType,
+        customerId: payload.customerId,
+        customerName: payload.customerName,
+        customerPhone: payload.customerPhone,
+        customerAddress: payload.customerAddress
+      }, now, workingSkus)
+      workingProducts = result.products
+      workingRecords = result.records
+      workingSkus = result.skus
+      last = result.record
+    })
+    return {
+      products: workingProducts,
+      skus: workingSkus,
+      records: workingRecords,
+      record: last
+    }
+  }
+
   let next = Object.assign({}, existing)
   let nextProducts = products
   let nextSkus = skus || []
@@ -1508,7 +1608,8 @@ function updateRecord(products, records, payload, now, skus) {
       customerId: next.customerId,
       customerName: next.customerName,
       customerPhone: next.customerPhone,
-      customerAddress: next.customerAddress
+      customerAddress: next.customerAddress,
+      remark: next.remark
     })
   }
 
@@ -1530,23 +1631,9 @@ function updateRecord(products, records, payload, now, skus) {
   }
 }
 
-function deleteRecord(products, records, id, now, skus) {
-  const existing = records.find(function (item) {
-    return item.id === id
-  })
-  if (!existing) {
-    throw new Error('流水不存在')
-  }
-
-  if (existing.type === 'out' && saleReturnQty(records, existing.id) > 0) {
-    throw new Error('请先删除退货记录')
-  }
-
+function restoreRecordStock(products, skus, existing, now) {
   let nextProducts = products
   let nextSkus = (skus || []).slice()
-  const nextRecords = records.filter(function (item) {
-    return item.id !== id
-  })
 
   if (existing.type === 'out' && existing.allocations && existing.allocations.length) {
     const product = products.find(function (item) {
@@ -1594,6 +1681,50 @@ function deleteRecord(products, records, id, now, skus) {
       })
     }
   }
+
+  return {
+    products: nextProducts,
+    skus: nextSkus
+  }
+}
+
+function deleteRecord(products, records, id, now, skus) {
+  const existing = records.find(function (item) {
+    return item.id === id
+  })
+  if (!existing) {
+    throw new Error('流水不存在')
+  }
+
+  const targets = existing.type === 'out'
+    ? saleOrderRecords(records, existing)
+    : [existing]
+
+  if (existing.type === 'out') {
+    const hasReturn = targets.some(function (item) {
+      return saleReturnQty(records, item.id) > 0
+    })
+    if (hasReturn) {
+      throw new Error('请先删除退货记录')
+    }
+  }
+
+  const removeIds = {}
+  targets.forEach(function (item) {
+    removeIds[item.id] = true
+  })
+
+  let nextProducts = products
+  let nextSkus = skus || []
+  targets.forEach(function (target) {
+    const restored = restoreRecordStock(nextProducts, nextSkus, target, now)
+    nextProducts = restored.products
+    nextSkus = restored.skus
+  })
+
+  let nextRecords = records.filter(function (item) {
+    return !removeIds[item.id]
+  })
 
   if (existing.type === 'in') {
     const costed = applyLatestPurchaseCost(nextProducts, nextSkus, nextRecords, existing.productId, existing.skuId, now)
@@ -1652,7 +1783,7 @@ function getDashboard(products, records, now, skus) {
     totalReceivable: getTotalReceivable(records),
     alertCount: alerts.length,
     alerts: alerts,
-    recent: records.slice(0, 10)
+    recent: groupRecords(records).slice(0, 10)
   }
 }
 
@@ -1917,6 +2048,7 @@ module.exports = {
   applyReturn: applyReturn,
   applyReturnOrder: applyReturnOrder,
   buildSaleOrder: buildSaleOrder,
+  groupRecords: groupRecords,
   receivableAt: receivableAt,
   applyPayment: applyPayment,
   updateRecord: updateRecord,

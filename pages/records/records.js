@@ -21,13 +21,14 @@ Page({
     const all = store.getRecords()
     const records = inventory.filterRecords(all, this.data.type)
     const summary = inventory.summarizeRecords(all)
+    const list = inventory.groupRecords(records)
     this.setData({
-      list: records.map(util.withRecordView),
+      list: list.map(util.withRecordView),
       salesAmount: util.money(summary.salesAmount),
       purchaseAmount: util.money(summary.purchaseAmount),
       profit: util.money(summary.profit),
       receivable: util.money(summary.receivable),
-      count: records.length
+      count: list.length
     })
   },
 

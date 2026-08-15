@@ -4,11 +4,15 @@
       <view class="field-label">类型</view>
       <view class="field-input readonly">{{typeText}}</view>
     </view>
-    <view class="field">
-      <view class="field-label">{{isPay ? '客户' : '商品'}}</view>
-      <view class="field-input readonly">{{isPay ? customerName : productName}}</view>
+    <view class="field" wx:if="{{isPay}}">
+      <view class="field-label">客户</view>
+      <view class="field-input readonly">{{customerName}}</view>
     </view>
-    <view class="field" wx:if="{{specText}}">
+    <view class="field" wx:if="{{!isPay && !isOut}}">
+      <view class="field-label">商品</view>
+      <view class="field-input readonly">{{productName}}</view>
+    </view>
+    <view class="field" wx:if="{{specText && !isOut}}">
       <view class="field-label">规格</view>
       <view class="field-input readonly">{{specText}}</view>
     </view>
@@ -29,33 +33,61 @@
     </view>
   </view>
 
-  <view class="card form-card" wx:else>
-    <view class="field" wx:if="{{isOut}}">
+  <view class="card form-card" wx:elif="{{isOut}}">
+    <view class="field">
       <view class="field-label">客户</view>
       <view class="field-input picker" bindtap="openCustomerPicker">{{customerName}}</view>
     </view>
-    <view class="customer-meta" wx:if="{{isOut && (customerPhone || customerAddress)}}">
+    <view class="customer-meta" wx:if="{{customerPhone || customerAddress}}">
       {{customerPhone}}<text wx:if="{{customerPhone && customerAddress}}"> · </text>{{customerAddress}}
     </view>
-    <view class="field" wx:if="{{isOut}}">
+    <view class="field">
       <view class="field-label">结算</view>
       <view class="pay-tabs">
         <view class="pay-tab {{payType === 'cash' ? 'on' : ''}}" data-type="cash" bindtap="setPayType">现结</view>
         <view class="pay-tab {{payType === 'credit' ? 'on' : ''}}" data-type="credit" bindtap="setPayType">赊账</view>
       </view>
     </view>
+    <view class="order-lines">
+      <view class="line-block" wx:for="{{lines}}" wx:key="id">
+        <view class="item-name">{{item.productName}}</view>
+        <view class="muted" wx:if="{{item.hasSpec}}">{{item.specText}}</view>
+        <view class="field-row">
+          <view class="field half">
+            <view class="field-label">数量</view>
+            <input class="field-input" type="digit" data-id="{{item.id}}" data-field="qty" value="{{item.qty}}" bindinput="onLineField" placeholder="0" hidden="{{showCustomerPicker}}" />
+          </view>
+          <view class="field half">
+            <view class="field-label">售价</view>
+            <input class="field-input" type="digit" data-id="{{item.id}}" data-field="unitPrice" value="{{item.unitPrice}}" bindinput="onLineField" placeholder="0.00" hidden="{{showCustomerPicker}}" />
+          </view>
+        </view>
+        <view class="meta">进价快照 ¥{{item.costText}} · 本行毛利 ¥{{item.profitText}}</view>
+      </view>
+    </view>
+    <view class="total">
+      <text>本单金额</text>
+      <text class="total-num">¥{{amountText}}</text>
+    </view>
+    <view class="field last">
+      <view class="field-label">备注</view>
+      <input class="field-input" data-field="remark" value="{{remark}}" bindinput="onField" placeholder="可选" hidden="{{showCustomerPicker}}" />
+    </view>
+  </view>
+
+  <view class="card form-card" wx:else>
     <view class="field-row">
       <view class="field {{isConvert ? 'last' : 'half'}}">
         <view class="field-label">数量</view>
         <input class="field-input" type="digit" data-field="qty" value="{{qty}}" bindinput="onField" placeholder="0" hidden="{{showCustomerPicker}}" />
       </view>
       <view class="field half" wx:if="{{!isConvert}}">
-        <view class="field-label">{{isIn ? '进价' : (isReturn ? '退货单价' : '售价')}}</view>
+        <view class="field-label">{{isIn ? '进价' : '退货单价'}}</view>
         <input wx:if="{{!isReturn}}" class="field-input" type="digit" data-field="unitPrice" value="{{unitPrice}}" bindinput="onField" placeholder="0.00" hidden="{{showCustomerPicker}}" />
         <view wx:else class="field-input readonly">{{unitPrice}}</view>
       </view>
     </view>
-    <view class="meta" wx:if="{{isOut || isReturn}}">进价快照 ¥{{costText}} · 本行毛利 ¥{{profitText}}</view>
+    <view class="meta" wx:if="{{isReturn}}">进价快照 ¥{{costText}} · 本行毛利 ¥{{profitText}}</view>
     <view class="total">
       <text>金额</text>
       <text class="total-num">¥{{amountText}}</text>
@@ -66,7 +98,7 @@
     </view>
   </view>
 
-  <view class="muted tip">改数量会同步改库存。记错商品请删除后重新开单。<text wx:if="{{hasOrder && isOut}}">同一张送货单的客户和结算会一起改。</text></view>
+  <view class="muted tip">改数量会同步改库存。记错商品请删除后重新开单。<text wx:if="{{isOut}}">删除销售会去掉本单全部商品。同一张送货单的客户、结算和备注会一起改。</text></view>
 
   <button wx:if="{{canReturn}}" class="btn-ghost export-btn" bindtap="goReturn" hidden="{{showCustomerPicker || showSlip}}">退货入库</button>
   <button wx:if="{{isOut}}" class="btn-ghost export-btn js-export-slip" bindtap="openSlip" hidden="{{showCustomerPicker || showSlip}}">导出送货单</button>
