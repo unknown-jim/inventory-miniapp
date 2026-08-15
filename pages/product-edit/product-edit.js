@@ -47,7 +47,11 @@ Page({
     specTip: '',
     blankProcess: false,
     blankStock: '',
-    blankStockText: ''
+    blankStockText: '',
+    categories: [],
+    categoryId: '',
+    nameSuggest: [],
+    sharedPrice: true
   },
 
   onLoad(query) {
@@ -64,6 +68,13 @@ Page({
     const margin = inventory.calcMargin(product.costPrice, product.salePrice)
     const kind = productKindOf(product)
     const blank = inventory.findBlankSku(skus, product.id)
+    const skuRows = this.rowsFromSkus(skus)
+    let sharedPrice = kind !== 'plain' && product.sharedPrice !== false
+    let specTip = ''
+    if (sharedPrice && !inventory.skuPricesMatch(skus)) {
+      sharedPrice = false
+      specTip = '部分规格价格不同，已按各格显示。'
+    }
     this.setData(Object.assign({
       id: product.id,
       isEdit: true,
@@ -81,9 +92,31 @@ Page({
       colors: product.colors || [],
       sizes: product.sizes || [],
       blankStockText: blank ? String(blank.stock) : '0',
-      skuRows: this.rowsFromSkus(skus)
+      skuRows: skuRows,
+      sharedPrice: sharedPrice,
+      specTip: specTip
     }, kindFields(kind)))
     wx.setNavigationBarTitle({ title: '编辑商品' })
+  },
+
+  onShow() {
+    this.refreshCategories()
+  },
+
+  categoryChips(categoryId) {
+    const selected = categoryId || this.data.categoryId
+    return store.getCategories().map(function (item) {
+      return Object.assign({}, item, { on: item.id === selected })
+    })
+  },
+
+  refreshCategories() {
+    const categories = this.categoryChips()
+    const current = this.data.categoryId ? store.getCategory(this.data.categoryId) : null
+    this.setData({
+      categories: categories,
+      nameSuggest: current ? current.names || [] : this.data.nameSuggest
+    })
   },
 
   rowsFromSkus(skus) {
@@ -122,16 +155,33 @@ Page({
     }
   },
 
+  withSharedPrices(rows) {
+    if (!this.data.sharedPrice) return rows
+    const cost = this.data.costPrice
+    const sale = this.data.salePrice
+    return (rows || []).map(function (row) {
+      return Object.assign({}, row, { costPrice: cost, salePrice: sale })
+    })
+  },
+
   rebuildSkuRows(colors, sizes, extra) {
     const combos = inventory.skuCombos(colors, sizes)
     const prevMap = {}
     ;(this.data.skuRows || []).forEach(function (row) {
       prevMap[row.key] = row
     })
-    const rows = combos.map(function (combo) {
+    let rows = combos.map(function (combo) {
       const key = inventory.specKey(combo.color, combo.size)
       return prevMap[key] || this.emptyRow(combo)
     }.bind(this))
+    const shared = extra && extra.sharedPrice != null ? extra.sharedPrice : this.data.sharedPrice
+    if (shared) {
+      const cost = this.data.costPrice
+      const sale = this.data.salePrice
+      rows = rows.map(function (row) {
+        return Object.assign({}, row, { costPrice: cost, salePrice: sale })
+      })
+    }
 
     const patch = Object.assign({
       colors: colors,
@@ -191,8 +241,13 @@ Page({
   },
 
   setProductKind(e) {
-    const kind = e.currentTarget.dataset.kind
-    if (!kind || kind === this.data.productKind) return
+    this.applyProductKind(e.currentTarget.dataset.kind)
+  },
+
+  applyProductKind(kind, extra, colorsOverride, sizesOverride) {
+    extra = extra || {}
+    if (!kind) return
+    if (kind === this.data.productKind && colorsOverride == null) return
     if (kind === 'plain') {
       this.clearSpecs()
       return
@@ -203,27 +258,30 @@ Page({
     }
 
     const from = this.data.productKind
-    const colors = this.data.colors.slice()
-    const sizes = this.data.sizes.slice()
-    let specTip = ''
-    if (!colors.length && !sizes.length) {
+    const colors = colorsOverride != null ? colorsOverride.slice() : this.data.colors.slice()
+    const sizes = sizesOverride != null ? sizesOverride.slice() : this.data.sizes.slice()
+    let specTip = extra.specTip != null ? extra.specTip : ''
+    if (!specTip && !colors.length && !sizes.length) {
       specTip = '先给规格轴起名（可只用一根），再添加取值。可改、可删、可再加。'
     }
 
-    const extra = kindFields(kind)
-    extra.specTip = specTip
+    const patch = Object.assign(kindFields(kind), extra)
+    patch.specTip = specTip
+    if (from === 'plain' && extra.sharedPrice == null) {
+      patch.sharedPrice = true
+    }
 
     if (from === 'plain' && kind === 'blank' && !this.data.isEdit) {
       const move = inventory.toNumber(this.data.stock)
-      extra.blankStock = String(move || 0)
+      patch.blankStock = String(move || 0)
       if (move > 0) {
-        extra.specTip = specTip ? specTip + ' 初始库存会记到待加工。' : '初始库存会记到待加工。'
+        patch.specTip = specTip ? specTip + ' 初始库存会记到待加工。' : '初始库存会记到待加工。'
       }
     }
 
-    this.rebuildSkuRows(colors, sizes, extra)
+    this.rebuildSkuRows(colors, sizes, patch)
 
-    if (from === 'plain' && kind === 'finished') {
+    if (from !== kind && from === 'plain' && kind === 'finished') {
       const move = this.data.isEdit
         ? inventory.toNumber(this.data.stockText)
         : inventory.toNumber(this.data.stock)
@@ -242,15 +300,104 @@ Page({
       return
     }
 
-    if (from === 'blank' || from === 'finished') {
+    if (from !== kind && (from === 'blank' || from === 'finished')) {
       this.setData(this.migrateBlankFinished(kind === 'blank'))
     }
+  },
+
+  applyCategory(e) {
+    const id = e.currentTarget.dataset.id
+    const category = store.getCategory(id)
+    if (!category) return
+    const kind = category.productKind || 'plain'
+    const chips = this.categoryChips(id)
+    const nameSuggest = category.names || []
+    const base = {
+      categoryId: id,
+      nameSuggest: nameSuggest,
+      categories: chips
+    }
+
+    if (kind === 'plain') {
+      if (this.data.productKind !== 'plain') {
+        if (this.data.isEdit && this.specStockTotal() > 0) {
+          wx.showToast({ title: '这件商品还有库存，只带出名称待选项', icon: 'none' })
+          this.setData(base)
+          return
+        }
+        if (!this.data.isEdit) {
+          this.setData(Object.assign(kindFields('plain'), base, {
+            specTip: '',
+            specAxis1: '',
+            specAxis2: '',
+            colors: [],
+            sizes: [],
+            skuRows: [],
+            blankStock: ''
+          }))
+          return
+        }
+        this.setData(base)
+        wx.showToast({ title: '名称待选项已带出。要改成普通请先去掉规格。', icon: 'none' })
+        return
+      }
+      this.setData(base)
+      return
+    }
+
+    const colors = this.data.isEdit
+      ? inventory.uniqueSpecs((this.data.colors || []).concat(category.colors || []))
+      : (category.colors || []).slice()
+    const sizes = this.data.isEdit
+      ? inventory.uniqueSpecs((this.data.sizes || []).concat(category.sizes || []))
+      : (category.sizes || []).slice()
+    const extra = Object.assign({}, base, {
+      specAxis1: category.specAxis1 || this.data.specAxis1,
+      specAxis2: category.specAxis2 || this.data.specAxis2,
+      sharedPrice: category.sharedPrice !== false,
+      specTip: ''
+    })
+
+    if (this.data.productKind !== kind) {
+      this.applyProductKind(kind, extra, colors, sizes)
+      return
+    }
+    this.rebuildSkuRows(colors, sizes, extra)
+  },
+
+  pickName(e) {
+    const name = e.currentTarget.dataset.value
+    this.setData({ name: name })
+    this.refreshMargin()
+  },
+
+  goCategories() {
+    wx.navigateTo({ url: '/pages/categories/categories' })
+  },
+
+  writeBack(field, value) {
+    if (!this.data.categoryId) return
+    store.appendCategoryValue(this.data.categoryId, field, value)
+    this.refreshCategories()
+  },
+
+  setSharedPrice(e) {
+    const sharedPrice = e.currentTarget.dataset.on === '1'
+    const skuRows = sharedPrice ? this.withSharedPrices(this.data.skuRows) : this.data.skuRows
+    this.setData({ sharedPrice: sharedPrice, skuRows: skuRows })
   },
 
   onField(e) {
     const field = e.currentTarget.dataset.field
     const patch = {}
     patch[field] = e.detail.value
+    if (this.data.sharedPrice && (field === 'costPrice' || field === 'salePrice')) {
+      const cost = field === 'costPrice' ? e.detail.value : this.data.costPrice
+      const sale = field === 'salePrice' ? e.detail.value : this.data.salePrice
+      patch.skuRows = (this.data.skuRows || []).map(function (row) {
+        return Object.assign({}, row, { costPrice: cost, salePrice: sale })
+      })
+    }
     this.setData(patch)
     this.refreshMargin()
   },
@@ -275,6 +422,7 @@ Page({
       return
     }
     this.rebuildSkuRows(this.data.colors.concat([value]), this.data.sizes, { colorInput: '' })
+    this.writeBack('colors', value)
   },
 
   addSize() {
@@ -289,6 +437,7 @@ Page({
       return
     }
     this.rebuildSkuRows(this.data.colors, this.data.sizes.concat([value]), { sizeInput: '' })
+    this.writeBack('sizes', value)
   },
 
   removeColor(e) {
@@ -371,13 +520,16 @@ Page({
       if (hasSpecs && !this.data.colors.length && !this.data.sizes.length) {
         throw new Error('请添加规格')
       }
+      const sharedPrice = hasSpecs && this.data.sharedPrice
+      const costPrice = this.data.costPrice
+      const salePrice = this.data.salePrice
       store.saveProduct({
         id: this.data.id,
         name: this.data.name,
         sku: this.data.sku,
         barcode: this.data.barcode,
-        costPrice: this.data.costPrice,
-        salePrice: this.data.salePrice,
+        costPrice: costPrice,
+        salePrice: salePrice,
         stock: hasSpecs
           ? (blankProcess && !this.data.isEdit ? this.data.blankStock || this.data.stock : 0)
           : (this.data.isEdit ? 0 : this.data.stock),
@@ -387,19 +539,21 @@ Page({
         colors: hasSpecs ? this.data.colors : [],
         sizes: hasSpecs ? this.data.sizes : [],
         blankProcess: blankProcess,
+        sharedPrice: sharedPrice,
         skus: hasSpecs ? this.data.skuRows.map(function (row) {
           return {
             id: row.id,
             color: row.color,
             size: row.size,
             sku: row.sku,
-            costPrice: row.costPrice,
-            salePrice: row.salePrice,
+            costPrice: sharedPrice ? costPrice : row.costPrice,
+            salePrice: sharedPrice ? salePrice : row.salePrice,
             stock: row.stock,
             alertQty: row.alertQty
           }
         }) : []
       })
+      this.writeBack('names', this.data.name)
       wx.showToast({ title: '已保存', icon: 'success' })
       setTimeout(function () {
         wx.navigateBack()

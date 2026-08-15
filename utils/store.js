@@ -4,7 +4,8 @@ const KEYS = {
   products: 'inv_products',
   records: 'inv_records',
   customers: 'inv_customers',
-  skus: 'inv_skus'
+  skus: 'inv_skus',
+  categories: 'inv_categories'
 }
 
 function uid() {
@@ -30,6 +31,10 @@ function getRecords() {
 
 function getCustomers() {
   return readList(KEYS.customers)
+}
+
+function getCategories() {
+  return readList(KEYS.categories)
 }
 
 function getSkus() {
@@ -60,6 +65,12 @@ function getSkusByProduct(productId) {
 
 function getCustomer(id) {
   return getCustomers().find(function (item) {
+    return item.id === id
+  }) || null
+}
+
+function getCategory(id) {
+  return getCategories().find(function (item) {
     return item.id === id
   }) || null
 }
@@ -126,6 +137,48 @@ function deleteCustomer(id) {
   writeList(KEYS.customers, getCustomers().filter(function (item) {
     return item.id !== id
   }))
+}
+
+function saveCategory(input) {
+  const categories = getCategories()
+  const now = Date.now()
+  let saved
+  if (input.id) {
+    const index = categories.findIndex(function (item) {
+      return item.id === input.id
+    })
+    if (index < 0) {
+      throw new Error('种类不存在')
+    }
+    saved = inventory.updateCategory(categories[index], input, now)
+    categories[index] = saved
+  } else {
+    saved = inventory.createCategory(input, now, uid())
+    categories.unshift(saved)
+  }
+  writeList(KEYS.categories, categories)
+  return saved
+}
+
+function deleteCategory(id) {
+  writeList(KEYS.categories, getCategories().filter(function (item) {
+    return item.id !== id
+  }))
+}
+
+function appendCategoryValue(id, field, value) {
+  const category = getCategory(id)
+  if (!category) return null
+  const saved = inventory.appendCategoryValue(category, field, value, Date.now())
+  if (saved === category) return category
+  const categories = getCategories()
+  const index = categories.findIndex(function (item) {
+    return item.id === id
+  })
+  if (index < 0) return null
+  categories[index] = saved
+  writeList(KEYS.categories, categories)
+  return saved
 }
 
 function markCustomerSold(id, now) {
@@ -295,6 +348,7 @@ function loadSeed() {
   writeList(KEYS.skus, seed.skus || [])
   writeList(KEYS.records, seed.records)
   writeList(KEYS.customers, seed.customers || [])
+  writeList(KEYS.categories, seed.categories || [])
   return seed
 }
 
@@ -303,6 +357,7 @@ function clearAll() {
   writeList(KEYS.skus, [])
   writeList(KEYS.records, [])
   writeList(KEYS.customers, [])
+  writeList(KEYS.categories, [])
 }
 
 function dashboard() {
@@ -313,16 +368,21 @@ module.exports = {
   getProducts: getProducts,
   getRecords: getRecords,
   getCustomers: getCustomers,
+  getCategories: getCategories,
   getSkus: getSkus,
   getProduct: getProduct,
   getSku: getSku,
   getSkusByProduct: getSkusByProduct,
   getCustomer: getCustomer,
+  getCategory: getCategory,
   getRecord: getRecord,
   saveProduct: saveProduct,
   deleteProduct: deleteProduct,
   saveCustomer: saveCustomer,
   deleteCustomer: deleteCustomer,
+  saveCategory: saveCategory,
+  deleteCategory: deleteCategory,
+  appendCategoryValue: appendCategoryValue,
   addPurchase: addPurchase,
   addSale: addSale,
   addReturn: addReturn,

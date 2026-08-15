@@ -1,0 +1,38 @@
+.goods-card {
+  margin-bottom: 16rpx;
+  padding: 24rpx 28rpx 20rpx;
+}
+
+.goods-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8rpx;
+}
+
+.item-name {
+  font-size: 30rpx;
+  font-weight: 600;
+}
+
+.seed-btn {
+  margin-top: 24rpx;
+}
+
+.fab {
+  position: fixed;
+  right: 32rpx;
+  bottom: 48rpx;
+  padding: 0 28rpx;
+  height: 80rpx;
+  line-height: 80rpx;
+  background: #0F766E;
+  color: #FFFFFF;
+  border-radius: 40rpx;
+  font-weight: 600;
+  box-shadow: 0 12rpx 24rpx rgba(15, 118, 110, 0.28);
+}
+
+.page {
+  padding-bottom: 140rpx;
+}

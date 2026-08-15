@@ -37,4 +37,4 @@
 
 - 件数守恒、退货原样入库、整单共享待加工：记账要自洽，必须守。
 - 能不能换某一根轴、先改再卖还是当场改：现场规矩，不要写成软件限制。
-- 给操作便利（类型给出可命名的规格轴和可编辑取值），不要给行业裁判。详见 [docs/accounting-vs-policy.md](docs/accounting-vs-policy.md)。
+- 给操作便利（种类模板带出待选项、多规格可同价），不要给行业裁判。详见 [docs/accounting-vs-policy.md](docs/accounting-vs-policy.md)。

@@ -87,6 +87,27 @@
   font-size: 24rpx;
 }
 
+.field-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12rpx;
+}
+
+.field-head .field-label {
+  margin-bottom: 0;
+}
+
+.link {
+  color: #0F766E;
+  font-size: 24rpx;
+}
+
+.name-chips {
+  margin-top: 12rpx;
+  margin-bottom: 0;
+}
+
 .pay-tab.on {
   background: #0F766E;
   color: #FFFFFF;

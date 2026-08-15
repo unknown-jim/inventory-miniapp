@@ -66,6 +66,10 @@ Page({
     wx.navigateTo({ url: '/pages/customers/customers' })
   },
 
+  goCategories() {
+    wx.navigateTo({ url: '/pages/categories/categories' })
+  },
+
   onAlertTap(e) {
     const id = e.currentTarget.dataset.id
     wx.navigateTo({ url: '/pages/product-edit/product-edit?id=' + id })
@@ -84,7 +88,7 @@ Page({
   clearData() {
     wx.showModal({
       title: '清空全部数据',
-      content: '商品、客户和流水都会删除，且无法恢复。',
+      content: '商品、客户、种类模板和流水都会删除，且无法恢复。',
       confirmColor: '#DC2626',
       success: (res) => {
         if (!res.confirm) return
