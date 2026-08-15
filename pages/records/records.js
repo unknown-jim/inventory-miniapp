@@ -13,6 +13,13 @@ Page({
     count: 0
   },
 
+  onLoad(options) {
+    const type = options && options.type
+    if (type === 'in' || type === 'out' || type === 'pay' || type === 'return' || type === 'convert') {
+      this.setData({ type: type })
+    }
+  },
+
   onShow() {
     this.refresh()
   },

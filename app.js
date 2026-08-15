@@ -1,7 +1,8 @@
 App({
   globalData: {
     selectedProductId: '',
-    selectedCustomerId: ''
+    selectedCustomerId: '',
+    pendingInventoryFilter: ''
   },
   setSelectedProduct(id) {
     this.globalData.selectedProductId = id || ''
@@ -18,5 +19,13 @@ App({
     const id = this.globalData.selectedCustomerId
     this.globalData.selectedCustomerId = ''
     return id
+  },
+  setPendingInventoryFilter(filter) {
+    this.globalData.pendingInventoryFilter = filter || ''
+  },
+  consumePendingInventoryFilter() {
+    const filter = this.globalData.pendingInventoryFilter
+    this.globalData.pendingInventoryFilter = ''
+    return filter
   }
 })

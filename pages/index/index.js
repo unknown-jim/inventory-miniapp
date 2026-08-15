@@ -46,7 +46,24 @@ Page({
     wx.navigateTo({ url: '/pages/records/records' })
   },
 
+  goTodaySales() {
+    wx.navigateTo({ url: '/pages/records/records?type=out' })
+  },
+
+  goProducts() {
+    wx.switchTab({ url: '/pages/products/products' })
+  },
+
   goInventory() {
+    this.openInventory('all')
+  },
+
+  goAlerts() {
+    this.openInventory('alert')
+  },
+
+  openInventory(filter) {
+    getApp().setPendingInventoryFilter(filter)
     wx.switchTab({ url: '/pages/inventory/inventory' })
   },
 

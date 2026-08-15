@@ -1,6 +1,6 @@
 <view class="page">
   <view class="hero card">
-    <view class="hero-top">
+    <view class="hero-top" hover-class="hero-press" bindtap="goRecords">
       <view>
         <view class="hero-kicker">{{dateText}}</view>
         <view class="hero-title">今日看板</view>
@@ -11,19 +11,19 @@
       </view>
     </view>
     <view class="stats">
-      <view class="stat">
+      <view class="stat" hover-class="hero-press" bindtap="goProducts">
         <view class="stat-num">{{productCount}}</view>
         <view class="muted">商品数</view>
       </view>
-      <view class="stat">
+      <view class="stat" hover-class="hero-press" bindtap="goInventory">
         <view class="stat-num">{{totalStock}}</view>
         <view class="muted">库存总量</view>
       </view>
-      <view class="stat">
+      <view class="stat" hover-class="hero-press" bindtap="goTodaySales">
         <view class="stat-num">{{todaySalesAmount}}</view>
         <view class="muted">今日销售额</view>
       </view>
-      <view class="stat {{alertCount ? 'stat-alert' : ''}}">
+      <view class="stat {{alertCount ? 'stat-alert' : ''}}" hover-class="hero-press" bindtap="goAlerts">
         <view class="stat-num">{{alertCount}}</view>
         <view class="muted">库存预警</view>
       </view>

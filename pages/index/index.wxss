@@ -42,6 +42,10 @@
   flex: 1;
 }
 
+.hero-press {
+  opacity: 0.72;
+}
+
 .stat-num {
   font-size: 32rpx;
   font-weight: 700;
