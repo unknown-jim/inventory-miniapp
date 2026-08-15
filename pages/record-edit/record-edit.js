@@ -11,6 +11,7 @@ Page({
     isIn: false,
     isOut: false,
     isPay: false,
+    isOpening: false,
     isReturn: false,
     isConvert: false,
     canReturn: false,
@@ -51,6 +52,7 @@ Page({
     const all = store.getRecords()
     let title = '修改销售'
     if (view.isPay) title = '修改收款'
+    else if (view.isOpening) title = '修改期初欠款'
     else if (view.isIn) title = '修改进货'
     else if (view.isReturn) title = '修改退货'
     else if (view.isConvert) title = '修改改规格'
@@ -94,6 +96,7 @@ Page({
       isIn: view.isIn,
       isOut: view.isOut,
       isPay: view.isPay,
+      isOpening: view.isOpening,
       isReturn: view.isReturn,
       isConvert: view.isConvert,
       isMulti: lines.length > 1,
@@ -101,9 +104,9 @@ Page({
       productName: productName,
       specText: specText,
       timeText: util.formatDateTime(record.createdAt),
-      qty: view.isPay ? '' : String(record.qty),
-      unitPrice: view.isPay || view.isConvert ? '' : String(record.unitPrice),
-      amount: view.isPay ? String(record.amount) : '',
+      qty: view.isPay || view.isOpening ? '' : String(record.qty),
+      unitPrice: view.isPay || view.isOpening || view.isConvert ? '' : String(record.unitPrice),
+      amount: view.isPay || view.isOpening ? String(record.amount) : '',
       amountText: amountText,
       profitText: profitText,
       remark: record.remark || '',
@@ -119,7 +122,7 @@ Page({
   },
 
   refreshAmount() {
-    if (this.data.isPay) {
+    if (this.data.isPay || this.data.isOpening) {
       const amount = inventory.round2(this.data.amount)
       this.setData({ amountText: util.money(amount), profitText: '0.00' })
       return
@@ -280,7 +283,7 @@ Page({
 
   save() {
     try {
-      if (this.data.isPay) {
+      if (this.data.isPay || this.data.isOpening) {
         store.updateRecord(this.data.id, {
           amount: this.data.amount,
           remark: this.data.remark
@@ -330,13 +333,15 @@ Page({
       title: '删除流水',
       content: this.data.isPay
         ? '删除后这笔收款会从欠款里去掉。'
-        : (this.data.isReturn
+        : (this.data.isOpening
+          ? '删除后这笔期初欠款会从欠款里去掉。若已经收过款，可能要先改收款。'
+          : (this.data.isReturn
           ? '删除后退货入库会改回去。'
           : (this.data.isConvert
             ? '删除后规格会改回原来的那一格。'
             : (this.data.isOut
               ? '删除后会把本单全部商品的库存改回去。记错商品时用这个，然后重新开单。'
-              : '删除后会把库存改回去。记错商品时用这个，然后重新开单。'))),
+              : '删除后会把库存改回去。记错商品时用这个，然后重新开单。')))),
       confirmColor: '#DC2626',
       success: (res) => {
         if (!res.confirm) return

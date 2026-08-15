@@ -147,4 +147,30 @@ assert.strictEqual(reprint.thisDebtText, '18.90')
 assert.strictEqual(reprint.prevDebtText, '0.00')
 assert.strictEqual(reprint.receivableText, '18.90')
 
+const openingThenSale = [
+  {
+    id: 'open-1',
+    type: 'opening',
+    customerId: 'c1',
+    amount: 50,
+    createdAt: 500
+  },
+  {
+    id: 'r-open-sale',
+    type: 'out',
+    productName: '纯牛奶 250ml',
+    qty: 2,
+    unitPrice: 4.5,
+    amount: 9,
+    payType: 'credit',
+    customerId: 'c1',
+    customerName: '李记便利',
+    createdAt: 1000
+  }
+]
+const openingSlip = util.withSlipViewFromRecord(openingThenSale, openingThenSale[1])
+assert.strictEqual(openingSlip.prevDebtText, '50.00')
+assert.strictEqual(openingSlip.thisDebtText, '9.00')
+assert.strictEqual(openingSlip.receivableText, '59.00')
+
 console.log('slip-image tests passed')

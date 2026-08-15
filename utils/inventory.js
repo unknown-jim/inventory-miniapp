@@ -905,9 +905,22 @@ function isCreditReturn(record) {
   return record && record.type === 'return' && record.payType === 'credit'
 }
 
+function isOpening(record) {
+  return record && record.type === 'opening'
+}
+
+function isCustomerAccountRecord(record) {
+  return record && (
+    record.type === 'out'
+    || record.type === 'pay'
+    || record.type === 'return'
+    || record.type === 'opening'
+  )
+}
+
 function summarizeCustomerAccount(records, customerId) {
   const related = records.filter(function (item) {
-    return item.customerId === customerId && (item.type === 'out' || item.type === 'pay' || item.type === 'return')
+    return item.customerId === customerId && isCustomerAccountRecord(item)
   })
   const sales = related.filter(function (item) {
     return item.type === 'out'
@@ -918,9 +931,12 @@ function summarizeCustomerAccount(records, customerId) {
   const payments = related.filter(function (item) {
     return item.type === 'pay'
   })
+  const openings = related.filter(isOpening)
   const creditAmount = round2(
     sales.reduce(function (sum, item) {
       return isCreditSale(item) ? sum + toNumber(item.amount) : sum
+    }, 0) + openings.reduce(function (sum, item) {
+      return sum + toNumber(item.amount)
     }, 0) - returns.reduce(function (sum, item) {
       return isCreditReturn(item) ? sum + toNumber(item.amount) : sum
     }, 0)
@@ -952,7 +968,7 @@ function summarizeCustomerAccount(records, customerId) {
 
 function getTotalReceivable(records) {
   return round2(records.reduce(function (sum, item) {
-    if (isCreditSale(item)) return sum + toNumber(item.amount)
+    if (isCreditSale(item) || isOpening(item)) return sum + toNumber(item.amount)
     if (isCreditReturn(item)) return sum - toNumber(item.amount)
     if (item.type === 'pay') return sum - toNumber(item.amount)
     return sum
@@ -990,6 +1006,41 @@ function applyPayment(records, payload, now, id) {
     customerPhone: String(payload.customerPhone || '').trim(),
     customerAddress: String(payload.customerAddress || '').trim(),
     payType: 'cash',
+    createdAt: now
+  }
+
+  return {
+    records: [record].concat(records),
+    record: record
+  }
+}
+
+function applyOpening(records, payload, now, id) {
+  const customerId = String(payload.customerId || '')
+  if (!customerId) {
+    throw new Error('请选择客户')
+  }
+  const amount = round2(payload.amount)
+  if (amount <= 0) {
+    throw new Error('期初欠款必须大于 0')
+  }
+
+  const record = {
+    id: id,
+    type: 'opening',
+    productId: '',
+    productName: '期初欠款',
+    sku: '',
+    qty: 0,
+    unitPrice: amount,
+    costPrice: 0,
+    amount: amount,
+    profit: 0,
+    remark: String(payload.remark || '').trim(),
+    customerId: customerId,
+    customerName: String(payload.customerName || '').trim(),
+    customerPhone: String(payload.customerPhone || '').trim(),
+    customerAddress: String(payload.customerAddress || '').trim(),
     createdAt: now
   }
 
@@ -1515,7 +1566,7 @@ function applyLatestPurchaseCost(products, skus, records, productId, skuId, now)
 function assertReceivableValid(records) {
   const seen = {}
   records.forEach(function (item) {
-    if (item.customerId && (item.type === 'out' || item.type === 'pay' || item.type === 'return')) {
+    if (item.customerId && isCustomerAccountRecord(item)) {
       seen[item.customerId] = true
     }
   })
@@ -1598,6 +1649,14 @@ function updateRecord(products, records, payload, now, skus) {
     const cap = summarizeCustomerAccount(others, existing.customerId).receivable
     if (amount > cap) {
       throw new Error('收款不能超过当前欠款 ' + cap)
+    }
+    next.amount = amount
+    next.unitPrice = amount
+    next.remark = String(payload.remark || '').trim()
+  } else if (existing.type === 'opening') {
+    const amount = round2(payload.amount)
+    if (amount <= 0) {
+      throw new Error('期初欠款必须大于 0')
     }
     next.amount = amount
     next.unitPrice = amount
@@ -2207,6 +2266,7 @@ module.exports = {
   summarizeCustomerAccount: summarizeCustomerAccount,
   getTotalReceivable: getTotalReceivable,
   isCreditSale: isCreditSale,
+  isOpening: isOpening,
   applyPurchase: applyPurchase,
   applySale: applySale,
   applySaleOrder: applySaleOrder,
@@ -2217,6 +2277,7 @@ module.exports = {
   groupRecords: groupRecords,
   receivableAt: receivableAt,
   applyPayment: applyPayment,
+  applyOpening: applyOpening,
   updateRecord: updateRecord,
   deleteRecord: deleteRecord,
   getDashboard: getDashboard,
