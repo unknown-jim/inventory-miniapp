@@ -17,7 +17,8 @@
       <view class="goods-top">
         <view class="item-name">{{item.name}}</view>
         <view class="goods-tags">
-          <text wx:if="{{item.hasSpecs}}" class="tag tag-spec">多规格</text>
+          <text wx:if="{{item.blankProcess}}" class="tag tag-blank">白坯加工</text>
+          <text wx:elif="{{item.hasSpecs}}" class="tag tag-spec">成衣现货</text>
           <text class="tag {{item.lowStock ? 'tag-alert' : 'tag-ok'}}">库存 {{item.stock}}</text>
         </view>
       </view>
@@ -32,6 +33,7 @@
     <view class="goods-actions">
       <button class="btn-ghost mini" data-id="{{item.id}}" catchtap="goPurchase">进货</button>
       <button class="btn-ghost mini warm" data-id="{{item.id}}" catchtap="goSale">销售</button>
+      <button wx:if="{{item.hasSpecs}}" class="btn-ghost mini" data-id="{{item.id}}" catchtap="goConvert">改规格</button>
     </view>
   </view>
 

@@ -17,6 +17,7 @@ Page({
     skuId: '',
     colorOptions: [],
     sizeOptions: [],
+    blankProcess: false,
     qty: '',
     unitPrice: '',
     remark: '',
@@ -108,31 +109,40 @@ Page({
 
   applyProductState(product, selectedColor, selectedSize) {
     const hasSpecs = inventory.productHasSpecs(product)
+    const blankProcess = inventory.isBlankProcess(product)
     const colors = product.colors || []
     const sizes = product.sizes || []
     let color = selectedColor
     let size = selectedSize
-    if (hasSpecs) {
+    if (hasSpecs && !blankProcess) {
       if (colors.length === 1) color = colors[0]
       if (sizes.length === 1) size = sizes[0]
     } else {
       color = ''
       size = ''
     }
-    const sku = hasSpecs ? inventory.findSkuBySpec(this.data.skus, product.id, color, size) : null
-    const keepPrice = this.data.productId === product.id && this.data.unitPrice && this.data.skuId === (sku ? sku.id : '')
+    const sku = hasSpecs && !blankProcess ? inventory.findSkuBySpec(this.data.skus, product.id, color, size) : null
+    const blank = blankProcess ? inventory.findBlankSku(this.data.skus, product.id) : null
+    const keepPrice = this.data.productId === product.id && this.data.unitPrice && this.data.skuId === (sku ? sku.id : (blank ? blank.id : ''))
     const unitPrice = keepPrice ? this.data.unitPrice : String(sku ? sku.costPrice : product.costPrice)
     const amount = inventory.round2(inventory.toNumber(this.data.qty) * inventory.toNumber(unitPrice))
+    let stockText = String(product.stock)
+    if (blankProcess) {
+      stockText = blank ? String(blank.stock) : '0'
+    } else if (hasSpecs) {
+      stockText = sku ? String(sku.stock) : '请选规格'
+    }
     this.setData(Object.assign({
       productId: product.id,
       productName: product.name,
       hasSpecs: hasSpecs,
+      blankProcess: blankProcess,
       colors: colors,
       sizes: sizes,
       selectedColor: color,
       selectedSize: size,
-      skuId: sku ? sku.id : '',
-      stockText: sku ? String(sku.stock) : (hasSpecs ? '请选规格' : String(product.stock)),
+      skuId: sku ? sku.id : (blank ? blank.id : ''),
+      stockText: stockText,
       unitPrice: unitPrice,
       amountText: util.money(amount)
     }, this.specOptions(product, color, size)))
@@ -172,7 +182,7 @@ Page({
   submit() {
     try {
       const product = store.getProduct(this.data.productId)
-      if (product && inventory.productHasSpecs(product)) {
+      if (product && inventory.productHasSpecs(product) && !inventory.isBlankProcess(product)) {
         const colors = product.colors || []
         const sizes = product.sizes || []
         if ((colors.length && !this.data.selectedColor) || (sizes.length && !this.data.selectedSize)) {
@@ -184,19 +194,20 @@ Page({
       }
       const record = store.addPurchase({
         productId: this.data.productId,
-        skuId: this.data.skuId,
+        skuId: inventory.isBlankProcess(product) ? '' : this.data.skuId,
         qty: this.data.qty,
         unitPrice: this.data.unitPrice,
         remark: this.data.remark
       })
       this.data.skus = store.getSkus()
       const latest = store.getProduct(record.productId)
-      const sku = record.skuId ? store.getSku(record.skuId) : null
+      const blank = latest && inventory.isBlankProcess(latest) ? inventory.findBlankSku(this.data.skus, latest.id) : null
+      const sku = record.skuId && !blank ? store.getSku(record.skuId) : null
       this.setData({
         skus: this.data.skus,
         qty: '',
         remark: '',
-        stockText: sku ? String(sku.stock) : String(latest.stock)
+        stockText: blank ? String(blank.stock) : (sku ? String(sku.stock) : String(latest.stock))
       })
       this.refreshAmount()
       wx.showToast({ title: '进货成功', icon: 'success' })

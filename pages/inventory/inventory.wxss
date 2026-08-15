@@ -69,3 +69,8 @@
   color: #334155;
   font-size: 24rpx;
 }
+
+.convert-link {
+  display: inline-block;
+  margin-top: 12rpx;
+}

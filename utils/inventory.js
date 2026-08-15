@@ -81,8 +81,253 @@ function skusOfProduct(skus, productId) {
 function findSkuBySpec(skus, productId, color, size) {
   const key = specKey(color, size)
   return skusOfProduct(skus, productId).find(function (item) {
-    return specKey(item.color, item.size) === key
+    return !item.isBlank && specKey(item.color, item.size) === key
   }) || null
+}
+
+function isBlankProcess(product) {
+  return !!(product && product.blankProcess && productHasSpecs(product))
+}
+
+function isBlankSku(sku) {
+  return !!(sku && sku.isBlank)
+}
+
+function findBlankSku(skus, productId) {
+  return skusOfProduct(skus, productId).find(function (item) {
+    return item.isBlank
+  }) || null
+}
+
+function cloneList(list) {
+  return (list || []).map(function (item) {
+    return Object.assign({}, item)
+  })
+}
+
+function saleReturnQty(records, saleRecordId) {
+  const id = String(saleRecordId || '')
+  if (!id) return 0
+  return round2((records || []).reduce(function (sum, item) {
+    return item.type === 'return' && item.saleRecordId === id
+      ? sum + toNumber(item.qty)
+      : sum
+  }, 0))
+}
+
+function returnableQty(records, saleRecord) {
+  if (!saleRecord || saleRecord.type !== 'out') return 0
+  return round2(toNumber(saleRecord.qty) - saleReturnQty(records, saleRecord.id))
+}
+
+function addSkuStock(skuList, skuId, qty, now, costPrice, product) {
+  const skuIndex = skuList.findIndex(function (item) {
+    return item.id === skuId
+  })
+  if (skuIndex < 0) {
+    throw new Error('规格不存在')
+  }
+  const sku = Object.assign({}, skuList[skuIndex])
+  const delta = round2(qty)
+  const nextStock = round2(sku.stock + delta)
+  if (nextStock < 0) {
+    throw new Error(stockLabel(product || { name: '' }, sku) + ' 库存不足，当前库存 ' + sku.stock)
+  }
+  if (delta > 0 && costPrice != null && nextStock > 0) {
+    sku.costPrice = round2((toNumber(sku.stock) * toNumber(sku.costPrice) + delta * toNumber(costPrice)) / nextStock)
+  }
+  sku.stock = nextStock
+  sku.updatedAt = now
+  skuList[skuIndex] = sku
+  return sku
+}
+
+function restoreAllocations(skuList, allocations, now, product) {
+  ;(allocations || []).forEach(function (row) {
+    addSkuStock(skuList, row.skuId, row.qty, now, null, product)
+  })
+}
+
+function resolveSaleSpec(product, skus, payload) {
+  if (payload.skuId) {
+    const sku = (skus || []).find(function (item) {
+      return item.id === payload.skuId
+    })
+    if (!sku || sku.productId !== product.id || sku.isBlank) {
+      throw new Error(specSelectHint(product) || '请选择颜色和尺码')
+    }
+    return { color: sku.color, size: sku.size, sku: sku }
+  }
+  const color = String(payload.color || '').trim()
+  const size = String(payload.size || '').trim()
+  const needColor = !!(product.colors && product.colors.length)
+  const needSize = !!(product.sizes && product.sizes.length)
+  if ((needColor && !color) || (needSize && !size)) {
+    throw new Error(specSelectHint(product) || '请选择颜色和尺码')
+  }
+  const sku = findSkuBySpec(skus, product.id, color, size)
+  if (!sku) {
+    throw new Error('规格不存在')
+  }
+  return { color: sku.color, size: sku.size, sku: sku }
+}
+
+function allocateBlankLine(product, skuList, color, size, qty, now) {
+  const allocations = []
+  let left = round2(qty)
+  const ready = findSkuBySpec(skuList, product.id, color, size)
+  if (!ready) {
+    throw new Error('规格不存在')
+  }
+  const takeReady = round2(Math.min(toNumber(ready.stock), left))
+  if (takeReady > 0) {
+    const costPrice = ready.costPrice
+    addSkuStock(skuList, ready.id, -takeReady, now, null, product)
+    allocations.push({
+      skuId: ready.id,
+      qty: takeReady,
+      source: 'ready',
+      color: ready.color,
+      size: ready.size,
+      costPrice: costPrice
+    })
+    left = round2(left - takeReady)
+  }
+  if (left > 0) {
+    const blank = findBlankSku(skuList, product.id)
+    if (!blank) {
+      throw new Error('白坯不存在')
+    }
+    const takeBlank = round2(Math.min(toNumber(blank.stock), left))
+    if (takeBlank > 0) {
+      const costPrice = blank.costPrice
+      addSkuStock(skuList, blank.id, -takeBlank, now, null, product)
+      allocations.push({
+        skuId: blank.id,
+        qty: takeBlank,
+        source: 'blank',
+        color: '',
+        size: '',
+        costPrice: costPrice
+      })
+      left = round2(left - takeBlank)
+    }
+  }
+  if (left > 0) {
+    throw new Error(product.name + ' ' + specText(color, size) + ' 库存不足，可出 ' + round2(qty - left))
+  }
+  const costSum = allocations.reduce(function (sum, item) {
+    return sum + toNumber(item.costPrice) * toNumber(item.qty)
+  }, 0)
+  return {
+    allocations: allocations,
+    costPrice: round2(costSum / qty),
+    skuId: ready.id,
+    color: ready.color,
+    size: ready.size,
+    skuCode: ready.sku || product.sku
+  }
+}
+
+function blankAvailability(product, skus, color, size, reservedItems) {
+  const working = cloneList(skus)
+  try {
+    ;(reservedItems || []).forEach(function (item) {
+      if (item.productId !== product.id) return
+      const spec = resolveSaleSpec(product, working, item)
+      allocateBlankLine(product, working, spec.color, spec.size, round2(item.qty), 0)
+    })
+  } catch (error) {
+    return { total: 0, ready: 0, blank: 0 }
+  }
+  const ready = findSkuBySpec(working, product.id, color, size)
+  const blank = findBlankSku(working, product.id)
+  const readyQty = round2(ready ? ready.stock : 0)
+  const blankQty = round2(blank ? blank.stock : 0)
+  return {
+    total: round2(readyQty + blankQty),
+    ready: readyQty,
+    blank: blankQty
+  }
+}
+
+function assertSaleItems(products, skus, items) {
+  let workingProducts = cloneList(products)
+  let workingSkus = cloneList(skus)
+  ;(items || []).forEach(function (item) {
+    const consumed = consumeSaleLine(workingProducts, workingSkus, item, 0)
+    workingProducts = consumed.products
+    workingSkus = consumed.skus
+  })
+}
+
+function consumeSaleLine(products, skus, payload, now) {
+  const qty = round2(payload.qty)
+  const index = products.findIndex(function (item) {
+    return item.id === payload.productId
+  })
+  if (index < 0) {
+    throw new Error('商品不存在')
+  }
+
+  const product = Object.assign({}, products[index])
+  const skuList = (skus || []).slice()
+  let costPrice = product.costPrice
+  let skuCode = product.sku
+  let skuId = ''
+  let color = ''
+  let size = ''
+  let allocations = []
+
+  if (isBlankProcess(product)) {
+    const spec = resolveSaleSpec(product, skuList, payload)
+    const allocated = allocateBlankLine(product, skuList, spec.color, spec.size, qty, now)
+    allocations = allocated.allocations
+    costPrice = allocated.costPrice
+    skuId = allocated.skuId
+    color = allocated.color
+    size = allocated.size
+    skuCode = allocated.skuCode
+    product.stock = productStockFromSkus(skuList, product.id)
+  } else if (productHasSpecs(product)) {
+    const spec = resolveSaleSpec(product, skuList, payload)
+    if (spec.sku.stock < qty) {
+      throw new Error(product.name + ' ' + specText(spec.sku.color, spec.sku.size) + ' 库存不足，当前库存 ' + spec.sku.stock)
+    }
+    const sku = Object.assign({}, spec.sku)
+    sku.stock = round2(sku.stock - qty)
+    sku.updatedAt = now
+    const skuIndex = skuList.findIndex(function (item) {
+      return item.id === sku.id
+    })
+    skuList[skuIndex] = sku
+    product.stock = productStockFromSkus(skuList, product.id)
+    costPrice = sku.costPrice
+    skuCode = sku.sku || product.sku
+    skuId = sku.id
+    color = sku.color
+    size = sku.size
+  } else {
+    if (product.stock < qty) {
+      throw new Error(product.name + ' 库存不足，当前库存 ' + product.stock)
+    }
+    product.stock = round2(product.stock - qty)
+  }
+
+  product.updatedAt = now
+  const nextProducts = products.slice()
+  nextProducts[index] = product
+  return {
+    products: nextProducts,
+    skus: skuList,
+    product: product,
+    costPrice: costPrice,
+    skuCode: skuCode,
+    skuId: skuId,
+    color: color,
+    size: size,
+    allocations: allocations
+  }
 }
 
 function productStockFromSkus(skus, productId) {
@@ -92,8 +337,16 @@ function productStockFromSkus(skus, productId) {
 }
 
 function isLowStock(product, skus) {
+  if (isBlankProcess(product) && Array.isArray(skus)) {
+    const blank = findBlankSku(skus, product.id)
+    if (blank) {
+      return toNumber(blank.stock) <= toNumber(product.alertQty)
+    }
+  }
   if (productHasSpecs(product) && Array.isArray(skus)) {
-    const list = skusOfProduct(skus, product.id)
+    const list = skusOfProduct(skus, product.id).filter(function (item) {
+      return !item.isBlank
+    })
     if (list.length) {
       return list.some(function (sku) {
         return toNumber(sku.stock) <= toNumber(sku.alertQty)
@@ -106,10 +359,21 @@ function isLowStock(product, skus) {
 function skuSummaryText(product, skus) {
   const list = skusOfProduct(skus, product.id)
   if (!list.length) return ''
-  const head = list.slice(0, 4).map(function (item) {
-    return specText(item.color, item.size) + ' ' + item.stock
-  }).join(' · ')
-  return list.length > 4 ? head + ' …' : head
+  const parts = []
+  if (isBlankProcess(product)) {
+    const blank = findBlankSku(skus, product.id)
+    parts.push('白坯 ' + (blank ? blank.stock : 0))
+    list.forEach(function (item) {
+      if (item.isBlank || toNumber(item.stock) <= 0) return
+      parts.push(specText(item.color, item.size) + ' ' + item.stock)
+    })
+  } else {
+    list.forEach(function (item) {
+      parts.push(specText(item.color, item.size) + ' ' + item.stock)
+    })
+  }
+  const head = parts.slice(0, 4).join(' · ')
+  return parts.length > 4 ? head + ' …' : head
 }
 
 function createSku(input, now, id) {
@@ -117,9 +381,10 @@ function createSku(input, now, id) {
   if (!productId) {
     throw new Error('商品不存在')
   }
-  const color = String(input.color || '').trim()
-  const size = String(input.size || '').trim()
-  if (!color && !size) {
+  const isBlank = !!input.isBlank
+  const color = isBlank ? '' : String(input.color || '').trim()
+  const size = isBlank ? '' : String(input.size || '').trim()
+  if (!isBlank && !color && !size) {
     throw new Error('请填写颜色或尺码')
   }
 
@@ -152,6 +417,7 @@ function createSku(input, now, id) {
     salePrice: salePrice,
     stock: stock,
     alertQty: alertQty,
+    isBlank: isBlank,
     createdAt: now,
     updatedAt: now
   }
@@ -163,8 +429,9 @@ function updateSku(existing, input, now) {
   }
   const next = createSku({
     productId: existing.productId,
-    color: input.color != null ? input.color : existing.color,
-    size: input.size != null ? input.size : existing.size,
+    isBlank: existing.isBlank,
+    color: existing.isBlank ? '' : (input.color != null ? input.color : existing.color),
+    size: existing.isBlank ? '' : (input.size != null ? input.size : existing.size),
     sku: input.sku != null ? input.sku : existing.sku,
     barcode: input.barcode != null ? input.barcode : existing.barcode,
     costPrice: input.costPrice != null ? input.costPrice : existing.costPrice,
@@ -180,7 +447,7 @@ function updateSku(existing, input, now) {
 function applyProductSkus(product, allSkus, skuInputs, now, nextId) {
   const existing = skusOfProduct(allSkus, product.id)
   if (!productHasSpecs(product)) {
-    const nextProduct = Object.assign({}, product)
+    const nextProduct = Object.assign({}, product, { blankProcess: false })
     if (existing.length) {
       nextProduct.stock = productStockFromSkus(existing, product.id)
       nextProduct.updatedAt = now
@@ -195,8 +462,17 @@ function applyProductSkus(product, allSkus, skuInputs, now, nextId) {
 
   const combos = skuCombos(product.colors, product.sizes)
   const inputList = skuInputs == null ? existing : skuInputs
+  const blankProcess = isBlankProcess(product)
+  const existingBlank = existing.find(function (item) {
+    return item.isBlank
+  })
+
+  if (!blankProcess && existingBlank && toNumber(existingBlank.stock) > 0) {
+    throw new Error('还有白坯库存，不能改成成衣现货')
+  }
 
   existing.forEach(function (old) {
+    if (old.isBlank) return
     const kept = combos.some(function (combo) {
       return specKey(combo.color, combo.size) === specKey(old.color, old.size)
     })
@@ -205,13 +481,13 @@ function applyProductSkus(product, allSkus, skuInputs, now, nextId) {
     }
   })
 
-  const nextForProduct = combos.map(function (combo) {
+  let nextForProduct = combos.map(function (combo) {
     const key = specKey(combo.color, combo.size)
     const row = inputList.find(function (item) {
-      return specKey(item.color, item.size) === key
+      return !item.isBlank && specKey(item.color, item.size) === key
     })
     const prev = existing.find(function (item) {
-      return specKey(item.color, item.size) === key
+      return !item.isBlank && specKey(item.color, item.size) === key
     })
     const payload = {
       productId: product.id,
@@ -222,7 +498,9 @@ function applyProductSkus(product, allSkus, skuInputs, now, nextId) {
       costPrice: row && row.costPrice != null ? row.costPrice : (prev ? prev.costPrice : product.costPrice),
       salePrice: row && row.salePrice != null ? row.salePrice : (prev ? prev.salePrice : product.salePrice),
       stock: prev ? prev.stock : (row && row.stock != null ? row.stock : 0),
-      alertQty: row && row.alertQty != null ? row.alertQty : (prev ? prev.alertQty : product.alertQty)
+      alertQty: blankProcess
+        ? 0
+        : (row && row.alertQty != null ? row.alertQty : (prev ? prev.alertQty : product.alertQty))
     }
     if (prev) {
       return updateSku(prev, payload, now)
@@ -230,7 +508,26 @@ function applyProductSkus(product, allSkus, skuInputs, now, nextId) {
     return createSku(payload, now, nextId())
   })
 
-  if (!existing.length && toNumber(product.stock) > 0) {
+  if (blankProcess) {
+    const blankStock = existingBlank
+      ? existingBlank.stock
+      : (!existing.filter(function (item) { return !item.isBlank }).length ? round2(product.stock) : 0)
+    const blankPayload = {
+      productId: product.id,
+      isBlank: true,
+      color: '',
+      size: '',
+      costPrice: existingBlank ? existingBlank.costPrice : product.costPrice,
+      salePrice: product.salePrice,
+      stock: blankStock,
+      alertQty: product.alertQty
+    }
+    const blankSku = existingBlank
+      ? updateSku(existingBlank, blankPayload, now)
+      : createSku(blankPayload, now, nextId())
+    blankSku.stock = blankStock
+    nextForProduct = [blankSku].concat(nextForProduct)
+  } else if (!existing.filter(function (item) { return !item.isBlank }).length && toNumber(product.stock) > 0) {
     const hasAny = nextForProduct.some(function (item) {
       return toNumber(item.stock) > 0
     })
@@ -278,6 +575,10 @@ function createProduct(input, now, id) {
     throw new Error('预警数量不能为负数')
   }
 
+  const colors = uniqueSpecs(input.colors)
+  const sizes = uniqueSpecs(input.sizes)
+  const hasSpecs = !!(colors.length || sizes.length)
+
   return {
     id: id,
     name: name,
@@ -287,8 +588,9 @@ function createProduct(input, now, id) {
     salePrice: salePrice,
     stock: stock,
     alertQty: alertQty,
-    colors: uniqueSpecs(input.colors),
-    sizes: uniqueSpecs(input.sizes),
+    colors: colors,
+    sizes: sizes,
+    blankProcess: hasSpecs && !!input.blankProcess,
     createdAt: now,
     updatedAt: now
   }
@@ -307,7 +609,8 @@ function updateProduct(existing, input, now) {
     alertQty: input.alertQty,
     stock: existing.stock,
     colors: input.colors != null ? input.colors : existing.colors,
-    sizes: input.sizes != null ? input.sizes : existing.sizes
+    sizes: input.sizes != null ? input.sizes : existing.sizes,
+    blankProcess: input.blankProcess != null ? input.blankProcess : existing.blankProcess
   }, now, existing.id)
   next.createdAt = existing.createdAt
   next.stock = existing.stock
@@ -348,7 +651,26 @@ function applyPurchase(products, records, payload, now, id, skus) {
     createdAt: now
   }
 
-  if (productHasSpecs(product)) {
+  if (isBlankProcess(product)) {
+    const blank = findBlankSku(skuList, product.id)
+    if (!blank) {
+      throw new Error('白坯不存在')
+    }
+    const sku = Object.assign({}, blank)
+    sku.stock = round2(sku.stock + qty)
+    sku.costPrice = unitPrice
+    sku.updatedAt = now
+    const skuIndex = skuList.findIndex(function (item) {
+      return item.id === blank.id
+    })
+    skuList[skuIndex] = sku
+    product.stock = productStockFromSkus(skuList, product.id)
+    product.costPrice = unitPrice
+    product.updatedAt = now
+    record.skuId = sku.id
+    record.sku = sku.sku || product.sku
+    record.costPrice = unitPrice
+  } else if (productHasSpecs(product)) {
     if (!payload.skuId) {
       throw new Error(specSelectHint(product))
     }
@@ -444,27 +766,43 @@ function isCreditSale(record) {
   return record && record.type === 'out' && record.payType === 'credit'
 }
 
+function isCreditReturn(record) {
+  return record && record.type === 'return' && record.payType === 'credit'
+}
+
 function summarizeCustomerAccount(records, customerId) {
   const related = records.filter(function (item) {
-    return item.customerId === customerId && (item.type === 'out' || item.type === 'pay')
+    return item.customerId === customerId && (item.type === 'out' || item.type === 'pay' || item.type === 'return')
   })
   const sales = related.filter(function (item) {
     return item.type === 'out'
   })
+  const returns = related.filter(function (item) {
+    return item.type === 'return'
+  })
   const payments = related.filter(function (item) {
     return item.type === 'pay'
   })
-  const creditAmount = round2(sales.reduce(function (sum, item) {
-    return isCreditSale(item) ? sum + toNumber(item.amount) : sum
-  }, 0))
+  const creditAmount = round2(
+    sales.reduce(function (sum, item) {
+      return isCreditSale(item) ? sum + toNumber(item.amount) : sum
+    }, 0) - returns.reduce(function (sum, item) {
+      return isCreditReturn(item) ? sum + toNumber(item.amount) : sum
+    }, 0)
+  )
   const paidAmount = round2(payments.reduce(function (sum, item) {
     return sum + toNumber(item.amount)
   }, 0))
+  const saleAmount = round2(
+    sales.reduce(function (sum, item) {
+      return sum + toNumber(item.amount)
+    }, 0) - returns.reduce(function (sum, item) {
+      return sum + toNumber(item.amount)
+    }, 0)
+  )
   return {
     count: sales.length,
-    amount: round2(sales.reduce(function (sum, item) {
-      return sum + toNumber(item.amount)
-    }, 0)),
+    amount: saleAmount,
     creditAmount: creditAmount,
     paidAmount: paidAmount,
     receivable: round2(creditAmount - paidAmount),
@@ -476,6 +814,7 @@ function summarizeCustomerAccount(records, customerId) {
 function getTotalReceivable(records) {
   return round2(records.reduce(function (sum, item) {
     if (isCreditSale(item)) return sum + toNumber(item.amount)
+    if (isCreditReturn(item)) return sum - toNumber(item.amount)
     if (item.type === 'pay') return sum - toNumber(item.amount)
     return sum
   }, 0))
@@ -537,70 +876,21 @@ function applySale(products, records, payload, now, id, skus) {
     throw new Error('赊账必须选择客户')
   }
 
-  const index = products.findIndex(function (item) {
-    return item.id === payload.productId
-  })
-  if (index < 0) {
-    throw new Error('商品不存在')
-  }
-
-  const product = Object.assign({}, products[index])
-  const skuList = (skus || []).slice()
-  let costPrice = product.costPrice
-  let skuCode = product.sku
-  let skuId = ''
-  let color = ''
-  let size = ''
-
-  if (productHasSpecs(product)) {
-    if (!payload.skuId) {
-      throw new Error(specSelectHint(product))
-    }
-    const skuIndex = skuList.findIndex(function (item) {
-      return item.id === payload.skuId
-    })
-    if (skuIndex < 0 || skuList[skuIndex].productId !== product.id) {
-      throw new Error('规格不存在')
-    }
-    const sku = Object.assign({}, skuList[skuIndex])
-    if (sku.stock < qty) {
-      throw new Error(product.name + ' ' + specText(sku.color, sku.size) + ' 库存不足，当前库存 ' + sku.stock)
-    }
-    sku.stock = round2(sku.stock - qty)
-    sku.updatedAt = now
-    skuList[skuIndex] = sku
-    product.stock = productStockFromSkus(skuList, product.id)
-    costPrice = sku.costPrice
-    skuCode = sku.sku || product.sku
-    skuId = sku.id
-    color = sku.color
-    size = sku.size
-  } else {
-    if (product.stock < qty) {
-      throw new Error(product.name + ' 库存不足，当前库存 ' + product.stock)
-    }
-    product.stock = round2(product.stock - qty)
-  }
-
-  product.updatedAt = now
-
-  const nextProducts = products.slice()
-  nextProducts[index] = product
-
+  const consumed = consumeSaleLine(products, skus, payload, now)
   const record = {
     id: id,
     type: 'out',
-    productId: product.id,
-    productName: product.name,
-    sku: skuCode,
-    skuId: skuId,
-    color: color,
-    size: size,
+    productId: consumed.product.id,
+    productName: consumed.product.name,
+    sku: consumed.skuCode,
+    skuId: consumed.skuId,
+    color: consumed.color,
+    size: consumed.size,
     qty: qty,
     unitPrice: unitPrice,
-    costPrice: costPrice,
+    costPrice: consumed.costPrice,
     amount: round2(qty * unitPrice),
-    profit: round2((unitPrice - costPrice) * qty),
+    profit: round2((unitPrice - consumed.costPrice) * qty),
     remark: String(payload.remark || '').trim(),
     customerId: customerId,
     customerName: String(payload.customerName || '').trim(),
@@ -608,12 +898,13 @@ function applySale(products, records, payload, now, id, skus) {
     customerAddress: String(payload.customerAddress || '').trim(),
     payType: payType,
     orderId: String(payload.orderId || id),
+    allocations: consumed.allocations || [],
     createdAt: now
   }
 
   return {
-    products: nextProducts,
-    skus: skuList,
+    products: consumed.products,
+    skus: consumed.skus,
     records: [record].concat(records),
     record: record
   }
@@ -631,56 +922,17 @@ function applySaleOrder(products, records, payload, now, orderId, nextId, skus) 
     throw new Error('赊账必须选择客户')
   }
 
-  const skuList = skus || []
-  const qtyBySku = {}
-  const qtyByProduct = {}
-
+  let previewProducts = cloneList(products)
+  let previewSkus = cloneList(skus || [])
   items.forEach(function (item) {
-    const product = products.find(function (row) {
-      return row.id === item.productId
-    })
-    if (!product) {
-      throw new Error('商品不存在')
-    }
-    const qty = round2(item.qty)
-    if (productHasSpecs(product)) {
-      if (!item.skuId) {
-        throw new Error(product.name + ' ' + specSelectHint(product))
-      }
-      qtyBySku[item.skuId] = round2(toNumber(qtyBySku[item.skuId]) + qty)
-    } else {
-      qtyByProduct[item.productId] = round2(toNumber(qtyByProduct[item.productId]) + qty)
-    }
-  })
-
-  Object.keys(qtyByProduct).forEach(function (productId) {
-    const product = products.find(function (item) {
-      return item.id === productId
-    })
-    if (product.stock < qtyByProduct[productId]) {
-      throw new Error(product.name + ' 库存不足，当前库存 ' + product.stock)
-    }
-  })
-
-  Object.keys(qtyBySku).forEach(function (skuId) {
-    const sku = skuList.find(function (item) {
-      return item.id === skuId
-    })
-    if (!sku) {
-      throw new Error('规格不存在')
-    }
-    const product = products.find(function (item) {
-      return item.id === sku.productId
-    })
-    const name = product ? product.name + ' ' + specText(sku.color, sku.size) : specText(sku.color, sku.size)
-    if (sku.stock < qtyBySku[skuId]) {
-      throw new Error(name + ' 库存不足，当前库存 ' + sku.stock)
-    }
+    const consumed = consumeSaleLine(previewProducts, previewSkus, item, now)
+    previewProducts = consumed.products
+    previewSkus = consumed.skus
   })
 
   let workingProducts = products
   let workingRecords = records
-  let workingSkus = skuList
+  let workingSkus = skus || []
   const orderRecords = []
   const shared = {
     customerId: customerId,
@@ -696,6 +948,8 @@ function applySaleOrder(products, records, payload, now, orderId, nextId, skus) 
     const result = applySale(workingProducts, workingRecords, Object.assign({}, shared, {
       productId: item.productId,
       skuId: item.skuId,
+      color: item.color,
+      size: item.size,
       qty: item.qty,
       unitPrice: item.unitPrice
     }), now, nextId(), workingSkus)
@@ -717,6 +971,190 @@ function applySaleOrder(products, records, payload, now, orderId, nextId, skus) 
       customerPhone: payload.customerPhone,
       customerAddress: payload.customerAddress
     }, now)
+  }
+}
+
+function applyConvert(products, records, payload, now, id, skus) {
+  const qty = round2(payload.qty)
+  if (qty <= 0) {
+    throw new Error('改规格数量必须大于 0')
+  }
+
+  const index = products.findIndex(function (item) {
+    return item.id === payload.productId
+  })
+  if (index < 0) {
+    throw new Error('商品不存在')
+  }
+  const product = Object.assign({}, products[index])
+  if (!productHasSpecs(product)) {
+    throw new Error('普通商品不用改规格')
+  }
+
+  const skuList = (skus || []).slice()
+  const from = skuList.find(function (item) {
+    return item.id === payload.fromSkuId
+  })
+  const to = skuList.find(function (item) {
+    return item.id === payload.toSkuId
+  })
+  if (!from || !to || from.productId !== product.id || to.productId !== product.id) {
+    throw new Error('规格不存在')
+  }
+  if (from.isBlank || to.isBlank) {
+    throw new Error('白坯不能改规格，请在销售时选色码')
+  }
+  if (from.id === to.id) {
+    throw new Error('请选择不同的规格')
+  }
+  if (from.stock < qty) {
+    throw new Error(stockLabel(product, from) + ' 库存不足，当前库存 ' + from.stock)
+  }
+
+  const costPrice = from.costPrice
+  addSkuStock(skuList, from.id, -qty, now, null, product)
+  addSkuStock(skuList, to.id, qty, now, costPrice, product)
+  product.stock = productStockFromSkus(skuList, product.id)
+  product.updatedAt = now
+  const nextProducts = products.slice()
+  nextProducts[index] = product
+
+  const record = {
+    id: id,
+    type: 'convert',
+    productId: product.id,
+    productName: product.name,
+    sku: to.sku || product.sku,
+    skuId: to.id,
+    color: to.color,
+    size: to.size,
+    fromSkuId: from.id,
+    fromColor: from.color,
+    fromSize: from.size,
+    toSkuId: to.id,
+    qty: qty,
+    unitPrice: 0,
+    costPrice: costPrice,
+    amount: 0,
+    profit: 0,
+    remark: String(payload.remark || '').trim(),
+    createdAt: now
+  }
+
+  return {
+    products: nextProducts,
+    skus: skuList,
+    records: [record].concat(records),
+    record: record
+  }
+}
+
+function restockRecord(products, skus, record, qty, now, costPrice) {
+  const index = products.findIndex(function (item) {
+    return item.id === record.productId
+  })
+  if (index < 0) {
+    throw new Error('商品已删除，不能改库存')
+  }
+  const product = Object.assign({}, products[index])
+  const skuList = (skus || []).slice()
+  const delta = round2(qty)
+  if (record.skuId) {
+    addSkuStock(skuList, record.skuId, delta, now, delta > 0 ? costPrice : null, product)
+    product.stock = productStockFromSkus(skuList, product.id)
+  } else if (productHasSpecs(product)) {
+    throw new Error(specSelectHint(product) || '请选择颜色和尺码')
+  } else {
+    const nextStock = round2(product.stock + delta)
+    if (nextStock < 0) {
+      throw new Error(product.name + ' 库存不足，当前库存 ' + product.stock)
+    }
+    product.stock = nextStock
+  }
+  product.updatedAt = now
+  const nextProducts = products.slice()
+  nextProducts[index] = product
+  return { products: nextProducts, skus: skuList }
+}
+
+function applyReturn(products, records, payload, now, id, skus) {
+  const sale = (records || []).find(function (item) {
+    return item.id === payload.saleRecordId && item.type === 'out'
+  })
+  if (!sale) {
+    throw new Error('销售流水不存在')
+  }
+  const qty = round2(payload.qty)
+  if (qty <= 0) {
+    throw new Error('退货数量必须大于 0')
+  }
+  const remain = returnableQty(records, sale)
+  if (qty > remain) {
+    throw new Error('退货不能超过可退数量 ' + remain)
+  }
+
+  const restocked = restockRecord(products, skus, sale, qty, now, sale.costPrice)
+  const record = {
+    id: id,
+    type: 'return',
+    productId: sale.productId,
+    productName: sale.productName,
+    sku: sale.sku,
+    skuId: sale.skuId || '',
+    color: sale.color || '',
+    size: sale.size || '',
+    qty: qty,
+    unitPrice: sale.unitPrice,
+    costPrice: sale.costPrice,
+    amount: round2(qty * toNumber(sale.unitPrice)),
+    profit: round2((toNumber(sale.unitPrice) - toNumber(sale.costPrice)) * qty * -1),
+    remark: String(payload.remark || '').trim(),
+    customerId: sale.customerId || '',
+    customerName: sale.customerName || '',
+    customerPhone: sale.customerPhone || '',
+    customerAddress: sale.customerAddress || '',
+    payType: sale.payType === 'credit' ? 'credit' : 'cash',
+    orderId: sale.orderId || sale.id,
+    saleRecordId: sale.id,
+    createdAt: now
+  }
+  const nextRecords = [record].concat(records)
+  assertReceivableValid(nextRecords)
+  return {
+    products: restocked.products,
+    skus: restocked.skus,
+    records: nextRecords,
+    record: record
+  }
+}
+
+function applyReturnOrder(products, records, payload, now, nextId, skus) {
+  const items = (payload.items || []).filter(function (item) {
+    return round2(item.qty) > 0
+  })
+  if (!items.length) {
+    throw new Error('请填写退货数量')
+  }
+  let workingProducts = products
+  let workingRecords = records
+  let workingSkus = skus || []
+  const returnRecords = []
+  items.forEach(function (item) {
+    const result = applyReturn(workingProducts, workingRecords, {
+      saleRecordId: item.saleRecordId,
+      qty: item.qty,
+      remark: payload.remark
+    }, now, nextId(), workingSkus)
+    workingProducts = result.products
+    workingRecords = result.records
+    workingSkus = result.skus
+    returnRecords.push(result.record)
+  })
+  return {
+    products: workingProducts,
+    skus: workingSkus,
+    records: workingRecords,
+    recordsCreated: returnRecords
   }
 }
 
@@ -772,6 +1210,9 @@ function receivableAt(records, customerId, at) {
 }
 
 function stockLabel(product, sku) {
+  if (sku && sku.isBlank) {
+    return (product && product.name ? product.name : '') + ' 白坯'
+  }
   if (sku) {
     const spec = specText(sku.color, sku.size)
     return spec ? product.name + ' ' + spec : product.name
@@ -877,7 +1318,7 @@ function applyLatestPurchaseCost(products, skus, records, productId, skuId, now)
 function assertReceivableValid(records) {
   const seen = {}
   records.forEach(function (item) {
-    if (item.customerId && (item.type === 'out' || item.type === 'pay')) {
+    if (item.customerId && (item.type === 'out' || item.type === 'pay' || item.type === 'return')) {
       seen[item.customerId] = true
     }
   })
@@ -936,12 +1377,53 @@ function updateRecord(products, records, payload, now, skus) {
       throw new Error(existing.type === 'in' ? '进价不能为负数' : '售价不能为负数')
     }
 
-    const stockDelta = existing.type === 'in'
-      ? round2(qty - existing.qty)
-      : round2(existing.qty - qty)
-    const adjusted = adjustStock(nextProducts, nextSkus, existing, stockDelta, now)
-    nextProducts = adjusted.products
-    nextSkus = adjusted.skus
+    if (existing.type === 'out') {
+      const returned = saleReturnQty(records, existing.id)
+      if (qty < returned) {
+        throw new Error('数量不能小于已退货 ' + returned)
+      }
+    }
+
+    if (existing.type === 'out' && existing.allocations && existing.allocations.length) {
+      const product = nextProducts.find(function (item) {
+        return item.id === existing.productId
+      })
+      nextSkus = nextSkus.slice()
+      restoreAllocations(nextSkus, existing.allocations, now, product)
+      if (product) {
+        const idx = nextProducts.findIndex(function (item) {
+          return item.id === product.id
+        })
+        const synced = Object.assign({}, nextProducts[idx], {
+          stock: productStockFromSkus(nextSkus, product.id),
+          updatedAt: now
+        })
+        nextProducts = nextProducts.slice()
+        nextProducts[idx] = synced
+      }
+      const consumed = consumeSaleLine(nextProducts, nextSkus, {
+        productId: existing.productId,
+        skuId: existing.skuId,
+        color: existing.color,
+        size: existing.size,
+        qty: qty
+      }, now)
+      nextProducts = consumed.products
+      nextSkus = consumed.skus
+      next.allocations = consumed.allocations
+      next.costPrice = consumed.costPrice
+      next.profit = round2((unitPrice - consumed.costPrice) * qty)
+    } else {
+      const stockDelta = existing.type === 'in'
+        ? round2(qty - existing.qty)
+        : round2(existing.qty - qty)
+      const adjusted = adjustStock(nextProducts, nextSkus, existing, stockDelta, now)
+      nextProducts = adjusted.products
+      nextSkus = adjusted.skus
+      if (existing.type === 'out') {
+        next.profit = round2((unitPrice - toNumber(existing.costPrice)) * qty)
+      }
+    }
 
     next.qty = qty
     next.unitPrice = unitPrice
@@ -957,13 +1439,62 @@ function updateRecord(products, records, payload, now, skus) {
       if (payType === 'credit' && !customerId) {
         throw new Error('赊账必须选择客户')
       }
-      next.profit = round2((unitPrice - toNumber(existing.costPrice)) * qty)
+      if (!(existing.allocations && existing.allocations.length)) {
+        next.profit = round2((unitPrice - toNumber(existing.costPrice)) * qty)
+      }
       next.payType = payType
       next.customerId = customerId
       next.customerName = String(payload.customerName || '').trim()
       next.customerPhone = String(payload.customerPhone || '').trim()
       next.customerAddress = String(payload.customerAddress || '').trim()
     }
+  } else if (existing.type === 'return') {
+    const qty = round2(payload.qty)
+    if (qty <= 0) {
+      throw new Error('退货数量必须大于 0')
+    }
+    const sale = records.find(function (item) {
+      return item.id === existing.saleRecordId && item.type === 'out'
+    })
+    const others = records.filter(function (item) {
+      return item.id !== existing.id
+    })
+    const remain = sale ? round2(returnableQty(others, sale) ) : qty
+    if (qty > remain) {
+      throw new Error('退货不能超过可退数量 ' + remain)
+    }
+    const restocked = restockRecord(nextProducts, nextSkus, existing, round2(qty - existing.qty), now, existing.costPrice)
+    nextProducts = restocked.products
+    nextSkus = restocked.skus
+    next.qty = qty
+    next.amount = round2(qty * toNumber(existing.unitPrice))
+    next.profit = round2((toNumber(existing.unitPrice) - toNumber(existing.costPrice)) * qty * -1)
+    next.remark = String(payload.remark || '').trim()
+  } else if (existing.type === 'convert') {
+    const qty = round2(payload.qty)
+    if (qty <= 0) {
+      throw new Error('改规格数量必须大于 0')
+    }
+    const product = nextProducts.find(function (item) {
+      return item.id === existing.productId
+    })
+    nextSkus = nextSkus.slice()
+    addSkuStock(nextSkus, existing.toSkuId, -existing.qty, now, null, product)
+    addSkuStock(nextSkus, existing.fromSkuId, existing.qty, now, existing.costPrice, product)
+    addSkuStock(nextSkus, existing.fromSkuId, -qty, now, null, product)
+    addSkuStock(nextSkus, existing.toSkuId, qty, now, existing.costPrice, product)
+    if (product) {
+      const idx = nextProducts.findIndex(function (item) {
+        return item.id === product.id
+      })
+      nextProducts = nextProducts.slice()
+      nextProducts[idx] = Object.assign({}, nextProducts[idx], {
+        stock: productStockFromSkus(nextSkus, product.id),
+        updatedAt: now
+      })
+    }
+    next.qty = qty
+    next.remark = String(payload.remark || '').trim()
   } else {
     throw new Error('流水不存在')
   }
@@ -1007,13 +1538,32 @@ function deleteRecord(products, records, id, now, skus) {
     throw new Error('流水不存在')
   }
 
+  if (existing.type === 'out' && saleReturnQty(records, existing.id) > 0) {
+    throw new Error('请先删除退货记录')
+  }
+
   let nextProducts = products
-  let nextSkus = skus || []
+  let nextSkus = (skus || []).slice()
   const nextRecords = records.filter(function (item) {
     return item.id !== id
   })
 
-  if (existing.type === 'in' || existing.type === 'out') {
+  if (existing.type === 'out' && existing.allocations && existing.allocations.length) {
+    const product = products.find(function (item) {
+      return item.id === existing.productId
+    })
+    restoreAllocations(nextSkus, existing.allocations, now, product)
+    if (product) {
+      const idx = nextProducts.findIndex(function (item) {
+        return item.id === product.id
+      })
+      nextProducts = nextProducts.slice()
+      nextProducts[idx] = Object.assign({}, nextProducts[idx], {
+        stock: productStockFromSkus(nextSkus, product.id),
+        updatedAt: now
+      })
+    }
+  } else if (existing.type === 'in' || existing.type === 'out') {
     const product = products.find(function (item) {
       return item.id === existing.productId
     })
@@ -1023,11 +1573,32 @@ function deleteRecord(products, records, id, now, skus) {
       nextProducts = adjusted.products
       nextSkus = adjusted.skus
     }
-    if (existing.type === 'in') {
-      const costed = applyLatestPurchaseCost(nextProducts, nextSkus, nextRecords, existing.productId, existing.skuId, now)
-      nextProducts = costed.products
-      nextSkus = costed.skus
+  } else if (existing.type === 'return') {
+    const restocked = restockRecord(nextProducts, nextSkus, existing, round2(-existing.qty), now, existing.costPrice)
+    nextProducts = restocked.products
+    nextSkus = restocked.skus
+  } else if (existing.type === 'convert') {
+    const product = products.find(function (item) {
+      return item.id === existing.productId
+    })
+    addSkuStock(nextSkus, existing.toSkuId, -existing.qty, now, null, product)
+    addSkuStock(nextSkus, existing.fromSkuId, existing.qty, now, existing.costPrice, product)
+    if (product) {
+      const idx = nextProducts.findIndex(function (item) {
+        return item.id === product.id
+      })
+      nextProducts = nextProducts.slice()
+      nextProducts[idx] = Object.assign({}, nextProducts[idx], {
+        stock: productStockFromSkus(nextSkus, product.id),
+        updatedAt: now
+      })
     }
+  }
+
+  if (existing.type === 'in') {
+    const costed = applyLatestPurchaseCost(nextProducts, nextSkus, nextRecords, existing.productId, existing.skuId, now)
+    nextProducts = costed.products
+    nextSkus = costed.skus
   }
 
   assertReceivableValid(nextRecords)
@@ -1044,6 +1615,9 @@ function getDashboard(products, records, now, skus) {
   const todayOut = records.filter(function (item) {
     return item.type === 'out' && item.createdAt >= start
   })
+  const todayReturn = records.filter(function (item) {
+    return item.type === 'return' && item.createdAt >= start
+  })
   const todayIn = records.filter(function (item) {
     return item.type === 'in' && item.createdAt >= start
   })
@@ -1058,12 +1632,20 @@ function getDashboard(products, records, now, skus) {
     totalStock: round2(products.reduce(function (sum, item) {
       return sum + toNumber(item.stock)
     }, 0)),
-    todaySalesAmount: round2(todayOut.reduce(function (sum, item) {
-      return sum + toNumber(item.amount)
-    }, 0)),
-    todayProfit: round2(todayOut.reduce(function (sum, item) {
-      return sum + toNumber(item.profit)
-    }, 0)),
+    todaySalesAmount: round2(
+      todayOut.reduce(function (sum, item) {
+        return sum + toNumber(item.amount)
+      }, 0) - todayReturn.reduce(function (sum, item) {
+        return sum + toNumber(item.amount)
+      }, 0)
+    ),
+    todayProfit: round2(
+      todayOut.reduce(function (sum, item) {
+        return sum + toNumber(item.profit)
+      }, 0) + todayReturn.reduce(function (sum, item) {
+        return sum + toNumber(item.profit)
+      }, 0)
+    ),
     todayInAmount: round2(todayIn.reduce(function (sum, item) {
       return sum + toNumber(item.amount)
     }, 0)),
@@ -1107,19 +1689,30 @@ function summarizeRecords(records) {
   const sales = records.filter(function (item) {
     return item.type === 'out'
   })
+  const returns = records.filter(function (item) {
+    return item.type === 'return'
+  })
   const purchases = records.filter(function (item) {
     return item.type === 'in'
   })
   return {
-    salesAmount: round2(sales.reduce(function (sum, item) {
-      return sum + toNumber(item.amount)
-    }, 0)),
+    salesAmount: round2(
+      sales.reduce(function (sum, item) {
+        return sum + toNumber(item.amount)
+      }, 0) - returns.reduce(function (sum, item) {
+        return sum + toNumber(item.amount)
+      }, 0)
+    ),
     purchaseAmount: round2(purchases.reduce(function (sum, item) {
       return sum + toNumber(item.amount)
     }, 0)),
-    profit: round2(sales.reduce(function (sum, item) {
-      return sum + toNumber(item.profit)
-    }, 0)),
+    profit: round2(
+      sales.reduce(function (sum, item) {
+        return sum + toNumber(item.profit)
+      }, 0) + returns.reduce(function (sum, item) {
+        return sum + toNumber(item.profit)
+      }, 0)
+    ),
     receivable: getTotalReceivable(records),
     count: records.length
   }
@@ -1155,6 +1748,20 @@ function buildSeed(now, nextId) {
   ], now - 5 * 3600000, nextId)
   products.push(teeApplied.product)
 
+  const hoodie = createProduct({
+    name: '卫衣',
+    sku: 'HD-006',
+    costPrice: 45,
+    salePrice: 99,
+    stock: 20,
+    alertQty: 5,
+    colors: ['黑色', '白色', '红色'],
+    sizes: ['M', 'L'],
+    blankProcess: true
+  }, now - 6 * 3600000, nextId())
+  const hoodieApplied = applyProductSkus(hoodie, teeApplied.skus, null, now - 6 * 3600000, nextId)
+  products.push(hoodieApplied.product)
+
   const customerA = createCustomer({
     name: '张三超市',
     phone: '13800138000',
@@ -1169,7 +1776,7 @@ function buildSeed(now, nextId) {
 
   let records = []
   let working = products
-  let skus = teeApplied.skus
+  let skus = hoodieApplied.skus
 
   const saleMilk = applySale(working, records, {
     productId: products[0].id,
@@ -1230,6 +1837,25 @@ function buildSeed(now, nextId) {
   records = saleTee.records
   skus = saleTee.skus
 
+  const hoodieWhiteM = skus.find(function (item) {
+    return item.productId === hoodieApplied.product.id && item.color === '白色' && item.size === 'M'
+  })
+  const saleHoodie = applySale(working, records, {
+    productId: hoodieApplied.product.id,
+    skuId: hoodieWhiteM.id,
+    qty: 2,
+    unitPrice: 99,
+    remark: '示例白坯销售',
+    customerId: customerB.id,
+    customerName: customerB.name,
+    customerPhone: customerB.phone,
+    customerAddress: customerB.address,
+    payType: 'cash'
+  }, now - 16 * 60000, nextId(), skus)
+  working = saleHoodie.products
+  records = saleHoodie.records
+  skus = saleHoodie.skus
+
   const purchaseWater = applyPurchase(working, records, {
     productId: products[3].id,
     qty: 12,
@@ -1264,6 +1890,14 @@ module.exports = {
   productStockFromSkus: productStockFromSkus,
   skuSummaryText: skuSummaryText,
   isLowStock: isLowStock,
+  isBlankProcess: isBlankProcess,
+  isBlankSku: isBlankSku,
+  findBlankSku: findBlankSku,
+  blankAvailability: blankAvailability,
+  assertSaleItems: assertSaleItems,
+  saleReturnQty: saleReturnQty,
+  returnableQty: returnableQty,
+  isCreditReturn: isCreditReturn,
   createProduct: createProduct,
   updateProduct: updateProduct,
   createSku: createSku,
@@ -1279,6 +1913,9 @@ module.exports = {
   applyPurchase: applyPurchase,
   applySale: applySale,
   applySaleOrder: applySaleOrder,
+  applyConvert: applyConvert,
+  applyReturn: applyReturn,
+  applyReturnOrder: applyReturnOrder,
   buildSaleOrder: buildSaleOrder,
   receivableAt: receivableAt,
   applyPayment: applyPayment,

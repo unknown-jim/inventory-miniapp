@@ -7,6 +7,8 @@
     "pages/inventory/inventory",
     "pages/records/records",
     "pages/record-edit/record-edit",
+    "pages/sale-return/sale-return",
+    "pages/convert/convert",
     "pages/product-edit/product-edit",
     "pages/customers/customers",
     "pages/customer-edit/customer-edit"

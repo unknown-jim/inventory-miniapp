@@ -11,6 +11,9 @@ Page({
     isIn: false,
     isOut: false,
     isPay: false,
+    isReturn: false,
+    isConvert: false,
+    canReturn: false,
     productName: '',
     specText: '',
     timeText: '',
@@ -43,7 +46,11 @@ Page({
       return
     }
     const view = util.withRecordView(record)
-    const title = view.isPay ? '修改收款' : (view.isIn ? '修改进货' : '修改销售')
+    let title = '修改销售'
+    if (view.isPay) title = '修改收款'
+    else if (view.isIn) title = '修改进货'
+    else if (view.isReturn) title = '修改退货'
+    else if (view.isConvert) title = '修改改规格'
     wx.setNavigationBarTitle({ title: title })
     this.costPrice = record.costPrice
     this.setData({
@@ -53,21 +60,24 @@ Page({
       isIn: view.isIn,
       isOut: view.isOut,
       isPay: view.isPay,
+      isReturn: view.isReturn,
+      isConvert: view.isConvert,
+      canReturn: view.isOut && inventory.returnableQty(store.getRecords(), record) > 0,
       productName: record.productName,
       specText: view.specText,
       timeText: util.formatDateTime(record.createdAt),
       qty: view.isPay ? '' : String(record.qty),
-      unitPrice: view.isPay ? '' : String(record.unitPrice),
+      unitPrice: view.isPay || view.isConvert ? '' : String(record.unitPrice),
       amount: view.isPay ? String(record.amount) : '',
       amountText: util.money(record.amount),
-      profitText: view.isOut ? util.money(record.profit) : '0.00',
+      profitText: view.isOut || view.isReturn ? util.money(record.profit) : '0.00',
       remark: record.remark || '',
       payType: record.payType === 'credit' ? 'credit' : 'cash',
       customerId: record.customerId || '',
       customerName: record.customerName || (view.isOut ? '散客（可不选）' : (record.customerName || '')),
       customerPhone: record.customerPhone || '',
       customerAddress: record.customerAddress || '',
-      costText: view.isOut ? util.money(record.costPrice) : '',
+      costText: view.isOut || view.isReturn ? util.money(record.costPrice) : '',
       hasOrder: !!(record.orderId)
     })
   },
@@ -81,8 +91,8 @@ Page({
     const qty = inventory.toNumber(this.data.qty)
     const price = inventory.toNumber(this.data.unitPrice)
     const amount = inventory.round2(qty * price)
-    const profit = this.data.isOut
-      ? inventory.round2((price - inventory.toNumber(this.costPrice)) * qty)
+    const profit = this.data.isOut || this.data.isReturn
+      ? inventory.round2((price - inventory.toNumber(this.costPrice)) * qty * (this.data.isReturn ? -1 : 1))
       : 0
     this.setData({
       amountText: util.money(amount),
@@ -199,6 +209,11 @@ Page({
           amount: this.data.amount,
           remark: this.data.remark
         })
+      } else if (this.data.isReturn || this.data.isConvert) {
+        store.updateRecord(this.data.id, {
+          qty: this.data.qty,
+          remark: this.data.remark
+        })
       } else {
         store.updateRecord(this.data.id, {
           qty: this.data.qty,
@@ -217,12 +232,20 @@ Page({
     }
   },
 
+  goReturn() {
+    wx.navigateTo({ url: '/pages/sale-return/sale-return?id=' + this.data.id })
+  },
+
   remove() {
     wx.showModal({
       title: '删除流水',
       content: this.data.isPay
         ? '删除后这笔收款会从欠款里去掉。'
-        : '删除后会把库存改回去。记错商品时用这个，然后重新开单。',
+        : (this.data.isReturn
+          ? '删除后退货入库会改回去。'
+          : (this.data.isConvert
+            ? '删除后规格会改回原来的颜色尺码。'
+            : '删除后会把库存改回去。记错商品时用这个，然后重新开单。')),
       confirmColor: '#DC2626',
       success: (res) => {
         if (!res.confirm) return

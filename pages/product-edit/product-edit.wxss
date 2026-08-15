@@ -62,10 +62,27 @@
   line-height: 80rpx;
 }
 
-.clear-spec {
-  margin-top: 8rpx;
-  color: #0F766E;
-  font-size: 24rpx;
+.pay-tabs {
+  display: flex;
+  gap: 12rpx;
+  margin-bottom: 12rpx;
+}
+
+.pay-tab {
+  flex: 1;
+  height: 72rpx;
+  line-height: 72rpx;
+  text-align: center;
+  background: #F8FAF9;
+  border-radius: 14rpx;
+  color: #64748B;
+  font-size: 28rpx;
+}
+
+.pay-tab.on {
+  background: #0F766E;
+  color: #FFFFFF;
+  font-weight: 600;
 }
 
 .sku-card {
