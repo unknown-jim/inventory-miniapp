@@ -52,6 +52,7 @@ npm run test:ui
 仓库文档在 `docs/` 和根目录 [AGENTS.md](AGENTS.md)，不放在 `.cursor/`。
 
 - 改任何文件必须从 `main` 新建 git worktree 和分支，见 [docs/git-workflow.md](docs/git-workflow.md)
+- 提交说明和 Pull Request 写法，见 [docs/commit-and-pr.md](docs/commit-and-pr.md)
 - 代码注入、用时注入、分包时机和上传前扫描，见 [docs/code-injection.md](docs/code-injection.md)
 - 记账要自洽，不要把行业习惯写成限制，见 [docs/accounting-vs-policy.md](docs/accounting-vs-policy.md)
 - 白坯 / 成衣 / 退货 / 改规格，见 [docs/blank-process.md](docs/blank-process.md)

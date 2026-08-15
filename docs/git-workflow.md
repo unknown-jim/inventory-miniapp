@@ -73,6 +73,8 @@ git branch -d <前缀>/<短名>
 
 未合并的分支不要用 `-D` 强删。
 
+提交说明和 Pull Request 怎么写，见 [commit-and-pr.md](commit-and-pr.md)。
+
 ## Agent 检查清单
 
 改任何文件之前：
