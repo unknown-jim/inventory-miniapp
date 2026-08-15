@@ -19,6 +19,7 @@
 
 .tabs {
   display: flex;
+  flex-wrap: wrap;
   gap: 12rpx;
   margin: 24rpx 0 16rpx;
 }

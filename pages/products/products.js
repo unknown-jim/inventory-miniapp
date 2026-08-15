@@ -13,7 +13,10 @@ Page({
   },
 
   refresh() {
-    const list = inventory.filterProducts(store.getProducts(), this.data.keyword).map(util.withView)
+    const skus = store.getSkus()
+    const list = inventory.filterProducts(store.getProducts(), this.data.keyword, skus).map(function (item) {
+      return util.withView(item, skus)
+    })
     this.setData({ list: list })
   },
 

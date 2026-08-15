@@ -8,6 +8,14 @@
   font-size: 24rpx;
 }
 
+.spec-block .field {
+  margin-bottom: 8rpx;
+}
+
+.spec-block .chips {
+  margin-bottom: 8rpx;
+}
+
 .field-row {
   display: flex;
   gap: 16rpx;
@@ -51,6 +59,7 @@
   background: rgba(15, 23, 42, 0.45);
   display: flex;
   align-items: flex-end;
+  z-index: 1000;
 }
 
 .sheet {
@@ -58,6 +67,8 @@
   background: #FFFFFF;
   border-radius: 24rpx 24rpx 0 0;
   padding: 28rpx 24rpx 12rpx;
+  position: relative;
+  z-index: 1001;
 }
 
 .sheet-title {

@@ -84,6 +84,20 @@
   color: #0F766E;
 }
 
+.debt-banner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 8rpx;
+}
+
+.debt-banner-num {
+  margin-top: 8rpx;
+  font-size: 36rpx;
+  font-weight: 700;
+  color: #C2410C;
+}
+
 .seed-btn {
   margin-top: 28rpx;
 }

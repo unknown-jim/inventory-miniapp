@@ -3,6 +3,11 @@
   "private": true,
   "description": "简单进销存微信小程序",
   "scripts": {
-    "test": "node tests/inventory.test.js"
+    "test": "node tests/inventory.test.js && node tests/slip-image.test.js",
+    "test:ui": "node tests/ui.test.js",
+    "test:all": "node tests/inventory.test.js && node tests/slip-image.test.js && node tests/ui.test.js"
+  },
+  "devDependencies": {
+    "miniprogram-automator": "^0.12.1"
   }
 }

@@ -12,27 +12,37 @@
       <view class="muted">销售毛利</view>
       <view class="sum-num">¥{{profit}}</view>
     </view>
+    <view class="sum">
+      <view class="muted">客户欠款</view>
+      <view class="sum-num warm">¥{{receivable}}</view>
+    </view>
   </view>
 
   <view class="tabs">
     <view class="tab {{type === 'all' ? 'on' : ''}}" data-type="all" bindtap="setType">全部 {{count}}</view>
     <view class="tab {{type === 'in' ? 'on' : ''}}" data-type="in" bindtap="setType">进货</view>
     <view class="tab {{type === 'out' ? 'on' : ''}}" data-type="out" bindtap="setType">销售</view>
+    <view class="tab {{type === 'pay' ? 'on' : ''}}" data-type="pay" bindtap="setType">收款</view>
   </view>
 
   <view wx:if="{{!list.length}}" class="card empty">还没有流水</view>
 
   <view class="card list-card" wx:if="{{list.length}}">
-    <view class="list-item" wx:for="{{list}}" wx:key="id">
+    <view class="list-item" wx:for="{{list}}" wx:key="id" data-id="{{item.id}}" bindtap="onRecordTap">
       <view>
         <view class="item-name">{{item.productName}}</view>
-        <view class="muted">{{item.timeText}} · {{item.qtyText}} 件 · 单价 ¥{{item.priceText}}</view>
+        <view class="muted" wx:if="{{item.hasSpec}}">{{item.specText}}</view>
+        <view class="muted">
+          {{item.timeText}}
+          <block wx:if="{{item.isOut || item.isIn}}"> · {{item.qtyText}} 件 · 单价 ¥{{item.priceText}}</block>
+        </view>
+        <view wx:if="{{item.customerText}}" class="muted">客户 {{item.customerText}}</view>
         <view wx:if="{{item.remark}}" class="muted">{{item.remark}}</view>
       </view>
       <view class="item-right">
-        <text class="tag {{item.isIn ? 'tag-in' : 'tag-out'}}">{{item.typeText}}</text>
+        <text class="tag {{item.tagClass}}">{{item.typeText}}</text>
         <view class="amount">¥{{item.amountText}}</view>
-        <view wx:if="{{!item.isIn}}" class="muted">毛利 ¥{{item.profitText}}</view>
+        <view wx:if="{{item.isOut}}" class="muted">毛利 ¥{{item.profitText}}</view>
       </view>
     </view>
   </view>

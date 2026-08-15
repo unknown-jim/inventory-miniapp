@@ -34,6 +34,12 @@
   margin-bottom: 8rpx;
 }
 
+.goods-tags {
+  display: flex;
+  gap: 8rpx;
+  align-items: center;
+}
+
 .item-name {
   font-weight: 600;
   font-size: 30rpx;

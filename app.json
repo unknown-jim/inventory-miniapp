@@ -6,7 +6,10 @@
     "pages/sale/sale",
     "pages/inventory/inventory",
     "pages/records/records",
-    "pages/product-edit/product-edit"
+    "pages/record-edit/record-edit",
+    "pages/product-edit/product-edit",
+    "pages/customers/customers",
+    "pages/customer-edit/customer-edit"
   ],
   "window": {
     "navigationBarBackgroundColor": "#0F766E",
@@ -54,5 +57,10 @@
     ]
   },
   "style": "v2",
-  "sitemapLocation": "sitemap.json"
+  "sitemapLocation": "sitemap.json",
+  "permission": {
+    "scope.writePhotosAlbum": {
+      "desc": "把送货单保存到相册，方便发给客户或打印"
+    }
+  }
 }

@@ -9,6 +9,7 @@ Page({
     salesAmount: '0.00',
     purchaseAmount: '0.00',
     profit: '0.00',
+    receivable: '0.00',
     count: 0
   },
 
@@ -17,19 +18,25 @@ Page({
   },
 
   refresh() {
-    const records = inventory.filterRecords(store.getRecords(), this.data.type)
-    const summary = inventory.summarizeRecords(records)
+    const all = store.getRecords()
+    const records = inventory.filterRecords(all, this.data.type)
+    const summary = inventory.summarizeRecords(all)
     this.setData({
       list: records.map(util.withRecordView),
       salesAmount: util.money(summary.salesAmount),
       purchaseAmount: util.money(summary.purchaseAmount),
       profit: util.money(summary.profit),
-      count: summary.count
+      receivable: util.money(summary.receivable),
+      count: records.length
     })
   },
 
   setType(e) {
     this.setData({ type: e.currentTarget.dataset.type })
     this.refresh()
+  },
+
+  onRecordTap(e) {
+    wx.navigateTo({ url: '/pages/record-edit/record-edit?id=' + e.currentTarget.dataset.id })
   }
 })

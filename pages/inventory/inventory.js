@@ -15,12 +15,15 @@ Page({
   },
 
   refresh() {
-    const products = inventory.filterProducts(store.getProducts(), this.data.keyword)
-    const alerts = products.filter(inventory.isLowStock)
+    const skus = store.getSkus()
+    const products = inventory.filterProducts(store.getProducts(), this.data.keyword, skus)
+    const alerts = products.filter(function (item) {
+      return inventory.isLowStock(item, skus)
+    })
     const source = this.data.onlyAlert ? alerts : products
     this.setData({
       list: source.map(function (item) {
-        const view = util.withView(item)
+        const view = util.withView(item, skus)
         const cap = item.alertQty * 3 || 1
         view.barWidth = Math.max(8, Math.min(100, Math.round(item.stock / cap * 100)))
         return view

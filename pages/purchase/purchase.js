@@ -5,9 +5,18 @@ const inventory = require('../../utils/inventory')
 Page({
   data: {
     products: [],
+    skus: [],
     productId: '',
     productName: '请选择商品',
     stockText: '-',
+    hasSpecs: false,
+    colors: [],
+    sizes: [],
+    selectedColor: '',
+    selectedSize: '',
+    skuId: '',
+    colorOptions: [],
+    sizeOptions: [],
     qty: '',
     unitPrice: '',
     remark: '',
@@ -19,9 +28,12 @@ Page({
 
   onShow() {
     const products = store.getProducts()
+    const skus = store.getSkus()
     const selectedId = getApp().consumeSelectedProduct()
-    this.setData({ products: products })
-    this.applyFilter(this.data.keyword, products)
+    this.setData({ products: products, skus: skus })
+    this.data.skus = skus
+    this.data.products = products
+    this.applyFilter(this.data.keyword, products, skus)
     if (selectedId) {
       this.selectProduct(selectedId)
     } else if (this.data.productId) {
@@ -29,11 +41,14 @@ Page({
     }
   },
 
-  applyFilter(keyword, products) {
+  applyFilter(keyword, products, skus) {
     const source = products || this.data.products
+    const skuList = skus || this.data.skus
     this.setData({
       keyword: keyword,
-      filtered: inventory.filterProducts(source, keyword).map(util.withView)
+      filtered: inventory.filterProducts(source, keyword, skuList).map(function (item) {
+        return util.withView(item, skuList)
+      })
     })
   },
 
@@ -61,18 +76,85 @@ Page({
     this.closePicker()
   },
 
+  currentSku(product) {
+    const current = product || store.getProduct(this.data.productId)
+    if (!current || !inventory.productHasSpecs(current)) return null
+    const colors = current.colors || []
+    const sizes = current.sizes || []
+    if ((colors.length && !this.data.selectedColor) || (sizes.length && !this.data.selectedSize)) {
+      return null
+    }
+    return inventory.findSkuBySpec(this.data.skus, current.id, this.data.selectedColor, this.data.selectedSize)
+  },
+
+  specOptions(product, selectedColor, selectedSize) {
+    const colors = (product && product.colors) || []
+    const sizes = (product && product.sizes) || []
+    const skus = this.data.skus
+    return {
+      colorOptions: colors.map(function (color) {
+        return { value: color, on: color === selectedColor }
+      }),
+      sizeOptions: sizes.map(function (size) {
+        const sku = inventory.findSkuBySpec(skus, product.id, selectedColor || '', size)
+        return {
+          value: size,
+          stock: sku ? sku.stock : 0,
+          on: size === selectedSize
+        }
+      })
+    }
+  },
+
+  applyProductState(product, selectedColor, selectedSize) {
+    const hasSpecs = inventory.productHasSpecs(product)
+    const colors = product.colors || []
+    const sizes = product.sizes || []
+    let color = selectedColor
+    let size = selectedSize
+    if (hasSpecs) {
+      if (colors.length === 1) color = colors[0]
+      if (sizes.length === 1) size = sizes[0]
+    } else {
+      color = ''
+      size = ''
+    }
+    const sku = hasSpecs ? inventory.findSkuBySpec(this.data.skus, product.id, color, size) : null
+    const keepPrice = this.data.productId === product.id && this.data.unitPrice && this.data.skuId === (sku ? sku.id : '')
+    const unitPrice = keepPrice ? this.data.unitPrice : String(sku ? sku.costPrice : product.costPrice)
+    const amount = inventory.round2(inventory.toNumber(this.data.qty) * inventory.toNumber(unitPrice))
+    this.setData(Object.assign({
+      productId: product.id,
+      productName: product.name,
+      hasSpecs: hasSpecs,
+      colors: colors,
+      sizes: sizes,
+      selectedColor: color,
+      selectedSize: size,
+      skuId: sku ? sku.id : '',
+      stockText: sku ? String(sku.stock) : (hasSpecs ? '请选规格' : String(product.stock)),
+      unitPrice: unitPrice,
+      amountText: util.money(amount)
+    }, this.specOptions(product, color, size)))
+  },
+
   selectProduct(id) {
     const product = store.getProduct(id)
     if (!product) return
-    this.setData({
-      productId: product.id,
-      productName: product.name,
-      stockText: String(product.stock),
-      unitPrice: this.data.productId === id && this.data.unitPrice
-        ? this.data.unitPrice
-        : String(product.costPrice)
-    })
-    this.refreshAmount()
+    const same = this.data.productId === id
+    this.applyProductState(product, same ? this.data.selectedColor : '', same ? this.data.selectedSize : '')
+  },
+
+  pickColor(e) {
+    const product = store.getProduct(this.data.productId)
+    if (!product) return
+    this.applyProductState(product, e.currentTarget.dataset.value, this.data.selectedSize)
+  },
+
+  pickSize(e) {
+    const product = store.getProduct(this.data.productId)
+    if (!product) return
+    this.applyProductState(product, this.data.selectedColor, e.currentTarget.dataset.value)
   },
 
   onField(e) {
@@ -87,16 +169,32 @@ Page({
 
   submit() {
     try {
+      const product = store.getProduct(this.data.productId)
+      if (product && inventory.productHasSpecs(product)) {
+        const colors = product.colors || []
+        const sizes = product.sizes || []
+        if ((colors.length && !this.data.selectedColor) || (sizes.length && !this.data.selectedSize)) {
+          throw new Error(inventory.specSelectHint(product))
+        }
+        if (!this.data.skuId) {
+          throw new Error('规格不存在')
+        }
+      }
       const record = store.addPurchase({
         productId: this.data.productId,
+        skuId: this.data.skuId,
         qty: this.data.qty,
         unitPrice: this.data.unitPrice,
         remark: this.data.remark
       })
+      this.data.skus = store.getSkus()
+      const latest = store.getProduct(record.productId)
+      const sku = record.skuId ? store.getSku(record.skuId) : null
       this.setData({
+        skus: this.data.skus,
         qty: '',
         remark: '',
-        stockText: String(store.getProduct(record.productId).stock)
+        stockText: sku ? String(sku.stock) : String(latest.stock)
       })
       this.refreshAmount()
       wx.showToast({ title: '进货成功', icon: 'success' })

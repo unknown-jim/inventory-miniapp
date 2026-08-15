@@ -1,0 +1,33 @@
+<view class="page">
+  <input
+    class="search"
+    placeholder="搜索名称 / 电话 / 地址"
+    value="{{keyword}}"
+    bindinput="onSearch"
+  />
+
+  <view wx:if="{{!list.length}}" class="card empty">
+    <view class="empty-title">还没有客户</view>
+    <view class="muted">先建客户档案，销售出库时就能选到，并出现在送货单上。</view>
+    <button class="btn-primary seed-btn" bindtap="goAdd">新增客户</button>
+  </view>
+
+  <view class="card goods-card" wx:for="{{list}}" wx:key="id">
+    <view class="goods-main" data-id="{{item.id}}" bindtap="goEdit">
+      <view class="goods-top">
+        <view class="item-name">{{item.name}}</view>
+        <text class="tag {{item.hasDebt ? 'tag-credit' : 'tag-ok'}}">{{item.hasDebt ? '欠款' : item.saleCount + ' 笔'}}</text>
+      </view>
+      <view class="muted">{{item.phoneText}}</view>
+      <view class="muted">{{item.addressText}}</view>
+      <view class="price-row">累计销售 ¥{{item.saleAmountText}}</view>
+      <view class="price-row debt" wx:if="{{item.hasDebt}}">欠款 ¥{{item.receivableText}}</view>
+    </view>
+    <view class="goods-actions">
+      <button wx:if="{{item.hasDebt}}" class="btn-ghost mini" data-id="{{item.id}}" catchtap="goCollect">收款</button>
+      <button class="btn-ghost mini warm" data-id="{{item.id}}" catchtap="goSale">去销售</button>
+    </view>
+  </view>
+
+  <view class="fab" bindtap="goAdd">+ 新增</view>
+</view>

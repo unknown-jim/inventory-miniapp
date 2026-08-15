@@ -16,9 +16,13 @@
     <view class="goods-main" data-id="{{item.id}}" bindtap="goEdit">
       <view class="goods-top">
         <view class="item-name">{{item.name}}</view>
-        <text class="tag {{item.lowStock ? 'tag-alert' : 'tag-ok'}}">库存 {{item.stock}}</text>
+        <view class="goods-tags">
+          <text wx:if="{{item.hasSpecs}}" class="tag tag-spec">多规格</text>
+          <text class="tag {{item.lowStock ? 'tag-alert' : 'tag-ok'}}">库存 {{item.stock}}</text>
+        </view>
       </view>
       <view class="muted">货号 {{item.sku || '未填'}} · 条码 {{item.barcode || '未填'}}</view>
+      <view wx:if="{{item.skuSummary}}" class="muted">{{item.skuSummary}}</view>
       <view class="price-row">
         <text>进价 ¥{{item.costText}}</text>
         <text>售价 ¥{{item.saleText}}</text>

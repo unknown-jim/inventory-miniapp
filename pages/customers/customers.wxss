@@ -10,29 +10,21 @@
   margin-bottom: 8rpx;
 }
 
-.goods-tags {
-  display: flex;
-  gap: 8rpx;
-  align-items: center;
-}
-
 .item-name {
   font-size: 30rpx;
   font-weight: 600;
 }
 
 .price-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 16rpx 24rpx;
   margin-top: 16rpx;
-  color: #334155;
+  color: #0F766E;
   font-size: 24rpx;
+  font-weight: 600;
 }
 
-.profit {
-  color: #0F766E;
-  font-weight: 600;
+.price-row.debt {
+  margin-top: 8rpx;
+  color: #C2410C;
 }
 
 .goods-actions {
@@ -69,4 +61,8 @@
   border-radius: 40rpx;
   font-weight: 600;
   box-shadow: 0 12rpx 24rpx rgba(15, 118, 110, 0.28);
+}
+
+.page {
+  padding-bottom: 140rpx;
 }
