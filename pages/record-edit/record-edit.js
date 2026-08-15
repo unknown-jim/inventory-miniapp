@@ -1,6 +1,7 @@
 const store = require('../../utils/store')
 const util = require('../../utils/util')
 const inventory = require('../../utils/inventory')
+const slipActions = require('../../utils/slip-actions')
 
 Page({
   data: {
@@ -26,9 +27,13 @@ Page({
     customerPhone: '',
     customerAddress: '',
     showCustomerPicker: false,
+    showPicker: false,
     customerKeyword: '',
     filteredCustomers: [],
-    hasOrder: false
+    hasOrder: false,
+    showSlip: false,
+    slip: null,
+    exporting: false
   },
 
   onLoad(query) {
@@ -159,6 +164,30 @@ Page({
       this.expectCustomer = false
       this.selectCustomer(selectedCustomerId)
     }
+  },
+
+  openSlip() {
+    try {
+      const record = store.getRecord(this.data.id)
+      const slipView = util.withSlipViewFromRecord(store.getRecords(), record)
+      this.slipImagePath = ''
+      this.setData({
+        showSlip: true,
+        showCustomerPicker: false,
+        slip: slipView
+      })
+      slipActions.prepareSlipImage(this, slipView)
+    } catch (error) {
+      util.showError(error)
+    }
+  },
+
+  exportSlip() {
+    slipActions.exportSlip(this)
+  },
+
+  closeSlip() {
+    slipActions.closeSlip(this)
   },
 
   save() {

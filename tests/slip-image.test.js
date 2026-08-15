@@ -104,4 +104,47 @@ const orderLayout = slipImage.layoutSlip(fromOrder)
 assert.ok(textsOf(orderLayout).indexOf('李记便利') >= 0)
 assert.ok(textsOf(orderLayout).indexOf('送货单') >= 0)
 
+const reprintRecords = [
+  {
+    id: 'pay-1',
+    type: 'pay',
+    customerId: 'c1',
+    amount: 18.9,
+    createdAt: 2000
+  },
+  {
+    id: 'r-b',
+    type: 'out',
+    orderId: 'order-1',
+    productName: '全麦面包',
+    qty: 1,
+    unitPrice: 9.9,
+    amount: 9.9,
+    payType: 'credit',
+    customerId: 'c1',
+    customerName: '李记便利',
+    createdAt: 1000
+  },
+  {
+    id: 'r-a',
+    type: 'out',
+    orderId: 'order-1',
+    productName: '纯牛奶 250ml',
+    qty: 2,
+    unitPrice: 4.5,
+    amount: 9,
+    payType: 'credit',
+    customerId: 'c1',
+    customerName: '李记便利',
+    createdAt: 1000
+  }
+]
+const reprint = util.withSlipViewFromRecord(reprintRecords, reprintRecords[1])
+assert.strictEqual(reprint.lines.length, 2)
+assert.strictEqual(reprint.lines[0].productName, '纯牛奶 250ml')
+assert.strictEqual(reprint.payText, '赊账')
+assert.strictEqual(reprint.thisDebtText, '18.90')
+assert.strictEqual(reprint.prevDebtText, '0.00')
+assert.strictEqual(reprint.receivableText, '18.90')
+
 console.log('slip-image tests passed')

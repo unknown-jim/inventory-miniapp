@@ -1,7 +1,7 @@
 const store = require('../../utils/store')
 const util = require('../../utils/util')
 const inventory = require('../../utils/inventory')
-const slipImage = require('../../utils/slip-image')
+const slipActions = require('../../utils/slip-actions')
 
 Page({
   data: {
@@ -465,49 +465,14 @@ Page({
   },
 
   prepareSlipImage(slip) {
-    const self = this
-    const docNo = slip && slip.docNo
-    slipImage.exportToTempFile(this, slip).then(function (path) {
-      if (self.data.showSlip && self.data.slip && self.data.slip.docNo === docNo) {
-        self.slipImagePath = path
-      }
-    }).catch(function () {
-      self.slipImagePath = ''
-    })
+    slipActions.prepareSlipImage(this, slip)
   },
 
   exportSlip() {
-    if (this.data.exporting) return
-    const ready = this.slipImagePath
-    if (ready) {
-      this.openSlipImage(ready)
-      return
-    }
-    const slip = this.data.slip
-    if (!slip) return
-    this.setData({ exporting: true })
-    wx.showLoading({ title: '生成图片', mask: true })
-    const self = this
-    slipImage.exportToTempFile(this, slip).then(function (path) {
-      self.slipImagePath = path
-      self.setData({ exporting: false })
-      wx.hideLoading()
-      self.openSlipImage(path)
-    }).catch(function (error) {
-      self.setData({ exporting: false })
-      wx.hideLoading()
-      util.showError(error && error.message ? error : new Error('导出失败'))
-    })
-  },
-
-  openSlipImage(path) {
-    slipImage.openExportedImage(path).catch(function (error) {
-      util.showError(error)
-    })
+    slipActions.exportSlip(this)
   },
 
   closeSlip() {
-    this.slipImagePath = ''
-    this.setData({ showSlip: false, exporting: false })
+    slipActions.closeSlip(this)
   }
 })

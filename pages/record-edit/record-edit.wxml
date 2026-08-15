@@ -67,8 +67,9 @@
 
   <view class="muted tip">改数量会同步改库存。记错商品请删除后重新开单。<text wx:if="{{hasOrder}}">同一张送货单的客户和结算会一起改。</text></view>
 
-  <button class="btn-primary save-btn" bindtap="save" hidden="{{showCustomerPicker}}">保存</button>
-  <button class="btn-danger" bindtap="remove" hidden="{{showCustomerPicker}}">删除流水</button>
+  <button wx:if="{{isOut}}" class="btn-ghost export-btn js-export-slip" bindtap="openSlip" hidden="{{showCustomerPicker || showSlip}}">导出送货单</button>
+  <button class="btn-primary save-btn" bindtap="save" hidden="{{showCustomerPicker || showSlip}}">保存</button>
+  <button class="btn-danger" bindtap="remove" hidden="{{showCustomerPicker || showSlip}}">删除流水</button>
 
   <view wx:if="{{showCustomerPicker}}" class="mask" bindtap="closeCustomerPicker">
     <view class="sheet" catchtap="closePickerKeep">
@@ -100,4 +101,7 @@
       </scroll-view>
     </view>
   </view>
+
+  <include src="../common/slip-overlay.wxml" />
+  <canvas type="2d" id="slipCanvas" class="slip-canvas"></canvas>
 </view>

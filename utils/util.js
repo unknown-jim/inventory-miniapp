@@ -80,6 +80,11 @@ function withSlipView(order, receivable) {
   }
 }
 
+function withSlipViewFromRecord(records, record) {
+  const order = inventory.buildSaleOrder(records, record)
+  return withSlipView(order, inventory.receivableAt(records, order.customerId, order.createdAt))
+}
+
 function pad(n) {
   return n < 10 ? '0' + n : '' + n
 }
@@ -161,5 +166,6 @@ module.exports = {
   withRecordView: withRecordView,
   withCustomerView: withCustomerView,
   withSlipView: withSlipView,
+  withSlipViewFromRecord: withSlipViewFromRecord,
   showError: showError
 }
