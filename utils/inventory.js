@@ -578,6 +578,9 @@ function createProduct(input, now, id) {
   const colors = uniqueSpecs(input.colors)
   const sizes = uniqueSpecs(input.sizes)
   const hasSpecs = !!(colors.length || sizes.length)
+  if (input.blankProcess && !hasSpecs) {
+    throw new Error('白坯加工请添加颜色或尺码')
+  }
 
   return {
     id: id,

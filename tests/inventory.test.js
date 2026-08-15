@@ -32,6 +32,16 @@ assert.throws(function () {
   inv.createProduct({ name: 'A', costPrice: -1, salePrice: 2, stock: 1 }, 1, 'x')
 }, /价格/)
 
+assert.throws(function () {
+  inv.createProduct({
+    name: '卫衣',
+    costPrice: 45,
+    salePrice: 99,
+    stock: 20,
+    blankProcess: true
+  }, 1000, 'p-no-spec')
+}, /颜色或尺码/)
+
 const created = sampleProduct()
 assert.strictEqual(created.alertQty, 5)
 assert.strictEqual(created.stock, 10)
@@ -536,6 +546,19 @@ assert.strictEqual(hoodieBlank.stock, 20)
 assert.strictEqual(inv.isLowStock(hoodieMade.product, hoodieMade.skus), false)
 const whiteM = inv.findSkuBySpec(hoodieMade.skus, 'p-hoodie', '白色', 'M')
 assert.strictEqual(whiteM.stock, 0)
+
+const hoodieFolded = inv.applyProductSkus(inv.updateProduct(hoodieMade.product, {
+  name: '卫衣',
+  costPrice: 45,
+  salePrice: 99,
+  alertQty: 5,
+  colors: [],
+  sizes: [],
+  blankProcess: false
+}, 1150), hoodieMade.skus, [], 1150, idFactory())
+assert.strictEqual(hoodieFolded.product.blankProcess, false)
+assert.strictEqual(hoodieFolded.product.stock, 20)
+assert.strictEqual(hoodieFolded.skus.length, 0)
 
 const boughtBlank = inv.applyPurchase([hoodieMade.product], [], {
   productId: 'p-hoodie',
