@@ -57,7 +57,7 @@ Page({
       receivable: summary.receivable,
       receivableText: util.money(summary.receivable),
       hasDebt: hasDebt,
-      ledger: summary.ledger.slice(0, 20).map(util.withRecordView)
+      ledger: inventory.groupRecords(summary.ledger).slice(0, 20).map(util.withRecordView)
     }, () => {
       if (this.openPayAfter) {
         this.openPayAfter = false

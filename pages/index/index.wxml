@@ -84,7 +84,7 @@
       <view class="list-item" wx:for="{{recent}}" wx:key="id" data-id="{{item.id}}" bindtap="onRecordTap">
         <view>
           <view class="item-name">{{item.productName}}</view>
-          <view class="muted">{{item.timeText}}<block wx:if="{{item.hasSpec}}"> · {{item.specText}}</block><block wx:if="{{item.isOut}}"> · {{item.qtyText}} 件</block><text wx:if="{{item.customerText}}"> · {{item.customerText}}</text></view>
+          <view class="muted">{{item.timeText}}<block wx:if="{{item.hasSpec}}"> · {{item.specText}}</block><block wx:if="{{item.isOut}}"> · {{item.qtyText}} 件</block><block wx:if="{{item.isMulti}}"> · {{item.lineCount}} 种</block><text wx:if="{{item.customerText}}"> · {{item.customerText}}</text></view>
         </view>
         <view class="item-right">
           <text class="tag {{item.tagClass}}">{{item.typeText}}</text>

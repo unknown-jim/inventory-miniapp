@@ -270,6 +270,44 @@ assert.throws(function () {
   inv.buildSaleOrder(multi.records, { type: 'pay', id: 'x' })
 }, /销售/)
 
+const grouped = inv.groupRecords(multi.records)
+assert.strictEqual(grouped.length, 2)
+assert.strictEqual(grouped[0].type, 'out')
+assert.strictEqual(grouped[0].lineCount, 2)
+assert.strictEqual(grouped[0].amount, 18.9)
+assert.strictEqual(grouped[0].qty, 3)
+assert.strictEqual(grouped[0].productName, '纯牛奶、全麦面包')
+assert.strictEqual(grouped.filter(function (item) {
+  return item.type === 'out'
+}).length, 1)
+assert.strictEqual(inv.summarizeCustomerAccount(multi.records, 'c1').count, 1)
+assert.strictEqual(inv.getDashboard(multi.products, multi.records, 9100).recent[0].lineCount, 2)
+
+const orderItemsEdit = inv.updateRecord(multi.products, multi.records, {
+  id: multi.order.records[0].id,
+  items: [
+    { id: multi.order.records[0].id, qty: 3, unitPrice: 4.5 },
+    { id: multi.order.records[1].id, qty: 1, unitPrice: 9.9 }
+  ],
+  payType: 'credit',
+  customerId: 'c1',
+  customerName: '张三超市',
+  remark: '整单备注'
+}, 9110, [])
+assert.strictEqual(orderItemsEdit.products.find(function (item) { return item.id === 'p1' }).stock, 12)
+assert.ok(orderItemsEdit.records.filter(function (item) {
+  return item.orderId === 'order-1'
+}).every(function (item) {
+  return item.remark === '整单备注'
+}))
+
+const deletedOrder = inv.deleteRecord(multi.products, multi.records, multi.order.records[1].id, 9120, [])
+assert.strictEqual(deletedOrder.records.filter(function (item) {
+  return item.orderId === 'order-1'
+}).length, 0)
+assert.strictEqual(deletedOrder.products.find(function (item) { return item.id === 'p1' }).stock, 15)
+assert.strictEqual(deletedOrder.products.find(function (item) { return item.id === 'p2' }).stock, 8)
+
 const paidAll = inv.applyPayment(multi.records, {
   customerId: 'c1',
   customerName: '张三超市',

@@ -36,7 +36,7 @@
         <view class="muted" wx:if="{{item.hasSpec}}">{{item.specText}}</view>
         <view class="muted">
           {{item.timeText}}
-          <block wx:if="{{item.isOut || item.isIn}}"> · {{item.qtyText}} 件 · 单价 ¥{{item.priceText}}</block>
+          <block wx:if="{{item.isOut || item.isIn}}"> · {{item.qtyText}} 件<block wx:if="{{item.isMulti}}"> · {{item.lineCount}} 种</block><block wx:else> · 单价 ¥{{item.priceText}}</block></block>
         </view>
         <view wx:if="{{item.customerText}}" class="muted">客户 {{item.customerText}}</view>
         <view wx:if="{{item.remark}}" class="muted">{{item.remark}}</view>

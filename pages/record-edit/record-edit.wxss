@@ -56,6 +56,27 @@
   font-size: 24rpx;
 }
 
+.order-lines {
+  margin-bottom: 8rpx;
+}
+
+.line-block {
+  padding: 8rpx 0 4rpx;
+  border-bottom: 1rpx solid #F1F5F4;
+}
+
+.line-block:last-child {
+  border-bottom: none;
+}
+
+.line-block .item-name {
+  margin-top: 8rpx;
+}
+
+.line-block .meta {
+  margin-top: -8rpx;
+}
+
 .total {
   display: flex;
   justify-content: space-between;

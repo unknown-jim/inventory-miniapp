@@ -34,6 +34,8 @@ Page({
     customerKeyword: '',
     filteredCustomers: [],
     hasOrder: false,
+    isMulti: false,
+    lines: [],
     showSlip: false,
     slip: null,
     exporting: false
@@ -46,6 +48,7 @@ Page({
       return
     }
     const view = util.withRecordView(record)
+    const all = store.getRecords()
     let title = '修改销售'
     if (view.isPay) title = '修改收款'
     else if (view.isIn) title = '修改进货'
@@ -53,6 +56,37 @@ Page({
     else if (view.isConvert) title = '修改改规格'
     wx.setNavigationBarTitle({ title: title })
     this.costPrice = record.costPrice
+    let lines = []
+    let canReturn = view.isOut && inventory.returnableQty(all, record) > 0
+    let amountText = util.money(record.amount)
+    let profitText = view.isOut || view.isReturn ? util.money(record.profit) : '0.00'
+    let productName = record.productName
+    let specText = view.specText
+    if (view.isOut) {
+      const order = inventory.buildSaleOrder(all, record)
+      lines = order.records.map(function (item) {
+        const spec = inventory.specText(item.color, item.size)
+        return {
+          id: item.id,
+          productName: item.productName,
+          specText: spec,
+          hasSpec: !!spec,
+          qty: String(item.qty),
+          unitPrice: String(item.unitPrice),
+          amountText: util.money(item.amount),
+          profitText: util.money(item.profit),
+          costText: util.money(item.costPrice),
+          costPrice: item.costPrice
+        }
+      })
+      canReturn = order.records.some(function (item) {
+        return inventory.returnableQty(all, item) > 0
+      })
+      amountText = util.money(order.amount)
+      profitText = util.money(order.profit)
+      productName = lines.length === 1 ? lines[0].productName : '本单 ' + lines.length + ' 种商品'
+      specText = lines.length === 1 ? lines[0].specText : ''
+    }
     this.setData({
       id: record.id,
       type: record.type,
@@ -62,15 +96,16 @@ Page({
       isPay: view.isPay,
       isReturn: view.isReturn,
       isConvert: view.isConvert,
-      canReturn: view.isOut && inventory.returnableQty(store.getRecords(), record) > 0,
-      productName: record.productName,
-      specText: view.specText,
+      isMulti: lines.length > 1,
+      canReturn: canReturn,
+      productName: productName,
+      specText: specText,
       timeText: util.formatDateTime(record.createdAt),
       qty: view.isPay ? '' : String(record.qty),
       unitPrice: view.isPay || view.isConvert ? '' : String(record.unitPrice),
       amount: view.isPay ? String(record.amount) : '',
-      amountText: util.money(record.amount),
-      profitText: view.isOut || view.isReturn ? util.money(record.profit) : '0.00',
+      amountText: amountText,
+      profitText: profitText,
       remark: record.remark || '',
       payType: record.payType === 'credit' ? 'credit' : 'cash',
       customerId: record.customerId || '',
@@ -78,7 +113,8 @@ Page({
       customerPhone: record.customerPhone || '',
       customerAddress: record.customerAddress || '',
       costText: view.isOut || view.isReturn ? util.money(record.costPrice) : '',
-      hasOrder: !!(record.orderId)
+      hasOrder: !!(record.orderId),
+      lines: lines
     })
   },
 
@@ -86,6 +122,19 @@ Page({
     if (this.data.isPay) {
       const amount = inventory.round2(this.data.amount)
       this.setData({ amountText: util.money(amount), profitText: '0.00' })
+      return
+    }
+    if (this.data.isOut) {
+      const amount = this.data.lines.reduce(function (sum, item) {
+        return sum + inventory.toNumber(item.qty) * inventory.toNumber(item.unitPrice)
+      }, 0)
+      const profit = this.data.lines.reduce(function (sum, item) {
+        return sum + (inventory.toNumber(item.unitPrice) - inventory.toNumber(item.costPrice)) * inventory.toNumber(item.qty)
+      }, 0)
+      this.setData({
+        amountText: util.money(amount),
+        profitText: util.money(profit)
+      })
       return
     }
     const qty = inventory.toNumber(this.data.qty)
@@ -105,6 +154,33 @@ Page({
     patch[e.currentTarget.dataset.field] = e.detail.value
     this.setData(patch)
     this.refreshAmount()
+  },
+
+  onLineField(e) {
+    const id = e.currentTarget.dataset.id
+    const field = e.currentTarget.dataset.field
+    const value = e.detail.value
+    const lines = this.data.lines.map(function (item) {
+      if (item.id !== id) return item
+      const next = Object.assign({}, item)
+      next[field] = value
+      const qty = inventory.toNumber(next.qty)
+      const price = inventory.toNumber(next.unitPrice)
+      next.amountText = util.money(qty * price)
+      next.profitText = util.money((price - inventory.toNumber(item.costPrice)) * qty)
+      return next
+    })
+    const amount = lines.reduce(function (sum, item) {
+      return sum + inventory.toNumber(item.qty) * inventory.toNumber(item.unitPrice)
+    }, 0)
+    const profit = lines.reduce(function (sum, item) {
+      return sum + (inventory.toNumber(item.unitPrice) - inventory.toNumber(item.costPrice)) * inventory.toNumber(item.qty)
+    }, 0)
+    this.setData({
+      lines: lines,
+      amountText: util.money(amount),
+      profitText: util.money(profit)
+    })
   },
 
   setPayType(e) {
@@ -209,6 +285,19 @@ Page({
           amount: this.data.amount,
           remark: this.data.remark
         })
+      } else if (this.data.isOut) {
+        store.updateRecord(this.data.id, {
+          remark: this.data.remark,
+          payType: this.data.payType,
+          customerId: this.data.customerId,
+          items: this.data.lines.map(function (item) {
+            return {
+              id: item.id,
+              qty: item.qty,
+              unitPrice: item.unitPrice
+            }
+          })
+        })
       } else if (this.data.isReturn || this.data.isConvert) {
         store.updateRecord(this.data.id, {
           qty: this.data.qty,
@@ -245,7 +334,9 @@ Page({
           ? '删除后退货入库会改回去。'
           : (this.data.isConvert
             ? '删除后规格会改回原来的颜色尺码。'
-            : '删除后会把库存改回去。记错商品时用这个，然后重新开单。')),
+            : (this.data.isOut
+              ? '删除后会把本单全部商品的库存改回去。记错商品时用这个，然后重新开单。'
+              : '删除后会把库存改回去。记错商品时用这个，然后重新开单。'))),
       confirmColor: '#DC2626',
       success: (res) => {
         if (!res.confirm) return

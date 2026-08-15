@@ -117,6 +117,8 @@ function withRecordView(record) {
   const isReturn = record.type === 'return'
   const isConvert = record.type === 'convert'
   const isCredit = isOut && record.payType === 'credit'
+  const lineCount = record.lineCount || 1
+  const isMulti = isOut && lineCount > 1
   const spec = inventory.specText(record.color, record.size)
   const fromSpec = inventory.specText(record.fromColor, record.fromSize)
   let typeText = '销售'
@@ -135,6 +137,8 @@ function withRecordView(record) {
     isReturn: isReturn,
     isConvert: isConvert,
     isCredit: isCredit,
+    isMulti: isMulti,
+    lineCount: lineCount,
     typeText: typeText,
     tagClass: isPay
       ? 'tag-pay'
