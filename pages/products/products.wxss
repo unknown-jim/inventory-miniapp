@@ -1,0 +1,66 @@
+.goods-card {
+  margin-bottom: 16rpx;
+  padding: 24rpx 28rpx 20rpx;
+}
+
+.goods-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8rpx;
+}
+
+.item-name {
+  font-size: 30rpx;
+  font-weight: 600;
+}
+
+.price-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16rpx 24rpx;
+  margin-top: 16rpx;
+  color: #334155;
+  font-size: 24rpx;
+}
+
+.profit {
+  color: #0F766E;
+  font-weight: 600;
+}
+
+.goods-actions {
+  display: flex;
+  gap: 16rpx;
+  margin-top: 20rpx;
+}
+
+.mini {
+  flex: 1;
+  margin: 0;
+  height: 64rpx;
+  line-height: 64rpx;
+}
+
+.warm {
+  background: #FFF7ED;
+  color: #C2410C;
+}
+
+.seed-btn {
+  margin-top: 24rpx;
+}
+
+.fab {
+  position: fixed;
+  right: 32rpx;
+  bottom: 48rpx;
+  padding: 0 28rpx;
+  height: 80rpx;
+  line-height: 80rpx;
+  background: #0F766E;
+  color: #FFFFFF;
+  border-radius: 40rpx;
+  font-weight: 600;
+  box-shadow: 0 12rpx 24rpx rgba(15, 118, 110, 0.28);
+}

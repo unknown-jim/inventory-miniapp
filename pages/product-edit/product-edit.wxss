@@ -1,0 +1,33 @@
+.field-row {
+  display: flex;
+  gap: 16rpx;
+}
+
+.half {
+  flex: 1;
+}
+
+.margin-box {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 24rpx;
+  padding: 18rpx 20rpx;
+  background: #ECFDF5;
+  color: #0F766E;
+  border-radius: 12rpx;
+  font-size: 24rpx;
+  font-weight: 600;
+}
+
+.readonly {
+  line-height: 80rpx;
+  color: #64748B;
+}
+
+.last {
+  margin-bottom: 0;
+}
+
+.save-btn {
+  margin: 32rpx 0 16rpx;
+}

@@ -1,0 +1,147 @@
+page {
+  min-height: 100%;
+  background: #F3F4F1;
+  color: #134E4A;
+  font-size: 28rpx;
+  box-sizing: border-box;
+}
+
+button {
+  padding: 0;
+}
+
+button::after {
+  border: none;
+}
+
+.page {
+  padding: 24rpx 24rpx 48rpx;
+}
+
+.card {
+  background: #FFFFFF;
+  border-radius: 24rpx;
+  padding: 28rpx;
+  box-shadow: 0 8rpx 24rpx rgba(15, 118, 110, 0.04);
+}
+
+.section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 36rpx 8rpx 16rpx;
+  font-size: 30rpx;
+  font-weight: 600;
+}
+
+.muted {
+  color: #64748B;
+  font-size: 24rpx;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+}
+
+.space {
+  justify-content: space-between;
+}
+
+.btn-primary {
+  height: 88rpx;
+  line-height: 88rpx;
+  background: #0F766E;
+  color: #FFFFFF;
+  border-radius: 16rpx;
+  font-size: 30rpx;
+  font-weight: 600;
+}
+
+.btn-primary[disabled] {
+  background: #99B8B4;
+  color: #FFFFFF;
+}
+
+.btn-ghost {
+  height: 72rpx;
+  line-height: 72rpx;
+  background: #E6F4F1;
+  color: #0F766E;
+  border-radius: 14rpx;
+  font-size: 26rpx;
+}
+
+.btn-danger {
+  height: 80rpx;
+  line-height: 80rpx;
+  background: #FEF2F2;
+  color: #DC2626;
+  border-radius: 14rpx;
+  font-size: 28rpx;
+}
+
+.tag {
+  display: inline-block;
+  padding: 4rpx 12rpx;
+  border-radius: 8rpx;
+  font-size: 22rpx;
+}
+
+.tag-alert {
+  background: #FEF2F2;
+  color: #DC2626;
+}
+
+.tag-ok {
+  background: #ECFDF5;
+  color: #047857;
+}
+
+.tag-in {
+  background: #ECFEFF;
+  color: #0E7490;
+}
+
+.tag-out {
+  background: #FFF7ED;
+  color: #C2410C;
+}
+
+.field {
+  margin-bottom: 24rpx;
+}
+
+.field-label {
+  color: #64748B;
+  font-size: 24rpx;
+  margin-bottom: 12rpx;
+}
+
+.field-input {
+  height: 80rpx;
+  padding: 0 24rpx;
+  background: #F8FAF9;
+  border-radius: 14rpx;
+  font-size: 28rpx;
+}
+
+.search {
+  height: 80rpx;
+  padding: 0 28rpx;
+  background: #FFFFFF;
+  border-radius: 40rpx;
+  margin-bottom: 20rpx;
+}
+
+.empty {
+  padding: 80rpx 24rpx;
+  text-align: center;
+  color: #64748B;
+}
+
+.empty-title {
+  font-size: 30rpx;
+  color: #134E4A;
+  margin-bottom: 12rpx;
+}
