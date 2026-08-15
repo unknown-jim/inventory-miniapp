@@ -621,6 +621,7 @@ function createProduct(input, now, id) {
     specAxis1: hasSpecs ? String(input.specAxis1 || '').trim() : '',
     specAxis2: hasSpecs ? String(input.specAxis2 || '').trim() : '',
     blankProcess: hasSpecs && !!input.blankProcess,
+    sharedPrice: hasSpecs && input.sharedPrice !== false,
     createdAt: now,
     updatedAt: now
   }
@@ -642,7 +643,8 @@ function updateProduct(existing, input, now) {
     sizes: input.sizes != null ? input.sizes : existing.sizes,
     specAxis1: input.specAxis1 != null ? input.specAxis1 : existing.specAxis1,
     specAxis2: input.specAxis2 != null ? input.specAxis2 : existing.specAxis2,
-    blankProcess: input.blankProcess != null ? input.blankProcess : existing.blankProcess
+    blankProcess: input.blankProcess != null ? input.blankProcess : existing.blankProcess,
+    sharedPrice: input.sharedPrice != null ? input.sharedPrice : existing.sharedPrice
   }, now, existing.id)
   next.createdAt = existing.createdAt
   next.stock = existing.stock
@@ -791,6 +793,107 @@ function sortCustomers(customers) {
     const saleDiff = toNumber(b.lastSaleAt) - toNumber(a.lastSaleAt)
     if (saleDiff) return saleDiff
     return toNumber(b.updatedAt) - toNumber(a.updatedAt)
+  })
+}
+
+function normalizeProductKind(value, hasSpecs) {
+  if (value === 'plain' || value === 'blank' || value === 'finished') return value
+  return hasSpecs ? 'finished' : 'plain'
+}
+
+function categoryKindTag(category) {
+  if (category && category.productKind === 'blank') return '待加工'
+  if (category && category.productKind === 'finished') return '分规格现货'
+  return '普通'
+}
+
+function skuPricesMatch(skus) {
+  const rows = (skus || []).filter(function (item) {
+    return !isBlankSku(item)
+  })
+  if (rows.length <= 1) return true
+  const cost = round2(rows[0].costPrice)
+  const sale = round2(rows[0].salePrice)
+  return rows.every(function (item) {
+    return round2(item.costPrice) === cost && round2(item.salePrice) === sale
+  })
+}
+
+function createCategory(input, now, id) {
+  const name = String(input.name || '').trim()
+  if (!name) {
+    throw new Error('请填写种类名称')
+  }
+
+  const colors = uniqueSpecs(input.colors)
+  const sizes = uniqueSpecs(input.sizes)
+  const hasSpecs = !!(colors.length || sizes.length)
+  const productKind = normalizeProductKind(input.productKind, hasSpecs)
+  if (productKind !== 'plain' && !hasSpecs) {
+    throw new Error('请添加规格')
+  }
+  if (productKind === 'blank' && !hasSpecs) {
+    throw new Error('待加工请添加规格')
+  }
+
+  return {
+    id: id,
+    name: name,
+    names: uniqueSpecs(input.names),
+    specAxis1: hasSpecs ? String(input.specAxis1 || '').trim() : '',
+    specAxis2: hasSpecs ? String(input.specAxis2 || '').trim() : '',
+    colors: productKind === 'plain' ? [] : colors,
+    sizes: productKind === 'plain' ? [] : sizes,
+    productKind: productKind,
+    sharedPrice: productKind !== 'plain' && input.sharedPrice !== false,
+    createdAt: now,
+    updatedAt: now
+  }
+}
+
+function updateCategory(existing, input, now) {
+  if (!existing) {
+    throw new Error('种类不存在')
+  }
+  const next = createCategory({
+    name: input.name != null ? input.name : existing.name,
+    names: input.names != null ? input.names : existing.names,
+    specAxis1: input.specAxis1 != null ? input.specAxis1 : existing.specAxis1,
+    specAxis2: input.specAxis2 != null ? input.specAxis2 : existing.specAxis2,
+    colors: input.colors != null ? input.colors : existing.colors,
+    sizes: input.sizes != null ? input.sizes : existing.sizes,
+    productKind: input.productKind != null ? input.productKind : existing.productKind,
+    sharedPrice: input.sharedPrice != null ? input.sharedPrice : existing.sharedPrice
+  }, now, existing.id)
+  next.createdAt = existing.createdAt
+  return next
+}
+
+function appendCategoryValue(existing, field, value, now) {
+  if (!existing) {
+    throw new Error('种类不存在')
+  }
+  const nextValue = String(value || '').trim()
+  if (!nextValue) return existing
+  const key = field === 'names' || field === 'colors' || field === 'sizes' ? field : ''
+  if (!key) return existing
+  const list = uniqueSpecs(existing[key]).slice()
+  if (list.indexOf(nextValue) >= 0) return existing
+  const patch = {}
+  patch[key] = list.concat([nextValue])
+  return updateCategory(existing, patch, now)
+}
+
+function filterCategories(categories, keyword) {
+  const query = String(keyword || '').trim().toLowerCase()
+  if (!query) {
+    return (categories || []).slice()
+  }
+  return (categories || []).filter(function (item) {
+    if (item.name.toLowerCase().indexOf(query) >= 0) return true
+    return (item.names || []).some(function (name) {
+      return String(name).toLowerCase().indexOf(query) >= 0
+    })
   })
 }
 
@@ -2037,7 +2140,24 @@ function buildSeed(now, nextId) {
     products: purchaseWater.products,
     skus: purchaseWater.skus,
     records: purchaseWater.records,
-    customers: [customerA, customerB]
+    customers: [customerA, customerB],
+    categories: [
+      createCategory({
+        name: '纺织',
+        names: ['短袖 T恤', '卫衣'],
+        specAxis1: '颜色',
+        specAxis2: '尺码',
+        colors: ['黑色', '白色'],
+        sizes: ['M', 'L'],
+        productKind: 'finished',
+        sharedPrice: true
+      }, now - 7 * 3600000, nextId()),
+      createCategory({
+        name: '日用',
+        names: ['纯牛奶', '全麦面包', '矿泉水'],
+        productKind: 'plain'
+      }, now - 8 * 3600000, nextId())
+    ]
   }
 }
 
@@ -2078,6 +2198,12 @@ module.exports = {
   updateCustomer: updateCustomer,
   filterCustomers: filterCustomers,
   sortCustomers: sortCustomers,
+  createCategory: createCategory,
+  updateCategory: updateCategory,
+  appendCategoryValue: appendCategoryValue,
+  filterCategories: filterCategories,
+  categoryKindTag: categoryKindTag,
+  skuPricesMatch: skuPricesMatch,
   summarizeCustomerAccount: summarizeCustomerAccount,
   getTotalReceivable: getTotalReceivable,
   isCreditSale: isCreditSale,

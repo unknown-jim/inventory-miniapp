@@ -10,6 +10,8 @@
     "pages/sale-return/sale-return",
     "pages/convert/convert",
     "pages/product-edit/product-edit",
+    "pages/categories/categories",
+    "pages/category-edit/category-edit",
     "pages/customers/customers",
     "pages/customer-edit/customer-edit"
   ],

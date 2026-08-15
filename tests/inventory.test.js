@@ -134,6 +134,10 @@ const milk = seed.products.find(function (item) {
 })
 assert.strictEqual(inv.productHasSpecs(milk), false)
 assert.strictEqual(seed.customers.length, 2)
+assert.ok(seed.categories.length >= 2)
+assert.ok(seed.categories.some(function (item) {
+  return item.name === '纺织' && item.productKind === 'finished'
+}))
 assert.ok(seed.records.some(function (item) {
   return item.type === 'out' && item.customerName === '张三超市'
 }))
@@ -714,5 +718,64 @@ const avail = inv.blankAvailability(hoodieMade.product, hoodieMade.skus, '黑色
 ])
 assert.strictEqual(avail.total, 12)
 assert.strictEqual(avail.blank, 12)
+
+assert.throws(function () {
+  inv.createCategory({ name: '  ' }, 1, 'c0')
+}, /种类名称/)
+assert.throws(function () {
+  inv.createCategory({ name: '纺织', productKind: 'finished' }, 1, 'c-no-spec')
+}, /规格/)
+
+const textile = inv.createCategory({
+  name: '纺织',
+  names: ['卫衣'],
+  specAxis1: '颜色',
+  specAxis2: '尺码',
+  colors: ['黑色'],
+  sizes: ['M', 'L'],
+  productKind: 'finished'
+}, 1000, 'cat-1')
+assert.strictEqual(textile.sharedPrice, true)
+assert.strictEqual(inv.categoryKindTag(textile), '分规格现货')
+
+const withGreen = inv.appendCategoryValue(textile, 'colors', '墨绿', 1100)
+assert.deepStrictEqual(withGreen.colors, ['黑色', '墨绿'])
+assert.strictEqual(inv.appendCategoryValue(withGreen, 'colors', '黑色', 1200), withGreen)
+
+const daily = inv.createCategory({
+  name: '日用',
+  names: ['纯牛奶'],
+  productKind: 'plain'
+}, 1000, 'cat-2')
+assert.strictEqual(daily.productKind, 'plain')
+assert.deepStrictEqual(daily.colors, [])
+assert.strictEqual(inv.categoryKindTag(daily), '普通')
+
+assert.strictEqual(inv.skuPricesMatch([
+  { costPrice: 10, salePrice: 20 },
+  { costPrice: 10, salePrice: 20 }
+]), true)
+assert.strictEqual(inv.skuPricesMatch([
+  { costPrice: 10, salePrice: 20 },
+  { costPrice: 11, salePrice: 20 }
+]), false)
+
+const sharedProduct = inv.createProduct({
+  name: '短袖同价',
+  costPrice: 28,
+  salePrice: 59,
+  colors: ['黑'],
+  sizes: ['M', 'L']
+}, 1000, 'p-share')
+assert.strictEqual(sharedProduct.sharedPrice, true)
+const unshared = inv.updateProduct(sharedProduct, {
+  name: '短袖同价',
+  costPrice: 28,
+  salePrice: 59,
+  colors: ['黑'],
+  sizes: ['M', 'L'],
+  sharedPrice: false
+}, 1100)
+assert.strictEqual(unshared.sharedPrice, false)
 
 console.log('inventory tests passed')

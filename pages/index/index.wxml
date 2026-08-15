@@ -99,6 +99,7 @@
   <view class="footer-actions">
     <text class="link" bindtap="goRecords">流水与毛利汇总</text>
     <text class="link" bindtap="goCustomers">客户管理</text>
+    <text class="link" bindtap="goCategories">种类模板</text>
     <text wx:if="{{!isEmpty}}" class="danger-link" bindtap="clearData">清空数据</text>
   </view>
 </view>

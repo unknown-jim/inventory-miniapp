@@ -145,6 +145,8 @@
 
 .footer-actions {
   display: flex;
+  flex-wrap: wrap;
+  gap: 16rpx 24rpx;
   justify-content: space-between;
   margin: 36rpx 8rpx 0;
 }
