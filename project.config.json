@@ -9,6 +9,30 @@
       {
         "type": "folder",
         "value": "node_modules"
+      },
+      {
+        "type": "folder",
+        "value": "docs"
+      },
+      {
+        "type": "file",
+        "value": "README.md"
+      },
+      {
+        "type": "file",
+        "value": "AGENTS.md"
+      },
+      {
+        "type": "file",
+        "value": "LICENSE"
+      },
+      {
+        "type": "file",
+        "value": "package.json"
+      },
+      {
+        "type": "file",
+        "value": "package-lock.json"
       }
     ],
     "include": []
@@ -20,6 +44,7 @@
     "postcss": true,
     "preloadBackgroundData": false,
     "minified": true,
+    "ignoreUploadUnusedFiles": true,
     "newFeature": false,
     "coverView": true,
     "nodeModules": false,

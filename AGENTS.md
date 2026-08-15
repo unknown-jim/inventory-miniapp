@@ -18,7 +18,7 @@
 
 ### 代码注入
 
-- `app.json` 必须保留 `"lazyCodeLoading": "requiredComponents"`（若尚未写入，在注入/组件相关任务的工作树里补上，之后不得删除）。
+- `app.json` 必须保留 `"lazyCodeLoading": "requiredComponents"`，不得删除。
 - 不要把低频自定义组件写进 `app.json` 的全局 `usingComponents`。
 - 页面 JSON 只声明本页真正用到的组件。
 - 非首屏重组件才配 `componentPlaceholder`；首屏立刻展示的组件不要配。
