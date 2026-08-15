@@ -1,0 +1,104 @@
+<view class="page">
+  <view class="hero card">
+    <view class="hero-top">
+      <view>
+        <view class="hero-kicker">{{dateText}}</view>
+        <view class="hero-title">今日看板</view>
+      </view>
+      <view class="hero-profit">
+        <view class="muted">今日毛利</view>
+        <view class="hero-profit-num">¥{{todayProfit}}</view>
+      </view>
+    </view>
+    <view class="stats">
+      <view class="stat">
+        <view class="stat-num">{{productCount}}</view>
+        <view class="muted">商品数</view>
+      </view>
+      <view class="stat">
+        <view class="stat-num">{{totalStock}}</view>
+        <view class="muted">库存总量</view>
+      </view>
+      <view class="stat">
+        <view class="stat-num">{{todaySalesAmount}}</view>
+        <view class="muted">今日销售额</view>
+      </view>
+      <view class="stat {{alertCount ? 'stat-alert' : ''}}">
+        <view class="stat-num">{{alertCount}}</view>
+        <view class="muted">库存预警</view>
+      </view>
+    </view>
+  </view>
+
+  <view class="actions">
+    <button class="action" bindtap="goPurchase">进货入库</button>
+    <button class="action action-warm" bindtap="goSale">销售出库</button>
+    <button class="action action-plain" bindtap="goAddProduct">新增商品</button>
+  </view>
+
+  <view wx:if="{{hasReceivable}}" class="card debt-banner" bindtap="goCustomers">
+    <view>
+      <view class="muted">客户欠款</view>
+      <view class="debt-banner-num">¥{{totalReceivable}}</view>
+    </view>
+    <text class="link">去收款</text>
+  </view>
+
+  <view wx:if="{{isEmpty}}" class="card empty-card">
+    <view class="empty-title">还没有商品</view>
+    <view class="muted">可以先填一份示例数据，看看进货、销售、预警和毛利怎么记。</view>
+    <button class="btn-primary seed-btn" bindtap="seedDemo">填充示例数据</button>
+  </view>
+
+  <block wx:else>
+    <view class="section-title">
+      <text>库存预警</text>
+      <text class="link" bindtap="goInventory">全部库存</text>
+    </view>
+    <view wx:if="{{alerts.length}}" class="card list-card">
+      <view
+        class="list-item"
+        wx:for="{{alerts}}"
+        wx:key="id"
+        data-id="{{item.id}}"
+        bindtap="onAlertTap"
+      >
+        <view>
+          <view class="item-name">{{item.name}}</view>
+          <view class="muted">
+            <block wx:if="{{item.hasSpecs}}">{{item.specHint || '多规格'}} · </block>货号 {{item.sku || '未填'}} · 预警 ≤ {{item.alertQty}}
+          </view>
+        </view>
+        <view class="item-right">
+          <text class="tag tag-alert">库存 {{item.stock}}</text>
+        </view>
+      </view>
+    </view>
+    <view wx:else class="card quiet">当前没有低于预警的商品</view>
+
+    <view class="section-title">
+      <text>最近流水</text>
+      <text class="link" bindtap="goRecords">查看全部</text>
+    </view>
+    <view wx:if="{{recent.length}}" class="card list-card">
+      <view class="list-item" wx:for="{{recent}}" wx:key="id" data-id="{{item.id}}" bindtap="onRecordTap">
+        <view>
+          <view class="item-name">{{item.productName}}</view>
+          <view class="muted">{{item.timeText}}<block wx:if="{{item.hasSpec}}"> · {{item.specText}}</block><block wx:if="{{item.isOut}}"> · {{item.qtyText}} 件</block><text wx:if="{{item.customerText}}"> · {{item.customerText}}</text></view>
+        </view>
+        <view class="item-right">
+          <text class="tag {{item.tagClass}}">{{item.typeText}}</text>
+          <view class="amount">¥{{item.amountText}}</view>
+          <view wx:if="{{item.isOut}}" class="muted">毛利 ¥{{item.profitText}}</view>
+        </view>
+      </view>
+    </view>
+    <view wx:else class="card quiet">今天还没有进销记录</view>
+  </block>
+
+  <view class="footer-actions">
+    <text class="link" bindtap="goRecords">流水与毛利汇总</text>
+    <text class="link" bindtap="goCustomers">客户管理</text>
+    <text wx:if="{{!isEmpty}}" class="danger-link" bindtap="clearData">清空数据</text>
+  </view>
+</view>

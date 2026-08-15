@@ -1,0 +1,115 @@
+<view class="page">
+  <view class="card">
+    <view class="field">
+      <view class="field-label">商品名称</view>
+      <input class="field-input" data-field="name" value="{{name}}" bindinput="onField" placeholder="例如 纯牛奶 250ml" />
+    </view>
+    <view class="field">
+      <view class="field-label">货号</view>
+      <input class="field-input" data-field="sku" value="{{sku}}" bindinput="onField" placeholder="可选" />
+    </view>
+    <view class="field">
+      <view class="field-label">条码</view>
+      <input class="field-input" data-field="barcode" value="{{barcode}}" bindinput="onField" placeholder="可选" />
+    </view>
+    <view class="field-row">
+      <view class="field half">
+        <view class="field-label">{{hasSpecs ? '默认进价' : '进价'}}</view>
+        <input class="field-input" type="digit" data-field="costPrice" value="{{costPrice}}" bindinput="onField" placeholder="0.00" />
+      </view>
+      <view class="field half">
+        <view class="field-label">{{hasSpecs ? '默认售价' : '售价'}}</view>
+        <input class="field-input" type="digit" data-field="salePrice" value="{{salePrice}}" bindinput="onField" placeholder="0.00" />
+      </view>
+    </view>
+    <view class="margin-box">
+      <text>单件毛利 ¥{{marginText}}</text>
+      <text>毛利率 {{rateText}}</text>
+    </view>
+    <view class="field" wx:if="{{!isEdit && !hasSpecs}}">
+      <view class="field-label">初始库存</view>
+      <input class="field-input" type="digit" data-field="stock" value="{{stock}}" bindinput="onField" placeholder="0" />
+    </view>
+    <view class="field" wx:elif="{{isEdit && !hasSpecs}}">
+      <view class="field-label">当前库存</view>
+      <view class="field-input readonly">{{stockText}}（通过进货 / 销售变动）</view>
+    </view>
+    <view class="field" wx:elif="{{isEdit && hasSpecs}}">
+      <view class="field-label">库存合计</view>
+      <view class="field-input readonly">{{stockText}}（各规格相加）</view>
+    </view>
+    <view class="field last" wx:if="{{!hasSpecs}}">
+      <view class="field-label">库存预警数量</view>
+      <input class="field-input" type="digit" data-field="alertQty" value="{{alertQty}}" bindinput="onField" placeholder="5" />
+    </view>
+  </view>
+
+  <view class="card spec-card">
+    <view class="spec-title">颜色 / 尺码</view>
+    <view class="muted spec-desc">牛奶这类商品不用填，库存还是记在商品上。衣服再加颜色和尺码，每种规格单独记库存。</view>
+
+    <view class="field">
+      <view class="field-label">颜色</view>
+      <view class="chips" wx:if="{{colors.length}}">
+        <view class="chip on" wx:for="{{colors}}" wx:key="*this" data-value="{{item}}" bindtap="removeColor">{{item}} ×</view>
+      </view>
+      <view class="add-spec">
+        <input class="field-input" data-field="colorInput" value="{{colorInput}}" bindinput="onField" bindconfirm="addColor" placeholder="如 黑色" />
+        <button class="btn-ghost spec-add" bindtap="addColor">添加</button>
+      </view>
+    </view>
+
+    <view class="field last">
+      <view class="field-label">尺码</view>
+      <view class="chips" wx:if="{{sizes.length}}">
+        <view class="chip on" wx:for="{{sizes}}" wx:key="*this" data-value="{{item}}" bindtap="removeSize">{{item}} ×</view>
+      </view>
+      <view class="add-spec">
+        <input class="field-input" data-field="sizeInput" value="{{sizeInput}}" bindinput="onField" bindconfirm="addSize" placeholder="如 M" />
+        <button class="btn-ghost spec-add" bindtap="addSize">添加</button>
+      </view>
+    </view>
+    <view wx:if="{{hasSpecs}}" class="link clear-spec" bindtap="clearSpecs">不用颜色尺码，改回普通商品</view>
+  </view>
+
+  <view class="card spec-card" wx:if="{{hasSpecs}}">
+    <view class="spec-title">规格库存</view>
+    <view class="muted spec-desc" wx:if="{{specTip}}">{{specTip}}</view>
+    <view class="sku-card" wx:for="{{skuRows}}" wx:key="key">
+      <view class="sku-title">{{item.specText}}</view>
+      <view class="field-row">
+        <view class="field half">
+          <view class="field-label">库存</view>
+          <input
+            wx:if="{{!isEdit || item.isNew}}"
+            class="field-input"
+            type="digit"
+            data-index="{{index}}"
+            data-field="stock"
+            value="{{item.stock}}"
+            bindinput="onSkuField"
+            placeholder="0"
+          />
+          <view wx:else class="field-input readonly">{{item.stock}}</view>
+        </view>
+        <view class="field half">
+          <view class="field-label">预警</view>
+          <input class="field-input" type="digit" data-index="{{index}}" data-field="alertQty" value="{{item.alertQty}}" bindinput="onSkuField" placeholder="5" />
+        </view>
+      </view>
+      <view class="field-row">
+        <view class="field half">
+          <view class="field-label">进价</view>
+          <input class="field-input" type="digit" data-index="{{index}}" data-field="costPrice" value="{{item.costPrice}}" bindinput="onSkuField" placeholder="0.00" />
+        </view>
+        <view class="field half last">
+          <view class="field-label">售价</view>
+          <input class="field-input" type="digit" data-index="{{index}}" data-field="salePrice" value="{{item.salePrice}}" bindinput="onSkuField" placeholder="0.00" />
+        </view>
+      </view>
+    </view>
+  </view>
+
+  <button class="btn-primary save-btn" bindtap="save">保存</button>
+  <button wx:if="{{isEdit}}" class="btn-danger" bindtap="remove">删除商品</button>
+</view>

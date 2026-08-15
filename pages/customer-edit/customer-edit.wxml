@@ -1,0 +1,76 @@
+<view class="page">
+  <view class="card">
+    <view class="field">
+      <view class="field-label">客户名称</view>
+      <input class="field-input" data-field="name" value="{{name}}" bindinput="onField" placeholder="例如 张三超市" hidden="{{showPay}}" />
+    </view>
+    <view class="field">
+      <view class="field-label">电话</view>
+      <input class="field-input" data-field="phone" value="{{phone}}" bindinput="onField" placeholder="可选" hidden="{{showPay}}" />
+    </view>
+    <view class="field">
+      <view class="field-label">送货地址</view>
+      <textarea
+        class="field-input field-textarea"
+        data-field="address"
+        value="{{address}}"
+        bindinput="onField"
+        placeholder="可选"
+        maxlength="200"
+        auto-height
+        hidden="{{showPay}}"
+      />
+    </view>
+    <view class="field last">
+      <view class="field-label">内部备注</view>
+      <input class="field-input" data-field="remark" value="{{remark}}" bindinput="onField" placeholder="仅自己可见" hidden="{{showPay}}" />
+    </view>
+    <view class="muted tip">内部备注不会出现在送货单上。</view>
+  </view>
+
+  <block wx:if="{{isEdit}}">
+    <view class="card debt-card">
+      <view class="muted">当前欠款</view>
+      <view class="debt-num {{hasDebt ? 'on' : ''}}">¥{{receivableText}}</view>
+      <view class="muted">累计销售 {{saleCount}} 笔 · ¥{{saleAmountText}}</view>
+      <button wx:if="{{hasDebt}}" class="btn-primary collect-btn" bindtap="openPay" hidden="{{showPay}}">收款</button>
+    </view>
+
+    <view class="section-title">
+      <text>往来记录</text>
+    </view>
+    <view wx:if="{{ledger.length}}" class="card list-card">
+      <view class="list-item" wx:for="{{ledger}}" wx:key="id" data-id="{{item.id}}" bindtap="goRecord">
+        <view>
+          <view class="item-name">{{item.productName}}</view>
+          <view class="muted">{{item.timeText}}<text wx:if="{{item.isOut}}"> · {{item.qtyText}} 件</text></view>
+        </view>
+        <view class="item-right">
+          <text class="tag {{item.tagClass}}">{{item.typeText}}</text>
+          <view class="amount">¥{{item.amountText}}</view>
+        </view>
+      </view>
+    </view>
+    <view wx:else class="card quiet">还没有销售或收款记录</view>
+  </block>
+
+  <button class="btn-primary save-btn" bindtap="save" hidden="{{showPay}}">保存</button>
+  <button wx:if="{{isEdit && phone}}" class="btn-ghost call-btn" bindtap="callPhone" hidden="{{showPay}}">拨打电话</button>
+  <button wx:if="{{isEdit}}" class="btn-danger" bindtap="remove" hidden="{{showPay}}">删除客户</button>
+
+  <view wx:if="{{showPay}}" class="mask" bindtap="closePay">
+    <view class="sheet" catchtap="keepPay">
+      <view class="sheet-title">收款</view>
+      <view class="muted pay-hint">当前欠款 ¥{{receivableText}}，不能超过这个金额。</view>
+      <view class="field">
+        <view class="field-label">本次收款</view>
+        <input class="field-input" type="digit" data-field="payAmount" value="{{payAmount}}" bindinput="onField" placeholder="0.00" />
+      </view>
+      <view class="field">
+        <view class="field-label">备注</view>
+        <input class="field-input" data-field="payRemark" value="{{payRemark}}" bindinput="onField" placeholder="可选" />
+      </view>
+      <button class="btn-primary" bindtap="submitPay">确认收款</button>
+    </view>
+  </view>
+</view>

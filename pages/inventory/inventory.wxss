@@ -1,0 +1,71 @@
+.toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin: 8rpx 8rpx 20rpx;
+}
+
+.filter {
+  padding: 10rpx 18rpx;
+  border-radius: 999rpx;
+  background: #FFFFFF;
+  color: #64748B;
+  font-size: 24rpx;
+}
+
+.filter.on {
+  background: #FEF2F2;
+  color: #DC2626;
+}
+
+.link {
+  color: #0F766E;
+  font-size: 24rpx;
+}
+
+.stock-card {
+  margin-bottom: 16rpx;
+}
+
+.stock-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8rpx;
+}
+
+.goods-tags {
+  display: flex;
+  gap: 8rpx;
+  align-items: center;
+}
+
+.item-name {
+  font-weight: 600;
+  font-size: 30rpx;
+}
+
+.bar {
+  height: 12rpx;
+  margin: 20rpx 0 12rpx;
+  background: #E2E8F0;
+  border-radius: 999rpx;
+  overflow: hidden;
+}
+
+.bar-fill {
+  height: 100%;
+  background: #0F766E;
+  border-radius: 999rpx;
+}
+
+.bar-fill.danger {
+  background: #DC2626;
+}
+
+.stock-nums {
+  display: flex;
+  justify-content: space-between;
+  color: #334155;
+  font-size: 24rpx;
+}

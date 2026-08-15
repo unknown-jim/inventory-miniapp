@@ -1,0 +1,39 @@
+<view class="page">
+  <input
+    class="search"
+    placeholder="搜索名称 / 货号 / 条码"
+    value="{{keyword}}"
+    bindinput="onSearch"
+  />
+
+  <view wx:if="{{!list.length}}" class="card empty">
+    <view class="empty-title">没有匹配的商品</view>
+    <view class="muted">先新增商品，再做进货和销售。</view>
+    <button class="btn-primary seed-btn" bindtap="goAdd">新增商品</button>
+  </view>
+
+  <view class="card goods-card" wx:for="{{list}}" wx:key="id">
+    <view class="goods-main" data-id="{{item.id}}" bindtap="goEdit">
+      <view class="goods-top">
+        <view class="item-name">{{item.name}}</view>
+        <view class="goods-tags">
+          <text wx:if="{{item.hasSpecs}}" class="tag tag-spec">多规格</text>
+          <text class="tag {{item.lowStock ? 'tag-alert' : 'tag-ok'}}">库存 {{item.stock}}</text>
+        </view>
+      </view>
+      <view class="muted">货号 {{item.sku || '未填'}} · 条码 {{item.barcode || '未填'}}</view>
+      <view wx:if="{{item.skuSummary}}" class="muted">{{item.skuSummary}}</view>
+      <view class="price-row">
+        <text>进价 ¥{{item.costText}}</text>
+        <text>售价 ¥{{item.saleText}}</text>
+        <text class="profit">毛利 ¥{{item.profitText}}（{{item.rateText}}）</text>
+      </view>
+    </view>
+    <view class="goods-actions">
+      <button class="btn-ghost mini" data-id="{{item.id}}" catchtap="goPurchase">进货</button>
+      <button class="btn-ghost mini warm" data-id="{{item.id}}" catchtap="goSale">销售</button>
+    </view>
+  </view>
+
+  <view class="fab" bindtap="goAdd">+ 新增</view>
+</view>

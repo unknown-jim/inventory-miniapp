@@ -1,0 +1,228 @@
+<view class="page">
+  <view class="card">
+    <view class="field">
+      <view class="field-head">
+        <view class="field-label">客户</view>
+        <text class="link" bindtap="goCustomers">管理</text>
+      </view>
+      <view class="field-input picker js-customer-picker" bindtap="openCustomerPicker">{{customerName}}</view>
+    </view>
+    <view class="customer-meta" wx:if="{{customerPhone || customerAddress || hasDebt}}">
+      {{customerPhone}}<text wx:if="{{customerPhone && customerAddress}}"> · </text>{{customerAddress}}
+      <text wx:if="{{hasDebt}}"> · 当前欠款 ¥{{receivableText}}</text>
+    </view>
+    <view class="field">
+      <view class="field-label">结算</view>
+      <view class="pay-tabs">
+        <view class="pay-tab js-pay-cash {{payType === 'cash' ? 'on' : ''}}" data-type="cash" bindtap="setPayType">现结</view>
+        <view class="pay-tab js-pay-credit {{payType === 'credit' ? 'on' : ''}}" data-type="credit" bindtap="setPayType">赊账</view>
+      </view>
+    </view>
+    <view class="field">
+      <view class="field-label">备注</view>
+      <input class="field-input" data-field="remark" value="{{remark}}" bindinput="onField" placeholder="可选，会写在送货单上" hidden="{{showPicker || showCustomerPicker || showSlip}}" />
+    </view>
+  </view>
+
+  <view class="card add-card">
+    <view class="field">
+      <view class="field-label">商品</view>
+      <view class="field-input picker js-product-picker" bindtap="openPicker">{{productName}}</view>
+    </view>
+    <view class="meta">当前可出 {{stockText}} · 进价 ¥{{costText}}</view>
+    <view class="spec-block" wx:if="{{hasSpecs}}">
+      <view class="field" wx:if="{{colors.length}}">
+        <view class="field-label">颜色</view>
+        <view class="chips">
+          <view
+            class="chip {{item.on ? 'on' : ''}}"
+            wx:for="{{colorOptions}}"
+            wx:key="value"
+            data-value="{{item.value}}"
+            bindtap="pickColor"
+          >{{item.value}}</view>
+        </view>
+      </view>
+      <view class="field" wx:if="{{sizes.length}}">
+        <view class="field-label">尺码</view>
+        <view class="chips">
+          <view
+            class="chip {{item.on ? 'on' : ''}} {{item.low ? 'low' : ''}}"
+            wx:for="{{sizeOptions}}"
+            wx:key="value"
+            data-value="{{item.value}}"
+            bindtap="pickSize"
+          >{{item.value}} {{item.stock}}</view>
+        </view>
+      </view>
+    </view>
+    <view class="field-row">
+      <view class="field half">
+        <view class="field-label">数量</view>
+        <input class="field-input js-qty" type="digit" data-field="qty" value="{{qty}}" bindinput="onField" placeholder="0" hidden="{{showPicker || showCustomerPicker || showSlip}}" />
+      </view>
+      <view class="field half">
+        <view class="field-label">本次售价</view>
+        <input class="field-input" type="digit" data-field="unitPrice" value="{{unitPrice}}" bindinput="onField" placeholder="0.00" hidden="{{showPicker || showCustomerPicker || showSlip}}" />
+      </view>
+    </view>
+    <view class="line-amount">本行 ¥{{lineAmountText}}</view>
+    <button class="btn-ghost add-btn js-add-cart" bindtap="addCart" hidden="{{showPicker || showCustomerPicker || showSlip}}">加入清单</button>
+  </view>
+
+  <view class="card cart-card" wx:if="{{cart.length}}">
+    <view class="cart-head">本单商品 {{cart.length}}</view>
+    <view class="cart-item" wx:for="{{cart}}" wx:key="key">
+      <view>
+        <view class="item-name">{{item.name}}</view>
+        <view class="muted">
+          <block wx:if="{{item.specText}}">{{item.specText}} · </block>{{item.qtyText}} 件 × ¥{{item.priceText}}
+        </view>
+      </view>
+      <view class="cart-right">
+        <view class="cart-amount">¥{{item.amountText}}</view>
+        <text class="link" data-key="{{item.key}}" bindtap="removeCart">删除</text>
+      </view>
+    </view>
+  </view>
+
+  <view class="card total-card">
+    <view class="total">
+      <view>
+        <view class="muted">本单销售额</view>
+        <view class="total-num">¥{{amountText}}</view>
+      </view>
+      <view class="right">
+        <view class="muted">预估毛利</view>
+        <view class="profit-num">¥{{profitText}}</view>
+      </view>
+    </view>
+    <view class="muted tip">可加入多种商品，确认后开一张送货单。赊账必须选客户。</view>
+  </view>
+
+  <button class="btn-primary save-btn js-sale-submit" bindtap="submit" hidden="{{showPicker || showCustomerPicker || showSlip}}">确认出库</button>
+
+  <view wx:if="{{showPicker}}" class="mask" bindtap="closePicker">
+    <view class="sheet" catchtap="closePickerKeep">
+      <view class="sheet-title">选择商品</view>
+      <input class="search" placeholder="搜索商品" value="{{keyword}}" bindinput="onSearch" />
+      <scroll-view scroll-y class="sheet-list">
+        <view
+          class="sheet-item js-product-item"
+          wx:for="{{filtered}}"
+          wx:key="id"
+          data-id="{{item.id}}"
+          bindtap="onPick"
+        >
+          <view>
+            <view class="item-name">{{item.name}}</view>
+            <view class="muted">
+              <block wx:if="{{item.hasSpecs}}">多规格 · </block>货号 {{item.sku || '未填'}} · 库存 {{item.stock}}
+            </view>
+          </view>
+          <text class="muted">售价 ¥{{item.saleText}}</text>
+        </view>
+        <view wx:if="{{!filtered.length}}" class="empty">没有匹配商品</view>
+      </scroll-view>
+    </view>
+  </view>
+
+  <view wx:if="{{showCustomerPicker}}" class="mask" bindtap="closeCustomerPicker">
+    <view class="sheet" catchtap="closePickerKeep">
+      <view class="sheet-head">
+        <view class="sheet-title">选择客户</view>
+        <text class="link" catchtap="goAddCustomer">新增</text>
+      </view>
+      <input class="search" placeholder="搜索客户" value="{{customerKeyword}}" bindinput="onCustomerSearch" />
+      <scroll-view scroll-y class="sheet-list">
+        <view class="sheet-item js-walkin" bindtap="clearCustomer">
+          <view>
+            <view class="item-name">散客</view>
+            <view class="muted">不填写客户，送货单不显示收货人</view>
+          </view>
+        </view>
+        <view
+          class="sheet-item js-customer-item"
+          wx:for="{{filteredCustomers}}"
+          wx:key="id"
+          data-id="{{item.id}}"
+          bindtap="onPickCustomer"
+        >
+          <view>
+            <view class="item-name">{{item.name}}</view>
+            <view class="muted">{{item.phone || '未填电话'}} · {{item.address || '未填地址'}}</view>
+          </view>
+        </view>
+        <view wx:if="{{!filteredCustomers.length}}" class="empty">没有匹配客户</view>
+      </scroll-view>
+    </view>
+  </view>
+
+  <view wx:if="{{showSlip && slip}}" class="mask slip-mask js-slip" bindtap="closeSlip">
+    <view class="slip" catchtap="closePickerKeep">
+      <view class="slip-kicker">请核对后签收</view>
+      <view class="slip-title js-slip-title">送货单</view>
+      <view class="slip-meta">
+        <text>单号 {{slip.docNo}}</text>
+        <text>{{slip.timeText}}</text>
+      </view>
+      <view class="slip-party" wx:if="{{slip.hasCustomer}}">
+        <view class="slip-row">
+          <text class="muted">收货人</text>
+          <text class="slip-val js-slip-customer">{{slip.customerName}}</text>
+        </view>
+        <view class="slip-row" wx:if="{{slip.customerPhone}}">
+          <text class="muted">电话</text>
+          <text class="slip-val">{{slip.customerPhone}}</text>
+        </view>
+        <view class="slip-row" wx:if="{{slip.customerAddress}}">
+          <text class="muted">地址</text>
+          <text class="slip-val">{{slip.customerAddress}}</text>
+        </view>
+      </view>
+      <view class="slip-lines">
+        <view class="slip-line" wx:for="{{slip.lines}}" wx:key="id">
+          <view class="slip-line-main">
+            <view class="item-name js-slip-product">{{item.productName}}</view>
+            <view class="muted">
+              <block wx:if="{{item.specText}}">{{item.specText}} · </block>{{item.qtyText}} 件 × ¥{{item.priceText}}
+            </view>
+          </view>
+          <text class="slip-val">¥{{item.amountText}}</text>
+        </view>
+      </view>
+      <view class="slip-row" wx:if="{{slip.remark}}">
+        <text class="muted">备注</text>
+        <text class="slip-val">{{slip.remark}}</text>
+      </view>
+      <view class="slip-row">
+        <text class="muted">结算</text>
+        <text class="slip-val js-slip-pay">{{slip.payText}}</text>
+      </view>
+      <view class="slip-total">
+        <text class="muted">金额</text>
+        <text class="slip-total-num">¥{{slip.amountText}}</text>
+      </view>
+      <view class="slip-debt-box" wx:if="{{slip.hasCustomer}}">
+        <view class="slip-row">
+          <text class="muted">之前欠款</text>
+          <text class="slip-val">¥{{slip.prevDebtText}}</text>
+        </view>
+        <view class="slip-row">
+          <text class="muted">本次欠款</text>
+          <text class="slip-val">¥{{slip.thisDebtText}}</text>
+        </view>
+        <view class="slip-total slip-debt">
+          <text class="muted">累计欠款</text>
+          <text class="slip-debt-num {{slip.hasDebt ? 'on' : ''}}">¥{{slip.receivableText}}</text>
+        </view>
+      </view>
+      <view class="slip-actions">
+        <button class="btn-ghost slip-btn js-slip-export" bindtap="exportSlip" disabled="{{exporting}}" hidden="{{showPicker || showCustomerPicker}}">导出图片</button>
+        <button class="btn-primary slip-btn js-slip-close" bindtap="closeSlip">完成</button>
+      </view>
+    </view>
+  </view>
+
+  <canvas type="2d" id="slipCanvas" class="slip-canvas"></canvas>
+</view>

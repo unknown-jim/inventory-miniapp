@@ -1,0 +1,92 @@
+.picker {
+  line-height: 80rpx;
+}
+
+.meta {
+  margin: -8rpx 0 24rpx;
+  color: #0F766E;
+  font-size: 24rpx;
+}
+
+.spec-block .field {
+  margin-bottom: 8rpx;
+}
+
+.spec-block .chips {
+  margin-bottom: 8rpx;
+}
+
+.field-row {
+  display: flex;
+  gap: 16rpx;
+}
+
+.half {
+  flex: 1;
+}
+
+.total,
+.sheet-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.total {
+  padding-top: 8rpx;
+  font-weight: 600;
+}
+
+.total-num {
+  font-size: 36rpx;
+  color: #0F766E;
+}
+
+.tip {
+  margin-top: 16rpx;
+}
+
+.save-btn {
+  margin-top: 32rpx;
+}
+
+.mask {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  background: rgba(15, 23, 42, 0.45);
+  display: flex;
+  align-items: flex-end;
+  z-index: 1000;
+}
+
+.sheet {
+  width: 100%;
+  background: #FFFFFF;
+  border-radius: 24rpx 24rpx 0 0;
+  padding: 28rpx 24rpx 12rpx;
+  position: relative;
+  z-index: 1001;
+}
+
+.sheet-title {
+  font-size: 30rpx;
+  font-weight: 600;
+  margin-bottom: 16rpx;
+}
+
+.sheet-list {
+  height: 560rpx;
+}
+
+.sheet-item {
+  padding: 22rpx 0;
+  border-bottom: 1rpx solid #F1F5F4;
+}
+
+.item-name {
+  font-weight: 600;
+  margin-bottom: 6rpx;
+}
