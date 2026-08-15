@@ -19,6 +19,8 @@
 ### 代码注入
 
 - `app.json` 必须保留 `"lazyCodeLoading": "requiredComponents"`，不得删除。
+- 不要在 `app.json` 的 `permission` 里写 `scope.writePhotosAlbum`（基础库只认地理位置 scope；相册说明写在后台隐私指引和保存弹窗里）。
+- `ignoreDevUnusedFiles` / `ignoreUploadUnusedFiles` 必须为 false，送货单文件留在 `packOptions.include`。详见 [docs/code-injection.md](docs/code-injection.md)。
 - 不要把低频自定义组件写进 `app.json` 的全局 `usingComponents`。
 - 页面 JSON 只声明本页真正用到的组件。
 - 非首屏重组件才配 `componentPlaceholder`；首屏立刻展示的组件不要配。
