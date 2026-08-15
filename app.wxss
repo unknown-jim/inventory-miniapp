@@ -123,6 +123,21 @@ button::after {
   color: #0E7490;
 }
 
+.tag-blank {
+  background: #EEF2FF;
+  color: #4338CA;
+}
+
+.tag-return {
+  background: #FFF7ED;
+  color: #C2410C;
+}
+
+.tag-convert {
+  background: #F5F3FF;
+  color: #6D28D9;
+}
+
 .chips {
   display: flex;
   flex-wrap: wrap;

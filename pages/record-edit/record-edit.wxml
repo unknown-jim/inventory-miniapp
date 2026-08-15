@@ -45,16 +45,17 @@
       </view>
     </view>
     <view class="field-row">
-      <view class="field half">
+      <view class="field {{isConvert ? 'last' : 'half'}}">
         <view class="field-label">数量</view>
         <input class="field-input" type="digit" data-field="qty" value="{{qty}}" bindinput="onField" placeholder="0" hidden="{{showCustomerPicker}}" />
       </view>
-      <view class="field half">
-        <view class="field-label">{{isIn ? '进价' : '售价'}}</view>
-        <input class="field-input" type="digit" data-field="unitPrice" value="{{unitPrice}}" bindinput="onField" placeholder="0.00" hidden="{{showCustomerPicker}}" />
+      <view class="field half" wx:if="{{!isConvert}}">
+        <view class="field-label">{{isIn ? '进价' : (isReturn ? '退货单价' : '售价')}}</view>
+        <input wx:if="{{!isReturn}}" class="field-input" type="digit" data-field="unitPrice" value="{{unitPrice}}" bindinput="onField" placeholder="0.00" hidden="{{showCustomerPicker}}" />
+        <view wx:else class="field-input readonly">{{unitPrice}}</view>
       </view>
     </view>
-    <view class="meta" wx:if="{{isOut}}">进价快照 ¥{{costText}} · 本行毛利 ¥{{profitText}}</view>
+    <view class="meta" wx:if="{{isOut || isReturn}}">进价快照 ¥{{costText}} · 本行毛利 ¥{{profitText}}</view>
     <view class="total">
       <text>金额</text>
       <text class="total-num">¥{{amountText}}</text>
@@ -65,8 +66,9 @@
     </view>
   </view>
 
-  <view class="muted tip">改数量会同步改库存。记错商品请删除后重新开单。<text wx:if="{{hasOrder}}">同一张送货单的客户和结算会一起改。</text></view>
+  <view class="muted tip">改数量会同步改库存。记错商品请删除后重新开单。<text wx:if="{{hasOrder && isOut}}">同一张送货单的客户和结算会一起改。</text></view>
 
+  <button wx:if="{{canReturn}}" class="btn-ghost export-btn" bindtap="goReturn" hidden="{{showCustomerPicker || showSlip}}">退货入库</button>
   <button wx:if="{{isOut}}" class="btn-ghost export-btn js-export-slip" bindtap="openSlip" hidden="{{showCustomerPicker || showSlip}}">导出送货单</button>
   <button class="btn-primary save-btn" bindtap="save" hidden="{{showCustomerPicker || showSlip}}">保存</button>
   <button class="btn-danger" bindtap="remove" hidden="{{showCustomerPicker || showSlip}}">删除流水</button>

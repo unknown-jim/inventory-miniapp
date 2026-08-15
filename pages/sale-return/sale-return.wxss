@@ -1,0 +1,35 @@
+.readonly {
+  line-height: 80rpx;
+  color: #64748B;
+}
+
+.last {
+  margin-bottom: 0;
+}
+
+.list-card {
+  margin-top: 16rpx;
+}
+
+.tip {
+  margin-bottom: 16rpx;
+}
+
+.line {
+  padding: 20rpx 0;
+  border-top: 1rpx solid #F1F5F4;
+}
+
+.line:first-of-type {
+  border-top: none;
+  padding-top: 0;
+}
+
+.item-name {
+  font-weight: 600;
+  margin-bottom: 8rpx;
+}
+
+.save-btn {
+  margin: 32rpx 0 16rpx;
+}

@@ -48,5 +48,9 @@ Page({
 
   goRecords() {
     wx.navigateTo({ url: '/pages/records/records' })
+  },
+
+  goConvert(e) {
+    wx.navigateTo({ url: '/pages/convert/convert?id=' + e.currentTarget.dataset.id })
   }
 })

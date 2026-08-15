@@ -22,7 +22,10 @@ Page({
     sizeInput: '',
     hasSpecs: false,
     skuRows: [],
-    specTip: ''
+    specTip: '',
+    blankProcess: false,
+    blankStock: '',
+    blankStockText: ''
   },
 
   onLoad(query) {
@@ -39,6 +42,7 @@ Page({
     const margin = inventory.calcMargin(product.costPrice, product.salePrice)
     const colors = product.colors || []
     const sizes = product.sizes || []
+    const blank = inventory.findBlankSku(skus, product.id)
     this.setData({
       id: product.id,
       isEdit: true,
@@ -54,13 +58,17 @@ Page({
       colors: colors,
       sizes: sizes,
       hasSpecs: inventory.productHasSpecs(product),
+      blankProcess: inventory.isBlankProcess(product),
+      blankStockText: blank ? String(blank.stock) : '0',
       skuRows: this.rowsFromSkus(skus)
     })
     wx.setNavigationBarTitle({ title: '编辑商品' })
   },
 
   rowsFromSkus(skus) {
-    return (skus || []).map(function (item) {
+    return (skus || []).filter(function (item) {
+      return !item.isBlank
+    }).map(function (item) {
       return {
         key: inventory.specKey(item.color, item.size),
         id: item.id,
@@ -105,11 +113,17 @@ Page({
     }.bind(this))
 
     let specTip = ''
+    let blankProcess = this.data.blankProcess
     if (!this.data.skuRows.length && rows.length) {
+      if (!this.data.hasSpecs) blankProcess = true
       const move = this.data.isEdit
         ? inventory.toNumber(this.data.stockText)
         : inventory.toNumber(this.data.stock)
-      if (move > 0 && !rows.some(function (row) { return inventory.toNumber(row.stock) > 0 })) {
+      if (blankProcess) {
+        if (move > 0 && !this.data.isEdit) {
+          specTip = '初始库存会记到白坯，销售时再选颜色尺码。'
+        }
+      } else if (move > 0 && !rows.some(function (row) { return inventory.toNumber(row.stock) > 0 })) {
         rows[0].stock = String(move)
         specTip = '原库存已记到第一个规格，请按实际拆分。'
       }
@@ -119,9 +133,47 @@ Page({
       colors: colors,
       sizes: sizes,
       hasSpecs: combos.length > 0,
+      blankProcess: combos.length ? blankProcess : false,
       skuRows: rows,
       specTip: specTip
     }, extra || {}))
+  },
+
+  setStockMode(e) {
+    const mode = e.currentTarget.dataset.mode
+    const blankProcess = mode === 'blank'
+    if (blankProcess === this.data.blankProcess) return
+    if (!blankProcess && this.data.isEdit && inventory.toNumber(this.data.blankStockText) > 0) {
+      wx.showToast({ title: '还有白坯库存，不能改成成衣现货', icon: 'none' })
+      return
+    }
+    const skuRows = this.data.skuRows.slice()
+    let specTip = ''
+    let blankStock = this.data.blankStock
+    if (blankProcess) {
+      const first = skuRows[0]
+      const move = first ? inventory.toNumber(first.stock) : 0
+      if (move > 0 && skuRows.every(function (row, index) {
+        return index === 0 || inventory.toNumber(row.stock) <= 0
+      })) {
+        skuRows[0].stock = '0'
+        blankStock = String(move)
+        specTip = '库存已记到白坯。'
+      }
+    } else {
+      const move = inventory.toNumber(this.data.blankStock || this.data.blankStockText)
+      if (move > 0 && skuRows.length && !skuRows.some(function (row) { return inventory.toNumber(row.stock) > 0 })) {
+        skuRows[0].stock = String(move)
+        blankStock = '0'
+        specTip = '白坯库存已记到第一个规格，请按实际拆分。'
+      }
+    }
+    this.setData({
+      blankProcess: blankProcess,
+      skuRows: skuRows,
+      blankStock: blankStock,
+      specTip: specTip
+    })
   },
 
   onField(e) {
@@ -209,6 +261,9 @@ Page({
           hasSpecs: false,
           skuRows: [],
           specTip: '',
+          blankProcess: false,
+          blankStock: String(total),
+          blankStockText: String(total),
           stock: String(total),
           stockText: String(total || this.data.stockText)
         })
@@ -233,10 +288,13 @@ Page({
         barcode: this.data.barcode,
         costPrice: this.data.costPrice,
         salePrice: this.data.salePrice,
-        stock: this.data.hasSpecs ? 0 : (this.data.isEdit ? 0 : this.data.stock),
+        stock: this.data.hasSpecs
+          ? (this.data.blankProcess && !this.data.isEdit ? this.data.blankStock || this.data.stock : 0)
+          : (this.data.isEdit ? 0 : this.data.stock),
         alertQty: this.data.alertQty,
         colors: this.data.colors,
         sizes: this.data.sizes,
+        blankProcess: this.data.hasSpecs && this.data.blankProcess,
         skus: this.data.skuRows.map(function (row) {
           return {
             id: row.id,
