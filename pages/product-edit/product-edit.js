@@ -1,6 +1,7 @@
 const store = require('../../utils/store')
 const util = require('../../utils/util')
 const inventory = require('../../utils/inventory')
+const skuCardView = require('../../utils/sku-card-view').skuCardView
 
 function axisLabel(value, fallback) {
   const name = String(value || '').trim()
@@ -51,7 +52,11 @@ Page({
     categories: [],
     categoryId: '',
     nameSuggest: [],
-    sharedPrice: true
+    sharedPrice: true,
+    blankStockRows: [],
+    showBlankPriceCard: false,
+    showBlankStockCard: false,
+    showFinishedSkuCard: false
   },
 
   onLoad(query) {
@@ -75,7 +80,7 @@ Page({
       sharedPrice = false
       specTip = '部分规格价格不同，已按各格显示。'
     }
-    this.setData(Object.assign({
+    this.setData(this.withSkuCards(Object.assign({
       id: product.id,
       isEdit: true,
       name: product.name,
@@ -95,7 +100,7 @@ Page({
       skuRows: skuRows,
       sharedPrice: sharedPrice,
       specTip: specTip
-    }, kindFields(kind)))
+    }, kindFields(kind))))
     wx.setNavigationBarTitle({ title: '编辑商品' })
   },
 
@@ -155,6 +160,13 @@ Page({
     }
   },
 
+  withSkuCards(patch) {
+    const kind = patch.productKind != null ? patch.productKind : this.data.productKind
+    const shared = patch.sharedPrice != null ? patch.sharedPrice : this.data.sharedPrice
+    const rows = patch.skuRows != null ? patch.skuRows : this.data.skuRows
+    return Object.assign(patch, skuCardView(kind, shared, rows))
+  },
+
   withSharedPrices(rows) {
     if (!this.data.sharedPrice) return rows
     const cost = this.data.costPrice
@@ -206,7 +218,7 @@ Page({
       }
     }
 
-    this.setData(patch)
+    this.setData(this.withSkuCards(patch))
   },
 
   migrateBlankFinished(wantBlank) {
@@ -290,18 +302,18 @@ Page({
         return inventory.toNumber(row.stock) > 0
       })) {
         skuRows[0].stock = String(move)
-        this.setData({
+        this.setData(this.withSkuCards({
           skuRows: skuRows,
           specTip: this.data.specTip
             ? this.data.specTip + ' 原库存已记到第一个规格，请按实际拆分。'
             : '原库存已记到第一个规格，请按实际拆分。'
-        })
+        }))
       }
       return
     }
 
     if (from !== kind && (from === 'blank' || from === 'finished')) {
-      this.setData(this.migrateBlankFinished(kind === 'blank'))
+      this.setData(this.withSkuCards(this.migrateBlankFinished(kind === 'blank')))
     }
   },
 
@@ -326,7 +338,7 @@ Page({
           return
         }
         if (!this.data.isEdit) {
-          this.setData(Object.assign(kindFields('plain'), base, {
+          this.setData(this.withSkuCards(Object.assign(kindFields('plain'), base, {
             specTip: '',
             specAxis1: '',
             specAxis2: '',
@@ -334,7 +346,7 @@ Page({
             sizes: [],
             skuRows: [],
             blankStock: ''
-          }))
+          })))
           return
         }
         this.setData(base)
@@ -384,7 +396,7 @@ Page({
   setSharedPrice(e) {
     const sharedPrice = e.currentTarget.dataset.on === '1'
     const skuRows = sharedPrice ? this.withSharedPrices(this.data.skuRows) : this.data.skuRows
-    this.setData({ sharedPrice: sharedPrice, skuRows: skuRows })
+    this.setData(this.withSkuCards({ sharedPrice: sharedPrice, skuRows: skuRows }))
   },
 
   onField(e) {
@@ -499,7 +511,7 @@ Page({
           })
           patch.blankStock = ''
         }
-        this.setData(patch)
+        this.setData(this.withSkuCards(patch))
       }
     })
   },
@@ -509,7 +521,7 @@ Page({
     const field = e.currentTarget.dataset.field
     const skuRows = this.data.skuRows.slice()
     skuRows[index][field] = e.detail.value
-    this.setData({ skuRows: skuRows })
+    this.setData(this.withSkuCards({ skuRows: skuRows }))
   },
 
   save() {
