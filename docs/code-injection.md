@@ -16,9 +16,10 @@
 |---|---|
 | 自定义组件 | 无，各页 `usingComponents` 为空 |
 | 插件 / 分包 | 无 |
-| `lazyCodeLoading` | **尚未写入 `app.json`，落地时第一步补上，之后不得删除** |
+| `lazyCodeLoading` | 已写入 `app.json`，之后不得删除 |
 | JS / WXSS / WXML 压缩 | 已开（`project.config.json`） |
-| `tests/`、`node_modules` | 已在 `packOptions.ignore` |
+| 上传过滤无依赖文件 | `ignoreUploadUnusedFiles` 已开 |
+| 不进代码包 | `tests/`、`node_modules`、`docs/`、仓库说明与 npm 清单已在 `packOptions.ignore` |
 | 基础库 | `3.8.0`（高于按需注入 2.11.1、用时注入 2.11.2） |
 
 用时注入目前没有对象。不要为了「看起来用了占位组件」去硬拆页面。
@@ -102,7 +103,7 @@
 |---|---|
 | 必须：开启组件懒注入 | `app.json` 保留 `lazyCodeLoading` |
 | 必须：去掉无用插件 | 不在 `app.json` 留死插件 |
-| 必须：去掉无依赖文件 | 无用文件不进代码包；`tests/`、`node_modules` 保持 ignore；可开 `ignoreUploadUnusedFiles` |
+| 必须：去掉无依赖文件 | 无用文件不进代码包；`tests/`、`node_modules`、`docs/` 等保持 ignore；`ignoreUploadUnusedFiles` 保持 true |
 | 压缩 JS / WXSS / WXML | 保持 `minified`、`minifyWXSS`、`minifyWXML` 为 true |
 | 建议：图片/音频 >200KB | tab 图标可留包内；超过 200KB 的静态资源走 CDN |
 | 建议：主包仅被分包依赖的 JS/组件 | 有分包之后再挪；现在无分包则不适用 |
