@@ -709,24 +709,66 @@ function applySaleOrder(products, records, payload, now, orderId, nextId, skus) 
     products: workingProducts,
     skus: workingSkus,
     records: workingRecords,
-    order: {
-      id: orderId,
-      records: orderRecords,
-      amount: round2(orderRecords.reduce(function (sum, item) {
-        return sum + toNumber(item.amount)
-      }, 0)),
-      profit: round2(orderRecords.reduce(function (sum, item) {
-        return sum + toNumber(item.profit)
-      }, 0)),
+    order: makeSaleOrder(orderId, orderRecords, {
       payType: payType,
-      remark: String(payload.remark || '').trim(),
+      remark: payload.remark,
       customerId: customerId,
-      customerName: String(payload.customerName || '').trim(),
-      customerPhone: String(payload.customerPhone || '').trim(),
-      customerAddress: String(payload.customerAddress || '').trim(),
-      createdAt: now
-    }
+      customerName: payload.customerName,
+      customerPhone: payload.customerPhone,
+      customerAddress: payload.customerAddress
+    }, now)
   }
+}
+
+function saleOrderIdOf(record) {
+  return String((record && record.orderId) || (record && record.id) || '')
+}
+
+function saleOrderRecords(records, record) {
+  const orderId = saleOrderIdOf(record)
+  return records.filter(function (item) {
+    return item.type === 'out' && saleOrderIdOf(item) === orderId
+  }).reverse()
+}
+
+function makeSaleOrder(orderId, orderRecords, fields, createdAt) {
+  return {
+    id: orderId,
+    records: orderRecords,
+    amount: round2(orderRecords.reduce(function (sum, item) {
+      return sum + toNumber(item.amount)
+    }, 0)),
+    profit: round2(orderRecords.reduce(function (sum, item) {
+      return sum + toNumber(item.profit)
+    }, 0)),
+    payType: fields.payType === 'credit' ? 'credit' : 'cash',
+    remark: String(fields.remark || '').trim(),
+    customerId: String(fields.customerId || ''),
+    customerName: String(fields.customerName || '').trim(),
+    customerPhone: String(fields.customerPhone || '').trim(),
+    customerAddress: String(fields.customerAddress || '').trim(),
+    createdAt: createdAt
+  }
+}
+
+function buildSaleOrder(records, record) {
+  if (!record || record.type !== 'out') {
+    throw new Error('不是销售流水')
+  }
+  const orderRecords = saleOrderRecords(records, record)
+  if (!orderRecords.length) {
+    throw new Error('流水不存在')
+  }
+  const first = orderRecords[0]
+  return makeSaleOrder(saleOrderIdOf(first), orderRecords, first, first.createdAt)
+}
+
+function receivableAt(records, customerId, at) {
+  if (!customerId) return 0
+  const ts = toNumber(at)
+  return summarizeCustomerAccount(records.filter(function (item) {
+    return toNumber(item.createdAt) <= ts
+  }), customerId).receivable
 }
 
 function stockLabel(product, sku) {
@@ -1237,6 +1279,8 @@ module.exports = {
   applyPurchase: applyPurchase,
   applySale: applySale,
   applySaleOrder: applySaleOrder,
+  buildSaleOrder: buildSaleOrder,
+  receivableAt: receivableAt,
   applyPayment: applyPayment,
   updateRecord: updateRecord,
   deleteRecord: deleteRecord,

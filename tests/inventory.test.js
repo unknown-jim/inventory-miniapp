@@ -250,6 +250,24 @@ assert.strictEqual(multi.products.find(function (item) { return item.id === 'p1'
 assert.strictEqual(multi.products.find(function (item) { return item.id === 'p2' }).stock, 7)
 assert.strictEqual(inv.summarizeCustomerAccount(multi.records, 'c1').receivable, 18.9)
 
+const rebuiltOrder = inv.buildSaleOrder(multi.records, multi.order.records[1])
+assert.strictEqual(rebuiltOrder.id, 'order-1')
+assert.strictEqual(rebuiltOrder.records.length, 2)
+assert.strictEqual(rebuiltOrder.records[0].id, multi.order.records[0].id)
+assert.strictEqual(rebuiltOrder.records[1].id, multi.order.records[1].id)
+assert.strictEqual(rebuiltOrder.amount, 18.9)
+assert.throws(function () {
+  inv.buildSaleOrder(multi.records, { type: 'pay', id: 'x' })
+}, /销售/)
+
+const paidAll = inv.applyPayment(multi.records, {
+  customerId: 'c1',
+  customerName: '张三超市',
+  amount: 18.9
+}, 10000, 'r-pay-all')
+assert.strictEqual(inv.summarizeCustomerAccount(paidAll.records, 'c1').receivable, 0)
+assert.strictEqual(inv.receivableAt(paidAll.records, 'c1', 9100), 18.9)
+
 assert.throws(function () {
   inv.applySaleOrder([created], [], {
     items: [

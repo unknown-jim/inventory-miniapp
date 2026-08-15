@@ -138,6 +138,27 @@ async function runSalePickerAndSlip(miniProgram) {
   await waitGone(sale, '.js-slip')
 }
 
+async function runRecordSlipExport(miniProgram) {
+  step('流水：打开销售记录，再次打开送货单')
+  const records = await miniProgram.navigateTo('/pages/records/records')
+  await records.waitFor('.js-record-out')
+  const items = await records.$$('.js-record-out')
+  assert.ok(items.length > 0, '流水里没有销售记录')
+  await items[0].tap()
+
+  await records.waitFor(800)
+  const edit = await miniProgram.currentPage()
+  assert.ok(edit.path.indexOf('record-edit') >= 0, '未进入流水详情: ' + edit.path)
+  await edit.waitFor('.js-export-slip')
+  await tap(edit, '.js-export-slip')
+  await edit.waitFor('.js-slip')
+  const title = await textOf(edit, '.js-slip-title')
+  assert.ok(title.indexOf('送货单') >= 0, '再次导出时送货单标题不对: ' + title)
+  await tap(edit, '.js-slip-close')
+  await waitGone(edit, '.js-slip')
+  await miniProgram.navigateBack()
+}
+
 async function runPaySheet(miniProgram) {
   step('客户页：点收款，弹出收款层并确认')
   const list = await miniProgram.navigateTo('/pages/customers/customers')
@@ -184,6 +205,7 @@ async function run() {
     })
     await seedFromHome(miniProgram)
     await runSalePickerAndSlip(miniProgram)
+    await runRecordSlipExport(miniProgram)
     await runPaySheet(miniProgram)
     await runNativeClearModal(miniProgram)
     console.log('ui tests passed')

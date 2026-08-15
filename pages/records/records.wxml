@@ -28,7 +28,7 @@
   <view wx:if="{{!list.length}}" class="card empty">还没有流水</view>
 
   <view class="card list-card" wx:if="{{list.length}}">
-    <view class="list-item" wx:for="{{list}}" wx:key="id" data-id="{{item.id}}" bindtap="onRecordTap">
+    <view class="list-item js-record-item {{item.isOut ? 'js-record-out' : ''}}" wx:for="{{list}}" wx:key="id" data-id="{{item.id}}" bindtap="onRecordTap">
       <view>
         <view class="item-name">{{item.productName}}</view>
         <view class="muted" wx:if="{{item.hasSpec}}">{{item.specText}}</view>
