@@ -11,6 +11,12 @@ Page({
   },
 
   onShow() {
+    const filter = getApp().consumePendingInventoryFilter()
+    if (filter === 'alert') {
+      this.setData({ onlyAlert: true })
+    } else if (filter === 'all') {
+      this.setData({ onlyAlert: false })
+    }
     this.refresh()
   },
 
