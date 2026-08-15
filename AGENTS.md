@@ -8,7 +8,7 @@
 2. [docs/code-injection.md](docs/code-injection.md)：按需注入、用时注入、分包时机、代码质量扫描。
 3. [docs/commit-and-pr.md](docs/commit-and-pr.md)：提交说明和 Pull Request 描述。写 commit 或开 PR 时必须遵守。
 4. [docs/accounting-vs-policy.md](docs/accounting-vs-policy.md)：记账要自洽，现场规矩不写死。
-5. [docs/blank-process.md](docs/blank-process.md)：白坯加工、成衣现货、退货原样入库、改规格。
+5. [docs/blank-process.md](docs/blank-process.md)：待加工、分规格现货、退货原样入库、改规格。
 
 ## 硬约束（摘要）
 
@@ -35,6 +35,6 @@
 
 ### 记账和现场规矩
 
-- 件数守恒、退货原样入库、整单共享白坯：记账要自洽，必须守。
-- 能改成什么色、能不能改码、先改再卖还是当场改：现场规矩，不要写成软件限制。
-- 给操作便利（类型带出可编辑待选项），不要给行业裁判。详见 [docs/accounting-vs-policy.md](docs/accounting-vs-policy.md)。
+- 件数守恒、退货原样入库、整单共享待加工：记账要自洽，必须守。
+- 能不能换某一根轴、先改再卖还是当场改：现场规矩，不要写成软件限制。
+- 给操作便利（类型给出可命名的规格轴和可编辑取值），不要给行业裁判。详见 [docs/accounting-vs-policy.md](docs/accounting-vs-policy.md)。

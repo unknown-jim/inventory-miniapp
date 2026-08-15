@@ -32,7 +32,7 @@
     <view class="meta">当前可出 {{stockText}} · 进价 ¥{{costText}}</view>
     <view class="spec-block" wx:if="{{hasSpecs}}">
       <view class="field" wx:if="{{colors.length}}">
-        <view class="field-label">颜色</view>
+        <view class="field-label">{{specAxis1}}</view>
         <view class="chips">
           <view
             class="chip {{item.on ? 'on' : ''}}"
@@ -44,7 +44,7 @@
         </view>
       </view>
       <view class="field" wx:if="{{sizes.length}}">
-        <view class="field-label">尺码</view>
+        <view class="field-label">{{specAxis2}}</view>
         <view class="chips">
           <view
             class="chip {{item.on ? 'on' : ''}} {{item.low ? 'low' : ''}}"
@@ -97,7 +97,7 @@
         <view class="profit-num">¥{{profitText}}</view>
       </view>
     </view>
-    <view class="muted tip">可加入多种商品，确认后开一张送货单。赊账必须选客户。白坯款先扣同色同码现货，不够再扣白坯。</view>
+    <view class="muted tip">可加入多种商品，确认后开一张送货单。赊账必须选客户。待加工款先扣同一格现货，不够再扣待加工库存。</view>
   </view>
 
   <button class="btn-primary save-btn js-sale-submit" bindtap="submit" hidden="{{showPicker || showCustomerPicker || showSlip}}">确认出库</button>
@@ -117,8 +117,7 @@
           <view>
             <view class="item-name">{{item.name}}</view>
             <view class="muted">
-              <block wx:if="{{item.blankProcess}}">白坯加工 · </block>
-              <block wx:elif="{{item.hasSpecs}}">成衣现货 · </block>货号 {{item.sku || '未填'}} · 库存 {{item.stock}}
+              <block wx:if="{{item.specTag}}">{{item.specTag}} · </block>货号 {{item.sku || '未填'}} · 库存 {{item.stock}}
             </view>
           </view>
           <text class="muted">售价 ¥{{item.saleText}}</text>

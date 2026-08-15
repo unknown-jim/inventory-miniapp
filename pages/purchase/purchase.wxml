@@ -4,10 +4,10 @@
       <view class="field-label">商品</view>
       <view class="field-input picker" bindtap="openPicker">{{productName}}</view>
     </view>
-    <view class="meta">当前库存 {{stockText}}<text wx:if="{{blankProcess}}">（白坯）</text></view>
+    <view class="meta">当前库存 {{stockText}}<text wx:if="{{blankProcess}}">（待加工）</text></view>
     <view class="spec-block" wx:if="{{hasSpecs && !blankProcess}}">
       <view class="field" wx:if="{{colors.length}}">
-        <view class="field-label">颜色</view>
+        <view class="field-label">{{specAxis1}}</view>
         <view class="chips">
           <view
             class="chip {{item.on ? 'on' : ''}}"
@@ -19,7 +19,7 @@
         </view>
       </view>
       <view class="field" wx:if="{{sizes.length}}">
-        <view class="field-label">尺码</view>
+        <view class="field-label">{{specAxis2}}</view>
         <view class="chips">
           <view
             class="chip {{item.on ? 'on' : ''}}"
@@ -49,7 +49,7 @@
       <text>进货金额</text>
       <text class="total-num">¥{{amountText}}</text>
     </view>
-    <view class="muted tip">{{blankProcess ? '进货记入白坯。颜色和尺码在销售时选；白色成衣不是白坯。' : (hasSpecs ? '本次进价会更新该规格的进价，之后销售按新进价算毛利。' : '本次进价会更新该商品的进价，之后销售按新进价算毛利。')}}</view>
+    <view class="muted tip">{{blankProcess ? '进货记入待加工库存。销售时再选规格；规格格和待加工库存不是一回事。' : (hasSpecs ? '本次进价会更新该规格的进价，之后销售按新进价算毛利。' : '本次进价会更新该商品的进价，之后销售按新进价算毛利。')}}</view>
   </view>
 
   <button class="btn-primary save-btn" bindtap="submit" hidden="{{showPicker}}">确认入库</button>
@@ -69,8 +69,7 @@
           <view>
             <view class="item-name">{{item.name}}</view>
             <view class="muted">
-              <block wx:if="{{item.blankProcess}}">白坯加工 · </block>
-              <block wx:elif="{{item.hasSpecs}}">成衣现货 · </block>货号 {{item.sku || '未填'}} · 库存 {{item.stock}}
+              <block wx:if="{{item.specTag}}">{{item.specTag}} · </block>货号 {{item.sku || '未填'}} · 库存 {{item.stock}}
             </view>
           </view>
           <text class="muted">进价 ¥{{item.costText}}</text>

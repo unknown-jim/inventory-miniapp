@@ -32,12 +32,12 @@
     <view class="spec-title">商品类型</view>
     <view class="pay-tabs kind-tabs">
       <view class="pay-tab {{productKind === 'plain' ? 'on' : ''}}" data-kind="plain" bindtap="setProductKind">普通</view>
-      <view class="pay-tab {{productKind === 'blank' ? 'on' : ''}}" data-kind="blank" bindtap="setProductKind">白坯加工</view>
-      <view class="pay-tab {{productKind === 'finished' ? 'on' : ''}}" data-kind="finished" bindtap="setProductKind">成衣现货</view>
+      <view class="pay-tab {{productKind === 'blank' ? 'on' : ''}}" data-kind="blank" bindtap="setProductKind">待加工</view>
+      <view class="pay-tab {{productKind === 'finished' ? 'on' : ''}}" data-kind="finished" bindtap="setProductKind">分规格现货</view>
     </view>
-    <view class="muted spec-desc" wx:if="{{productKind === 'plain'}}">库存记在这件商品上，不用颜色尺码。牛奶这类商品选这个。</view>
-    <view class="muted spec-desc" wx:elif="{{productKind === 'blank'}}">进货只进白坯。销售时选色码：先扣同色同码现货，不够再扣白坯。白色成衣和白坯不是一回事。退货按卖掉的色码入库；要改色改码请用「改规格」。</view>
-    <view class="muted spec-desc" wx:else>进货、销售都按颜色×尺码记库存。</view>
+    <view class="muted spec-desc" wx:if="{{productKind === 'plain'}}">库存记在这件商品上，不用规格。牛奶这类商品选这个。</view>
+    <view class="muted spec-desc" wx:elif="{{productKind === 'blank'}}">进货只进待加工库存。销售时选规格：先扣同一格现货，不够再扣待加工。规格格不是待加工库存。退货按卖掉的那一格入库；要换格请用「改规格」。</view>
+    <view class="muted spec-desc" wx:else>进货、销售都按规格组合记库存。可只用一根轴。</view>
 
     <block wx:if="{{productKind === 'plain'}}">
       <view class="field" wx:if="{{!isEdit}}">
@@ -56,15 +56,15 @@
 
     <block wx:if="{{productKind === 'blank'}}">
       <view class="field">
-        <view class="field-label">白坯预警数量</view>
+        <view class="field-label">待加工预警数量</view>
         <input class="field-input" type="digit" data-field="alertQty" value="{{alertQty}}" bindinput="onField" placeholder="5" />
       </view>
       <view class="field last" wx:if="{{!isEdit}}">
-        <view class="field-label">白坯初始库存</view>
+        <view class="field-label">待加工初始库存</view>
         <input class="field-input" type="digit" data-field="blankStock" value="{{blankStock}}" bindinput="onField" placeholder="0" />
       </view>
       <view class="field last" wx:else>
-        <view class="field-label">白坯库存</view>
+        <view class="field-label">待加工库存</view>
         <view class="field-input readonly">{{blankStockText}}（通过进货 / 销售 / 退货变动）</view>
       </view>
     </block>
@@ -76,28 +76,28 @@
   </view>
 
   <view class="card spec-card" wx:if="{{productKind !== 'plain'}}">
-    <view class="spec-title">{{productKind === 'blank' ? '销售色码' : '颜色 / 尺码'}}</view>
-    <view class="muted spec-desc" wx:if="{{productKind === 'blank'}}">可改、可删、可再加。销售时用这些色码；白色成衣不是白坯。</view>
-    <view class="muted spec-desc" wx:else>可改、可删、可再加。每个颜色×尺码各记一份库存。</view>
+    <view class="spec-title">{{productKind === 'blank' ? '销售规格' : '规格'}}</view>
+    <view class="muted spec-desc" wx:if="{{productKind === 'blank'}}">可改、可删、可再加。销售时用这些规格格；格上的值和待加工库存不是一回事。</view>
+    <view class="muted spec-desc" wx:else>可改、可删、可再加。每个规格组合各记一份库存。可只用一根轴。</view>
 
     <view class="field">
-      <view class="field-label">颜色</view>
+      <input class="axis-title" data-field="specAxis1" value="{{specAxis1}}" bindinput="onField" placeholder="规格一，如 颜色、口味" />
       <view class="chips" wx:if="{{colors.length}}">
         <view class="chip on" wx:for="{{colors}}" wx:key="*this" data-value="{{item}}" bindtap="removeColor">{{item}} ×</view>
       </view>
       <view class="add-spec">
-        <input class="field-input" data-field="colorInput" value="{{colorInput}}" bindinput="onField" bindconfirm="addColor" placeholder="如 黑色" />
+        <input class="field-input" data-field="colorInput" value="{{colorInput}}" bindinput="onField" bindconfirm="addColor" placeholder="添加取值" />
         <button class="btn-ghost spec-add" bindtap="addColor">添加</button>
       </view>
     </view>
 
     <view class="field last">
-      <view class="field-label">尺码</view>
+      <input class="axis-title" data-field="specAxis2" value="{{specAxis2}}" bindinput="onField" placeholder="规格二，如 尺码、容量（可空）" />
       <view class="chips" wx:if="{{sizes.length}}">
         <view class="chip on" wx:for="{{sizes}}" wx:key="*this" data-value="{{item}}" bindtap="removeSize">{{item}} ×</view>
       </view>
       <view class="add-spec">
-        <input class="field-input" data-field="sizeInput" value="{{sizeInput}}" bindinput="onField" bindconfirm="addSize" placeholder="如 M" />
+        <input class="field-input" data-field="sizeInput" value="{{sizeInput}}" bindinput="onField" bindconfirm="addSize" placeholder="添加取值" />
         <button class="btn-ghost spec-add" bindtap="addSize">添加</button>
       </view>
     </view>
@@ -106,7 +106,7 @@
   <view class="card spec-card" wx:if="{{productKind !== 'plain' && skuRows.length}}">
     <view class="spec-title">{{productKind === 'blank' ? '销售规格' : '规格库存'}}</view>
     <view class="muted spec-desc" wx:if="{{specTip}}">{{specTip}}</view>
-    <view class="muted spec-desc" wx:elif="{{productKind === 'blank'}}">现货只在退货或改规格后才会有数。这里改的是各色码售价。</view>
+    <view class="muted spec-desc" wx:elif="{{productKind === 'blank'}}">现货只在退货或改规格后才会有数。这里改的是各规格售价。</view>
     <view class="sku-card" wx:for="{{skuRows}}" wx:key="key">
       <view class="sku-title">{{item.specText}}</view>
       <view class="field-row">

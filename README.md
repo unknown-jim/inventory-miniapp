@@ -4,9 +4,9 @@
 
 ## 能做什么
 
-- 商品：名称、货号、条码、进价、售价、预警数量；衣服先选白坯加工或成衣现货，再填颜色尺码
-- 白坯加工：进货进白坯，销售选色码，先扣现货再扣白坯
-- 成衣现货：按颜色×尺码各记一份库存
+- 商品：名称、货号、条码、进价、售价、预警数量；多规格先选待加工或分规格现货，再给规格轴起名并填取值
+- 待加工：进货进待加工库存，销售选规格，先扣现货再扣待加工
+- 分规格现货：按规格组合各记一份库存
 - 进货入库、销售出库、退货原样入库、成品改规格
 - 看板：商品数、库存总量、今日销售额、今日毛利、预警
 - 库存：低于预警标红，可只看预警商品
@@ -55,7 +55,7 @@ npm run test:ui
 - 提交说明和 Pull Request 写法，见 [docs/commit-and-pr.md](docs/commit-and-pr.md)
 - 代码注入、用时注入、分包时机和上传前扫描，见 [docs/code-injection.md](docs/code-injection.md)
 - 记账要自洽，不要把行业习惯写成限制，见 [docs/accounting-vs-policy.md](docs/accounting-vs-policy.md)
-- 白坯 / 成衣 / 退货 / 改规格，见 [docs/blank-process.md](docs/blank-process.md)
+- 待加工 / 分规格 / 退货 / 改规格，见 [docs/blank-process.md](docs/blank-process.md)
 
 ## 刻意没做的
 

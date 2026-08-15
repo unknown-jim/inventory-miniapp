@@ -22,8 +22,7 @@
     <view class="stock-top">
       <view class="item-name">{{item.name}}</view>
       <view class="goods-tags">
-        <text wx:if="{{item.blankProcess}}" class="tag tag-blank">白坯加工</text>
-        <text wx:elif="{{item.hasSpecs}}" class="tag tag-spec">成衣现货</text>
+        <text wx:if="{{item.specTag}}" class="tag {{item.blankProcess ? 'tag-blank' : 'tag-spec'}}">{{item.specTag}}</text>
         <text class="tag {{item.lowStock ? 'tag-alert' : 'tag-ok'}}">{{item.lowStock ? '低于预警' : '正常'}}</text>
       </view>
     </view>
