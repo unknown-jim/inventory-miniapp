@@ -62,6 +62,10 @@
       },
       {
         "type": "file",
+        "value": "utils/sku-card-view.js"
+      },
+      {
+        "type": "file",
         "value": "styles/slip.wxss"
       },
       {
