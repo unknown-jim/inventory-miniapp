@@ -1,0 +1,58 @@
+{
+  "pages": [
+    "pages/index/index",
+    "pages/products/products",
+    "pages/purchase/purchase",
+    "pages/sale/sale",
+    "pages/inventory/inventory",
+    "pages/records/records",
+    "pages/product-edit/product-edit"
+  ],
+  "window": {
+    "navigationBarBackgroundColor": "#0F766E",
+    "navigationBarTitleText": "进销存",
+    "navigationBarTextStyle": "white",
+    "backgroundColor": "#F3F4F1",
+    "backgroundTextStyle": "dark"
+  },
+  "tabBar": {
+    "color": "#64748B",
+    "selectedColor": "#0F766E",
+    "backgroundColor": "#FFFFFF",
+    "borderStyle": "white",
+    "list": [
+      {
+        "pagePath": "pages/index/index",
+        "text": "看板",
+        "iconPath": "assets/tab/home.png",
+        "selectedIconPath": "assets/tab/home-active.png"
+      },
+      {
+        "pagePath": "pages/products/products",
+        "text": "商品",
+        "iconPath": "assets/tab/goods.png",
+        "selectedIconPath": "assets/tab/goods-active.png"
+      },
+      {
+        "pagePath": "pages/purchase/purchase",
+        "text": "进货",
+        "iconPath": "assets/tab/in.png",
+        "selectedIconPath": "assets/tab/in-active.png"
+      },
+      {
+        "pagePath": "pages/sale/sale",
+        "text": "销售",
+        "iconPath": "assets/tab/out.png",
+        "selectedIconPath": "assets/tab/out-active.png"
+      },
+      {
+        "pagePath": "pages/inventory/inventory",
+        "text": "库存",
+        "iconPath": "assets/tab/stock.png",
+        "selectedIconPath": "assets/tab/stock-active.png"
+      }
+    ]
+  },
+  "style": "v2",
+  "sitemapLocation": "sitemap.json"
+}

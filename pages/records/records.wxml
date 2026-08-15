@@ -1,0 +1,39 @@
+<view class="page">
+  <view class="card summary">
+    <view class="sum">
+      <view class="muted">进货金额</view>
+      <view class="sum-num">¥{{purchaseAmount}}</view>
+    </view>
+    <view class="sum">
+      <view class="muted">销售金额</view>
+      <view class="sum-num warm">¥{{salesAmount}}</view>
+    </view>
+    <view class="sum">
+      <view class="muted">销售毛利</view>
+      <view class="sum-num">¥{{profit}}</view>
+    </view>
+  </view>
+
+  <view class="tabs">
+    <view class="tab {{type === 'all' ? 'on' : ''}}" data-type="all" bindtap="setType">全部 {{count}}</view>
+    <view class="tab {{type === 'in' ? 'on' : ''}}" data-type="in" bindtap="setType">进货</view>
+    <view class="tab {{type === 'out' ? 'on' : ''}}" data-type="out" bindtap="setType">销售</view>
+  </view>
+
+  <view wx:if="{{!list.length}}" class="card empty">还没有流水</view>
+
+  <view class="card list-card" wx:if="{{list.length}}">
+    <view class="list-item" wx:for="{{list}}" wx:key="id">
+      <view>
+        <view class="item-name">{{item.productName}}</view>
+        <view class="muted">{{item.timeText}} · {{item.qtyText}} 件 · 单价 ¥{{item.priceText}}</view>
+        <view wx:if="{{item.remark}}" class="muted">{{item.remark}}</view>
+      </view>
+      <view class="item-right">
+        <text class="tag {{item.isIn ? 'tag-in' : 'tag-out'}}">{{item.typeText}}</text>
+        <view class="amount">¥{{item.amountText}}</view>
+        <view wx:if="{{!item.isIn}}" class="muted">毛利 ¥{{item.profitText}}</view>
+      </view>
+    </view>
+  </view>
+</view>

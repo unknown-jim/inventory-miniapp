@@ -1,0 +1,45 @@
+<view class="page">
+  <view class="card">
+    <view class="field">
+      <view class="field-label">商品名称</view>
+      <input class="field-input" data-field="name" value="{{name}}" bindinput="onField" placeholder="例如 纯牛奶 250ml" />
+    </view>
+    <view class="field">
+      <view class="field-label">货号</view>
+      <input class="field-input" data-field="sku" value="{{sku}}" bindinput="onField" placeholder="可选" />
+    </view>
+    <view class="field">
+      <view class="field-label">条码</view>
+      <input class="field-input" data-field="barcode" value="{{barcode}}" bindinput="onField" placeholder="可选" />
+    </view>
+    <view class="field-row">
+      <view class="field half">
+        <view class="field-label">进价</view>
+        <input class="field-input" type="digit" data-field="costPrice" value="{{costPrice}}" bindinput="onField" placeholder="0.00" />
+      </view>
+      <view class="field half">
+        <view class="field-label">售价</view>
+        <input class="field-input" type="digit" data-field="salePrice" value="{{salePrice}}" bindinput="onField" placeholder="0.00" />
+      </view>
+    </view>
+    <view class="margin-box">
+      <text>单件毛利 ¥{{marginText}}</text>
+      <text>毛利率 {{rateText}}</text>
+    </view>
+    <view class="field" wx:if="{{!isEdit}}">
+      <view class="field-label">初始库存</view>
+      <input class="field-input" type="digit" data-field="stock" value="{{stock}}" bindinput="onField" placeholder="0" />
+    </view>
+    <view class="field" wx:else>
+      <view class="field-label">当前库存</view>
+      <view class="field-input readonly">{{stockText}}（通过进货 / 销售变动）</view>
+    </view>
+    <view class="field last">
+      <view class="field-label">库存预警数量</view>
+      <input class="field-input" type="digit" data-field="alertQty" value="{{alertQty}}" bindinput="onField" placeholder="5" />
+    </view>
+  </view>
+
+  <button class="btn-primary save-btn" bindtap="save">保存</button>
+  <button wx:if="{{isEdit}}" class="btn-danger" bindtap="remove">删除商品</button>
+</view>

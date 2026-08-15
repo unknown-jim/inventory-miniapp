@@ -1,0 +1,59 @@
+<view class="page">
+  <view class="card">
+    <view class="field">
+      <view class="field-label">商品</view>
+      <view class="field-input picker" bindtap="openPicker">{{productName}}</view>
+    </view>
+    <view class="meta">当前库存 {{stockText}} · 进价 ¥{{costText}}</view>
+    <view class="field-row">
+      <view class="field half">
+        <view class="field-label">数量</view>
+        <input class="field-input" type="digit" data-field="qty" value="{{qty}}" bindinput="onField" placeholder="0" />
+      </view>
+      <view class="field half">
+        <view class="field-label">本次售价</view>
+        <input class="field-input" type="digit" data-field="unitPrice" value="{{unitPrice}}" bindinput="onField" placeholder="0.00" />
+      </view>
+    </view>
+    <view class="field">
+      <view class="field-label">备注</view>
+      <input class="field-input" data-field="remark" value="{{remark}}" bindinput="onField" placeholder="可选" />
+    </view>
+    <view class="total">
+      <view>
+        <view class="muted">销售额</view>
+        <view class="total-num">¥{{amountText}}</view>
+      </view>
+      <view class="right">
+        <view class="muted">预估毛利</view>
+        <view class="profit-num">¥{{profitText}}</view>
+      </view>
+    </view>
+    <view class="muted tip">库存不足时不能出库。毛利按当前进价计算。</view>
+  </view>
+
+  <button class="btn-primary save-btn" bindtap="submit">确认出库</button>
+
+  <view wx:if="{{showPicker}}" class="mask" bindtap="closePicker">
+    <view class="sheet" catchtap="closePickerKeep">
+      <view class="sheet-title">选择商品</view>
+      <input class="search" placeholder="搜索商品" value="{{keyword}}" bindinput="onSearch" />
+      <scroll-view scroll-y class="sheet-list">
+        <view
+          class="sheet-item"
+          wx:for="{{filtered}}"
+          wx:key="id"
+          data-id="{{item.id}}"
+          bindtap="onPick"
+        >
+          <view>
+            <view class="item-name">{{item.name}}</view>
+            <view class="muted">货号 {{item.sku || '未填'}} · 库存 {{item.stock}}</view>
+          </view>
+          <text class="muted">售价 ¥{{item.saleText}}</text>
+        </view>
+        <view wx:if="{{!filtered.length}}" class="empty">没有匹配商品</view>
+      </scroll-view>
+    </view>
+  </view>
+</view>
