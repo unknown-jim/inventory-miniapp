@@ -2,6 +2,23 @@ const store = require('../../utils/store')
 const util = require('../../utils/util')
 const inventory = require('../../utils/inventory')
 
+const SUGGESTED_COLORS = ['黑色', '白色']
+const SUGGESTED_SIZES = ['M', 'L']
+
+function kindFields(kind) {
+  return {
+    productKind: kind,
+    hasSpecs: kind !== 'plain',
+    blankProcess: kind === 'blank'
+  }
+}
+
+function productKindOf(product) {
+  if (inventory.isBlankProcess(product)) return 'blank'
+  if (inventory.productHasSpecs(product)) return 'finished'
+  return 'plain'
+}
+
 Page({
   data: {
     id: '',
@@ -16,6 +33,7 @@ Page({
     stockText: '',
     marginText: '0.00',
     rateText: '0%',
+    productKind: 'plain',
     colors: [],
     sizes: [],
     colorInput: '',
@@ -40,10 +58,9 @@ Page({
     }
     const skus = store.getSkusByProduct(product.id)
     const margin = inventory.calcMargin(product.costPrice, product.salePrice)
-    const colors = product.colors || []
-    const sizes = product.sizes || []
+    const kind = productKindOf(product)
     const blank = inventory.findBlankSku(skus, product.id)
-    this.setData({
+    this.setData(Object.assign({
       id: product.id,
       isEdit: true,
       name: product.name,
@@ -55,13 +72,11 @@ Page({
       stockText: String(product.stock),
       marginText: util.money(margin.profit),
       rateText: margin.rate + '%',
-      colors: colors,
-      sizes: sizes,
-      hasSpecs: inventory.productHasSpecs(product),
-      blankProcess: inventory.isBlankProcess(product),
+      colors: product.colors || [],
+      sizes: product.sizes || [],
       blankStockText: blank ? String(blank.stock) : '0',
       skuRows: this.rowsFromSkus(skus)
-    })
+    }, kindFields(kind)))
     wx.setNavigationBarTitle({ title: '编辑商品' })
   },
 
@@ -112,45 +127,18 @@ Page({
       return prevMap[key] || this.emptyRow(combo)
     }.bind(this))
 
-    let specTip = ''
-    let blankProcess = this.data.blankProcess
-    if (!this.data.skuRows.length && rows.length) {
-      if (!this.data.hasSpecs) blankProcess = true
-      const move = this.data.isEdit
-        ? inventory.toNumber(this.data.stockText)
-        : inventory.toNumber(this.data.stock)
-      if (blankProcess) {
-        if (move > 0 && !this.data.isEdit) {
-          specTip = '初始库存会记到白坯，销售时再选颜色尺码。'
-        }
-      } else if (move > 0 && !rows.some(function (row) { return inventory.toNumber(row.stock) > 0 })) {
-        rows[0].stock = String(move)
-        specTip = '原库存已记到第一个规格，请按实际拆分。'
-      }
-    }
-
     this.setData(Object.assign({
       colors: colors,
       sizes: sizes,
-      hasSpecs: combos.length > 0,
-      blankProcess: combos.length ? blankProcess : false,
-      skuRows: rows,
-      specTip: specTip
+      skuRows: rows
     }, extra || {}))
   },
 
-  setStockMode(e) {
-    const mode = e.currentTarget.dataset.mode
-    const blankProcess = mode === 'blank'
-    if (blankProcess === this.data.blankProcess) return
-    if (!blankProcess && this.data.isEdit && inventory.toNumber(this.data.blankStockText) > 0) {
-      wx.showToast({ title: '还有白坯库存，不能改成成衣现货', icon: 'none' })
-      return
-    }
+  migrateBlankFinished(wantBlank) {
     const skuRows = this.data.skuRows.slice()
-    let specTip = ''
+    let specTip = this.data.specTip || ''
     let blankStock = this.data.blankStock
-    if (blankProcess) {
+    if (wantBlank) {
       const first = skuRows[0]
       const move = first ? inventory.toNumber(first.stock) : 0
       if (move > 0 && skuRows.every(function (row, index) {
@@ -158,22 +146,82 @@ Page({
       })) {
         skuRows[0].stock = '0'
         blankStock = String(move)
-        specTip = '库存已记到白坯。'
+        specTip = specTip ? specTip + ' 库存已记到白坯。' : '库存已记到白坯。'
       }
     } else {
       const move = inventory.toNumber(this.data.blankStock || this.data.blankStockText)
-      if (move > 0 && skuRows.length && !skuRows.some(function (row) { return inventory.toNumber(row.stock) > 0 })) {
+      if (move > 0 && skuRows.length && !skuRows.some(function (row) {
+        return inventory.toNumber(row.stock) > 0
+      })) {
         skuRows[0].stock = String(move)
         blankStock = '0'
-        specTip = '白坯库存已记到第一个规格，请按实际拆分。'
+        specTip = specTip ? specTip + ' 白坯库存已记到第一个规格，请按实际拆分。' : '白坯库存已记到第一个规格，请按实际拆分。'
       }
     }
-    this.setData({
-      blankProcess: blankProcess,
+    return {
       skuRows: skuRows,
       blankStock: blankStock,
       specTip: specTip
-    })
+    }
+  },
+
+  setProductKind(e) {
+    const kind = e.currentTarget.dataset.kind
+    if (!kind || kind === this.data.productKind) return
+    if (kind === 'plain') {
+      this.clearSpecs()
+      return
+    }
+    if (kind === 'finished' && this.data.isEdit && inventory.toNumber(this.data.blankStockText) > 0) {
+      wx.showToast({ title: '还有白坯库存，不能改成成衣现货', icon: 'none' })
+      return
+    }
+
+    const from = this.data.productKind
+    let colors = this.data.colors.slice()
+    let sizes = this.data.sizes.slice()
+    let specTip = ''
+    if (!colors.length && !sizes.length) {
+      colors = SUGGESTED_COLORS.slice()
+      sizes = SUGGESTED_SIZES.slice()
+      specTip = '已带出常用色码，可改、可删、可再加。'
+    }
+
+    const extra = kindFields(kind)
+    extra.specTip = specTip
+
+    if (from === 'plain' && kind === 'blank' && !this.data.isEdit) {
+      const move = inventory.toNumber(this.data.stock)
+      extra.blankStock = String(move || 0)
+      if (move > 0) {
+        extra.specTip = specTip ? specTip + ' 初始库存会记到白坯。' : '初始库存会记到白坯。'
+      }
+    }
+
+    this.rebuildSkuRows(colors, sizes, extra)
+
+    if (from === 'plain' && kind === 'finished') {
+      const move = this.data.isEdit
+        ? inventory.toNumber(this.data.stockText)
+        : inventory.toNumber(this.data.stock)
+      const skuRows = this.data.skuRows.slice()
+      if (move > 0 && skuRows.length && !skuRows.some(function (row) {
+        return inventory.toNumber(row.stock) > 0
+      })) {
+        skuRows[0].stock = String(move)
+        this.setData({
+          skuRows: skuRows,
+          specTip: this.data.specTip
+            ? this.data.specTip + ' 原库存已记到第一个规格，请按实际拆分。'
+            : '原库存已记到第一个规格，请按实际拆分。'
+        })
+      }
+      return
+    }
+
+    if (from === 'blank' || from === 'finished') {
+      this.setData(this.migrateBlankFinished(kind === 'blank'))
+    }
   },
 
   onField(e) {
@@ -246,27 +294,36 @@ Page({
     }))
   },
 
+  specStockTotal() {
+    const skuTotal = this.data.skuRows.reduce(function (sum, row) {
+      return sum + inventory.toNumber(row.stock)
+    }, 0)
+    if (this.data.productKind !== 'blank') return skuTotal
+    const blank = this.data.isEdit
+      ? inventory.toNumber(this.data.blankStockText)
+      : inventory.toNumber(this.data.blankStock)
+    return skuTotal + blank
+  },
+
   clearSpecs() {
+    const total = this.specStockTotal()
     wx.showModal({
       title: '改为普通商品',
-      content: '颜色和尺码会去掉，各规格库存合并到这件商品上。',
+      content: '颜色和尺码会去掉，白坯和各规格库存合并到这件商品上。',
       success: (res) => {
         if (!res.confirm) return
-        const total = this.data.skuRows.reduce(function (sum, row) {
-          return sum + inventory.toNumber(row.stock)
-        }, 0)
-        this.setData({
-          colors: [],
-          sizes: [],
-          hasSpecs: false,
-          skuRows: [],
+        const patch = Object.assign(kindFields('plain'), {
           specTip: '',
-          blankProcess: false,
-          blankStock: String(total),
-          blankStockText: String(total),
           stock: String(total),
-          stockText: String(total || this.data.stockText)
+          stockText: String(total)
         })
+        if (!this.data.isEdit) {
+          patch.skuRows = this.data.skuRows.map(function (row) {
+            return Object.assign({}, row, { stock: '0' })
+          })
+          patch.blankStock = ''
+        }
+        this.setData(patch)
       }
     })
   },
@@ -281,6 +338,12 @@ Page({
 
   save() {
     try {
+      const kind = this.data.productKind
+      const hasSpecs = kind !== 'plain'
+      const blankProcess = kind === 'blank'
+      if (hasSpecs && !this.data.colors.length && !this.data.sizes.length) {
+        throw new Error('请添加颜色或尺码')
+      }
       store.saveProduct({
         id: this.data.id,
         name: this.data.name,
@@ -288,14 +351,14 @@ Page({
         barcode: this.data.barcode,
         costPrice: this.data.costPrice,
         salePrice: this.data.salePrice,
-        stock: this.data.hasSpecs
-          ? (this.data.blankProcess && !this.data.isEdit ? this.data.blankStock || this.data.stock : 0)
+        stock: hasSpecs
+          ? (blankProcess && !this.data.isEdit ? this.data.blankStock || this.data.stock : 0)
           : (this.data.isEdit ? 0 : this.data.stock),
         alertQty: this.data.alertQty,
-        colors: this.data.colors,
-        sizes: this.data.sizes,
-        blankProcess: this.data.hasSpecs && this.data.blankProcess,
-        skus: this.data.skuRows.map(function (row) {
+        colors: hasSpecs ? this.data.colors : [],
+        sizes: hasSpecs ? this.data.sizes : [],
+        blankProcess: blankProcess,
+        skus: hasSpecs ? this.data.skuRows.map(function (row) {
           return {
             id: row.id,
             color: row.color,
@@ -306,7 +369,7 @@ Page({
             stock: row.stock,
             alertQty: row.alertQty
           }
-        })
+        }) : []
       })
       wx.showToast({ title: '已保存', icon: 'success' })
       setTimeout(function () {

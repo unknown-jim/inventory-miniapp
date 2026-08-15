@@ -79,6 +79,10 @@
   font-size: 28rpx;
 }
 
+.kind-tabs .pay-tab {
+  font-size: 26rpx;
+}
+
 .pay-tab.on {
   background: #0F766E;
   color: #FFFFFF;
