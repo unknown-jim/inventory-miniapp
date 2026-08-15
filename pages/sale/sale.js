@@ -328,7 +328,9 @@ Page({
     const value = e.detail.value
     const qty = field === 'qty' ? value : this.data.qty
     const price = field === 'unitPrice' ? value : this.data.unitPrice
-    this.setData(Object.assign({ [field]: value }, this.totals(this.data.cart, qty, price)))
+    const patch = {}
+    patch[field] = value
+    this.setData(Object.assign(patch, this.totals(this.data.cart, qty, price)))
   },
 
   currentLine() {
