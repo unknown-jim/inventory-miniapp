@@ -4,16 +4,16 @@
 
 ## 必须先读
 
-1. [docs/git-workflow.md](docs/git-workflow.md)：从 `master` 新建 worktree 和分支。不满足这一条就不要改文件。
+1. [docs/git-workflow.md](docs/git-workflow.md)：从 `main` 新建 worktree 和分支。不满足这一条就不要改文件。
 2. [docs/code-injection.md](docs/code-injection.md)：按需注入、用时注入、分包时机、代码质量扫描。
 
 ## 硬约束（摘要）
 
 ### Git
 
-- 禁止在主工作树（`inventory-miniapp-main`）和 `master` 上改文件。
-- 每次任务：`git fetch origin`（有远程时）→ `git worktree add -b <前缀>/<短名> ../inventory-miniapp-<短名> origin/master`（无远程则基线用 `master`）→ **把工作区切到新目录** → 再改文件。
-- 主工作树永远停在 `master`，不要在里面切换分支。
+- 禁止在主工作树（`inventory-miniapp-main`）和 `main` 上改文件。也不要从历史分支 `master` 开新任务。
+- 每次任务：`git fetch origin`（有远程时）→ `git worktree add -b <前缀>/<短名> ../inventory-miniapp-<短名> origin/main`（无远程则基线用 `main`）→ **把工作区切到新目录** → 再改文件。
+- 主工作树永远停在 `main`，不要在里面切换分支。
 - 不要复用上一任务的工作树做下一件无关的事。
 
 ### 代码注入

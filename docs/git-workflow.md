@@ -1,17 +1,21 @@
 # Git 工作树与分支
 
-任何会改仓库文件的工作（功能、修复、文档、配置）都必须：**从 `master` 新建一条分支，并在新的 git worktree 里改**。不要在主工作树、不要在 `master` 上直接改。
+任何会改仓库文件的工作（功能、修复、文档、配置）都必须：**从 `main` 新建一条分支，并在新的 git worktree 里改**。不要在主工作树、不要在 `main` 上直接改。
 
 本约定由仓库维护者指定，不是可选项。
+
+GitHub 默认分支是 `main`（`origin/main`）。远程或本地可能还留着历史分支 `master` / `origin/master`，**不要拿它当基线**。
+
+目录名 `inventory-miniapp-main` 只是主工作树的文件夹名，不是分支名。
 
 ## 目录约定
 
 | 角色 | 路径 |
 |---|---|
-| 主工作树（只留 `master`，保持干净） | `inventory-miniapp-main`（本仓库当前这份检出） |
+| 主工作树（只留 `main`，保持干净） | `inventory-miniapp-main`（本仓库主检出） |
 | 任务工作树 | 与主仓库同级：`../inventory-miniapp-<短名>` |
 
-主工作树永远停在 `master`，不要在里面 `checkout` 到别的分支。
+主工作树永远停在 `main`，不要在里面 `checkout` 到别的分支。若主工作树还停在历史分支 `master`，先一次性切到 `main` 对齐默认分支，再开新任务。
 
 ## 开新任务
 
@@ -19,13 +23,13 @@
 
 ```bash
 git fetch origin
-git worktree add -b <前缀>/<短名> ../inventory-miniapp-<短名> origin/master
+git worktree add -b <前缀>/<短名> ../inventory-miniapp-<短名> origin/main
 ```
 
-没有 `origin` 时，基线用本地 `master`：
+没有 `origin` 时，基线用本地 `main`：
 
 ```bash
-git worktree add -b <前缀>/<短名> ../inventory-miniapp-<短名> master
+git worktree add -b <前缀>/<短名> ../inventory-miniapp-<短名> main
 ```
 
 然后进入新目录再改文件：
@@ -51,15 +55,16 @@ cd ../inventory-miniapp-<短名>
 
 ## 不要做
 
-- 在 `master` 上改文件、提交、或把未提交改动直接带进新分支。
+- 在 `main` 或历史分支 `master` 上改文件、提交、或把未提交改动直接带进新分支。
+- 从 `origin/master` 或本地 `master` 开新任务。
 - 从功能分支再分出新任务（除非明确是同一任务的后续）。
 - 在主工作树切换分支来「省事」。
 - 复用上一任务的工作树做下一件无关的事。
-- 基线过期：有 `origin` 却不 `fetch`，从旧的本地 `master` 开工。
+- 基线过期：有 `origin` 却不 `fetch`，从旧的本地 `main` 开工。
 
 ## 收尾
 
-合并进 `master` 且不再需要该目录后，在主工作树执行：
+合并进 `main` 且不再需要该目录后，在主工作树执行：
 
 ```bash
 git worktree remove ../inventory-miniapp-<短名>
@@ -72,7 +77,8 @@ git branch -d <前缀>/<短名>
 
 改任何文件之前：
 
-- [ ] 当前目录不是主工作树里的 `master` 检出
-- [ ] 当前分支是本次任务新建的，并且从最新 `master`（有远程则是 `origin/master`）长出来
+- [ ] 当前目录不是主工作树里的 `main` 检出
+- [ ] 当前分支是本次任务新建的，并且从最新 `main`（有远程则是 `origin/main`）长出来
+- [ ] 没有从 `master` / `origin/master` 起步
 - [ ] 工作区已经切到对应 worktree 目录
 - [ ] 没有把这次任务的文件写进主工作树

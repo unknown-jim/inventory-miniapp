@@ -50,7 +50,7 @@ npm run test:ui
 
 仓库文档在 `docs/` 和根目录 [AGENTS.md](AGENTS.md)，不放在 `.cursor/`。
 
-- 改任何文件必须从 `master` 新建 git worktree 和分支，见 [docs/git-workflow.md](docs/git-workflow.md)
+- 改任何文件必须从 `main` 新建 git worktree 和分支，见 [docs/git-workflow.md](docs/git-workflow.md)
 - 代码注入、用时注入、分包时机和上传前扫描，见 [docs/code-injection.md](docs/code-injection.md)
 
 ## 刻意没做的
