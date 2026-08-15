@@ -11,7 +11,7 @@
   </view>
 
   <view class="card list-card">
-    <view class="muted tip">退货按当时卖掉的颜色尺码原样入库。要改色改码，入库后再用「改规格」。</view>
+    <view class="muted tip">退货按当时卖掉的规格原样入库。要换格，入库后再用「改规格」。</view>
     <view class="line" wx:for="{{lines}}" wx:key="id">
       <view class="item-name">{{item.productName}}</view>
       <view class="muted" wx:if="{{item.specText}}">{{item.specText}}</view>

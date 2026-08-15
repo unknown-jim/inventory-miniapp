@@ -17,6 +17,8 @@ Page({
     selectedColor: '',
     selectedSize: '',
     skuId: '',
+    specAxis1: '规格一',
+    specAxis2: '规格二',
     colorOptions: [],
     sizeOptions: [],
     blankProcess: false,
@@ -194,7 +196,7 @@ Page({
       if (!selected) return '请选规格'
       const avail = inventory.blankAvailability(current, this.data.skus, selected.color, selected.size, reserved)
       if (!avail.total) return '0'
-      return String(avail.total) + '（现货 ' + avail.ready + ' · 白坯 ' + avail.blank + '）'
+      return String(avail.total) + '（现货 ' + avail.ready + ' · 待加工 ' + avail.blank + '）'
     }
     if (inventory.productHasSpecs(current)) {
       const selected = sku || this.currentSku(current)
@@ -290,6 +292,8 @@ Page({
       productName: product.name,
       hasSpecs: hasSpecs,
       blankProcess: inventory.isBlankProcess(product),
+      specAxis1: inventory.specAxis1Name(product),
+      specAxis2: inventory.specAxis2Name(product),
       colors: colors,
       sizes: sizes,
       selectedColor: color,

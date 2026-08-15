@@ -48,12 +48,31 @@ function productHasSpecs(product) {
   return !!(product && ((product.colors && product.colors.length) || (product.sizes && product.sizes.length)))
 }
 
+function specAxisName(value, fallback) {
+  const name = String(value || '').trim()
+  return name || fallback
+}
+
+function specAxis1Name(product) {
+  return specAxisName(product && product.specAxis1, '规格一')
+}
+
+function specAxis2Name(product) {
+  return specAxisName(product && product.specAxis2, '规格二')
+}
+
+function blankStockLabel() {
+  return '待加工'
+}
+
 function specSelectHint(product) {
   const needColor = !!(product && product.colors && product.colors.length)
   const needSize = !!(product && product.sizes && product.sizes.length)
-  if (needColor && needSize) return '请选择颜色和尺码'
-  if (needColor) return '请选择颜色'
-  if (needSize) return '请选择尺码'
+  const axis1 = specAxis1Name(product)
+  const axis2 = specAxis2Name(product)
+  if (needColor && needSize) return '请选择' + axis1 + '和' + axis2
+  if (needColor) return '请选择' + axis1
+  if (needSize) return '请选择' + axis2
   return ''
 }
 
@@ -87,6 +106,12 @@ function findSkuBySpec(skus, productId, color, size) {
 
 function isBlankProcess(product) {
   return !!(product && product.blankProcess && productHasSpecs(product))
+}
+
+function specKindTag(product) {
+  if (isBlankProcess(product)) return '待加工'
+  if (productHasSpecs(product)) return '分规格现货'
+  return ''
 }
 
 function isBlankSku(sku) {
@@ -154,7 +179,7 @@ function resolveSaleSpec(product, skus, payload) {
       return item.id === payload.skuId
     })
     if (!sku || sku.productId !== product.id || sku.isBlank) {
-      throw new Error(specSelectHint(product) || '请选择颜色和尺码')
+      throw new Error(specSelectHint(product) || '请选择规格')
     }
     return { color: sku.color, size: sku.size, sku: sku }
   }
@@ -163,7 +188,7 @@ function resolveSaleSpec(product, skus, payload) {
   const needColor = !!(product.colors && product.colors.length)
   const needSize = !!(product.sizes && product.sizes.length)
   if ((needColor && !color) || (needSize && !size)) {
-    throw new Error(specSelectHint(product) || '请选择颜色和尺码')
+    throw new Error(specSelectHint(product) || '请选择规格')
   }
   const sku = findSkuBySpec(skus, product.id, color, size)
   if (!sku) {
@@ -196,7 +221,7 @@ function allocateBlankLine(product, skuList, color, size, qty, now) {
   if (left > 0) {
     const blank = findBlankSku(skuList, product.id)
     if (!blank) {
-      throw new Error('白坯不存在')
+      throw new Error('待加工库存不存在')
     }
     const takeBlank = round2(Math.min(toNumber(blank.stock), left))
     if (takeBlank > 0) {
@@ -362,7 +387,7 @@ function skuSummaryText(product, skus) {
   const parts = []
   if (isBlankProcess(product)) {
     const blank = findBlankSku(skus, product.id)
-    parts.push('白坯 ' + (blank ? blank.stock : 0))
+    parts.push(blankStockLabel() + ' ' + (blank ? blank.stock : 0))
     list.forEach(function (item) {
       if (item.isBlank || toNumber(item.stock) <= 0) return
       parts.push(specText(item.color, item.size) + ' ' + item.stock)
@@ -385,7 +410,7 @@ function createSku(input, now, id) {
   const color = isBlank ? '' : String(input.color || '').trim()
   const size = isBlank ? '' : String(input.size || '').trim()
   if (!isBlank && !color && !size) {
-    throw new Error('请填写颜色或尺码')
+    throw new Error('请填写规格')
   }
 
   const costPrice = round2(input.costPrice)
@@ -468,7 +493,7 @@ function applyProductSkus(product, allSkus, skuInputs, now, nextId) {
   })
 
   if (!blankProcess && existingBlank && toNumber(existingBlank.stock) > 0) {
-    throw new Error('还有白坯库存，不能改成成衣现货')
+    throw new Error('还有待加工库存，不能改成分规格现货')
   }
 
   existing.forEach(function (old) {
@@ -579,7 +604,7 @@ function createProduct(input, now, id) {
   const sizes = uniqueSpecs(input.sizes)
   const hasSpecs = !!(colors.length || sizes.length)
   if (input.blankProcess && !hasSpecs) {
-    throw new Error('白坯加工请添加颜色或尺码')
+    throw new Error('待加工请添加规格')
   }
 
   return {
@@ -593,6 +618,8 @@ function createProduct(input, now, id) {
     alertQty: alertQty,
     colors: colors,
     sizes: sizes,
+    specAxis1: hasSpecs ? String(input.specAxis1 || '').trim() : '',
+    specAxis2: hasSpecs ? String(input.specAxis2 || '').trim() : '',
     blankProcess: hasSpecs && !!input.blankProcess,
     createdAt: now,
     updatedAt: now
@@ -613,6 +640,8 @@ function updateProduct(existing, input, now) {
     stock: existing.stock,
     colors: input.colors != null ? input.colors : existing.colors,
     sizes: input.sizes != null ? input.sizes : existing.sizes,
+    specAxis1: input.specAxis1 != null ? input.specAxis1 : existing.specAxis1,
+    specAxis2: input.specAxis2 != null ? input.specAxis2 : existing.specAxis2,
     blankProcess: input.blankProcess != null ? input.blankProcess : existing.blankProcess
   }, now, existing.id)
   next.createdAt = existing.createdAt
@@ -657,7 +686,7 @@ function applyPurchase(products, records, payload, now, id, skus) {
   if (isBlankProcess(product)) {
     const blank = findBlankSku(skuList, product.id)
     if (!blank) {
-      throw new Error('白坯不存在')
+      throw new Error('待加工库存不存在')
     }
     const sku = Object.assign({}, blank)
     sku.stock = round2(sku.stock + qty)
@@ -1009,7 +1038,7 @@ function applyConvert(products, records, payload, now, id, skus) {
     throw new Error('规格不存在')
   }
   if (from.isBlank || to.isBlank) {
-    throw new Error('白坯不能改规格，请在销售时选色码')
+    throw new Error('待加工库存不能改规格，请在销售时选规格')
   }
   if (from.id === to.id) {
     throw new Error('请选择不同的规格')
@@ -1070,7 +1099,7 @@ function restockRecord(products, skus, record, qty, now, costPrice) {
     addSkuStock(skuList, record.skuId, delta, now, delta > 0 ? costPrice : null, product)
     product.stock = productStockFromSkus(skuList, product.id)
   } else if (productHasSpecs(product)) {
-    throw new Error(specSelectHint(product) || '请选择颜色和尺码')
+    throw new Error(specSelectHint(product) || '请选择规格')
   } else {
     const nextStock = round2(product.stock + delta)
     if (nextStock < 0) {
@@ -1276,7 +1305,7 @@ function receivableAt(records, customerId, at) {
 
 function stockLabel(product, sku) {
   if (sku && sku.isBlank) {
-    return (product && product.name ? product.name : '') + ' 白坯'
+    return (product && product.name ? product.name : '') + ' ' + blankStockLabel()
   }
   if (sku) {
     const spec = specText(sku.color, sku.size)
@@ -1318,7 +1347,7 @@ function adjustStock(products, skus, record, delta, now) {
     skuList[skuIndex] = sku
     product.stock = productStockFromSkus(skuList, product.id)
   } else if (productHasSpecs(product)) {
-    throw new Error(specSelectHint(product) || '请选择颜色和尺码')
+    throw new Error(specSelectHint(product) || '请选择规格')
   } else {
     const nextStock = round2(product.stock + qtyDelta)
     if (nextStock < 0) {
@@ -1872,7 +1901,9 @@ function buildSeed(now, nextId) {
     stock: 0,
     alertQty: 4,
     colors: ['黑色', '白色'],
-    sizes: ['M', 'L']
+    sizes: ['M', 'L'],
+    specAxis1: '颜色',
+    specAxis2: '尺码'
   }, now - 5 * 3600000, nextId())
   const teeApplied = applyProductSkus(tee, [], [
     { color: '黑色', size: 'M', stock: 6, costPrice: 28, salePrice: 59, alertQty: 4 },
@@ -1891,6 +1922,8 @@ function buildSeed(now, nextId) {
     alertQty: 5,
     colors: ['黑色', '白色', '红色'],
     sizes: ['M', 'L'],
+    specAxis1: '颜色',
+    specAxis2: '尺码',
     blankProcess: true
   }, now - 6 * 3600000, nextId())
   const hoodieApplied = applyProductSkus(hoodie, teeApplied.skus, null, now - 6 * 3600000, nextId)
@@ -1979,7 +2012,7 @@ function buildSeed(now, nextId) {
     skuId: hoodieWhiteM.id,
     qty: 2,
     unitPrice: 99,
-    remark: '示例白坯销售',
+    remark: '示例待加工销售',
     customerId: customerB.id,
     customerName: customerB.name,
     customerPhone: customerB.phone,
@@ -2017,6 +2050,10 @@ module.exports = {
   specKey: specKey,
   specText: specText,
   productHasSpecs: productHasSpecs,
+  specAxis1Name: specAxis1Name,
+  specAxis2Name: specAxis2Name,
+  specKindTag: specKindTag,
+  blankStockLabel: blankStockLabel,
   specSelectHint: specSelectHint,
   skuCombos: skuCombos,
   skusOfProduct: skusOfProduct,

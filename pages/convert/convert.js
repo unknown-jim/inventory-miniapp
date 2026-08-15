@@ -16,6 +16,8 @@ Page({
     sizes: [],
     toColor: '',
     toSize: '',
+    specAxis1: '规格一',
+    specAxis2: '规格二',
     colorOptions: [],
     sizeOptions: [],
     qty: '',
@@ -67,7 +69,7 @@ Page({
 
   openPicker() {
     if (!this.specProducts(this.data.products, this.data.skus).length) {
-      wx.showToast({ title: '请先给商品加上颜色尺码', icon: 'none' })
+      wx.showToast({ title: '请先给商品加上规格', icon: 'none' })
       return
     }
     this.setData({ showPicker: true })
@@ -101,7 +103,7 @@ Page({
   selectProduct(id) {
     const product = store.getProduct(id)
     if (!product || !inventory.productHasSpecs(product)) {
-      wx.showToast({ title: '请选择带颜色尺码的商品', icon: 'none' })
+      wx.showToast({ title: '请选择带规格的商品', icon: 'none' })
       return
     }
     const colors = product.colors || []
@@ -113,6 +115,8 @@ Page({
       productName: product.name,
       hasSpecs: true,
       blankProcess: inventory.isBlankProcess(product),
+      specAxis1: inventory.specAxis1Name(product),
+      specAxis2: inventory.specAxis2Name(product),
       colors: colors,
       sizes: sizes,
       fromSkuId: fromSkuId,
@@ -177,7 +181,7 @@ Page({
       }
       const toSku = inventory.findSkuBySpec(this.data.skus, product.id, this.data.toColor, this.data.toSize)
       if (!toSku) {
-        throw new Error(inventory.specSelectHint(product) || '请选择改成的颜色和尺码')
+        throw new Error(inventory.specSelectHint(product) || '请选择改成的规格')
       }
       store.addConvert({
         productId: product.id,

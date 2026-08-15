@@ -40,7 +40,7 @@ assert.throws(function () {
     stock: 20,
     blankProcess: true
   }, 1000, 'p-no-spec')
-}, /颜色或尺码/)
+}, /规格/)
 
 const created = sampleProduct()
 assert.strictEqual(created.alertQty, 5)
@@ -329,6 +329,37 @@ assert.strictEqual(created.stock, 10)
 assert.deepStrictEqual(inv.skuCombos(['黑', '白'], ['M', 'L']).length, 4)
 assert.deepStrictEqual(inv.skuCombos(['黑'], []), [{ color: '黑', size: '' }])
 assert.strictEqual(inv.specText('黑色', 'M'), '黑色 · M')
+assert.strictEqual(inv.specAxis1Name({}), '规格一')
+assert.strictEqual(inv.specAxis2Name({ specAxis2: '容量' }), '容量')
+assert.strictEqual(inv.specKindTag({}), '')
+
+const tea = inv.createProduct({
+  name: '绿茶',
+  costPrice: 10,
+  salePrice: 20,
+  stock: 0,
+  specAxis1: '口味',
+  specAxis2: '克数',
+  colors: ['原味', '茉莉'],
+  sizes: ['50g', '100g']
+}, 1000, 'p-tea')
+assert.strictEqual(tea.specAxis1, '口味')
+assert.strictEqual(tea.specAxis2, '克数')
+assert.strictEqual(inv.specSelectHint(tea), '请选择口味和克数')
+assert.strictEqual(inv.specKindTag(tea), '分规格现货')
+
+const blankTea = inv.createProduct({
+  name: '待炒绿茶',
+  costPrice: 8,
+  salePrice: 18,
+  stock: 12,
+  specAxis1: '口味',
+  colors: ['原味'],
+  blankProcess: true
+}, 1000, 'p-blank-tea')
+assert.strictEqual(inv.specKindTag(blankTea), '待加工')
+assert.strictEqual(inv.specSelectHint(blankTea), '请选择口味')
+assert.strictEqual(inv.specAxis2Name(blankTea), '规格二')
 
 const tee = inv.createProduct({
   name: '短袖',
@@ -377,7 +408,7 @@ assert.throws(function () {
     qty: 1,
     unitPrice: 59
   }, 1500, 'r-spec-miss', teeSkus.skus)
-}, /颜色和尺码/)
+}, /规格一和规格二/)
 
 const blackM = teeSkus.skus.find(function (item) {
   return item.color === '黑色' && item.size === 'M'
@@ -539,6 +570,8 @@ function blankHoodie() {
 
 const hoodieMade = blankHoodie()
 assert.strictEqual(hoodieMade.product.blankProcess, true)
+assert.strictEqual(inv.specKindTag(hoodieMade.product), '待加工')
+assert.ok(inv.skuSummaryText(hoodieMade.product, hoodieMade.skus).indexOf('待加工') === 0)
 assert.strictEqual(hoodieMade.product.stock, 20)
 const hoodieBlank = inv.findBlankSku(hoodieMade.skus, 'p-hoodie')
 assert.ok(hoodieBlank)
@@ -629,7 +662,7 @@ assert.throws(function () {
     toSkuId: redM.id,
     qty: 1
   }, 1710, 'r-convert-blank', converted.skus)
-}, /白坯不能改规格/)
+}, /待加工库存不能改规格/)
 
 const blackMHoodie = inv.findSkuBySpec(converted.skus, 'p-hoodie', '黑色', 'M')
 const soldBlackFromBlank = inv.applySale(converted.products, converted.records, {

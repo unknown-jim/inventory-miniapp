@@ -4,8 +4,8 @@
       <view class="field-label">商品</view>
       <view class="field-input picker" bindtap="openPicker">{{productName}}</view>
     </view>
-    <view class="muted tip" wx:if="{{blankProcess}}">只能改成衣现货，不能改白坯。要做成衣请直接销售。</view>
-    <view class="muted tip" wx:elif="{{hasSpecs}}">从仓里的现货改到另一个颜色 / 尺码，一件还是一件。</view>
+    <view class="muted tip" wx:if="{{blankProcess}}">只能改分规格现货，不能改待加工库存。要加工请直接销售。</view>
+    <view class="muted tip" wx:elif="{{hasSpecs}}">从仓里的现货改到另一格，一件还是一件。</view>
 
     <view class="spec-block" wx:if="{{hasSpecs}}">
       <view class="field">
@@ -21,8 +21,8 @@
         </view>
         <view class="muted" wx:if="{{!fromOptions.length}}">没有现货可改</view>
       </view>
-      <view class="field">
-        <view class="field-label">改成颜色</view>
+      <view class="field" wx:if="{{colors.length}}">
+        <view class="field-label">改成{{specAxis1}}</view>
         <view class="chips">
           <view
             class="chip {{item.on ? 'on' : ''}}"
@@ -33,8 +33,8 @@
           >{{item.value}}</view>
         </view>
       </view>
-      <view class="field">
-        <view class="field-label">改成尺码</view>
+      <view class="field" wx:if="{{sizes.length}}">
+        <view class="field-label">改成{{specAxis2}}</view>
         <view class="chips">
           <view
             class="chip {{item.on ? 'on' : ''}}"
@@ -76,12 +76,11 @@
           <view>
             <view class="item-name">{{item.name}}</view>
             <view class="muted">
-              <block wx:if="{{item.blankProcess}}">白坯加工 · </block>
-              <block wx:elif="{{item.hasSpecs}}">成衣现货 · </block>库存 {{item.stock}}
+              <block wx:if="{{item.specTag}}">{{item.specTag}} · </block>库存 {{item.stock}}
             </view>
           </view>
         </view>
-        <view wx:if="{{!filtered.length}}" class="empty">没有带颜色尺码的商品</view>
+        <view wx:if="{{!filtered.length}}" class="empty">没有带规格的商品</view>
       </scroll-view>
     </view>
   </view>

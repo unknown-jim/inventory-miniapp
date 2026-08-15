@@ -96,7 +96,9 @@ function withView(product, skus) {
   return Object.assign({}, product, {
     hasSpecs: hasSpecs,
     blankProcess: blankProcess,
-    specTag: blankProcess ? '白坯加工' : (hasSpecs ? '成衣现货' : ''),
+    specTag: inventory.specKindTag(product),
+    specAxis1: inventory.specAxis1Name(product),
+    specAxis2: inventory.specAxis2Name(product),
     lowStock: inventory.isLowStock(product, skus),
     profitText: money(margin.profit),
     rateText: margin.rate + '%',
@@ -105,7 +107,7 @@ function withView(product, skus) {
     stockText: String(product.stock),
     skuSummary: hasSpecs ? inventory.skuSummaryText(product, skus) : '',
     specHint: hasSpecs && inventory.isLowStock(product, skus)
-      ? (blankProcess ? '白坯低于预警' : '部分规格低于预警')
+      ? (blankProcess ? '待加工低于预警' : '部分规格低于预警')
       : ''
   })
 }
@@ -129,7 +131,7 @@ function withRecordView(record) {
   else if (isCredit) typeText = '赊账'
   let specText = spec
   if (isConvert) specText = fromSpec + ' → ' + spec
-  if (isIn && !spec && record.skuId) specText = '白坯'
+  if (isIn && !spec && record.skuId) specText = inventory.blankStockLabel()
   return Object.assign({}, record, {
     isIn: isIn,
     isOut: isOut,
