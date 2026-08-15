@@ -46,6 +46,18 @@
       },
       {
         "type": "file",
+        "value": "utils/store.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/util.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/inventory.js"
+      },
+      {
+        "type": "file",
         "value": "styles/slip.wxss"
       },
       {

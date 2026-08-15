@@ -158,7 +158,9 @@ Page({
   },
 
   onField(e) {
-    this.setData({ [e.currentTarget.dataset.field]: e.detail.value })
+    const patch = {}
+    patch[e.currentTarget.dataset.field] = e.detail.value
+    this.setData(patch)
     this.refreshAmount()
   },
 

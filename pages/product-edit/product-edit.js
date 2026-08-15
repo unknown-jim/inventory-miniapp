@@ -126,7 +126,9 @@ Page({
 
   onField(e) {
     const field = e.currentTarget.dataset.field
-    this.setData({ [field]: e.detail.value })
+    const patch = {}
+    patch[field] = e.detail.value
+    this.setData(patch)
     this.refreshMargin()
   },
 
