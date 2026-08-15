@@ -66,7 +66,7 @@
         <view>
           <view class="item-name">{{item.name}}</view>
           <view class="muted">
-            <block wx:if="{{item.hasSpecs}}">{{item.specHint || '多规格'}} · </block>货号 {{item.sku || '未填'}} · 预警 ≤ {{item.alertQty}}
+            <block wx:if="{{item.hasSpecs}}">{{item.specHint || item.specTag}} · </block>货号 {{item.sku || '未填'}} · 预警 ≤ {{item.alertQty}}
           </view>
         </view>
         <view class="item-right">
@@ -89,7 +89,7 @@
         <view class="item-right">
           <text class="tag {{item.tagClass}}">{{item.typeText}}</text>
           <view class="amount">¥{{item.amountText}}</view>
-          <view wx:if="{{item.isOut}}" class="muted">毛利 ¥{{item.profitText}}</view>
+          <view wx:if="{{item.isOut || item.isReturn}}" class="muted">毛利 ¥{{item.profitText}}</view>
         </view>
       </view>
     </view>

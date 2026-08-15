@@ -110,7 +110,7 @@ assert.strictEqual(summary.count, 2)
 assert.strictEqual(summary.profit, 7.6)
 
 const seed = inv.buildSeed(now, idFactory())
-assert.strictEqual(seed.products.length, 5)
+assert.strictEqual(seed.products.length, 6)
 assert.ok(seed.records.length >= 3)
 assert.ok(seed.products.some(inv.isLowStock))
 assert.ok(seed.skus.length >= 4)
@@ -474,5 +474,151 @@ const specEdited = inv.updateRecord(soldTee.products, soldTee.records, {
 }, 3000, soldTee.skus)
 assert.strictEqual(specEdited.skus.find(function (item) { return item.id === blackM.id }).stock, 5)
 assert.strictEqual(specEdited.products[0].stock, 20)
+
+function blankHoodie() {
+  const product = inv.createProduct({
+    name: '卫衣',
+    costPrice: 45,
+    salePrice: 99,
+    stock: 20,
+    alertQty: 5,
+    colors: ['黑色', '白色', '红色'],
+    sizes: ['M', 'L'],
+    blankProcess: true
+  }, 1000, 'p-hoodie')
+  return inv.applyProductSkus(product, [], null, 1100, idFactory())
+}
+
+const hoodieMade = blankHoodie()
+assert.strictEqual(hoodieMade.product.blankProcess, true)
+assert.strictEqual(hoodieMade.product.stock, 20)
+const hoodieBlank = inv.findBlankSku(hoodieMade.skus, 'p-hoodie')
+assert.ok(hoodieBlank)
+assert.strictEqual(hoodieBlank.stock, 20)
+assert.strictEqual(inv.isLowStock(hoodieMade.product, hoodieMade.skus), false)
+const whiteM = inv.findSkuBySpec(hoodieMade.skus, 'p-hoodie', '白色', 'M')
+assert.strictEqual(whiteM.stock, 0)
+
+const boughtBlank = inv.applyPurchase([hoodieMade.product], [], {
+  productId: 'p-hoodie',
+  qty: 5,
+  unitPrice: 40
+}, 1200, 'r-hoodie-in', hoodieMade.skus)
+assert.strictEqual(inv.findBlankSku(boughtBlank.skus, 'p-hoodie').stock, 25)
+assert.strictEqual(boughtBlank.products[0].stock, 25)
+
+const soldWhite = inv.applySale(boughtBlank.products, boughtBlank.records, {
+  productId: 'p-hoodie',
+  skuId: whiteM.id,
+  qty: 3,
+  unitPrice: 99
+}, 1300, 'r-hoodie-out', boughtBlank.skus)
+assert.strictEqual(inv.findBlankSku(soldWhite.skus, 'p-hoodie').stock, 22)
+assert.strictEqual(inv.findSkuBySpec(soldWhite.skus, 'p-hoodie', '白色', 'M').stock, 0)
+assert.strictEqual(soldWhite.record.color, '白色')
+assert.strictEqual(soldWhite.record.size, 'M')
+assert.strictEqual(soldWhite.record.allocations[0].source, 'blank')
+assert.strictEqual(soldWhite.products[0].stock, 22)
+
+assert.throws(function () {
+  inv.applySaleOrder(soldWhite.products, soldWhite.records, {
+    items: [
+      { productId: 'p-hoodie', skuId: whiteM.id, qty: 12, unitPrice: 99 },
+      { productId: 'p-hoodie', skuId: inv.findSkuBySpec(soldWhite.skus, 'p-hoodie', '黑色', 'L').id, qty: 12, unitPrice: 99 }
+    ]
+  }, 1400, 'order-blank-over', idFactory(), soldWhite.skus)
+}, /库存不足/)
+
+const sharedOrder = inv.applySaleOrder(soldWhite.products, soldWhite.records, {
+  items: [
+    { productId: 'p-hoodie', skuId: whiteM.id, qty: 10, unitPrice: 99 },
+    { productId: 'p-hoodie', skuId: inv.findSkuBySpec(soldWhite.skus, 'p-hoodie', '黑色', 'L').id, qty: 10, unitPrice: 99 }
+  ]
+}, 1500, 'order-blank-ok', idFactory(), soldWhite.skus)
+assert.strictEqual(inv.findBlankSku(sharedOrder.skus, 'p-hoodie').stock, 2)
+
+const returned = inv.applyReturn(sharedOrder.products, sharedOrder.records, {
+  saleRecordId: sharedOrder.order.records[0].id,
+  qty: 2
+}, 1600, 'r-hoodie-return', sharedOrder.skus)
+assert.strictEqual(inv.findSkuBySpec(returned.skus, 'p-hoodie', '白色', 'M').stock, 2)
+assert.strictEqual(inv.findBlankSku(returned.skus, 'p-hoodie').stock, 2)
+assert.strictEqual(returned.products[0].stock, 4)
+assert.throws(function () {
+  inv.applyReturn(returned.products, returned.records, {
+    saleRecordId: sharedOrder.order.records[0].id,
+    qty: 9
+  }, 1610, 'r-too-much', returned.skus)
+}, /可退/)
+
+const redM = inv.findSkuBySpec(returned.skus, 'p-hoodie', '红色', 'M')
+const converted = inv.applyConvert(returned.products, returned.records, {
+  productId: 'p-hoodie',
+  fromSkuId: whiteM.id,
+  toSkuId: redM.id,
+  qty: 1
+}, 1700, 'r-convert', returned.skus)
+assert.strictEqual(inv.findSkuBySpec(converted.skus, 'p-hoodie', '白色', 'M').stock, 1)
+assert.strictEqual(inv.findSkuBySpec(converted.skus, 'p-hoodie', '红色', 'M').stock, 1)
+assert.strictEqual(converted.products[0].stock, 4)
+assert.throws(function () {
+  inv.applyConvert(converted.products, converted.records, {
+    productId: 'p-hoodie',
+    fromSkuId: inv.findBlankSku(converted.skus, 'p-hoodie').id,
+    toSkuId: redM.id,
+    qty: 1
+  }, 1710, 'r-convert-blank', converted.skus)
+}, /白坯不能改规格/)
+
+const blackMHoodie = inv.findSkuBySpec(converted.skus, 'p-hoodie', '黑色', 'M')
+const soldBlackFromBlank = inv.applySale(converted.products, converted.records, {
+  productId: 'p-hoodie',
+  skuId: blackMHoodie.id,
+  qty: 1,
+  unitPrice: 99
+}, 1750, 'r-no-auto-recolor', converted.skus)
+assert.strictEqual(soldBlackFromBlank.record.allocations[0].source, 'blank')
+assert.strictEqual(inv.findSkuBySpec(soldBlackFromBlank.skus, 'p-hoodie', '红色', 'M').stock, 1)
+assert.strictEqual(inv.findBlankSku(soldBlackFromBlank.skus, 'p-hoodie').stock, 1)
+
+const soldReadyFirst = inv.applySale(soldBlackFromBlank.products, soldBlackFromBlank.records, {
+  productId: 'p-hoodie',
+  skuId: redM.id,
+  qty: 1,
+  unitPrice: 99
+}, 1800, 'r-ready-first', soldBlackFromBlank.skus)
+assert.strictEqual(soldReadyFirst.record.allocations[0].source, 'ready')
+assert.strictEqual(inv.findSkuBySpec(soldReadyFirst.skus, 'p-hoodie', '红色', 'M').stock, 0)
+assert.strictEqual(inv.findBlankSku(soldReadyFirst.skus, 'p-hoodie').stock, 1)
+
+const undoneReady = inv.deleteRecord(soldReadyFirst.products, soldReadyFirst.records, 'r-ready-first', 1900, soldReadyFirst.skus)
+assert.strictEqual(inv.findSkuBySpec(undoneReady.skus, 'p-hoodie', '红色', 'M').stock, 1)
+
+assert.throws(function () {
+  inv.deleteRecord(returned.products, returned.records, sharedOrder.order.records[0].id, 2000, returned.skus)
+}, /退货/)
+
+const creditBlank = inv.applySale([hoodieMade.product], [], {
+  productId: 'p-hoodie',
+  skuId: whiteM.id,
+  qty: 1,
+  unitPrice: 99,
+  customerId: 'c-blank',
+  customerName: '测试客户',
+  payType: 'credit'
+}, 2100, 'r-credit-blank', hoodieMade.skus)
+assert.strictEqual(inv.summarizeCustomerAccount(creditBlank.records, 'c-blank').receivable, 99)
+const creditReturn = inv.applyReturn(creditBlank.products, creditBlank.records, {
+  saleRecordId: 'r-credit-blank',
+  qty: 1
+}, 2200, 'r-credit-return', creditBlank.skus)
+assert.strictEqual(inv.summarizeCustomerAccount(creditReturn.records, 'c-blank').receivable, 0)
+assert.strictEqual(inv.findSkuBySpec(creditReturn.skus, 'p-hoodie', '白色', 'M').stock, 1)
+
+const avail = inv.blankAvailability(hoodieMade.product, hoodieMade.skus, '黑色', 'M', [
+  { productId: 'p-hoodie', skuId: whiteM.id, qty: 8 }
+])
+assert.strictEqual(avail.total, 12)
+assert.strictEqual(avail.blank, 12)
 
 console.log('inventory tests passed')

@@ -41,5 +41,9 @@ Page({
   goSale(e) {
     getApp().setSelectedProduct(e.currentTarget.dataset.id)
     wx.switchTab({ url: '/pages/sale/sale' })
+  },
+
+  goConvert(e) {
+    wx.navigateTo({ url: '/pages/convert/convert?id=' + e.currentTarget.dataset.id })
   }
 })

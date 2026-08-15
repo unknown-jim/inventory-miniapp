@@ -19,6 +19,7 @@ Page({
     skuId: '',
     colorOptions: [],
     sizeOptions: [],
+    blankProcess: false,
     customerId: '',
     customerName: '散客（可不选）',
     customerPhone: '',
@@ -138,15 +139,29 @@ Page({
     }, 0)
   },
 
+  cartItems(cart) {
+    return (cart || this.data.cart).map(function (item) {
+      return {
+        productId: item.productId,
+        skuId: item.skuId,
+        color: item.color,
+        size: item.size,
+        qty: item.qty
+      }
+    })
+  },
+
   toCartItem(product, sku, qty, unitPrice) {
     const count = inventory.round2(qty)
     const price = inventory.round2(unitPrice)
     const amount = inventory.round2(count * price)
     const spec = sku ? inventory.specText(sku.color, sku.size) : ''
     return {
-      key: sku ? sku.id : product.id,
+      key: sku ? product.id + inventory.specKey(sku.color, sku.size) : product.id,
       productId: product.id,
       skuId: sku ? sku.id : '',
+      color: sku ? sku.color : '',
+      size: sku ? sku.size : '',
       name: product.name,
       specText: spec,
       sku: sku && sku.sku ? sku.sku : product.sku,
@@ -173,6 +188,14 @@ Page({
   stockLeft(product, sku, cart) {
     const current = product || store.getProduct(this.data.productId)
     if (!current) return '-'
+    const reserved = this.cartItems(cart)
+    if (inventory.isBlankProcess(current)) {
+      const selected = sku || this.currentSku(current)
+      if (!selected) return '请选规格'
+      const avail = inventory.blankAvailability(current, this.data.skus, selected.color, selected.size, reserved)
+      if (!avail.total) return '0'
+      return String(avail.total) + '（现货 ' + avail.ready + ' · 白坯 ' + avail.blank + '）'
+    }
     if (inventory.productHasSpecs(current)) {
       const selected = sku || this.currentSku(current)
       if (!selected) return '请选规格'
@@ -181,13 +204,15 @@ Page({
     return String(inventory.round2(current.stock - this.cartQtyOf(current.id, '', cart)))
   },
 
-  specOptions(product, selectedColor, selectedSize) {
+  specOptions(product, selectedColor, selectedSize, cart) {
     const colors = (product && product.colors) || []
     const sizes = (product && product.sizes) || []
     const skus = this.data.skus
+    const reserved = this.cartItems(cart)
+    const blankProcess = inventory.isBlankProcess(product)
     const colorOptions = colors.map(function (color) {
       const related = inventory.skusOfProduct(skus, product.id).filter(function (item) {
-        return item.color === color
+        return !item.isBlank && item.color === color
       })
       const stock = related.reduce(function (sum, item) {
         return sum + inventory.toNumber(item.stock)
@@ -195,6 +220,17 @@ Page({
       return { value: color, stock: stock, on: color === selectedColor }
     })
     const sizeOptions = sizes.map(function (size) {
+      if (blankProcess) {
+        const avail = selectedColor
+          ? inventory.blankAvailability(product, skus, selectedColor, size, reserved)
+          : { total: 0 }
+        return {
+          value: size,
+          stock: avail.total,
+          on: size === selectedSize,
+          low: false
+        }
+      }
       const sku = inventory.findSkuBySpec(skus, product.id, selectedColor || '', size)
       return {
         value: size,
@@ -237,6 +273,14 @@ Page({
       size = ''
     }
     const sku = hasSpecs ? inventory.findSkuBySpec(this.data.skus, product.id, color, size) : null
+    let costPrice = product.costPrice
+    if (inventory.isBlankProcess(product)) {
+      const blank = inventory.findBlankSku(this.data.skus, product.id)
+      if (sku && inventory.toNumber(sku.stock) > 0) costPrice = sku.costPrice
+      else if (blank) costPrice = blank.costPrice
+    } else if (sku) {
+      costPrice = sku.costPrice
+    }
     const keepPrice = this.data.productId === product.id && this.data.unitPrice && this.data.skuId === (sku ? sku.id : '')
     const unitPrice = keepPrice
       ? this.data.unitPrice
@@ -245,15 +289,16 @@ Page({
       productId: product.id,
       productName: product.name,
       hasSpecs: hasSpecs,
+      blankProcess: inventory.isBlankProcess(product),
       colors: colors,
       sizes: sizes,
       selectedColor: color,
       selectedSize: size,
       skuId: sku ? sku.id : '',
-      costText: util.money(sku ? sku.costPrice : product.costPrice),
+      costText: util.money(costPrice),
       unitPrice: unitPrice,
       stockText: this.stockLeft(product, sku, cart)
-    }, this.specOptions(product, color, size), this.totals(cart, this.data.qty, unitPrice))
+    }, this.specOptions(product, color, size, cart), this.totals(cart, this.data.qty, unitPrice))
     this.setData(patch)
   },
 
@@ -386,16 +431,12 @@ Page({
       return item.key === line.key
     })
     const nextQty = inventory.round2((index >= 0 ? list[index].qty : 0) + line.qty)
-    const left = sku ? sku.stock : product.stock
-    if (left < nextQty) {
-      const label = product.name + (line.specText ? ' ' + line.specText : '')
-      throw new Error(label + ' 库存不足，当前库存 ' + left)
-    }
     if (index >= 0) {
       list[index] = this.toCartItem(product, sku, nextQty, line.unitPrice)
     } else {
       list.push(line)
     }
+    inventory.assertSaleItems(this.data.products, this.data.skus, this.cartItems(list))
     return list
   },
 
@@ -434,6 +475,8 @@ Page({
           return {
             productId: item.productId,
             skuId: item.skuId,
+            color: item.color,
+            size: item.size,
             qty: item.qty,
             unitPrice: item.unitPrice
           }

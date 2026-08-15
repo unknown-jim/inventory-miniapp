@@ -92,8 +92,11 @@ function pad(n) {
 function withView(product, skus) {
   const margin = inventory.calcMargin(product.costPrice, product.salePrice)
   const hasSpecs = inventory.productHasSpecs(product)
+  const blankProcess = inventory.isBlankProcess(product)
   return Object.assign({}, product, {
     hasSpecs: hasSpecs,
+    blankProcess: blankProcess,
+    specTag: blankProcess ? '白坯加工' : (hasSpecs ? '成衣现货' : ''),
     lowStock: inventory.isLowStock(product, skus),
     profitText: money(margin.profit),
     rateText: margin.rate + '%',
@@ -101,7 +104,9 @@ function withView(product, skus) {
     saleText: money(product.salePrice),
     stockText: String(product.stock),
     skuSummary: hasSpecs ? inventory.skuSummaryText(product, skus) : '',
-    specHint: hasSpecs && inventory.isLowStock(product, skus) ? '部分规格低于预警' : ''
+    specHint: hasSpecs && inventory.isLowStock(product, skus)
+      ? (blankProcess ? '白坯低于预警' : '部分规格低于预警')
+      : ''
   })
 }
 
@@ -109,27 +114,39 @@ function withRecordView(record) {
   const isIn = record.type === 'in'
   const isOut = record.type === 'out'
   const isPay = record.type === 'pay'
+  const isReturn = record.type === 'return'
+  const isConvert = record.type === 'convert'
   const isCredit = isOut && record.payType === 'credit'
   const spec = inventory.specText(record.color, record.size)
+  const fromSpec = inventory.specText(record.fromColor, record.fromSize)
   let typeText = '销售'
   if (isIn) typeText = '进货'
   else if (isPay) typeText = '收款'
+  else if (isReturn) typeText = '退货'
+  else if (isConvert) typeText = '改规格'
   else if (isCredit) typeText = '赊账'
+  let specText = spec
+  if (isConvert) specText = fromSpec + ' → ' + spec
+  if (isIn && !spec && record.skuId) specText = '白坯'
   return Object.assign({}, record, {
     isIn: isIn,
     isOut: isOut,
     isPay: isPay,
+    isReturn: isReturn,
+    isConvert: isConvert,
     isCredit: isCredit,
     typeText: typeText,
-    tagClass: isPay ? 'tag-pay' : (isIn ? 'tag-in' : (isCredit ? 'tag-credit' : 'tag-out')),
+    tagClass: isPay
+      ? 'tag-pay'
+      : (isIn ? 'tag-in' : (isReturn ? 'tag-return' : (isConvert ? 'tag-convert' : (isCredit ? 'tag-credit' : 'tag-out')))),
     timeText: formatTime(record.createdAt),
     amountText: money(record.amount),
     priceText: money(record.unitPrice),
     profitText: money(record.profit),
     qtyText: isPay ? '' : String(record.qty),
     customerText: record.customerName || '',
-    specText: spec,
-    hasSpec: !!spec
+    specText: specText,
+    hasSpec: !!specText
   })
 }
 

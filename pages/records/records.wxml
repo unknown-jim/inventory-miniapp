@@ -23,6 +23,8 @@
     <view class="tab {{type === 'in' ? 'on' : ''}}" data-type="in" bindtap="setType">进货</view>
     <view class="tab {{type === 'out' ? 'on' : ''}}" data-type="out" bindtap="setType">销售</view>
     <view class="tab {{type === 'pay' ? 'on' : ''}}" data-type="pay" bindtap="setType">收款</view>
+    <view class="tab {{type === 'return' ? 'on' : ''}}" data-type="return" bindtap="setType">退货</view>
+    <view class="tab {{type === 'convert' ? 'on' : ''}}" data-type="convert" bindtap="setType">改规格</view>
   </view>
 
   <view wx:if="{{!list.length}}" class="card empty">还没有流水</view>
@@ -42,7 +44,8 @@
       <view class="item-right">
         <text class="tag {{item.tagClass}}">{{item.typeText}}</text>
         <view class="amount">¥{{item.amountText}}</view>
-        <view wx:if="{{item.isOut}}" class="muted">毛利 ¥{{item.profitText}}</view>
+          <view wx:if="{{item.isOut}}" class="muted">毛利 ¥{{item.profitText}}</view>
+          <view wx:elif="{{item.isReturn}}" class="muted">冲减毛利 ¥{{item.profitText}}</view>
       </view>
     </view>
   </view>

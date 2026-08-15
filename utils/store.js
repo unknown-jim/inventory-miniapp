@@ -168,6 +168,8 @@ function addSale(payload) {
       items: payload.items || [{
         productId: payload.productId,
         skuId: payload.skuId,
+        color: payload.color,
+        size: payload.size,
         qty: payload.qty,
         unitPrice: payload.unitPrice
       }]
@@ -184,6 +186,36 @@ function addSale(payload) {
     markCustomerSold(extra.customerId, now)
   }
   return result.order
+}
+
+function addReturn(payload) {
+  const result = inventory.applyReturnOrder(
+    getProducts(),
+    getRecords(),
+    payload,
+    Date.now(),
+    uid,
+    getSkus()
+  )
+  writeList(KEYS.products, result.products)
+  writeList(KEYS.skus, result.skus)
+  writeList(KEYS.records, result.records)
+  return result.recordsCreated
+}
+
+function addConvert(payload) {
+  const result = inventory.applyConvert(
+    getProducts(),
+    getRecords(),
+    payload,
+    Date.now(),
+    uid(),
+    getSkus()
+  )
+  writeList(KEYS.products, result.products)
+  writeList(KEYS.skus, result.skus)
+  writeList(KEYS.records, result.records)
+  return result.record
 }
 
 function addPayment(payload) {
@@ -293,6 +325,8 @@ module.exports = {
   deleteCustomer: deleteCustomer,
   addPurchase: addPurchase,
   addSale: addSale,
+  addReturn: addReturn,
+  addConvert: addConvert,
   addPayment: addPayment,
   updateRecord: updateRecord,
   deleteRecord: deleteRecord,
