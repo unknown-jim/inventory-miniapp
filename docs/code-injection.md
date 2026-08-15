@@ -18,9 +18,11 @@
 | 插件 / 分包 | 无 |
 | `lazyCodeLoading` | 已写入 `app.json`，之后不得删除 |
 | JS / WXSS / WXML 压缩 | 已开（`project.config.json`） |
-| 上传过滤无依赖文件 | `ignoreUploadUnusedFiles` 已开 |
+| 上传过滤无依赖文件 | **关闭**。开发者工具的无依赖分析会漏掉 `require` / `@import` / `<include>` 的送货单文件，主包加载失败后看板白屏 |
+| 必须打进包的文件 | `utils/slip-actions.js`、`utils/slip-image.js`、`styles/slip.wxss`、`pages/common/slip-overlay.wxml` 写在 `packOptions.include` |
 | 不进代码包 | `tests/`、`node_modules`、`docs/`、仓库说明与 npm 清单已在 `packOptions.ignore` |
 | 基础库 | `3.8.0`（高于按需注入 2.11.1、用时注入 2.11.2） |
+| 相册权限 | 不要写 `permission["scope.writePhotosAlbum"]`。`permission` 只认地理位置；`requiredPrivateInfos` 也只认地理位置接口。用途说明放后台「用户隐私保护指引」，运行时弹窗在 `utils/slip-image.js` |
 
 用时注入目前没有对象。不要为了「看起来用了占位组件」去硬拆页面。
 
@@ -103,7 +105,7 @@
 |---|---|
 | 必须：开启组件懒注入 | `app.json` 保留 `lazyCodeLoading` |
 | 必须：去掉无用插件 | 不在 `app.json` 留死插件 |
-| 必须：去掉无依赖文件 | 无用文件不进代码包；`tests/`、`node_modules`、`docs/` 等保持 ignore；`ignoreUploadUnusedFiles` 保持 true |
+| 必须：去掉无依赖文件 | 无用文件用 `packOptions.ignore` 排除；**不要**开 `ignoreUploadUnusedFiles` / `ignoreDevUnusedFiles`，分析器会把送货单模块当成无依赖丢掉 |
 | 压缩 JS / WXSS / WXML | 保持 `minified`、`minifyWXSS`、`minifyWXML` 为 true |
 | 建议：图片/音频 >200KB | tab 图标可留包内；超过 200KB 的静态资源走 CDN |
 | 建议：主包仅被分包依赖的 JS/组件 | 有分包之后再挪；现在无分包则不适用 |
@@ -115,6 +117,7 @@
 - 给首屏关键块配 `componentPlaceholder`。
 - 把 tab 页塞进分包。
 - 把 `lazyCodeLoading` 删掉，或把 `lazyloadPlaceholderEnable` 长期设为 true。
+- 打开 `ignoreDevUnusedFiles` 或 `ignoreUploadUnusedFiles`。开发者工具会漏掉送货单的 `require` / `@import` / `<include>`，销售页加载失败后整个主包白屏。
 - 在用时注入组件的 `attached` 里做页面占位阶段就必须完成的逻辑。
 
 ## 6. 改代码时的检查清单
@@ -126,5 +129,7 @@
 - [ ] 页面 JSON 没有未使用的组件声明
 - [ ] 非首屏重组件配了 `componentPlaceholder`；首屏组件没有
 - [ ] 没有新增无用插件或无依赖文件
+- [ ] `ignoreDevUnusedFiles`、`ignoreUploadUnusedFiles` 为 false
+- [ ] 送货单相关文件仍在 `packOptions.include`
 - [ ] tab 页仍在主包
 - [ ] 准备上传时跑过代码质量扫描

@@ -35,7 +35,24 @@
         "value": "package-lock.json"
       }
     ],
-    "include": []
+    "include": [
+      {
+        "type": "file",
+        "value": "utils/slip-actions.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/slip-image.js"
+      },
+      {
+        "type": "file",
+        "value": "styles/slip.wxss"
+      },
+      {
+        "type": "file",
+        "value": "pages/common/slip-overlay.wxml"
+      }
+    ]
   },
   "setting": {
     "urlCheck": false,
@@ -44,7 +61,8 @@
     "postcss": true,
     "preloadBackgroundData": false,
     "minified": true,
-    "ignoreUploadUnusedFiles": true,
+    "ignoreDevUnusedFiles": false,
+    "ignoreUploadUnusedFiles": false,
     "newFeature": false,
     "coverView": true,
     "nodeModules": false,

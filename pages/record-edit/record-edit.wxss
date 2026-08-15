@@ -1,4 +1,4 @@
-@import '../../styles/slip.wxss';
+@import '/styles/slip.wxss';
 
 .form-card {
   margin-top: 16rpx;

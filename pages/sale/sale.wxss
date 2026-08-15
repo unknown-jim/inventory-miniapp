@@ -1,4 +1,4 @@
-@import '../../styles/slip.wxss';
+@import '/styles/slip.wxss';
 
 .picker {
   line-height: 80rpx;
