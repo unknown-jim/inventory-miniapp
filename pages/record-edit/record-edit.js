@@ -3,6 +3,15 @@ const util = require('../../utils/util')
 const inventory = require('../../utils/inventory')
 const slipActions = require('../../utils/slip-actions')
 
+function navTitle(view, editing) {
+  if (view.isPay) return editing ? '修改收款' : '收款详情'
+  if (view.isOpening) return editing ? '修改期初欠款' : '期初欠款详情'
+  if (view.isIn) return editing ? '修改进货' : '进货详情'
+  if (view.isReturn) return editing ? '修改退货' : '退货详情'
+  if (view.isConvert) return editing ? '修改改规格' : '改规格详情'
+  return editing ? '修改销售' : '销售详情'
+}
+
 Page({
   data: {
     id: '',
@@ -15,6 +24,7 @@ Page({
     isReturn: false,
     isConvert: false,
     canReturn: false,
+    editing: false,
     productName: '',
     specText: '',
     timeText: '',
@@ -26,6 +36,7 @@ Page({
     costText: '',
     remark: '',
     payType: 'cash',
+    payTypeText: '现结',
     customerId: '',
     customerName: '散客（可不选）',
     customerPhone: '',
@@ -43,20 +54,18 @@ Page({
   },
 
   onLoad(query) {
-    const record = store.getRecord(query.id)
+    this.loadRecord(query.id)
+  },
+
+  loadRecord(id) {
+    const record = store.getRecord(id)
     if (!record) {
       wx.showToast({ title: '流水不存在', icon: 'none' })
       return
     }
     const view = util.withRecordView(record)
     const all = store.getRecords()
-    let title = '修改销售'
-    if (view.isPay) title = '修改收款'
-    else if (view.isOpening) title = '修改期初欠款'
-    else if (view.isIn) title = '修改进货'
-    else if (view.isReturn) title = '修改退货'
-    else if (view.isConvert) title = '修改改规格'
-    wx.setNavigationBarTitle({ title: title })
+    wx.setNavigationBarTitle({ title: navTitle(view, false) })
     this.costPrice = record.costPrice
     let lines = []
     let canReturn = view.isOut && inventory.returnableQty(all, record) > 0
@@ -101,6 +110,7 @@ Page({
       isConvert: view.isConvert,
       isMulti: lines.length > 1,
       canReturn: canReturn,
+      editing: false,
       productName: productName,
       specText: specText,
       timeText: util.formatDateTime(record.createdAt),
@@ -111,14 +121,27 @@ Page({
       profitText: profitText,
       remark: record.remark || '',
       payType: record.payType === 'credit' ? 'credit' : 'cash',
+      payTypeText: record.payType === 'credit' ? '赊账' : '现结',
       customerId: record.customerId || '',
       customerName: record.customerName || (view.isOut ? '散客（可不选）' : (record.customerName || '')),
       customerPhone: record.customerPhone || '',
       customerAddress: record.customerAddress || '',
       costText: view.isOut || view.isReturn ? util.money(record.costPrice) : '',
       hasOrder: !!(record.orderId),
-      lines: lines
+      lines: lines,
+      showCustomerPicker: false
     })
+  },
+
+  startEdit() {
+    if (this.data.editing) return
+    this.setData({ editing: true })
+    wx.setNavigationBarTitle({ title: navTitle(this.data, true) })
+  },
+
+  cancelEdit() {
+    if (!this.data.editing) return
+    this.loadRecord(this.data.id)
   },
 
   refreshAmount() {
@@ -153,6 +176,7 @@ Page({
   },
 
   onField(e) {
+    if (!this.data.editing) return
     const patch = {}
     patch[e.currentTarget.dataset.field] = e.detail.value
     this.setData(patch)
@@ -160,6 +184,7 @@ Page({
   },
 
   onLineField(e) {
+    if (!this.data.editing) return
     const id = e.currentTarget.dataset.id
     const field = e.currentTarget.dataset.field
     const value = e.detail.value
@@ -187,7 +212,12 @@ Page({
   },
 
   setPayType(e) {
-    this.setData({ payType: e.currentTarget.dataset.type })
+    if (!this.data.editing) return
+    const payType = e.currentTarget.dataset.type
+    this.setData({
+      payType: payType,
+      payTypeText: payType === 'credit' ? '赊账' : '现结'
+    })
   },
 
   applyCustomerFilter(keyword) {
@@ -200,6 +230,7 @@ Page({
   },
 
   openCustomerPicker() {
+    if (!this.data.editing) return
     this.setData({ showCustomerPicker: true })
     this.applyCustomerFilter(this.data.customerKeyword)
   },
@@ -282,6 +313,7 @@ Page({
   },
 
   save() {
+    if (!this.data.editing) return
     try {
       if (this.data.isPay || this.data.isOpening) {
         store.updateRecord(this.data.id, {

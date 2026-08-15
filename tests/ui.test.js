@@ -139,7 +139,7 @@ async function runSalePickerAndSlip(miniProgram) {
 }
 
 async function runRecordSlipExport(miniProgram) {
-  step('流水：打开销售记录，再次打开送货单')
+  step('流水：打开销售记录，默认只读，再次打开送货单')
   const records = await miniProgram.navigateTo('/pages/records/records')
   await records.waitFor('.js-record-out')
   const items = await records.$$('.js-record-out')
@@ -149,6 +149,11 @@ async function runRecordSlipExport(miniProgram) {
   await records.waitFor(800)
   const edit = await miniProgram.currentPage()
   assert.ok(edit.path.indexOf('record-edit') >= 0, '未进入流水详情: ' + edit.path)
+  await edit.waitFor('.js-edit')
+  let pageData = await edit.data()
+  assert.strictEqual(pageData.editing, false, '进入详情就进入了修改')
+  const saveBefore = await edit.$$('.js-save')
+  assert.strictEqual(saveBefore.length, 0, '未点修改就出现了保存')
   await edit.waitFor('.js-export-slip')
   await tap(edit, '.js-export-slip')
   await edit.waitFor('.js-slip')
@@ -156,6 +161,16 @@ async function runRecordSlipExport(miniProgram) {
   assert.ok(title.indexOf('送货单') >= 0, '再次导出时送货单标题不对: ' + title)
   await tap(edit, '.js-slip-close')
   await waitGone(edit, '.js-slip')
+
+  step('流水：点修改后才能保存，取消回到详情')
+  await tap(edit, '.js-edit')
+  await edit.waitFor('.js-save')
+  pageData = await edit.data()
+  assert.strictEqual(pageData.editing, true, '点修改后仍不能改')
+  await tap(edit, '.js-cancel')
+  await edit.waitFor('.js-edit')
+  pageData = await edit.data()
+  assert.strictEqual(pageData.editing, false, '取消后没有回到详情')
   await miniProgram.navigateBack()
 }
 

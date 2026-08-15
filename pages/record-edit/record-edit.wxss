@@ -110,6 +110,10 @@
   margin-top: 0;
 }
 
+.cancel-btn {
+  margin: 0 0 16rpx;
+}
+
 .link {
   color: #0F766E;
   font-size: 24rpx;
