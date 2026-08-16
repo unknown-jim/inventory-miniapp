@@ -1397,8 +1397,9 @@ function orderProductTitle(orderRecords) {
     const name = item.productName || ''
     if (name && names.indexOf(name) < 0) names.push(name)
   })
+  const lineCount = (orderRecords || []).length
   if (names.length <= 2) return names.join('、')
-  return names[0] + '、' + names[1] + ' 等' + names.length + '种'
+  return names[0] + '、' + names[1] + ' 等' + lineCount + '种'
 }
 
 function groupRecords(records) {
