@@ -356,6 +356,45 @@ assert.strictEqual(grouped.filter(function (item) {
 assert.strictEqual(inv.summarizeCustomerAccount(multi.records, 'c1').count, 1)
 assert.strictEqual(inv.getDashboard(multi.products, multi.records, 9100).recent[0].lineCount, 2)
 
+const cookie = inv.createProduct({
+  name: '苏打饼干',
+  sku: 'CK-003',
+  costPrice: 3,
+  salePrice: 6,
+  stock: 20
+}, 1000, 'p-cookie')
+const juice = inv.createProduct({
+  name: '橙汁',
+  costPrice: 4,
+  salePrice: 8,
+  stock: 0,
+  colors: ['原味', '加糖']
+}, 1000, 'p-juice')
+const juiceSkus = inv.applyProductSkus(juice, [], [
+  { color: '原味', size: '', stock: 10, costPrice: 4, salePrice: 8, alertQty: 2 },
+  { color: '加糖', size: '', stock: 10, costPrice: 4, salePrice: 8, alertQty: 2 }
+], 1100, idFactory())
+const titleOrder = inv.applySaleOrder(
+  [sampleProduct({ stock: 10 }), bread, cookie, juiceSkus.product],
+  [],
+  {
+    items: [
+      { productId: 'p1', qty: 1, unitPrice: 4.5 },
+      { productId: 'p2', qty: 1, unitPrice: 9.9 },
+      { productId: 'p-cookie', qty: 1, unitPrice: 6 },
+      { productId: 'p-juice', skuId: juiceSkus.skus[0].id, qty: 1, unitPrice: 8 },
+      { productId: 'p-juice', skuId: juiceSkus.skus[1].id, qty: 1, unitPrice: 8 }
+    ]
+  },
+  9200,
+  'order-title-lines',
+  idFactory(),
+  juiceSkus.skus
+)
+const titleGrouped = inv.groupRecords(titleOrder.records)
+assert.strictEqual(titleGrouped[0].lineCount, 5)
+assert.strictEqual(titleGrouped[0].productName, '纯牛奶、全麦面包 等5种')
+
 const orderItemsEdit = inv.updateRecord(multi.products, multi.records, {
   id: multi.order.records[0].id,
   items: [
