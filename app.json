@@ -13,7 +13,9 @@
     "pages/categories/categories",
     "pages/category-edit/category-edit",
     "pages/customers/customers",
-    "pages/customer-edit/customer-edit"
+    "pages/customer-edit/customer-edit",
+    "pages/shop/shop",
+    "pages/members/members"
   ],
   "window": {
     "navigationBarBackgroundColor": "#0F766E",

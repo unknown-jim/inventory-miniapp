@@ -1,0 +1,37 @@
+.openid {
+  margin: 16rpx 0;
+  padding: 20rpx 24rpx;
+  background: #F8FAF9;
+  border-radius: 14rpx;
+  word-break: break-all;
+  font-size: var(--fs-sm);
+}
+
+.copy-btn {
+  margin-top: 12rpx;
+}
+
+.member-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16rpx;
+}
+
+.item-name {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  word-break: break-all;
+  margin-bottom: 8rpx;
+  padding-right: 16rpx;
+}
+
+.mini {
+  margin: 0;
+  flex-shrink: 0;
+  min-width: 140rpx;
+}
+
+.quiet {
+  text-align: center;
+}

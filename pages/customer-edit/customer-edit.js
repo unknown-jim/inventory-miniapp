@@ -35,8 +35,9 @@ Page({
     wx.setNavigationBarTitle({ title: '编辑客户' })
   },
 
-  onShow() {
+  async onShow() {
     if (!this.data.id) return
+    if (!(await store.ready())) return
     this.fillCustomer(this.data.id)
   },
 
@@ -98,9 +99,9 @@ Page({
 
   keepPay() {},
 
-  submitPay() {
+  async submitPay() {
     try {
-      store.addPayment({
+      await store.addPayment({
         customerId: this.data.id,
         amount: this.data.payAmount,
         remark: this.data.payRemark
@@ -128,9 +129,9 @@ Page({
 
   keepOpening() {},
 
-  submitOpening() {
+  async submitOpening() {
     try {
-      store.addOpening({
+      await store.addOpening({
         customerId: this.data.id,
         amount: this.data.openingAmount,
         remark: this.data.openingRemark
@@ -143,7 +144,7 @@ Page({
     }
   },
 
-  save() {
+  async save() {
     try {
       const openingText = String(this.data.openingAmount || '').trim()
       let opening = 0
@@ -153,7 +154,7 @@ Page({
           throw new Error('期初欠款必须大于 0')
         }
       }
-      const saved = store.saveCustomer({
+      const saved = await store.saveCustomer({
         id: this.data.id,
         name: this.data.name,
         phone: this.data.phone,
@@ -161,7 +162,7 @@ Page({
         remark: this.data.remark
       })
       if (opening > 0) {
-        store.addOpening({
+        await store.addOpening({
           customerId: saved.id,
           amount: opening,
           remark: '上线前欠款'
@@ -200,13 +201,17 @@ Page({
       title: '删除客户',
       content: '历史送货记录会保留当时的客户信息，只是以后不能再选这个客户。',
       confirmColor: '#DC2626',
-      success: (res) => {
+      success: async (res) => {
         if (!res.confirm) return
-        store.deleteCustomer(this.data.id)
-        wx.showToast({ title: '已删除', icon: 'success' })
-        setTimeout(function () {
-          wx.navigateBack()
-        }, 400)
+        try {
+          await store.deleteCustomer(this.data.id)
+          wx.showToast({ title: '已删除', icon: 'success' })
+          setTimeout(function () {
+            wx.navigateBack()
+          }, 400)
+        } catch (error) {
+          util.showError(error)
+        }
       }
     })
   }

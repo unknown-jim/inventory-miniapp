@@ -1,0 +1,51 @@
+<view class="page">
+  <view wx:if="{{!configured}}" class="card empty">
+    <view class="empty-title">还不能记账</view>
+    <view class="muted">{{blockedMessage}}</view>
+  </view>
+
+  <block wx:else>
+    <view class="card">
+      <view class="field-label">我的 openid</view>
+      <view class="muted">发给老板，加进本店白名单后就能记账。没有邀请码。</view>
+      <view class="openid" selectable="true">{{openid || '加载中…'}}</view>
+      <button class="btn-ghost copy-btn" bindtap="copyOpenid">复制 openid</button>
+    </view>
+
+    <view class="card">
+      <view class="field">
+        <view class="field-label">创建店铺</view>
+        <input class="field-input" value="{{newShopName}}" bindinput="onShopName" placeholder="店铺名称" />
+      </view>
+      <button class="btn-primary" bindtap="createShop">创建并进入</button>
+    </view>
+
+    <view class="section-title">
+      <text>我加入的店</text>
+    </view>
+    <view wx:if="{{!shops.length}}" class="card empty">
+      <view class="muted">还没有店铺。自己创建一个，或把 openid 发给老板。</view>
+    </view>
+    <view
+      class="card shop-card {{item.current ? 'current' : ''}}"
+      wx:for="{{shops}}"
+      wx:key="id"
+      data-id="{{item.id}}"
+      data-name="{{item.name}}"
+      bindtap="selectShop"
+    >
+      <view class="item-name">{{item.name}}</view>
+      <view class="muted">{{item.role === 'owner' ? '店主' : '店员'}}<block wx:if="{{item.current}}"> · 当前</block></view>
+    </view>
+
+    <view wx:if="{{canMigrate}}" class="card">
+      <view class="empty-title">本机还有一份旧账本</view>
+      <view class="muted">只会上传到当前店一次。若云上已经有账，就不要传，以免两份账对打。</view>
+      <button class="btn-primary seed-btn" bindtap="migrateLocal">把本机账本上传到当前店</button>
+    </view>
+
+    <view class="footer-actions">
+      <text class="link" bindtap="goMembers">成员名单</text>
+    </view>
+  </block>
+</view>

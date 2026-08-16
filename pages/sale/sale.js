@@ -47,7 +47,8 @@ Page({
     exporting: false
   },
 
-  onShow() {
+  async onShow() {
+    if (!(await store.ready())) return
     const products = store.getProducts()
     const skus = store.getSkus()
     const selectedId = getApp().consumeSelectedProduct()
@@ -457,7 +458,7 @@ Page({
     }, this.totals(cart)))
   },
 
-  submit() {
+  async submit() {
     try {
       const cart = this.data.cart.slice()
       const line = this.currentLine()
@@ -471,7 +472,7 @@ Page({
           cart.push(item)
         })
       }
-      const order = store.addSale({
+      const order = await store.addSale({
         customerId: this.data.customerId,
         payType: this.data.payType,
         remark: this.data.remark,
