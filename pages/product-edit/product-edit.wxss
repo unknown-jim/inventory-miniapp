@@ -15,12 +15,12 @@
   background: #ECFDF5;
   color: #0F766E;
   border-radius: 12rpx;
-  font-size: 24rpx;
+  font-size: var(--fs-sm);
   font-weight: 600;
 }
 
 .readonly {
-  line-height: 80rpx;
+  line-height: var(--tap-md);
   color: #64748B;
 }
 
@@ -52,10 +52,10 @@
 
 .axis-title {
   margin-bottom: 12rpx;
-  height: 64rpx;
-  line-height: 64rpx;
+  min-height: var(--tap-sm);
+  line-height: var(--tap-sm);
   font-weight: 600;
-  font-size: 28rpx;
+  font-size: var(--fs-md);
 }
 
 .add-spec {
@@ -71,8 +71,8 @@
 .spec-add {
   width: 140rpx;
   margin: 0;
-  height: 80rpx;
-  line-height: 80rpx;
+  height: var(--tap-md);
+  line-height: var(--tap-md);
 }
 
 .pay-tabs {
@@ -83,17 +83,17 @@
 
 .pay-tab {
   flex: 1;
-  height: 72rpx;
-  line-height: 72rpx;
+  height: var(--tap-sm);
+  line-height: var(--tap-sm);
   text-align: center;
   background: #F8FAF9;
   border-radius: 14rpx;
   color: #64748B;
-  font-size: 28rpx;
+  font-size: var(--fs-md);
 }
 
 .kind-tabs .pay-tab {
-  font-size: 24rpx;
+  font-size: var(--fs-sm);
 }
 
 .field-head {
@@ -109,7 +109,7 @@
 
 .link {
   color: #0F766E;
-  font-size: 24rpx;
+  font-size: var(--fs-sm);
 }
 
 .name-chips {

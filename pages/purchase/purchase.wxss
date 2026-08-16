@@ -1,11 +1,11 @@
 .picker {
-  line-height: 80rpx;
+  line-height: var(--tap-md);
 }
 
 .meta {
   margin: -8rpx 0 24rpx;
   color: #0F766E;
-  font-size: 24rpx;
+  font-size: var(--fs-sm);
 }
 
 .spec-block .field {
@@ -38,7 +38,7 @@
 }
 
 .total-num {
-  font-size: 36rpx;
+  font-size: var(--fs-xl);
   color: #0F766E;
 }
 
@@ -72,7 +72,7 @@
 }
 
 .sheet-title {
-  font-size: 30rpx;
+  font-size: var(--fs-lg);
   font-weight: 600;
   margin-bottom: 16rpx;
 }

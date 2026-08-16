@@ -11,7 +11,7 @@
 }
 
 .item-name {
-  font-size: 30rpx;
+  font-size: var(--fs-lg);
   font-weight: 600;
 }
 
@@ -24,8 +24,9 @@
   right: 32rpx;
   bottom: 48rpx;
   padding: 0 28rpx;
-  height: 80rpx;
-  line-height: 80rpx;
+  height: var(--tap-md);
+  line-height: var(--tap-md);
+  font-size: var(--fs-lg);
   background: #0F766E;
   color: #FFFFFF;
   border-radius: 40rpx;

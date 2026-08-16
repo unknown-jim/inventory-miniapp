@@ -48,7 +48,7 @@ npm run test:ui
 - 上线前已经欠的钱走客户页「记期初欠款」（新建时也可填），不要用赊账销售去凑；不改库存、不计入销售和毛利
 - 毛利 =（本次售价 − 当前进价）× 数量
 - 数据在当前设备的本地存储里，换手机或清缓存会丢
-- 首页底部可以清空全部数据
+- 首页底部可以改显示大小（标准 / 大 / 更大），也可以清空全部数据
 
 ## 开发约定
 
@@ -59,6 +59,7 @@ npm run test:ui
 - 代码注入、用时注入、分包时机和上传前扫描，见 [docs/code-injection.md](docs/code-injection.md)
 - 记账要自洽，不要把行业习惯写成限制，见 [docs/accounting-vs-policy.md](docs/accounting-vs-policy.md)
 - 待加工 / 分规格 / 退货 / 改规格，见 [docs/blank-process.md](docs/blank-process.md)
+- 操作界面字号和点击区域、看板显示大小，见 [docs/ui-scale.md](docs/ui-scale.md)
 
 ## 刻意没做的
 

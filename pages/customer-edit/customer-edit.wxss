@@ -12,7 +12,7 @@
 
 .debt-num {
   margin: 8rpx 0 12rpx;
-  font-size: 44rpx;
+  font-size: var(--fs-hero);
   font-weight: 700;
   color: #0F766E;
 }
@@ -92,7 +92,7 @@
 }
 
 .sheet-title {
-  font-size: 30rpx;
+  font-size: var(--fs-lg);
   font-weight: 600;
   margin-bottom: 12rpx;
 }

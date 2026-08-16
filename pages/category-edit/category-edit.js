@@ -1,6 +1,7 @@
 const store = require('../../utils/store')
 const util = require('../../utils/util')
 const inventory = require('../../utils/inventory')
+const uiScale = require('../../utils/ui-scale')
 
 function axisLabel(value, fallback) {
   const name = String(value || '').trim()
@@ -8,6 +9,7 @@ function axisLabel(value, fallback) {
 }
 
 Page({
+  behaviors: [uiScale.behavior],
   data: {
     id: '',
     isEdit: false,

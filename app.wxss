@@ -1,9 +1,45 @@
 page {
+  --fs-xs: 32rpx;
+  --fs-sm: 34rpx;
+  --fs-md: 36rpx;
+  --fs-lg: 40rpx;
+  --fs-xl: 44rpx;
+  --fs-hero: 48rpx;
+  --tap-sm: 96rpx;
+  --tap-md: 104rpx;
+  --tap-lg: 112rpx;
+  --chip-min: 80rpx;
   min-height: 100%;
   background: #F3F4F1;
   color: #134E4A;
-  font-size: 28rpx;
+  font-size: var(--fs-md);
   box-sizing: border-box;
+}
+
+.page.ui-std {
+  --fs-xs: 28rpx;
+  --fs-sm: 30rpx;
+  --fs-md: 32rpx;
+  --fs-lg: 36rpx;
+  --fs-xl: 40rpx;
+  --fs-hero: 44rpx;
+  --tap-sm: 88rpx;
+  --tap-md: 96rpx;
+  --tap-lg: 104rpx;
+  --chip-min: 72rpx;
+}
+
+.page.ui-xl {
+  --fs-xs: 36rpx;
+  --fs-sm: 38rpx;
+  --fs-md: 40rpx;
+  --fs-lg: 44rpx;
+  --fs-xl: 48rpx;
+  --fs-hero: 52rpx;
+  --tap-sm: 104rpx;
+  --tap-md: 112rpx;
+  --tap-lg: 120rpx;
+  --chip-min: 88rpx;
 }
 
 button {
@@ -16,6 +52,7 @@ button::after {
 
 .page {
   padding: 24rpx 24rpx 48rpx;
+  font-size: var(--fs-md);
 }
 
 .card {
@@ -30,13 +67,13 @@ button::after {
   align-items: center;
   justify-content: space-between;
   margin: 36rpx 8rpx 16rpx;
-  font-size: 30rpx;
+  font-size: var(--fs-lg);
   font-weight: 600;
 }
 
 .muted {
   color: #64748B;
-  font-size: 24rpx;
+  font-size: var(--fs-sm);
 }
 
 .row {
@@ -49,12 +86,12 @@ button::after {
 }
 
 .btn-primary {
-  height: 88rpx;
-  line-height: 88rpx;
+  height: var(--tap-lg);
+  line-height: var(--tap-lg);
   background: #0F766E;
   color: #FFFFFF;
   border-radius: 16rpx;
-  font-size: 30rpx;
+  font-size: var(--fs-lg);
   font-weight: 600;
 }
 
@@ -64,28 +101,28 @@ button::after {
 }
 
 .btn-ghost {
-  height: 72rpx;
-  line-height: 72rpx;
+  height: var(--tap-sm);
+  line-height: var(--tap-sm);
   background: #E6F4F1;
   color: #0F766E;
   border-radius: 14rpx;
-  font-size: 26rpx;
+  font-size: var(--fs-md);
 }
 
 .btn-danger {
-  height: 80rpx;
-  line-height: 80rpx;
+  height: var(--tap-md);
+  line-height: var(--tap-md);
   background: #FEF2F2;
   color: #DC2626;
   border-radius: 14rpx;
-  font-size: 28rpx;
+  font-size: var(--fs-md);
 }
 
 .tag {
   display: inline-block;
-  padding: 4rpx 12rpx;
+  padding: 8rpx 16rpx;
   border-radius: 8rpx;
-  font-size: 22rpx;
+  font-size: var(--fs-xs);
 }
 
 .tag-alert {
@@ -146,11 +183,15 @@ button::after {
 }
 
 .chip {
-  padding: 10rpx 20rpx;
+  display: flex;
+  align-items: center;
+  min-height: var(--chip-min);
+  padding: 12rpx 28rpx;
+  box-sizing: border-box;
   background: #F8FAF9;
   border-radius: 999rpx;
   color: #64748B;
-  font-size: 24rpx;
+  font-size: var(--fs-sm);
 }
 
 .chip.on {
@@ -170,16 +211,16 @@ button::after {
 
 .field-label {
   color: #64748B;
-  font-size: 24rpx;
+  font-size: var(--fs-sm);
   margin-bottom: 12rpx;
 }
 
 .field-input {
-  height: 80rpx;
+  height: var(--tap-md);
   padding: 0 24rpx;
   background: #F8FAF9;
   border-radius: 14rpx;
-  font-size: 28rpx;
+  font-size: var(--fs-md);
 }
 
 .field-textarea {
@@ -192,11 +233,12 @@ button::after {
 }
 
 .search {
-  height: 80rpx;
+  height: var(--tap-md);
   padding: 0 28rpx;
   background: #FFFFFF;
   border-radius: 40rpx;
   margin-bottom: 20rpx;
+  font-size: var(--fs-md);
 }
 
 .empty {
@@ -206,7 +248,7 @@ button::after {
 }
 
 .empty-title {
-  font-size: 30rpx;
+  font-size: var(--fs-lg);
   color: #134E4A;
   margin-bottom: 12rpx;
 }
