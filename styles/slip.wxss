@@ -127,7 +127,7 @@
   position: fixed;
   left: -2000px;
   top: 0;
-  width: 1240px;
+  width: 1760px;
   height: 4000px;
   pointer-events: none;
   opacity: 0;
