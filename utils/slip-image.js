@@ -138,17 +138,73 @@ function layoutLabeled(cmds, label, value, x, y, maxWidth, measure) {
   return y + Math.max(lineH, lines.length * lineH) + 6
 }
 
-function tableColumns() {
+function specAxisNames(lines) {
+  const names = []
+  let unnamed = false
+  ;(lines || []).forEach(function (line) {
+    const parts = line.specParts
+    if (parts && parts.length) {
+      parts.forEach(function (part) {
+        if (!part || !part.value) return
+        if (part.name) {
+          if (names.indexOf(part.name) < 0) names.push(part.name)
+        } else {
+          unnamed = true
+        }
+      })
+      return
+    }
+    if (line.specText) unnamed = true
+  })
+  if (unnamed && names.indexOf('规格') < 0) names.push('规格')
+  return names
+}
+
+function specCellValue(line, axisName) {
+  const parts = line.specParts
+  if (parts && parts.length) {
+    const hits = parts.filter(function (part) {
+      if (!part || !part.value) return false
+      if (part.name) return part.name === axisName
+      return axisName === '规格'
+    })
+    return hits.map(function (part) {
+      return part.value
+    }).join(' · ')
+  }
+  if (axisName === '规格') return line.specText || ''
+  return ''
+}
+
+function specColWidth(count) {
+  if (count <= 1) return 280
+  if (count === 2) return 200
+  return 150
+}
+
+function tableColumns(slip) {
   const contentWidth = WIDTH - PAD * 2
+  const axes = specAxisNames(slip && slip.lines)
+  const specWidth = specColWidth(axes.length)
   const defs = [
     { key: 'seq', title: '序号', width: 68, align: 'center', font: FONT.num },
-    { key: 'sku', title: '货号', width: 200, align: 'left', font: FONT.num },
-    { key: 'name', title: '品名', width: 0, align: 'left', font: FONT.name },
-    { key: 'spec', title: '规格', width: 300, align: 'left', font: FONT.name },
+    { key: 'sku', title: '货号', width: axes.length >= 3 ? 160 : 200, align: 'left', font: FONT.num },
+    { key: 'name', title: '品名', width: 0, align: 'left', font: FONT.name }
+  ]
+  axes.forEach(function (name) {
+    defs.push({
+      key: 'spec:' + name,
+      title: name,
+      width: specWidth,
+      align: 'left',
+      font: FONT.name
+    })
+  })
+  defs.push(
     { key: 'qty', title: '数量', width: 100, align: 'center', font: FONT.num },
     { key: 'price', title: '单价', width: 140, align: 'right', font: FONT.num },
     { key: 'amount', title: '金额', width: 156, align: 'right', font: FONT.num }
-  ]
+  )
   const used = defs.reduce(function (sum, col) {
     return sum + col.width
   }, 0)
@@ -209,19 +265,22 @@ function layoutMeta(cmds, slip, y, measure) {
 function layoutTable(cmds, slip, y, measure) {
   const headerH = 42
   const totalH = 48
-  const cols = tableColumns()
+  const cols = tableColumns(slip)
   const defs = cols.defs
   const lines = slip.lines || []
+  const axes = specAxisNames(lines)
   const rows = lines.map(function (line, index) {
     const cells = {
       seq: [String(index + 1)],
       sku: wrapCell(skuText(line), colByKey(cols, 'sku'), measure),
       name: wrapCell(line.productName, colByKey(cols, 'name'), measure),
-      spec: wrapCell(line.specText, colByKey(cols, 'spec'), measure),
       qty: [line.qtyText],
       price: [line.priceText],
       amount: [line.amountText]
     }
+    axes.forEach(function (name) {
+      cells['spec:' + name] = wrapCell(specCellValue(line, name), colByKey(cols, 'spec:' + name), measure)
+    })
     const lineCount = defs.reduce(function (max, col) {
       return Math.max(max, (cells[col.key] || []).length)
     }, 1)
@@ -320,7 +379,7 @@ function layoutFooter(cmds, slip, y, measure) {
 }
 
 function layoutSlip(slip, measure) {
-  // 预览弹层仍是手机竖向卡片；导出用横向表格，货号/品名/规格分列。
+  // 预览弹层仍是手机竖向卡片；导出用横向表格，规格按本单出现的轴名分列。
   const measureFn = measure || estimateWidth
   const cmds = []
   let y = PAD
@@ -579,6 +638,7 @@ module.exports = {
   WIDTH: WIDTH,
   FONT: FONT,
   estimateWidth: estimateWidth,
+  specAxisNames: specAxisNames,
   wrapText: wrapText,
   layoutSlip: layoutSlip,
   drawSlip: drawSlip,

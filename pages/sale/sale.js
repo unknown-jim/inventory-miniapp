@@ -494,7 +494,7 @@ Page({
       this.data.skus = skus
       const product = this.data.productId ? store.getProduct(this.data.productId) : null
       const sku = this.currentSku(product)
-      const slipView = util.withSlipView(order, receivable)
+      const slipView = util.withSlipView(order, receivable, store.getProducts())
       this.slipImagePath = ''
       this.setData(Object.assign({
         skus: skus,

@@ -441,6 +441,12 @@ assert.strictEqual(created.stock, 10)
 assert.deepStrictEqual(inv.skuCombos(['黑', '白'], ['M', 'L']).length, 4)
 assert.deepStrictEqual(inv.skuCombos(['黑'], []), [{ color: '黑', size: '' }])
 assert.strictEqual(inv.specText('黑色', 'M'), '黑色 · M')
+assert.deepStrictEqual(inv.specParts({ color: '黑色', size: 'M' }, { specAxis1: '颜色', specAxis2: '尺码' }), [
+  { name: '颜色', value: '黑色' },
+  { name: '尺码', value: 'M' }
+])
+assert.strictEqual(inv.specLabelText(inv.specParts({ color: '原味' }, { specAxis1: '口味' })), '口味 原味')
+assert.strictEqual(inv.specLabelText(inv.specParts({ color: '黑色', size: 'M' })), '黑色 · M')
 assert.strictEqual(inv.specAxis1Name({}), '规格一')
 assert.strictEqual(inv.specAxis2Name({ specAxis2: '容量' }), '容量')
 assert.strictEqual(inv.specKindTag({}), '')
