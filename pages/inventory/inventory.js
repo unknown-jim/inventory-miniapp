@@ -10,7 +10,8 @@ Page({
     alertCount: 0
   },
 
-  onShow() {
+  async onShow() {
+    if (!(await store.ready())) return
     const filter = getApp().consumePendingInventoryFilter()
     if (filter === 'alert') {
       this.setData({ onlyAlert: true })

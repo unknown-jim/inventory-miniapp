@@ -1,0 +1,14 @@
+{
+  "envId": "inventory-miniapp-d6d2s57eaa99e5",
+  "functionRoot": "cloudfunctions",
+  "functions": [
+    {
+      "name": "ledger",
+      "timeout": 20,
+      "memorySize": 256,
+      "runtime": "Nodejs18.15",
+      "handler": "index.main",
+      "installDependency": true
+    }
+  ]
+}

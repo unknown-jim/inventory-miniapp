@@ -59,7 +59,8 @@ Page({
     showFinishedSkuCard: false
   },
 
-  onLoad(query) {
+  async onLoad(query) {
+    if (!(await store.ready())) return
     if (!query.id) {
       wx.setNavigationBarTitle({ title: '新增商品' })
       return
@@ -104,7 +105,8 @@ Page({
     wx.setNavigationBarTitle({ title: '编辑商品' })
   },
 
-  onShow() {
+  async onShow() {
+    if (!(await store.ready())) return
     this.refreshCategories()
   },
 
@@ -387,10 +389,14 @@ Page({
     wx.navigateTo({ url: '/pages/categories/categories' })
   },
 
-  writeBack(field, value) {
+  async writeBack(field, value) {
     if (!this.data.categoryId) return
-    store.appendCategoryValue(this.data.categoryId, field, value)
-    this.refreshCategories()
+    try {
+      await store.appendCategoryValue(this.data.categoryId, field, value)
+      this.refreshCategories()
+    } catch (error) {
+      util.showError(error)
+    }
   },
 
   setSharedPrice(e) {
@@ -524,7 +530,7 @@ Page({
     this.setData(this.withSkuCards({ skuRows: skuRows }))
   },
 
-  save() {
+  async save() {
     try {
       const kind = this.data.productKind
       const hasSpecs = kind !== 'plain'
@@ -535,7 +541,7 @@ Page({
       const sharedPrice = hasSpecs && this.data.sharedPrice
       const costPrice = this.data.costPrice
       const salePrice = this.data.salePrice
-      store.saveProduct({
+      await store.saveProduct({
         id: this.data.id,
         name: this.data.name,
         sku: this.data.sku,
@@ -565,7 +571,7 @@ Page({
           }
         }) : []
       })
-      this.writeBack('names', this.data.name)
+      await this.writeBack('names', this.data.name)
       wx.showToast({ title: '已保存', icon: 'success' })
       setTimeout(function () {
         wx.navigateBack()
@@ -580,13 +586,17 @@ Page({
       title: '删除商品',
       content: '历史流水会保留，只是不再显示这个商品。',
       confirmColor: '#DC2626',
-      success: (res) => {
+      success: async (res) => {
         if (!res.confirm) return
-        store.deleteProduct(this.data.id)
-        wx.showToast({ title: '已删除', icon: 'success' })
-        setTimeout(function () {
-          wx.navigateBack()
-        }, 400)
+        try {
+          await store.deleteProduct(this.data.id)
+          wx.showToast({ title: '已删除', icon: 'success' })
+          setTimeout(function () {
+            wx.navigateBack()
+          }, 400)
+        } catch (error) {
+          util.showError(error)
+        }
       }
     })
   }

@@ -1,6 +1,6 @@
 # 简单进销存小程序
 
-单人记账用的微信小程序：管商品、进货、销售、库存预警和毛利。数据存在手机本地，不需要后端，也不需要登录。
+进销存微信小程序：管商品、进货、销售、库存预警和毛利。多家店共用一个云环境，按店隔离；店员用 openid 白名单进店。记账走云函数，卖货时需要联网。
 
 ## 能做什么
 
@@ -13,13 +13,16 @@
 - 库存：低于预警标红，可只看预警商品
 - 流水：进货/销售记录，以及对应毛利
 - 客户：档案、上线前期初欠款、赊账和收款
+- 店铺：创建店铺、选店、成员白名单（粘贴 openid，没有邀请码）
 
 ## 怎么运行
 
 1. 安装 [微信开发者工具](https://developers.weixin.qq.com/miniprogram/dev/devtools/download.html)
-2. 导入本仓库根目录
-3. AppID 选「测试号 / 游客模式」即可（`project.config.json` 里已是 `touristappid`）
-4. 编译预览。第一次打开首页可以点「填充示例数据」
+2. 导入本仓库根目录，使用正式 AppID（测试号没有云开发）
+3. 开通云开发，把**环境 ID**填进 [`utils/cloud-config.js`](utils/cloud-config.js) 的 `CLOUD_ENV_ID`。空着不能记账，也不会自动用第一个环境
+4. 在云开发控制台创建集合 `shops`、`members`、`ledgers`、`ledger_clears`，权限选「仅管理端可读写」
+5. 上传并部署云函数 `ledger`（目录 `cloudfunctions/ledger`，超时 20 秒）
+6. 编译预览。先建店或让老板把你的 openid 加进白名单，才能记账
 
 公式对不对，不依赖微信开发者工具：
 
@@ -27,12 +30,18 @@
 npm test
 ```
 
+改过 [`utils/inventory.js`](utils/inventory.js) 或 [`utils/ledger-apply.js`](utils/ledger-apply.js) 之后，先同步到云函数再测、再部署：
+
+```bash
+npm run sync:ledger-inventory
+```
+
 点选、收款弹层、送货单要开发者工具自动点：
 
 1. 安装 [Node.js LTS](https://nodejs.org/)
 2. 仓库根目录执行 `npm install`
 3. 微信开发者工具 → 设置 → 安全设置 → **开启服务端口 / CLI**
-4. 跑 UI 测试（会拉起开发者工具）：
+4. 跑 UI 测试（会拉起开发者工具；走内存账本，不连真实云）：
 
 ```bash
 npm run test:ui
@@ -47,8 +56,10 @@ npm run test:ui
 - 库存只通过「进货」「销售」「退货」「改规格」变动；编辑商品不会改库存
 - 上线前已经欠的钱走客户页「记期初欠款」（新建时也可填），不要用赊账销售去凑；不改库存、不计入销售和毛利
 - 毛利 =（本次售价 − 当前进价）× 数量
-- 数据在当前设备的本地存储里，换手机或清缓存会丢
-- 首页底部可以清空全部数据
+- 账在云上按店隔离。换手机要用同一微信、并被加进该店白名单
+- 本机若还有旧版本地账，建店后可在店铺页上传一次到当前店
+- 两个人同时卖同一规格时，后提交的人会看到库存不足，或提示「库存刚被别人改过，请再提交」
+- 首页底部可以清空当前店数据；最近一次清空可免费恢复，更早的清空记录留在云端
 
 ## 开发约定
 
@@ -60,7 +71,8 @@ npm run test:ui
 - 记账要自洽，不要把行业习惯写成限制，见 [docs/accounting-vs-policy.md](docs/accounting-vs-policy.md)
 - 待加工 / 分规格 / 退货 / 改规格，见 [docs/blank-process.md](docs/blank-process.md)
 - 操作界面字号、点击区域和密度规则，见 [docs/ui-scale.md](docs/ui-scale.md)
+- 云函数记账、多店隔离、环境 ID，见 [docs/cloud-ledger.md](docs/cloud-ledger.md)
 
 ## 刻意没做的
 
-多人同步、云开发、登录、扫码、供应商、盘点、多仓库。
+离线开单队列、邀请码、手机号登录、角色权限矩阵、扫码、供应商、盘点、多仓库、把流水拆成可分页集合。

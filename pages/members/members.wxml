@@ -1,0 +1,35 @@
+<view class="page">
+  <view class="card">
+    <view class="field-label">我的 openid</view>
+    <view class="muted">店员把这一串发给老板，老板粘贴到下面即可进店。没有邀请码。</view>
+    <view class="openid" selectable="true">{{openid || '加载中…'}}</view>
+    <button class="btn-ghost copy-btn" bindtap="copyOpenid">复制 openid</button>
+  </view>
+
+  <view class="section-title">
+    <text>{{shopName || '本店'}}成员</text>
+  </view>
+  <view class="card member-card" wx:for="{{members}}" wx:key="id">
+    <view>
+      <view class="item-name">{{item.openid}}</view>
+      <view class="muted">{{item.roleText}}<block wx:if="{{item.isMe}}"> · 我</block></view>
+    </view>
+    <button
+      wx:if="{{isOwner && !item.isMe}}"
+      class="btn-danger mini"
+      data-openid="{{item.openid}}"
+      bindtap="removeMember"
+    >移出</button>
+  </view>
+
+  <view wx:if="{{isOwner}}" class="card">
+    <view class="field">
+      <view class="field-label">添加店员</view>
+      <input class="field-input" value="{{newOpenid}}" bindinput="onNewOpenid" placeholder="粘贴店员的 openid" />
+    </view>
+    <button class="btn-primary" bindtap="addMember">加入白名单</button>
+  </view>
+  <view wx:else class="card quiet">
+    <view class="muted">只有店主能加减成员。</view>
+  </view>
+</view>

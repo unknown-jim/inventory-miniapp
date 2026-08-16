@@ -2,7 +2,12 @@ App({
   globalData: {
     selectedProductId: '',
     selectedCustomerId: '',
-    pendingInventoryFilter: ''
+    pendingInventoryFilter: '',
+    cloudInit: null
+  },
+  onLaunch() {
+    const store = require('./utils/store')
+    this.globalData.cloudInit = store.initCloud()
   },
   setSelectedProduct(id) {
     this.globalData.selectedProductId = id || ''

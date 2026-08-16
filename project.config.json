@@ -19,6 +19,14 @@
         "value": "docs"
       },
       {
+        "type": "folder",
+        "value": "cloudfunctions"
+      },
+      {
+        "type": "folder",
+        "value": "scripts"
+      },
+      {
         "type": "file",
         "value": "README.md"
       },
@@ -51,6 +59,14 @@
       {
         "type": "file",
         "value": "utils/store.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/cloud-config.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/ledger-apply.js"
       },
       {
         "type": "file",
@@ -119,6 +135,7 @@
     "disableSWC": true
   },
   "compileType": "miniprogram",
+  "cloudfunctionRoot": "cloudfunctions/",
   "libVersion": "3.8.0",
   "appid": "wx1c68fb1f642da976",
   "projectname": "inventory-miniapp",

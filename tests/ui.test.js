@@ -66,11 +66,18 @@ async function textOf(page, selector) {
 }
 
 async function resetStorage(miniProgram) {
+  // 注入内存账本：同一套 inventory.js，不连真实云。
   await miniProgram.evaluate(function () {
+    wx.setStorageSync('inv_test_memory_ledger', true)
+    wx.setStorageSync('inv_shop_id', 'ui-test-shop')
+    wx.setStorageSync('inv_shop_name', '测试店')
     wx.setStorageSync('inv_products', [])
     wx.setStorageSync('inv_records', [])
     wx.setStorageSync('inv_customers', [])
     wx.setStorageSync('inv_skus', [])
+    wx.setStorageSync('inv_categories', [])
+    wx.setStorageSync('inv_revision', 0)
+    wx.setStorageSync('inv_local_snapshot_done', true)
   })
 }
 
