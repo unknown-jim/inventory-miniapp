@@ -293,7 +293,7 @@ Page({
   openSlip() {
     try {
       const record = store.getRecord(this.data.id)
-      const slipView = util.withSlipViewFromRecord(store.getRecords(), record)
+      const slipView = util.withSlipViewFromRecord(store.getRecords(), record, store.getProducts())
       this.slipImagePath = ''
       this.setData({
         showSlip: true,

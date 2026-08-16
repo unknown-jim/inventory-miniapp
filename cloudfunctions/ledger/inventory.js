@@ -44,6 +44,32 @@ function specText(color, size) {
   return parts.join(' · ')
 }
 
+function specParts(item, product) {
+  const parts = []
+  const axis1 = String(item && item.color || '').trim()
+  const axis2 = String(item && item.size || '').trim()
+  if (axis1) {
+    parts.push({
+      name: product ? specAxis1Name(product) : '',
+      value: axis1
+    })
+  }
+  if (axis2) {
+    parts.push({
+      name: product ? specAxis2Name(product) : '',
+      value: axis2
+    })
+  }
+  return parts
+}
+
+function specLabelText(parts) {
+  return (parts || []).map(function (part) {
+    if (part.name) return part.name + ' ' + part.value
+    return part.value
+  }).join(' · ')
+}
+
 function productHasSpecs(product) {
   return !!(product && ((product.colors && product.colors.length) || (product.sizes && product.sizes.length)))
 }
@@ -2228,6 +2254,8 @@ module.exports = {
   uniqueSpecs: uniqueSpecs,
   specKey: specKey,
   specText: specText,
+  specParts: specParts,
+  specLabelText: specLabelText,
   productHasSpecs: productHasSpecs,
   specAxis1Name: specAxis1Name,
   specAxis2Name: specAxis2Name,
