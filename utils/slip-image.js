@@ -1,25 +1,36 @@
-const WIDTH = 750
-const PAD = 48
+const WIDTH = 1240
+const PAD = 56
+const COL = {
+  seq: 80,
+  qty: 120,
+  price: 160,
+  amount: 176
+}
 
 const COLORS = {
   bg: '#FFFFFF',
-  kicker: '#0F766E',
-  title: '#134E4A',
-  muted: '#64748B',
-  value: '#134E4A',
-  line: '#E2E8F0',
-  debt: '#C2410C'
+  title: '#111827',
+  muted: '#6B7280',
+  value: '#1F2937',
+  line: '#4B5563',
+  header: '#F3F4F6',
+  total: '#FAFAFA',
+  debt: '#C2410C',
+  ok: '#0F766E'
 }
 
 const FONT = {
-  kicker: '600 22px sans-serif',
-  title: '700 40px sans-serif',
+  kicker: '22px sans-serif',
+  title: '700 44px sans-serif',
   meta: '22px sans-serif',
-  name: '600 28px sans-serif',
-  muted: '22px sans-serif',
-  value: '600 28px sans-serif',
-  amount: '700 36px sans-serif',
-  debt: '700 32px sans-serif'
+  value: '600 24px sans-serif',
+  head: '600 22px sans-serif',
+  name: '24px sans-serif',
+  spec: '20px sans-serif',
+  num: '24px sans-serif',
+  total: '700 26px sans-serif',
+  debt: '700 26px sans-serif',
+  sign: '22px sans-serif'
 }
 
 function parseFontSize(font) {
@@ -55,6 +66,10 @@ function wrapText(text, maxWidth, measure) {
   return lines
 }
 
+function textTop(y, rowH, font) {
+  return y + (rowH - parseFontSize(font)) / 2
+}
+
 function pushText(cmds, text, x, y, font, color, align) {
   cmds.push({
     type: 'text',
@@ -67,105 +82,236 @@ function pushText(cmds, text, x, y, font, color, align) {
   })
 }
 
-function pushDash(cmds, y) {
+function pushRect(cmds, x, y, w, h, fill) {
+  cmds.push({ type: 'rect', x: x, y: y, w: w, h: h, fill: fill })
+}
+
+function pushLine(cmds, x1, y1, x2, y2, width) {
   cmds.push({
-    type: 'dash',
-    y: y,
-    x1: PAD,
-    x2: WIDTH - PAD
+    type: 'line',
+    x1: x1,
+    y1: y1,
+    x2: x2,
+    y2: y2,
+    width: width || 1,
+    color: COLORS.line
   })
 }
 
-function pushRow(cmds, label, value, y, measure) {
-  const labelWidth = 132
-  const valueWidth = WIDTH - PAD * 2 - labelWidth
-  const lines = wrapText(value, valueWidth, function (text) {
+function pushStroke(cmds, x, y, w, h, width) {
+  cmds.push({
+    type: 'stroke',
+    x: x,
+    y: y,
+    w: w,
+    h: h,
+    width: width || 1,
+    color: COLORS.line
+  })
+}
+
+function layoutLabeled(cmds, label, value, x, y, maxWidth, measure) {
+  const prefix = label + '：'
+  const prefixW = measure(prefix, FONT.meta)
+  const inner = Math.max(48, maxWidth - prefixW)
+  const lines = wrapText(String(value || ''), inner, function (text) {
     return measure(text, FONT.value)
   })
-  pushText(cmds, label, PAD, y, FONT.muted, COLORS.muted, 'left')
+  const lineH = 32
   lines.forEach(function (line, index) {
-    pushText(cmds, line, WIDTH - PAD, y + index * 36, FONT.value, COLORS.value, 'right')
+    const top = y + index * lineH
+    if (index === 0) {
+      pushText(cmds, prefix, x, top, FONT.meta, COLORS.muted)
+    }
+    pushText(cmds, line, x + prefixW, top, FONT.value, COLORS.value)
   })
-  return y + Math.max(44, lines.length * 36 + 8)
+  return y + Math.max(lineH, lines.length * lineH) + 6
+}
+
+function tableColumns() {
+  const contentWidth = WIDTH - PAD * 2
+  const nameW = contentWidth - COL.seq - COL.qty - COL.price - COL.amount
+  const xs = [
+    PAD,
+    PAD + COL.seq,
+    PAD + COL.seq + nameW,
+    PAD + COL.seq + nameW + COL.qty,
+    PAD + COL.seq + nameW + COL.qty + COL.price,
+    WIDTH - PAD
+  ]
+  return { contentWidth: contentWidth, nameW: nameW, xs: xs }
+}
+
+function layoutMeta(cmds, slip, y, measure) {
+  const contentWidth = WIDTH - PAD * 2
+  if (!slip.hasCustomer) {
+    const third = contentWidth / 3
+    layoutLabeled(cmds, '单号', slip.docNo, PAD, y, third, measure)
+    layoutLabeled(cmds, '日期', slip.timeText, PAD + third, y, third, measure)
+    return layoutLabeled(cmds, '结算', slip.payText, PAD + third * 2, y, third, measure) + 12
+  }
+  const colW = (contentWidth - 48) / 2
+  const rightX = PAD + colW + 48
+  let leftY = y
+  let rightY = y
+  leftY = layoutLabeled(cmds, '收货人', slip.customerName, PAD, leftY, colW, measure)
+  if (slip.customerPhone) {
+    leftY = layoutLabeled(cmds, '电话', slip.customerPhone, PAD, leftY, colW, measure)
+  }
+  if (slip.customerAddress) {
+    leftY = layoutLabeled(cmds, '地址', slip.customerAddress, PAD, leftY, colW, measure)
+  }
+  rightY = layoutLabeled(cmds, '单号', slip.docNo, rightX, rightY, colW, measure)
+  rightY = layoutLabeled(cmds, '日期', slip.timeText, rightX, rightY, colW, measure)
+  rightY = layoutLabeled(cmds, '结算', slip.payText, rightX, rightY, colW, measure)
+  return Math.max(leftY, rightY) + 12
+}
+
+function layoutTable(cmds, slip, y, measure) {
+  const padX = 12
+  const headerH = 46
+  const totalH = 50
+  const nameLineH = 30
+  const specLineH = 24
+  const cols = tableColumns()
+  const xs = cols.xs
+  const rows = (slip.lines || []).map(function (line) {
+    const inner = cols.nameW - padX * 2
+    const names = wrapText(line.productName, inner, function (text) {
+      return measure(text, FONT.name)
+    })
+    const specs = line.specText
+      ? wrapText(line.specText, inner, function (text) {
+        return measure(text, FONT.spec)
+      })
+      : []
+    const blockH = names.length * nameLineH + specs.length * specLineH
+    return {
+      line: line,
+      names: names,
+      specs: specs,
+      height: Math.max(52, 12 + blockH + 12)
+    }
+  })
+  const tableTop = y
+  const headerY = y
+  y += headerH
+  rows.forEach(function (row) {
+    row.y = y
+    y += row.height
+  })
+  const totalY = y
+  y += totalH
+  const tableH = y - tableTop
+
+  pushRect(cmds, PAD, headerY, cols.contentWidth, headerH, COLORS.header)
+  pushRect(cmds, PAD, totalY, cols.contentWidth, totalH, COLORS.total)
+  pushStroke(cmds, PAD, tableTop, cols.contentWidth, tableH, 2)
+  pushLine(cmds, PAD, headerY + headerH, WIDTH - PAD, headerY + headerH, 1)
+  rows.forEach(function (row) {
+    pushLine(cmds, PAD, row.y + row.height, WIDTH - PAD, row.y + row.height, 1)
+  })
+  xs.slice(1, -1).forEach(function (x) {
+    pushLine(cmds, x, tableTop, x, y, 1)
+  })
+
+  const heads = [
+    { text: '序号', x: (xs[0] + xs[1]) / 2, align: 'center' },
+    { text: '品名', x: xs[1] + padX, align: 'left' },
+    { text: '数量', x: (xs[2] + xs[3]) / 2, align: 'center' },
+    { text: '单价', x: xs[4] - padX, align: 'right' },
+    { text: '金额', x: xs[5] - padX, align: 'right' }
+  ]
+  heads.forEach(function (head) {
+    pushText(cmds, head.text, head.x, textTop(headerY, headerH, FONT.head), FONT.head, COLORS.value, head.align)
+  })
+
+  rows.forEach(function (row, index) {
+    const line = row.line
+    const blockH = row.names.length * nameLineH + row.specs.length * specLineH
+    let nameY = row.y + (row.height - blockH) / 2
+    pushText(cmds, String(index + 1), (xs[0] + xs[1]) / 2, textTop(row.y, row.height, FONT.num), FONT.num, COLORS.value, 'center')
+    row.names.forEach(function (name) {
+      pushText(cmds, name, xs[1] + padX, nameY, FONT.name, COLORS.value)
+      nameY += nameLineH
+    })
+    row.specs.forEach(function (spec) {
+      pushText(cmds, spec, xs[1] + padX, nameY, FONT.spec, COLORS.muted)
+      nameY += specLineH
+    })
+    pushText(cmds, line.qtyText, (xs[2] + xs[3]) / 2, textTop(row.y, row.height, FONT.num), FONT.num, COLORS.value, 'center')
+    pushText(cmds, line.priceText, xs[4] - padX, textTop(row.y, row.height, FONT.num), FONT.num, COLORS.value, 'right')
+    pushText(cmds, line.amountText, xs[5] - padX, textTop(row.y, row.height, FONT.num), FONT.num, COLORS.value, 'right')
+  })
+
+  pushText(cmds, '合计', xs[1] + padX, textTop(totalY, totalH, FONT.total), FONT.total, COLORS.title)
+  pushText(cmds, '¥' + slip.amountText, xs[5] - padX, textTop(totalY, totalH, FONT.total), FONT.total, COLORS.title, 'right')
+  return y + 18
+}
+
+function layoutDebt(cmds, slip, y) {
+  const contentWidth = WIDTH - PAD * 2
+  const colW = contentWidth / 3
+  const headH = 40
+  const valH = 48
+  const top = y
+  const height = headH + valH
+  pushRect(cmds, PAD, top, contentWidth, headH, COLORS.header)
+  pushStroke(cmds, PAD, top, contentWidth, height, 1)
+  pushLine(cmds, PAD, top + headH, WIDTH - PAD, top + headH, 1)
+  pushLine(cmds, PAD + colW, top, PAD + colW, top + height, 1)
+  pushLine(cmds, PAD + colW * 2, top, PAD + colW * 2, top + height, 1)
+  const labels = ['之前欠款', '本次欠款', '累计欠款']
+  const values = [
+    '¥' + slip.prevDebtText,
+    '¥' + slip.thisDebtText,
+    '¥' + slip.receivableText
+  ]
+  const valueColors = [
+    COLORS.value,
+    COLORS.value,
+    slip.hasDebt ? COLORS.debt : COLORS.ok
+  ]
+  labels.forEach(function (label, index) {
+    const cx = PAD + colW * index + colW / 2
+    pushText(cmds, label, cx, textTop(top, headH, FONT.head), FONT.head, COLORS.muted, 'center')
+    pushText(cmds, values[index], cx, textTop(top + headH, valH, FONT.debt), FONT.debt, valueColors[index], 'center')
+  })
+  return top + height + 16
+}
+
+function layoutSign(cmds, y) {
+  pushText(cmds, '客户签收：', PAD, y, FONT.sign, COLORS.muted)
+  const lineX = PAD + 110
+  pushLine(cmds, lineX, y + 22, lineX + 320, y + 22, 1)
+  return y + 40
 }
 
 function layoutSlip(slip, measure) {
+  // 预览弹层仍是手机竖向卡片；导出画成表格单据，方便发给客户或打印。
   const measureFn = measure || estimateWidth
   const cmds = []
-  const right = WIDTH - PAD
-  const contentWidth = WIDTH - PAD * 2
-  const amountCol = 200
-  const nameWidth = contentWidth - amountCol
   let y = PAD
 
-  pushText(cmds, '请核对后签收', PAD, y, FONT.kicker, COLORS.kicker)
+  pushText(cmds, '送货单', WIDTH / 2, y, FONT.title, COLORS.title, 'center')
+  y += 54
+  pushText(cmds, '请核对后签收', WIDTH / 2, y, FONT.kicker, COLORS.muted, 'center')
   y += 36
-  pushText(cmds, '送货单', PAD, y, FONT.title, COLORS.title)
-  y += 58
-  pushText(cmds, '单号 ' + (slip.docNo || ''), PAD, y, FONT.meta, COLORS.muted)
-  pushText(cmds, slip.timeText || '', right, y, FONT.meta, COLORS.muted, 'right')
-  y += 40
-  pushDash(cmds, y)
-  y += 20
+  pushLine(cmds, PAD, y, WIDTH - PAD, y, 2)
+  y += 5
+  pushLine(cmds, PAD, y, WIDTH - PAD, y, 1)
+  y += 22
 
-  if (slip.hasCustomer) {
-    y = pushRow(cmds, '收货人', slip.customerName, y, measureFn)
-    if (slip.customerPhone) {
-      y = pushRow(cmds, '电话', slip.customerPhone, y, measureFn)
-    }
-    if (slip.customerAddress) {
-      y = pushRow(cmds, '地址', slip.customerAddress, y, measureFn)
-    }
-    y += 8
-    pushDash(cmds, y)
-    y += 16
-  }
-
-  ;(slip.lines || []).forEach(function (line) {
-    const names = wrapText(line.productName, nameWidth, function (text) {
-      return measureFn(text, FONT.name)
-    })
-    names.forEach(function (name, index) {
-      pushText(cmds, name, PAD, y, FONT.name, COLORS.value)
-      if (index === 0) {
-        pushText(cmds, '¥' + line.amountText, right, y, FONT.name, COLORS.value, 'right')
-      }
-      y += 36
-    })
-    const sub = (line.specText ? line.specText + ' · ' : '') + line.qtyText + ' 件 × ¥' + line.priceText
-    wrapText(sub, nameWidth, function (text) {
-      return measureFn(text, FONT.muted)
-    }).forEach(function (row) {
-      pushText(cmds, row, PAD, y, FONT.muted, COLORS.muted)
-      y += 30
-    })
-    y += 10
-  })
-
-  pushDash(cmds, y)
-  y += 12
+  y = layoutMeta(cmds, slip, y, measureFn)
+  y = layoutTable(cmds, slip, y, measureFn)
 
   if (slip.remark) {
-    y = pushRow(cmds, '备注', slip.remark, y, measureFn)
+    y = layoutLabeled(cmds, '备注', slip.remark, PAD, y, WIDTH - PAD * 2, measureFn) + 8
   }
-  y = pushRow(cmds, '结算', slip.payText, y, measureFn)
-  y += 8
-  pushDash(cmds, y)
-  y += 24
-  pushText(cmds, '金额', PAD, y, FONT.muted, COLORS.muted)
-  pushText(cmds, '¥' + slip.amountText, right, y, FONT.amount, COLORS.title, 'right')
-  y += 52
-
   if (slip.hasCustomer) {
-    y = pushRow(cmds, '之前欠款', '¥' + slip.prevDebtText, y, measureFn)
-    y = pushRow(cmds, '本次欠款', '¥' + slip.thisDebtText, y, measureFn)
-    y += 8
-    pushDash(cmds, y)
-    y += 20
-    pushText(cmds, '累计欠款', PAD, y, FONT.muted, COLORS.muted)
-    pushText(cmds, '¥' + slip.receivableText, right, y, FONT.debt, slip.hasDebt ? COLORS.debt : COLORS.kicker, 'right')
-    y += 48
+    y = layoutDebt(cmds, slip, y)
   }
+  y = layoutSign(cmds, y + 8)
 
   return {
     width: WIDTH,
@@ -184,14 +330,24 @@ function drawSlip(ctx, layout) {
       ctx.fillStyle = cmd.color
       ctx.textAlign = cmd.align
       ctx.fillText(cmd.text, cmd.x, cmd.y)
-    } else if (cmd.type === 'dash') {
+    } else if (cmd.type === 'rect') {
+      ctx.fillStyle = cmd.fill
+      ctx.fillRect(cmd.x, cmd.y, cmd.w, cmd.h)
+    } else if (cmd.type === 'stroke') {
       ctx.save()
-      ctx.strokeStyle = COLORS.line
-      ctx.lineWidth = 2
-      ctx.setLineDash([8, 8])
+      ctx.strokeStyle = cmd.color
+      ctx.lineWidth = cmd.width || 1
+      if (ctx.setLineDash) ctx.setLineDash([])
+      ctx.strokeRect(cmd.x, cmd.y, cmd.w, cmd.h)
+      ctx.restore()
+    } else if (cmd.type === 'line') {
+      ctx.save()
+      ctx.strokeStyle = cmd.color
+      ctx.lineWidth = cmd.width || 1
+      if (ctx.setLineDash) ctx.setLineDash([])
       ctx.beginPath()
-      ctx.moveTo(cmd.x1, cmd.y)
-      ctx.lineTo(cmd.x2, cmd.y)
+      ctx.moveTo(cmd.x1, cmd.y1)
+      ctx.lineTo(cmd.x2, cmd.y2)
       ctx.stroke()
       ctx.restore()
     }
