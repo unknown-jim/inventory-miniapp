@@ -1,4 +1,4 @@
-<view class="page {{uiScaleClass}}">
+<view class="page">
   <input
     class="search"
     placeholder="搜索名称 / 货号 / 条码"
@@ -7,7 +7,7 @@
   />
 
   <view class="toolbar">
-    <view class="filter {{onlyAlert ? 'on' : ''}}" bindtap="toggleAlert">
+    <view class="chip {{onlyAlert ? 'low' : ''}}" bindtap="toggleAlert">
       {{onlyAlert ? '只看预警' : '全部库存'}} · 预警 {{alertCount}}
     </view>
     <text class="link" bindtap="goRecords">流水</text>

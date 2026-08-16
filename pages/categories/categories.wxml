@@ -1,4 +1,4 @@
-<view class="page {{uiScaleClass}}">
+<view class="page">
   <input
     class="search"
     placeholder="搜索种类 / 商品名"

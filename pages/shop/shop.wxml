@@ -1,4 +1,4 @@
-<view class="page {{uiScaleClass}}">
+<view class="page">
   <view wx:if="{{!configured}}" class="card empty">
     <view class="empty-title">还不能记账</view>
     <view class="muted">{{blockedMessage}}</view>

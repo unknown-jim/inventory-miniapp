@@ -59,7 +59,7 @@ npm run test:ui
 - 账在云上按店隔离。换手机要用同一微信、并被加进该店白名单
 - 本机若还有旧版本地账，建店后可在店铺页上传一次到当前店
 - 两个人同时卖同一规格时，后提交的人会看到库存不足，或提示「库存刚被别人改过，请再提交」
-- 首页底部可以改显示大小（标准 / 大 / 更大），也可以清空当前店数据；最近一次清空可免费恢复，更早的清空记录留在云端
+- 首页底部可以清空当前店数据；最近一次清空可免费恢复，更早的清空记录留在云端
 
 ## 开发约定
 
@@ -70,7 +70,7 @@ npm run test:ui
 - 代码注入、用时注入、分包时机和上传前扫描，见 [docs/code-injection.md](docs/code-injection.md)
 - 记账要自洽，不要把行业习惯写成限制，见 [docs/accounting-vs-policy.md](docs/accounting-vs-policy.md)
 - 待加工 / 分规格 / 退货 / 改规格，见 [docs/blank-process.md](docs/blank-process.md)
-- 操作界面字号和点击区域、看板显示大小，见 [docs/ui-scale.md](docs/ui-scale.md)
+- 操作界面字号、点击区域和密度规则，见 [docs/ui-scale.md](docs/ui-scale.md)
 - 云函数记账、多店隔离、环境 ID，见 [docs/cloud-ledger.md](docs/cloud-ledger.md)
 
 ## 刻意没做的

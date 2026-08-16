@@ -1,4 +1,4 @@
-<view class="page {{uiScaleClass}}">
+<view class="page">
   <input
     class="search"
     placeholder="搜索名称 / 电话 / 地址"
@@ -23,9 +23,9 @@
       <view class="price-row">累计销售 ¥{{item.saleAmountText}}</view>
       <view class="price-row debt" wx:if="{{item.hasDebt}}">欠款 ¥{{item.receivableText}}</view>
     </view>
-    <view class="goods-actions">
-      <button wx:if="{{item.hasDebt}}" class="btn-ghost mini js-collect" data-id="{{item.id}}" catchtap="goCollect">收款</button>
-      <button class="btn-ghost mini warm" data-id="{{item.id}}" catchtap="goSale">去销售</button>
+    <view class="action-strip">
+      <button wx:if="{{item.hasDebt}}" class="btn-ghost js-collect" data-id="{{item.id}}" catchtap="goCollect">收款</button>
+      <button class="btn-ghost warm" data-id="{{item.id}}" catchtap="goSale">去销售</button>
     </view>
   </view>
 

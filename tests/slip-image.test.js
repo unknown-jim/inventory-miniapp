@@ -10,6 +10,7 @@ function sampleSlip(overrides) {
       id: 'l1',
       productName: '短袖 T恤',
       specText: '黑色 · M',
+      sku: 'TS-005',
       qtyText: '2',
       priceText: '59.00',
       amountText: '118.00'
@@ -49,17 +50,54 @@ assert.ok(wrapped.length > 1)
 const slip = sampleSlip()
 const layout = slipImage.layoutSlip(slip)
 const text = textsOf(layout)
+assert.strictEqual(layout.width, 1760)
 assert.ok(layout.height > 400)
+assert.ok(layout.width > layout.height)
 assert.ok(text.indexOf('送货单') >= 0)
 assert.ok(text.indexOf('SH20260815-AB12') >= 0)
 assert.ok(text.indexOf('张三超市') >= 0)
 assert.ok(text.indexOf('黑色 · M') >= 0)
+assert.ok(text.indexOf('TS-005') >= 0)
 assert.ok(text.indexOf('赊账') >= 0)
 assert.ok(text.indexOf('门口放') >= 0)
 assert.ok(text.indexOf('¥118.00') >= 0)
+assert.ok(text.indexOf('序号') >= 0)
+assert.ok(text.indexOf('货号') >= 0)
+assert.ok(text.indexOf('品名') >= 0)
+assert.ok(text.indexOf('规格') >= 0)
+assert.ok(text.indexOf('数量') >= 0)
+assert.ok(text.indexOf('单价') >= 0)
+assert.ok(text.indexOf('金额') >= 0)
+assert.ok(text.indexOf('合计') >= 0)
+assert.ok(text.indexOf('客户签收') >= 0)
+assert.ok(text.indexOf('件 ×') < 0)
+assert.ok(text.indexOf('未填') < 0)
 assert.ok(text.indexOf('毛利') < 0)
 assert.ok(text.indexOf('进价') < 0)
 assert.ok(text.indexOf('内部备注') < 0)
+
+const drawn = []
+slipImage.drawSlip({
+  fillStyle: '',
+  font: '',
+  textAlign: '',
+  textBaseline: '',
+  strokeStyle: '',
+  lineWidth: 1,
+  fillRect: function () { drawn.push('fillRect') },
+  fillText: function () { drawn.push('fillText') },
+  strokeRect: function () { drawn.push('strokeRect') },
+  beginPath: function () {},
+  moveTo: function () {},
+  lineTo: function () {},
+  stroke: function () { drawn.push('stroke') },
+  save: function () {},
+  restore: function () {},
+  setLineDash: function () {}
+}, layout)
+assert.ok(drawn.indexOf('fillText') >= 0)
+assert.ok(drawn.indexOf('strokeRect') >= 0)
+assert.ok(drawn.indexOf('stroke') >= 0)
 
 const walkin = slipImage.layoutSlip(sampleSlip({
   hasCustomer: false,
@@ -94,6 +132,7 @@ const fromOrder = util.withSlipView({
   records: [{
     id: 'r1',
     productName: '纯牛奶 250ml',
+    sku: 'MK-001',
     qty: 2,
     unitPrice: 4.5,
     amount: 9,
@@ -103,6 +142,25 @@ const fromOrder = util.withSlipView({
 const orderLayout = slipImage.layoutSlip(fromOrder)
 assert.ok(textsOf(orderLayout).indexOf('李记便利') >= 0)
 assert.ok(textsOf(orderLayout).indexOf('送货单') >= 0)
+assert.ok(textsOf(orderLayout).indexOf('MK-001') >= 0)
+assert.strictEqual(fromOrder.lines[0].sku, 'MK-001')
+
+const blankSku = util.withSlipView({
+  id: 'order-blank-sku',
+  createdAt: new Date('2026-08-15T12:00:00').getTime(),
+  amount: 9,
+  payType: 'cash',
+  records: [{
+    id: 'r-blank',
+    productName: '纯牛奶 250ml',
+    qty: 2,
+    unitPrice: 4.5,
+    amount: 9,
+    createdAt: new Date('2026-08-15T12:00:00').getTime()
+  }]
+}, 0)
+assert.strictEqual(blankSku.lines[0].sku, '')
+assert.ok(textsOf(slipImage.layoutSlip(blankSku)).indexOf('未填') < 0)
 
 const reprintRecords = [
   {

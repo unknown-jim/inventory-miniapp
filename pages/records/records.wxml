@@ -1,30 +1,30 @@
-<view class="page {{uiScaleClass}}">
-  <view class="card summary">
-    <view class="sum">
+<view class="page">
+  <view class="card stat-grid">
+    <view class="stat">
       <view class="muted">进货金额</view>
-      <view class="sum-num">¥{{purchaseAmount}}</view>
+      <view class="stat-num">¥{{purchaseAmount}}</view>
     </view>
-    <view class="sum">
+    <view class="stat">
       <view class="muted">销售金额</view>
-      <view class="sum-num warm">¥{{salesAmount}}</view>
+      <view class="stat-num warm">¥{{salesAmount}}</view>
     </view>
-    <view class="sum">
+    <view class="stat">
       <view class="muted">销售毛利</view>
-      <view class="sum-num">¥{{profit}}</view>
+      <view class="stat-num">¥{{profit}}</view>
     </view>
-    <view class="sum">
+    <view class="stat">
       <view class="muted">客户欠款</view>
-      <view class="sum-num warm">¥{{receivable}}</view>
+      <view class="stat-num warm">¥{{receivable}}</view>
     </view>
   </view>
 
-  <view class="tabs">
-    <view class="tab {{type === 'all' ? 'on' : ''}}" data-type="all" bindtap="setType">全部 {{count}}</view>
-    <view class="tab {{type === 'in' ? 'on' : ''}}" data-type="in" bindtap="setType">进货</view>
-    <view class="tab {{type === 'out' ? 'on' : ''}}" data-type="out" bindtap="setType">销售</view>
-    <view class="tab {{type === 'pay' ? 'on' : ''}}" data-type="pay" bindtap="setType">收款</view>
-    <view class="tab {{type === 'return' ? 'on' : ''}}" data-type="return" bindtap="setType">退货</view>
-    <view class="tab {{type === 'convert' ? 'on' : ''}}" data-type="convert" bindtap="setType">改规格</view>
+  <view class="chips">
+    <view class="chip {{type === 'all' ? 'on' : ''}}" data-type="all" bindtap="setType">全部 {{count}}</view>
+    <view class="chip {{type === 'in' ? 'on' : ''}}" data-type="in" bindtap="setType">进货</view>
+    <view class="chip {{type === 'out' ? 'on' : ''}}" data-type="out" bindtap="setType">销售</view>
+    <view class="chip {{type === 'pay' ? 'on' : ''}}" data-type="pay" bindtap="setType">收款</view>
+    <view class="chip {{type === 'return' ? 'on' : ''}}" data-type="return" bindtap="setType">退货</view>
+    <view class="chip {{type === 'convert' ? 'on' : ''}}" data-type="convert" bindtap="setType">改规格</view>
   </view>
 
   <view wx:if="{{!list.length}}" class="card empty">还没有流水</view>

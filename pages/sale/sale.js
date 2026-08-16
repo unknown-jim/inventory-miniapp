@@ -2,10 +2,8 @@ const store = require('../../utils/store')
 const util = require('../../utils/util')
 const inventory = require('../../utils/inventory')
 const slipActions = require('../../utils/slip-actions')
-const uiScale = require('../../utils/ui-scale')
 
 Page({
-  behaviors: [uiScale.behavior],
   data: {
     products: [],
     skus: [],

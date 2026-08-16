@@ -16,15 +16,6 @@
   margin-bottom: 8rpx;
 }
 
-.field-row {
-  display: flex;
-  gap: 16rpx;
-}
-
-.half {
-  flex: 1;
-}
-
 .total,
 .sheet-item {
   display: flex;

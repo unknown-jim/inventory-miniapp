@@ -1,12 +1,3 @@
-.field-row {
-  display: flex;
-  gap: 16rpx;
-}
-
-.half {
-  flex: 1;
-}
-
 .margin-box {
   display: flex;
   justify-content: space-between;
@@ -75,27 +66,6 @@
   line-height: var(--tap-md);
 }
 
-.pay-tabs {
-  display: flex;
-  gap: 12rpx;
-  margin-bottom: 12rpx;
-}
-
-.pay-tab {
-  flex: 1;
-  height: var(--tap-sm);
-  line-height: var(--tap-sm);
-  text-align: center;
-  background: #F8FAF9;
-  border-radius: 14rpx;
-  color: #64748B;
-  font-size: var(--fs-md);
-}
-
-.kind-tabs .pay-tab {
-  font-size: var(--fs-sm);
-}
-
 .field-head {
   display: flex;
   justify-content: space-between;
@@ -115,12 +85,6 @@
 .name-chips {
   margin-top: 12rpx;
   margin-bottom: 0;
-}
-
-.pay-tab.on {
-  background: #0F766E;
-  color: #FFFFFF;
-  font-weight: 600;
 }
 
 .sku-card {

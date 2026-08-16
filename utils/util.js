@@ -59,7 +59,7 @@ function withSlipView(order, receivable) {
         id: item.id,
         productName: item.productName,
         specText: inventory.specText(item.color, item.size),
-        sku: item.sku || '未填',
+        sku: item.sku || '',
         qtyText: String(item.qty),
         priceText: money(item.unitPrice),
         amountText: money(item.amount)

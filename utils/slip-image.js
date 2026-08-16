@@ -1,25 +1,32 @@
-const WIDTH = 750
+const WIDTH = 1760
 const PAD = 48
+const LINE_H = 28
+const CELL_PAD_X = 12
+const CELL_PAD_Y = 10
 
 const COLORS = {
   bg: '#FFFFFF',
-  kicker: '#0F766E',
-  title: '#134E4A',
-  muted: '#64748B',
-  value: '#134E4A',
-  line: '#E2E8F0',
-  debt: '#C2410C'
+  title: '#111827',
+  muted: '#6B7280',
+  value: '#1F2937',
+  line: '#4B5563',
+  header: '#F3F4F6',
+  total: '#FAFAFA',
+  debt: '#C2410C',
+  ok: '#0F766E'
 }
 
 const FONT = {
-  kicker: '600 22px sans-serif',
-  title: '700 40px sans-serif',
+  kicker: '22px sans-serif',
+  title: '700 44px sans-serif',
   meta: '22px sans-serif',
-  name: '600 28px sans-serif',
-  muted: '22px sans-serif',
-  value: '600 28px sans-serif',
-  amount: '700 36px sans-serif',
-  debt: '700 32px sans-serif'
+  value: '600 24px sans-serif',
+  head: '600 22px sans-serif',
+  name: '24px sans-serif',
+  num: '24px sans-serif',
+  total: '700 26px sans-serif',
+  debt: '700 26px sans-serif',
+  sign: '22px sans-serif'
 }
 
 function parseFontSize(font) {
@@ -55,6 +62,10 @@ function wrapText(text, maxWidth, measure) {
   return lines
 }
 
+function textTop(y, rowH, font) {
+  return y + (rowH - parseFontSize(font)) / 2
+}
+
 function pushText(cmds, text, x, y, font, color, align) {
   cmds.push({
     type: 'text',
@@ -67,105 +78,265 @@ function pushText(cmds, text, x, y, font, color, align) {
   })
 }
 
-function pushDash(cmds, y) {
+function pushRect(cmds, x, y, w, h, fill) {
+  cmds.push({ type: 'rect', x: x, y: y, w: w, h: h, fill: fill })
+}
+
+function pushLine(cmds, x1, y1, x2, y2, width) {
   cmds.push({
-    type: 'dash',
-    y: y,
-    x1: PAD,
-    x2: WIDTH - PAD
+    type: 'line',
+    x1: x1,
+    y1: y1,
+    x2: x2,
+    y2: y2,
+    width: width || 1,
+    color: COLORS.line
   })
 }
 
-function pushRow(cmds, label, value, y, measure) {
-  const labelWidth = 132
-  const valueWidth = WIDTH - PAD * 2 - labelWidth
-  const lines = wrapText(value, valueWidth, function (text) {
+function pushStroke(cmds, x, y, w, h, width) {
+  cmds.push({
+    type: 'stroke',
+    x: x,
+    y: y,
+    w: w,
+    h: h,
+    width: width || 1,
+    color: COLORS.line
+  })
+}
+
+function skuText(line) {
+  const sku = line && line.sku ? String(line.sku) : ''
+  return sku === '未填' ? '' : sku
+}
+
+function qtyTotalText(lines) {
+  const total = (lines || []).reduce(function (sum, line) {
+    const n = Number(line.qtyText)
+    return sum + (isFinite(n) ? n : 0)
+  }, 0)
+  if (Math.round(total) === total) return String(total)
+  return String(Math.round(total * 100) / 100)
+}
+
+function layoutLabeled(cmds, label, value, x, y, maxWidth, measure) {
+  const prefix = label + '：'
+  const prefixW = measure(prefix, FONT.meta)
+  const inner = Math.max(48, maxWidth - prefixW)
+  const lines = wrapText(String(value || ''), inner, function (text) {
     return measure(text, FONT.value)
   })
-  pushText(cmds, label, PAD, y, FONT.muted, COLORS.muted, 'left')
+  const lineH = 32
   lines.forEach(function (line, index) {
-    pushText(cmds, line, WIDTH - PAD, y + index * 36, FONT.value, COLORS.value, 'right')
+    const top = y + index * lineH
+    if (index === 0) {
+      pushText(cmds, prefix, x, top, FONT.meta, COLORS.muted)
+    }
+    pushText(cmds, line, x + prefixW, top, FONT.value, COLORS.value)
   })
-  return y + Math.max(44, lines.length * 36 + 8)
+  return y + Math.max(lineH, lines.length * lineH) + 6
+}
+
+function tableColumns() {
+  const contentWidth = WIDTH - PAD * 2
+  const defs = [
+    { key: 'seq', title: '序号', width: 68, align: 'center', font: FONT.num },
+    { key: 'sku', title: '货号', width: 200, align: 'left', font: FONT.num },
+    { key: 'name', title: '品名', width: 0, align: 'left', font: FONT.name },
+    { key: 'spec', title: '规格', width: 300, align: 'left', font: FONT.name },
+    { key: 'qty', title: '数量', width: 100, align: 'center', font: FONT.num },
+    { key: 'price', title: '单价', width: 140, align: 'right', font: FONT.num },
+    { key: 'amount', title: '金额', width: 156, align: 'right', font: FONT.num }
+  ]
+  const used = defs.reduce(function (sum, col) {
+    return sum + col.width
+  }, 0)
+  let x = PAD
+  defs.forEach(function (col) {
+    if (!col.width) col.width = contentWidth - used
+    col.x = x
+    x += col.width
+  })
+  return { defs: defs, contentWidth: contentWidth }
+}
+
+function colByKey(cols, key) {
+  return cols.defs.find(function (col) {
+    return col.key === key
+  })
+}
+
+function cellX(col) {
+  if (col.align === 'right') return col.x + col.width - CELL_PAD_X
+  if (col.align === 'center') return col.x + col.width / 2
+  return col.x + CELL_PAD_X
+}
+
+function wrapCell(text, col, measure) {
+  const str = String(text || '')
+  if (!str) return []
+  const inner = Math.max(24, col.width - CELL_PAD_X * 2)
+  return wrapText(str, inner, function (line) {
+    return measure(line, col.font)
+  })
+}
+
+function layoutMeta(cmds, slip, y, measure) {
+  const contentWidth = WIDTH - PAD * 2
+  const gap = 28
+  const colW = (contentWidth - gap * 2) / 3
+  const x2 = PAD + colW + gap
+  const x3 = PAD + (colW + gap) * 2
+  if (!slip.hasCustomer) {
+    layoutLabeled(cmds, '单号', slip.docNo, PAD, y, colW, measure)
+    layoutLabeled(cmds, '日期', slip.timeText, x2, y, colW, measure)
+    return layoutLabeled(cmds, '结算', slip.payText, x3, y, colW, measure) + 8
+  }
+  const row1 = Math.max(
+    layoutLabeled(cmds, '收货人', slip.customerName, PAD, y, colW, measure),
+    layoutLabeled(cmds, '电话', slip.customerPhone, x2, y, colW, measure),
+    layoutLabeled(cmds, '单号', slip.docNo, x3, y, colW, measure)
+  )
+  const row2 = Math.max(
+    layoutLabeled(cmds, '地址', slip.customerAddress, PAD, row1, colW, measure),
+    layoutLabeled(cmds, '结算', slip.payText, x2, row1, colW, measure),
+    layoutLabeled(cmds, '日期', slip.timeText, x3, row1, colW, measure)
+  )
+  return row2 + 8
+}
+
+function layoutTable(cmds, slip, y, measure) {
+  const headerH = 42
+  const totalH = 48
+  const cols = tableColumns()
+  const defs = cols.defs
+  const lines = slip.lines || []
+  const rows = lines.map(function (line, index) {
+    const cells = {
+      seq: [String(index + 1)],
+      sku: wrapCell(skuText(line), colByKey(cols, 'sku'), measure),
+      name: wrapCell(line.productName, colByKey(cols, 'name'), measure),
+      spec: wrapCell(line.specText, colByKey(cols, 'spec'), measure),
+      qty: [line.qtyText],
+      price: [line.priceText],
+      amount: [line.amountText]
+    }
+    const lineCount = defs.reduce(function (max, col) {
+      return Math.max(max, (cells[col.key] || []).length)
+    }, 1)
+    return {
+      cells: cells,
+      height: Math.max(44, CELL_PAD_Y * 2 + lineCount * LINE_H)
+    }
+  })
+  const tableTop = y
+  const headerY = y
+  y += headerH
+  rows.forEach(function (row) {
+    row.y = y
+    y += row.height
+  })
+  const totalY = y
+  y += totalH
+  const tableH = y - tableTop
+  const tableRight = WIDTH - PAD
+
+  pushRect(cmds, PAD, headerY, cols.contentWidth, headerH, COLORS.header)
+  pushRect(cmds, PAD, totalY, cols.contentWidth, totalH, COLORS.total)
+  pushStroke(cmds, PAD, tableTop, cols.contentWidth, tableH, 2)
+  pushLine(cmds, PAD, headerY + headerH, tableRight, headerY + headerH, 1)
+  rows.forEach(function (row) {
+    pushLine(cmds, PAD, row.y + row.height, tableRight, row.y + row.height, 1)
+  })
+  defs.slice(1).forEach(function (col) {
+    pushLine(cmds, col.x, tableTop, col.x, y, 1)
+  })
+
+  defs.forEach(function (col) {
+    pushText(cmds, col.title, cellX(col), textTop(headerY, headerH, FONT.head), FONT.head, COLORS.value, col.align)
+  })
+
+  rows.forEach(function (row) {
+    defs.forEach(function (col) {
+      const texts = row.cells[col.key] || []
+      const blockH = texts.length * LINE_H
+      let ty = row.y + (row.height - blockH) / 2
+      texts.forEach(function (line) {
+        pushText(cmds, line, cellX(col), ty, col.font, COLORS.value, col.align)
+        ty += LINE_H
+      })
+    })
+  })
+
+  const nameCol = colByKey(cols, 'name')
+  const qtyCol = colByKey(cols, 'qty')
+  const amountCol = colByKey(cols, 'amount')
+  pushText(cmds, '合计', cellX(nameCol), textTop(totalY, totalH, FONT.total), FONT.total, COLORS.title, nameCol.align)
+  pushText(cmds, qtyTotalText(lines), cellX(qtyCol), textTop(totalY, totalH, FONT.total), FONT.total, COLORS.title, qtyCol.align)
+  pushText(cmds, '¥' + slip.amountText, cellX(amountCol), textTop(totalY, totalH, FONT.total), FONT.total, COLORS.title, amountCol.align)
+  return y + 16
+}
+
+function layoutDebt(cmds, slip, x, y, boxW) {
+  const rows = [
+    { label: '之前欠款', value: '¥' + slip.prevDebtText, color: COLORS.value },
+    { label: '本次欠款', value: '¥' + slip.thisDebtText, color: COLORS.value },
+    { label: '累计欠款', value: '¥' + slip.receivableText, color: slip.hasDebt ? COLORS.debt : COLORS.ok }
+  ]
+  const rowH = 40
+  const height = rowH * rows.length
+  pushRect(cmds, x, y + rowH * 2, boxW, rowH, COLORS.total)
+  pushStroke(cmds, x, y, boxW, height, 1)
+  rows.forEach(function (row, index) {
+    if (index) pushLine(cmds, x, y + rowH * index, x + boxW, y + rowH * index, 1)
+    const font = index === 2 ? FONT.debt : FONT.value
+    pushText(cmds, row.label, x + 14, textTop(y + rowH * index, rowH, FONT.head), FONT.head, COLORS.muted)
+    pushText(cmds, row.value, x + boxW - 14, textTop(y + rowH * index, rowH, font), font, row.color, 'right')
+  })
+  return y + height
+}
+
+function layoutSign(cmds, y) {
+  pushText(cmds, '客户签收：', PAD, y, FONT.sign, COLORS.muted)
+  const lineX = PAD + 110
+  pushLine(cmds, lineX, y + 22, lineX + 360, y + 22, 1)
+  return y + 36
+}
+
+function layoutFooter(cmds, slip, y, measure) {
+  let next = y
+  if (slip.remark) {
+    next = layoutLabeled(cmds, '备注', slip.remark, PAD, y, WIDTH - PAD * 2, measure) + 8
+  }
+  const signY = next + 12
+  layoutSign(cmds, signY)
+  if (slip.hasCustomer) {
+    const boxW = 420
+    const debtY = layoutDebt(cmds, slip, WIDTH - PAD - boxW, next, boxW)
+    return Math.max(signY + 36, debtY) + 8
+  }
+  return signY + 36
 }
 
 function layoutSlip(slip, measure) {
+  // 预览弹层仍是手机竖向卡片；导出用横向表格，货号/品名/规格分列。
   const measureFn = measure || estimateWidth
   const cmds = []
-  const right = WIDTH - PAD
-  const contentWidth = WIDTH - PAD * 2
-  const amountCol = 200
-  const nameWidth = contentWidth - amountCol
   let y = PAD
 
-  pushText(cmds, '请核对后签收', PAD, y, FONT.kicker, COLORS.kicker)
-  y += 36
-  pushText(cmds, '送货单', PAD, y, FONT.title, COLORS.title)
-  y += 58
-  pushText(cmds, '单号 ' + (slip.docNo || ''), PAD, y, FONT.meta, COLORS.muted)
-  pushText(cmds, slip.timeText || '', right, y, FONT.meta, COLORS.muted, 'right')
-  y += 40
-  pushDash(cmds, y)
-  y += 20
+  pushText(cmds, '送货单', WIDTH / 2, y, FONT.title, COLORS.title, 'center')
+  y += 50
+  pushText(cmds, '请核对后签收', WIDTH / 2, y, FONT.kicker, COLORS.muted, 'center')
+  y += 32
+  pushLine(cmds, PAD, y, WIDTH - PAD, y, 2)
+  y += 5
+  pushLine(cmds, PAD, y, WIDTH - PAD, y, 1)
+  y += 18
 
-  if (slip.hasCustomer) {
-    y = pushRow(cmds, '收货人', slip.customerName, y, measureFn)
-    if (slip.customerPhone) {
-      y = pushRow(cmds, '电话', slip.customerPhone, y, measureFn)
-    }
-    if (slip.customerAddress) {
-      y = pushRow(cmds, '地址', slip.customerAddress, y, measureFn)
-    }
-    y += 8
-    pushDash(cmds, y)
-    y += 16
-  }
-
-  ;(slip.lines || []).forEach(function (line) {
-    const names = wrapText(line.productName, nameWidth, function (text) {
-      return measureFn(text, FONT.name)
-    })
-    names.forEach(function (name, index) {
-      pushText(cmds, name, PAD, y, FONT.name, COLORS.value)
-      if (index === 0) {
-        pushText(cmds, '¥' + line.amountText, right, y, FONT.name, COLORS.value, 'right')
-      }
-      y += 36
-    })
-    const sub = (line.specText ? line.specText + ' · ' : '') + line.qtyText + ' 件 × ¥' + line.priceText
-    wrapText(sub, nameWidth, function (text) {
-      return measureFn(text, FONT.muted)
-    }).forEach(function (row) {
-      pushText(cmds, row, PAD, y, FONT.muted, COLORS.muted)
-      y += 30
-    })
-    y += 10
-  })
-
-  pushDash(cmds, y)
-  y += 12
-
-  if (slip.remark) {
-    y = pushRow(cmds, '备注', slip.remark, y, measureFn)
-  }
-  y = pushRow(cmds, '结算', slip.payText, y, measureFn)
-  y += 8
-  pushDash(cmds, y)
-  y += 24
-  pushText(cmds, '金额', PAD, y, FONT.muted, COLORS.muted)
-  pushText(cmds, '¥' + slip.amountText, right, y, FONT.amount, COLORS.title, 'right')
-  y += 52
-
-  if (slip.hasCustomer) {
-    y = pushRow(cmds, '之前欠款', '¥' + slip.prevDebtText, y, measureFn)
-    y = pushRow(cmds, '本次欠款', '¥' + slip.thisDebtText, y, measureFn)
-    y += 8
-    pushDash(cmds, y)
-    y += 20
-    pushText(cmds, '累计欠款', PAD, y, FONT.muted, COLORS.muted)
-    pushText(cmds, '¥' + slip.receivableText, right, y, FONT.debt, slip.hasDebt ? COLORS.debt : COLORS.kicker, 'right')
-    y += 48
-  }
+  y = layoutMeta(cmds, slip, y, measureFn)
+  y = layoutTable(cmds, slip, y, measureFn)
+  y = layoutFooter(cmds, slip, y, measureFn)
 
   return {
     width: WIDTH,
@@ -184,14 +355,24 @@ function drawSlip(ctx, layout) {
       ctx.fillStyle = cmd.color
       ctx.textAlign = cmd.align
       ctx.fillText(cmd.text, cmd.x, cmd.y)
-    } else if (cmd.type === 'dash') {
+    } else if (cmd.type === 'rect') {
+      ctx.fillStyle = cmd.fill
+      ctx.fillRect(cmd.x, cmd.y, cmd.w, cmd.h)
+    } else if (cmd.type === 'stroke') {
       ctx.save()
-      ctx.strokeStyle = COLORS.line
-      ctx.lineWidth = 2
-      ctx.setLineDash([8, 8])
+      ctx.strokeStyle = cmd.color
+      ctx.lineWidth = cmd.width || 1
+      if (ctx.setLineDash) ctx.setLineDash([])
+      ctx.strokeRect(cmd.x, cmd.y, cmd.w, cmd.h)
+      ctx.restore()
+    } else if (cmd.type === 'line') {
+      ctx.save()
+      ctx.strokeStyle = cmd.color
+      ctx.lineWidth = cmd.width || 1
+      if (ctx.setLineDash) ctx.setLineDash([])
       ctx.beginPath()
-      ctx.moveTo(cmd.x1, cmd.y)
-      ctx.lineTo(cmd.x2, cmd.y)
+      ctx.moveTo(cmd.x1, cmd.y1)
+      ctx.lineTo(cmd.x2, cmd.y2)
       ctx.stroke()
       ctx.restore()
     }
