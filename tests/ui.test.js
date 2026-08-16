@@ -71,7 +71,6 @@ async function resetStorage(miniProgram) {
     wx.setStorageSync('inv_records', [])
     wx.setStorageSync('inv_customers', [])
     wx.setStorageSync('inv_skus', [])
-    wx.setStorageSync('inv_ui_scale', 'lg')
   })
 }
 

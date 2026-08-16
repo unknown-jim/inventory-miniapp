@@ -1,44 +1,14 @@
-.summary {
-  display: flex;
-}
-
-.sum {
-  flex: 1;
-}
-
-.sum-num {
-  margin-top: 8rpx;
-  font-size: var(--fs-lg);
-  font-weight: 700;
+.stat-num {
+  margin-top: var(--space-xs);
   color: #0F766E;
 }
 
-.sum-num.warm {
+.stat-num.warm {
   color: #C2410C;
 }
 
-.tabs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12rpx;
-  margin: 24rpx 0 16rpx;
-}
-
-.tab {
-  padding: 14rpx 28rpx;
-  border-radius: 999rpx;
-  background: #FFFFFF;
-  color: #64748B;
-  font-size: var(--fs-sm);
-  min-height: var(--chip-min);
-  box-sizing: border-box;
-  display: flex;
-  align-items: center;
-}
-
-.tab.on {
-  background: #0F766E;
-  color: #FFFFFF;
+.chips {
+  margin: var(--space-lg) 0 var(--space-md);
 }
 
 .list-card {

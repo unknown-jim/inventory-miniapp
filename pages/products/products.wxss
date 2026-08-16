@@ -35,19 +35,6 @@
   font-weight: 600;
 }
 
-.goods-actions {
-  display: flex;
-  gap: 16rpx;
-  margin-top: 20rpx;
-}
-
-.mini {
-  flex: 1;
-  margin: 0;
-  height: var(--tap-sm);
-  line-height: var(--tap-sm);
-}
-
 .warm {
   background: #FFF7ED;
   color: #C2410C;

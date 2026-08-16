@@ -9,7 +9,7 @@
 3. [docs/commit-and-pr.md](docs/commit-and-pr.md)：提交说明和 Pull Request 描述。写 commit 或开 PR 时必须遵守。
 4. [docs/accounting-vs-policy.md](docs/accounting-vs-policy.md)：记账要自洽，现场规矩不写死。
 5. [docs/blank-process.md](docs/blank-process.md)：待加工、分规格现货、退货原样入库、改规格。
-6. [docs/ui-scale.md](docs/ui-scale.md)：操作界面字号、点击区域、看板显示大小。
+6. [docs/ui-scale.md](docs/ui-scale.md)：操作界面字号、点击区域、密度规则。
 
 ## 硬约束（摘要）
 
@@ -40,4 +40,4 @@
 - 上线前欠款走期初往来，不拿销售去凑；不改库存、不计入销售和毛利。
 - 能不能换某一根轴、先改再卖还是当场改：现场规矩，不要写成软件限制。
 - 给操作便利（种类模板带出待选项、多规格可同价），不要给行业裁判。详见 [docs/accounting-vs-policy.md](docs/accounting-vs-policy.md)。
-- 操作界面不要写小于 `--fs-xs` 的字号、不要写小于 `--tap-sm` 的可点高度。新页面挂 `ui-scale` behavior。送货单除外。详见 [docs/ui-scale.md](docs/ui-scale.md)。
+- 操作界面不要写小于 `--fs-xs` 的字号、不要写小于 `--tap-sm` 的可点高度。新页面用 `app.wxss` 共用布局类，根节点 `class="page"`。送货单除外。详见 [docs/ui-scale.md](docs/ui-scale.md)。

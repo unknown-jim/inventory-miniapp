@@ -1,12 +1,3 @@
-.field-row {
-  display: flex;
-  gap: 16rpx;
-}
-
-.half {
-  flex: 1;
-}
-
 .last {
   margin-bottom: 0;
 }
