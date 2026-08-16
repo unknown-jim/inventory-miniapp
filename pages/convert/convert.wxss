@@ -12,7 +12,7 @@
 }
 
 .picker {
-  line-height: 80rpx;
+  line-height: var(--tap-md);
 }
 
 .tip {
@@ -43,7 +43,7 @@
 }
 
 .sheet-title {
-  font-size: 30rpx;
+  font-size: var(--fs-lg);
   font-weight: 600;
   margin-bottom: 16rpx;
 }

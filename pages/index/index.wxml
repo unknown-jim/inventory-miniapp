@@ -1,4 +1,4 @@
-<view class="page">
+<view class="page {{uiScaleClass}}">
   <view class="hero card">
     <view class="hero-top" hover-class="hero-press" bindtap="goRecords">
       <view>
@@ -95,6 +95,18 @@
     </view>
     <view wx:else class="card quiet">今天还没有进销记录</view>
   </block>
+
+  <view class="section-title">
+    <text>显示大小</text>
+  </view>
+  <view class="card scale-card">
+    <view class="chips">
+      <view class="chip {{uiScale === 'std' ? 'on' : ''}}" data-level="std" bindtap="setUiScale">标准</view>
+      <view class="chip {{uiScale === 'lg' ? 'on' : ''}}" data-level="lg" bindtap="setUiScale">大</view>
+      <view class="chip {{uiScale === 'xl' ? 'on' : ''}}" data-level="xl" bindtap="setUiScale">更大</view>
+    </view>
+    <view class="muted">字和按钮跟着变，可随时改。默认是「大」。</view>
+  </view>
 
   <view class="footer-actions">
     <text class="link" bindtap="goRecords">流水与毛利汇总</text>

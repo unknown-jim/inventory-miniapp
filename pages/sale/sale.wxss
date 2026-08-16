@@ -1,13 +1,13 @@
 @import '/styles/slip.wxss';
 
 .picker {
-  line-height: 80rpx;
+  line-height: var(--tap-md);
 }
 
 .meta {
   margin: -8rpx 0 24rpx;
   color: #C2410C;
-  font-size: 24rpx;
+  font-size: var(--fs-sm);
 }
 
 .spec-block .field {
@@ -21,7 +21,7 @@
 .customer-meta {
   margin: -8rpx 0 24rpx;
   color: #64748B;
-  font-size: 24rpx;
+  font-size: var(--fs-sm);
 }
 
 .field-head {
@@ -37,7 +37,7 @@
 
 .link {
   color: #0F766E;
-  font-size: 24rpx;
+  font-size: var(--fs-sm);
 }
 
 .field-row {
@@ -52,13 +52,13 @@
 
 .pay-tab {
   flex: 1;
-  height: 72rpx;
-  line-height: 72rpx;
+  height: var(--tap-sm);
+  line-height: var(--tap-sm);
   text-align: center;
   background: #F8FAF9;
   border-radius: 14rpx;
   color: #64748B;
-  font-size: 28rpx;
+  font-size: var(--fs-md);
 }
 
 .pay-tab.on {
@@ -85,7 +85,7 @@
 .total-num,
 .profit-num {
   margin-top: 8rpx;
-  font-size: 36rpx;
+  font-size: var(--fs-xl);
   font-weight: 700;
 }
 
@@ -108,7 +108,7 @@
 .line-amount {
   margin-bottom: 16rpx;
   color: #64748B;
-  font-size: 24rpx;
+  font-size: var(--fs-sm);
 }
 
 .add-btn {
@@ -180,7 +180,7 @@
 }
 
 .sheet-title {
-  font-size: 30rpx;
+  font-size: var(--fs-lg);
   font-weight: 600;
   margin-bottom: 16rpx;
 }

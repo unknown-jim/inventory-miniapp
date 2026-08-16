@@ -1,7 +1,9 @@
 const store = require('../../utils/store')
 const inventory = require('../../utils/inventory')
+const uiScale = require('../../utils/ui-scale')
 
 Page({
+  behaviors: [uiScale.behavior],
   data: {
     keyword: '',
     list: []

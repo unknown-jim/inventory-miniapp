@@ -8,7 +8,7 @@
 
 .sum-num {
   margin-top: 8rpx;
-  font-size: 32rpx;
+  font-size: var(--fs-lg);
   font-weight: 700;
   color: #0F766E;
 }
@@ -25,11 +25,15 @@
 }
 
 .tab {
-  padding: 10rpx 22rpx;
+  padding: 14rpx 28rpx;
   border-radius: 999rpx;
   background: #FFFFFF;
   color: #64748B;
-  font-size: 24rpx;
+  font-size: var(--fs-sm);
+  min-height: var(--chip-min);
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
 }
 
 .tab.on {

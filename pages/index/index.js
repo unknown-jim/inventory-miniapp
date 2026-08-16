@@ -1,7 +1,9 @@
 const store = require('../../utils/store')
 const util = require('../../utils/util')
+const uiScale = require('../../utils/ui-scale')
 
 Page({
+  behaviors: [uiScale.behavior],
   data: {
     dateText: '',
     productCount: 0,

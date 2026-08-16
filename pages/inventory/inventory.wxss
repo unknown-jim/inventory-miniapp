@@ -6,11 +6,15 @@
 }
 
 .filter {
-  padding: 10rpx 18rpx;
+  padding: 14rpx 24rpx;
   border-radius: 999rpx;
   background: #FFFFFF;
   color: #64748B;
-  font-size: 24rpx;
+  font-size: var(--fs-sm);
+  min-height: var(--chip-min);
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
 }
 
 .filter.on {
@@ -20,7 +24,7 @@
 
 .link {
   color: #0F766E;
-  font-size: 24rpx;
+  font-size: var(--fs-sm);
 }
 
 .stock-card {
@@ -42,7 +46,7 @@
 
 .item-name {
   font-weight: 600;
-  font-size: 30rpx;
+  font-size: var(--fs-lg);
 }
 
 .bar {
@@ -67,7 +71,7 @@
   display: flex;
   justify-content: space-between;
   color: #334155;
-  font-size: 24rpx;
+  font-size: var(--fs-sm);
 }
 
 .convert-link {

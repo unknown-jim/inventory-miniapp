@@ -1,5 +1,5 @@
 .readonly {
-  line-height: 80rpx;
+  line-height: var(--tap-md);
   color: #64748B;
 }
 

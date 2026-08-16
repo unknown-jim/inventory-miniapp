@@ -66,6 +66,10 @@
       },
       {
         "type": "file",
+        "value": "utils/ui-scale.js"
+      },
+      {
+        "type": "file",
         "value": "styles/slip.wxss"
       },
       {

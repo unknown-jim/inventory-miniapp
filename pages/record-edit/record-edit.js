@@ -2,6 +2,7 @@ const store = require('../../utils/store')
 const util = require('../../utils/util')
 const inventory = require('../../utils/inventory')
 const slipActions = require('../../utils/slip-actions')
+const uiScale = require('../../utils/ui-scale')
 
 function navTitle(view, editing) {
   if (view.isPay) return editing ? '修改收款' : '收款详情'
@@ -13,6 +14,7 @@ function navTitle(view, editing) {
 }
 
 Page({
+  behaviors: [uiScale.behavior],
   data: {
     id: '',
     type: '',
