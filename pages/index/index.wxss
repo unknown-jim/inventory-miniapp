@@ -108,6 +108,10 @@
   margin-top: 28rpx;
 }
 
+.btn-ghost {
+  margin-top: 16rpx;
+}
+
 .empty-card,
 .quiet {
   text-align: center;

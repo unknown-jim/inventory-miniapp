@@ -55,7 +55,8 @@ Page({
     exporting: false
   },
 
-  onLoad(query) {
+  async onLoad(query) {
+    if (!(await store.ready())) return
     this.loadRecord(query.id)
   },
 
@@ -282,7 +283,8 @@ Page({
     wx.navigateTo({ url: '/pages/customer-edit/customer-edit?select=1' })
   },
 
-  onShow() {
+  async onShow() {
+    if (!(await store.ready())) return
     const selectedCustomerId = getApp().consumeSelectedCustomer()
     if (this.expectCustomer && selectedCustomerId) {
       this.expectCustomer = false
@@ -314,16 +316,16 @@ Page({
     slipActions.closeSlip(this)
   },
 
-  save() {
+  async save() {
     if (!this.data.editing) return
     try {
       if (this.data.isPay || this.data.isOpening) {
-        store.updateRecord(this.data.id, {
+        await store.updateRecord(this.data.id, {
           amount: this.data.amount,
           remark: this.data.remark
         })
       } else if (this.data.isOut) {
-        store.updateRecord(this.data.id, {
+        await store.updateRecord(this.data.id, {
           remark: this.data.remark,
           payType: this.data.payType,
           customerId: this.data.customerId,
@@ -336,12 +338,12 @@ Page({
           })
         })
       } else if (this.data.isReturn || this.data.isConvert) {
-        store.updateRecord(this.data.id, {
+        await store.updateRecord(this.data.id, {
           qty: this.data.qty,
           remark: this.data.remark
         })
       } else {
-        store.updateRecord(this.data.id, {
+        await store.updateRecord(this.data.id, {
           qty: this.data.qty,
           unitPrice: this.data.unitPrice,
           remark: this.data.remark,
@@ -377,10 +379,10 @@ Page({
               ? '删除后会把本单全部商品的库存改回去。记错商品时用这个，然后重新开单。'
               : '删除后会把库存改回去。记错商品时用这个，然后重新开单。')))),
       confirmColor: '#DC2626',
-      success: (res) => {
+      success: async (res) => {
         if (!res.confirm) return
         try {
-          store.deleteRecord(this.data.id)
+          await store.deleteRecord(this.data.id)
           wx.showToast({ title: '已删除', icon: 'success' })
           setTimeout(function () {
             wx.navigateBack()

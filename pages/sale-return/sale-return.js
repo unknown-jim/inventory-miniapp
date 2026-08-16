@@ -12,7 +12,8 @@ Page({
     lines: []
   },
 
-  onLoad(query) {
+  async onLoad(query) {
+    if (!(await store.ready())) return
     const record = store.getRecord(query.id)
     if (!record || record.type !== 'out') {
       wx.showToast({ title: '销售流水不存在', icon: 'none' })
@@ -52,12 +53,12 @@ Page({
     this.setData({ remark: e.detail.value })
   },
 
-  submit() {
+  async submit() {
     try {
       const items = this.data.lines.map(function (item) {
         return { saleRecordId: item.id, qty: item.qty }
       })
-      store.addReturn({
+      await store.addReturn({
         items: items,
         remark: this.data.remark
       })

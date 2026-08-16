@@ -22,7 +22,8 @@ Page({
     }
   },
 
-  onShow() {
+  async onShow() {
+    if (!(await store.ready())) return
     this.refresh()
   },
 

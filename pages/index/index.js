@@ -16,10 +16,52 @@ Page({
     alertCount: 0,
     alerts: [],
     recent: [],
-    isEmpty: true
+    isEmpty: true,
+    canRestore: false,
+    blocked: false,
+    blockedMessage: '',
+    shopName: ''
   },
 
-  onShow() {
+  async onShow() {
+    const status = store.getStatus()
+    if (!status.canBookkeep) {
+      this.setData({
+        blocked: true,
+        blockedMessage: status.message,
+        shopName: '',
+        dateText: util.formatDate(Date.now()),
+        productCount: 0,
+        totalStock: 0,
+        todaySalesAmount: '0.00',
+        todayProfit: '0.00',
+        todayInAmount: '0.00',
+        totalReceivable: '0.00',
+        hasReceivable: false,
+        alertCount: 0,
+        alerts: [],
+        recent: [],
+        isEmpty: true,
+        canRestore: false
+      })
+      return
+    }
+    try {
+      await store.ensureReady()
+    } catch (error) {
+      this.setData({
+        blocked: true,
+        blockedMessage: error.message || '无法记账',
+        isEmpty: true,
+        canRestore: false
+      })
+      return
+    }
+    this.setData({
+      blocked: false,
+      blockedMessage: '',
+      shopName: status.shopName
+    })
     this.refresh()
   },
 
@@ -40,7 +82,8 @@ Page({
         return util.withView(item, skus)
       }),
       recent: dash.recent.slice(0, 6).map(util.withRecordView),
-      isEmpty: dash.productCount === 0
+      isEmpty: dash.productCount === 0,
+      canRestore: store.hasClearedBackup()
     })
   },
 
@@ -89,6 +132,14 @@ Page({
     wx.navigateTo({ url: '/pages/categories/categories' })
   },
 
+  goShop() {
+    wx.navigateTo({ url: '/pages/shop/shop' })
+  },
+
+  goMembers() {
+    wx.navigateTo({ url: '/pages/members/members' })
+  },
+
   onAlertTap(e) {
     const id = e.currentTarget.dataset.id
     wx.navigateTo({ url: '/pages/product-edit/product-edit?id=' + id })
@@ -98,22 +149,48 @@ Page({
     wx.navigateTo({ url: '/pages/record-edit/record-edit?id=' + e.currentTarget.dataset.id })
   },
 
-  seedDemo() {
-    store.loadSeed()
-    this.refresh()
-    wx.showToast({ title: '已填入示例数据', icon: 'success' })
+  async seedDemo() {
+    try {
+      await store.loadSeed()
+      this.refresh()
+      wx.showToast({ title: '已填入示例数据', icon: 'success' })
+    } catch (error) {
+      util.showError(error)
+    }
   },
 
   clearData() {
     wx.showModal({
       title: '清空全部数据',
-      content: '商品、客户、种类模板和流水都会删除，且无法恢复。',
+      content: '商品、客户、种类模板和流水都会从当前店删掉。最近一次可以用「恢复清空前数据」免费找回；更早的清空记录会留在云端。',
       confirmColor: '#DC2626',
-      success: (res) => {
+      success: async (res) => {
         if (!res.confirm) return
-        store.clearAll()
-        this.refresh()
-        wx.showToast({ title: '已清空', icon: 'success' })
+        try {
+          await store.clearAll()
+          this.refresh()
+          wx.showToast({ title: '已清空', icon: 'success' })
+        } catch (error) {
+          util.showError(error)
+        }
+      }
+    })
+  },
+
+  restoreCleared() {
+    wx.showModal({
+      title: '恢复清空前数据',
+      content: '将恢复到最近一次清空前的账本。清空之后新记的账会丢掉。更早的清空记录仍保存在云端。',
+      confirmColor: '#0F766E',
+      success: async (res) => {
+        if (!res.confirm) return
+        try {
+          await store.restoreCleared()
+          this.refresh()
+          wx.showToast({ title: '已恢复', icon: 'success' })
+        } catch (error) {
+          util.showError(error)
+        }
       }
     })
   }

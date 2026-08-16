@@ -33,7 +33,8 @@ Page({
     if (query.id) this.pendingId = query.id
   },
 
-  onShow() {
+  async onShow() {
+    if (!(await store.ready())) return
     const products = store.getProducts()
     const skus = store.getSkus()
     this.setData({ products: products, skus: skus })
@@ -172,7 +173,7 @@ Page({
     this.setData(patch)
   },
 
-  submit() {
+  async submit() {
     try {
       const product = store.getProduct(this.data.productId)
       if (!product) {
@@ -185,7 +186,7 @@ Page({
       if (!toSku) {
         throw new Error(inventory.specSelectHint(product) || '请选择改成的规格')
       }
-      store.addConvert({
+      await store.addConvert({
         productId: product.id,
         fromSkuId: this.data.fromSkuId,
         toSkuId: toSku.id,

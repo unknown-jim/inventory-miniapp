@@ -1,4 +1,12 @@
 <view class="page {{uiScaleClass}}">
+  <view wx:if="{{blocked}}" class="card empty-card">
+    <view class="empty-title">还不能记账</view>
+    <view class="muted">{{blockedMessage}}</view>
+    <button class="btn-primary seed-btn" bindtap="goShop">创建或选择店铺</button>
+    <button class="btn-ghost" bindtap="goMembers">成员名单</button>
+  </view>
+
+  <block wx:else>
   <view class="hero card">
     <view class="hero-top" hover-class="hero-press" bindtap="goRecords">
       <view>
@@ -47,7 +55,7 @@
   <view wx:if="{{isEmpty}}" class="card empty-card">
     <view class="empty-title">还没有商品</view>
     <view class="muted">可以先填一份示例数据，看看进货、销售、预警和毛利怎么记。</view>
-    <button class="btn-primary seed-btn" bindtap="seedDemo">填充示例数据</button>
+    <button class="btn-primary seed-btn js-seed" bindtap="seedDemo">填充示例数据</button>
   </view>
 
   <block wx:else>
@@ -112,6 +120,10 @@
     <text class="link" bindtap="goRecords">流水与毛利汇总</text>
     <text class="link" bindtap="goCustomers">客户管理</text>
     <text class="link" bindtap="goCategories">种类模板</text>
-    <text wx:if="{{!isEmpty}}" class="danger-link" bindtap="clearData">清空数据</text>
+    <text class="link" bindtap="goShop">店铺</text>
+    <text class="link" bindtap="goMembers">成员</text>
+    <text wx:if="{{!isEmpty}}" class="danger-link js-clear" bindtap="clearData">清空数据</text>
+    <text wx:if="{{canRestore}}" class="link js-restore" bindtap="restoreCleared">恢复清空前数据</text>
   </view>
+  </block>
 </view>

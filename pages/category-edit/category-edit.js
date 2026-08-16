@@ -26,7 +26,8 @@ Page({
     sizeInput: ''
   },
 
-  onLoad(query) {
+  async onLoad(query) {
+    if (!(await store.ready())) return
     if (!query.id) {
       wx.setNavigationBarTitle({ title: '新增种类' })
       return
@@ -151,9 +152,9 @@ Page({
     })
   },
 
-  save() {
+  async save() {
     try {
-      store.saveCategory({
+      await store.saveCategory({
         id: this.data.id,
         name: this.data.name,
         names: this.data.names,
@@ -178,13 +179,17 @@ Page({
       title: '删除种类',
       content: '只删模板，已经建好的商品不会动。',
       confirmColor: '#DC2626',
-      success: (res) => {
+      success: async (res) => {
         if (!res.confirm) return
-        store.deleteCategory(this.data.id)
-        wx.showToast({ title: '已删除', icon: 'success' })
-        setTimeout(function () {
-          wx.navigateBack()
-        }, 400)
+        try {
+          await store.deleteCategory(this.data.id)
+          wx.showToast({ title: '已删除', icon: 'success' })
+          setTimeout(function () {
+            wx.navigateBack()
+          }, 400)
+        } catch (error) {
+          util.showError(error)
+        }
       }
     })
   }

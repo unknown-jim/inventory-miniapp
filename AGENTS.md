@@ -10,6 +10,7 @@
 4. [docs/accounting-vs-policy.md](docs/accounting-vs-policy.md)：记账要自洽，现场规矩不写死。
 5. [docs/blank-process.md](docs/blank-process.md)：待加工、分规格现货、退货原样入库、改规格。
 6. [docs/ui-scale.md](docs/ui-scale.md)：操作界面字号、点击区域、看板显示大小。
+7. [docs/cloud-ledger.md](docs/cloud-ledger.md)：云函数记账、多店隔离、环境 ID、禁止客户端直连业务库。
 
 ## 硬约束（摘要）
 
@@ -41,3 +42,10 @@
 - 能不能换某一根轴、先改再卖还是当场改：现场规矩，不要写成软件限制。
 - 给操作便利（种类模板带出待选项、多规格可同价），不要给行业裁判。详见 [docs/accounting-vs-policy.md](docs/accounting-vs-policy.md)。
 - 操作界面不要写小于 `--fs-xs` 的字号、不要写小于 `--tap-sm` 的可点高度。新页面挂 `ui-scale` behavior。送货单除外。详见 [docs/ui-scale.md](docs/ui-scale.md)。
+
+### 云开发
+
+- 业务库只允许云函数 `ledger` 读写。小程序禁止 `wx.cloud.database()` 访问 `shops` / `members` / `ledgers` / `ledger_clears`。
+- `utils/cloud-config.js` 必须有明确的环境 ID 才记账；不要依赖「第一个云环境」。
+- 改 `utils/inventory.js` 或 `utils/ledger-apply.js` 后运行 `npm run sync:ledger-inventory`，保持云函数副本一致。
+- `app.json` 的 `lazyCodeLoading` 仍须保留；`cloudfunctions/` 不进小程序包。详见 [docs/cloud-ledger.md](docs/cloud-ledger.md)。

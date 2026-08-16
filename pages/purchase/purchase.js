@@ -31,7 +31,8 @@ Page({
     filtered: []
   },
 
-  onShow() {
+  async onShow() {
+    if (!(await store.ready())) return
     const products = store.getProducts()
     const skus = store.getSkus()
     const selectedId = getApp().consumeSelectedProduct()
@@ -185,7 +186,7 @@ Page({
     this.setData({ amountText: util.money(amount) })
   },
 
-  submit() {
+  async submit() {
     try {
       const product = store.getProduct(this.data.productId)
       if (product && inventory.productHasSpecs(product) && !inventory.isBlankProcess(product)) {
@@ -198,7 +199,7 @@ Page({
           throw new Error('规格不存在')
         }
       }
-      const record = store.addPurchase({
+      const record = await store.addPurchase({
         productId: this.data.productId,
         skuId: inventory.isBlankProcess(product) ? '' : this.data.skuId,
         qty: this.data.qty,

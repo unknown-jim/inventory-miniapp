@@ -1,0 +1,40 @@
+.openid {
+  margin: 16rpx 0;
+  padding: 20rpx 24rpx;
+  background: #F8FAF9;
+  border-radius: 14rpx;
+  word-break: break-all;
+  font-size: var(--fs-sm);
+}
+
+.copy-btn {
+  margin-top: 12rpx;
+}
+
+.shop-card {
+  margin-bottom: 16rpx;
+}
+
+.shop-card.current {
+  box-shadow: 0 0 0 4rpx rgba(15, 118, 110, 0.24);
+}
+
+.item-name {
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  margin-bottom: 8rpx;
+}
+
+.seed-btn {
+  margin-top: 24rpx;
+}
+
+.footer-actions {
+  display: flex;
+  margin: 36rpx 8rpx 0;
+}
+
+.link {
+  color: #0F766E;
+  font-size: var(--fs-sm);
+}
