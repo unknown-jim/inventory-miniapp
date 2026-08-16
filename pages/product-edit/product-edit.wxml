@@ -1,4 +1,4 @@
-<view class="page {{uiScaleClass}}">
+<view class="page">
   <view class="card">
     <view class="field">
       <view class="field-head">
@@ -47,19 +47,19 @@
     </view>
     <view class="field last" wx:if="{{productKind !== 'plain'}}">
       <view class="field-label">各规格价格</view>
-      <view class="pay-tabs">
-        <view class="pay-tab {{sharedPrice ? 'on' : ''}}" data-on="1" bindtap="setSharedPrice">同价</view>
-        <view class="pay-tab {{!sharedPrice ? 'on' : ''}}" data-on="0" bindtap="setSharedPrice">各格不同价</view>
+      <view class="seg">
+        <view class="seg-item {{sharedPrice ? 'on' : ''}}" data-on="1" bindtap="setSharedPrice">同价</view>
+        <view class="seg-item {{!sharedPrice ? 'on' : ''}}" data-on="0" bindtap="setSharedPrice">各格不同价</view>
       </view>
     </view>
   </view>
 
   <view class="card spec-card">
     <view class="spec-title">商品类型</view>
-    <view class="pay-tabs kind-tabs">
-      <view class="pay-tab {{productKind === 'plain' ? 'on' : ''}}" data-kind="plain" bindtap="setProductKind">普通</view>
-      <view class="pay-tab {{productKind === 'blank' ? 'on' : ''}}" data-kind="blank" bindtap="setProductKind">待加工</view>
-      <view class="pay-tab {{productKind === 'finished' ? 'on' : ''}}" data-kind="finished" bindtap="setProductKind">分规格现货</view>
+    <view class="seg">
+      <view class="seg-item {{productKind === 'plain' ? 'on' : ''}}" data-kind="plain" bindtap="setProductKind">普通</view>
+      <view class="seg-item {{productKind === 'blank' ? 'on' : ''}}" data-kind="blank" bindtap="setProductKind">待加工</view>
+      <view class="seg-item {{productKind === 'finished' ? 'on' : ''}}" data-kind="finished" bindtap="setProductKind">分规格现货</view>
     </view>
     <view class="muted spec-desc" wx:if="{{productKind === 'plain'}}">库存记在这件商品上，不用规格。牛奶这类商品选这个。</view>
     <view class="muted spec-desc" wx:elif="{{productKind === 'blank'}}">进货只进待加工库存。销售时选规格：先扣同一格现货，不够再扣待加工。规格格不是待加工库存。退货按卖掉的那一格入库；要换格请用「改规格」。</view>

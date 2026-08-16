@@ -1,4 +1,4 @@
-<view class="page {{uiScaleClass}}">
+<view class="page">
   <input
     class="search"
     placeholder="搜索名称 / 货号 / 条码"
@@ -29,10 +29,10 @@
         <text class="profit">毛利 ¥{{item.profitText}}（{{item.rateText}}）</text>
       </view>
     </view>
-    <view class="goods-actions">
-      <button class="btn-ghost mini" data-id="{{item.id}}" catchtap="goPurchase">进货</button>
-      <button class="btn-ghost mini warm" data-id="{{item.id}}" catchtap="goSale">销售</button>
-      <button wx:if="{{item.hasSpecs}}" class="btn-ghost mini" data-id="{{item.id}}" catchtap="goConvert">改规格</button>
+    <view class="action-strip">
+      <button class="btn-ghost" data-id="{{item.id}}" catchtap="goPurchase">进货</button>
+      <button class="btn-ghost warm" data-id="{{item.id}}" catchtap="goSale">销售</button>
+      <button wx:if="{{item.hasSpecs}}" class="btn-ghost" data-id="{{item.id}}" catchtap="goConvert">改规格</button>
     </view>
   </view>
 

@@ -1,4 +1,4 @@
-<view class="page {{uiScaleClass}}">
+<view class="page">
   <view class="card">
     <view class="field">
       <view class="field-label">种类名称</view>
@@ -6,10 +6,10 @@
     </view>
     <view class="field last">
       <view class="field-label">默认商品类型</view>
-      <view class="pay-tabs kind-tabs">
-        <view class="pay-tab {{productKind === 'plain' ? 'on' : ''}}" data-kind="plain" bindtap="setProductKind">普通</view>
-        <view class="pay-tab {{productKind === 'blank' ? 'on' : ''}}" data-kind="blank" bindtap="setProductKind">待加工</view>
-        <view class="pay-tab {{productKind === 'finished' ? 'on' : ''}}" data-kind="finished" bindtap="setProductKind">分规格现货</view>
+      <view class="seg">
+        <view class="seg-item {{productKind === 'plain' ? 'on' : ''}}" data-kind="plain" bindtap="setProductKind">普通</view>
+        <view class="seg-item {{productKind === 'blank' ? 'on' : ''}}" data-kind="blank" bindtap="setProductKind">待加工</view>
+        <view class="seg-item {{productKind === 'finished' ? 'on' : ''}}" data-kind="finished" bindtap="setProductKind">分规格现货</view>
       </view>
       <view class="muted spec-desc">选这个种类时，会带出下面的待选项。建档后仍可改。</view>
     </view>
@@ -56,9 +56,9 @@
 
   <view class="card spec-card" wx:if="{{productKind !== 'plain'}}">
     <view class="spec-title">默认各规格同价</view>
-    <view class="pay-tabs">
-      <view class="pay-tab {{sharedPrice ? 'on' : ''}}" data-on="1" bindtap="setSharedPrice">同价</view>
-      <view class="pay-tab {{!sharedPrice ? 'on' : ''}}" data-on="0" bindtap="setSharedPrice">各格不同价</view>
+    <view class="seg">
+      <view class="seg-item {{sharedPrice ? 'on' : ''}}" data-on="1" bindtap="setSharedPrice">同价</view>
+      <view class="seg-item {{!sharedPrice ? 'on' : ''}}" data-on="0" bindtap="setSharedPrice">各格不同价</view>
     </view>
     <view class="muted spec-desc last-desc">建档时只填一次进价售价。进货仍可改某一格的进价。</view>
   </view>
