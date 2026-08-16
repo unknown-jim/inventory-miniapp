@@ -37,6 +37,10 @@ assert.ok(appWxss.indexOf('--card-pad:') >= 0, 'app.wxss should define --card-pa
 assert.ok(appWxss.indexOf('--gap:') >= 0, 'app.wxss should define --gap')
 assert.ok(appWxss.indexOf('.stat-grid') >= 0, 'app.wxss should define .stat-grid')
 assert.ok(appWxss.indexOf('.action-strip') >= 0, 'app.wxss should define .action-strip')
+assert.ok(
+  !/(^|[,>+~\s])\*\s*[{,]/.test(appWxss),
+  'app.wxss should not use universal selector * (WXSS does not compile it)'
+)
 assert.ok(appWxss.indexOf('.field-row') >= 0, 'app.wxss should define .field-row')
 assert.ok(appWxss.indexOf('.seg') >= 0, 'app.wxss should define .seg')
 assert.ok(appWxss.indexOf('.page.ui-std') < 0, 'app.wxss should not define ui-std')
