@@ -259,7 +259,7 @@ button::after {
   margin-top: var(--space-lg);
 }
 
-.action-strip > * {
+.action-strip > button {
   flex: 1 1 28%;
   min-width: 160rpx;
   margin: 0;
