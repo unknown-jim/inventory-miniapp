@@ -49,6 +49,7 @@ assert.ok(wrapped.length > 1)
 const slip = sampleSlip()
 const layout = slipImage.layoutSlip(slip)
 const text = textsOf(layout)
+assert.strictEqual(layout.width, 1240)
 assert.ok(layout.height > 400)
 assert.ok(text.indexOf('送货单') >= 0)
 assert.ok(text.indexOf('SH20260815-AB12') >= 0)
@@ -57,9 +58,40 @@ assert.ok(text.indexOf('黑色 · M') >= 0)
 assert.ok(text.indexOf('赊账') >= 0)
 assert.ok(text.indexOf('门口放') >= 0)
 assert.ok(text.indexOf('¥118.00') >= 0)
+assert.ok(text.indexOf('序号') >= 0)
+assert.ok(text.indexOf('品名') >= 0)
+assert.ok(text.indexOf('数量') >= 0)
+assert.ok(text.indexOf('单价') >= 0)
+assert.ok(text.indexOf('金额') >= 0)
+assert.ok(text.indexOf('合计') >= 0)
+assert.ok(text.indexOf('客户签收') >= 0)
+assert.ok(text.indexOf('件 ×') < 0)
 assert.ok(text.indexOf('毛利') < 0)
 assert.ok(text.indexOf('进价') < 0)
 assert.ok(text.indexOf('内部备注') < 0)
+
+const drawn = []
+slipImage.drawSlip({
+  fillStyle: '',
+  font: '',
+  textAlign: '',
+  textBaseline: '',
+  strokeStyle: '',
+  lineWidth: 1,
+  fillRect: function () { drawn.push('fillRect') },
+  fillText: function () { drawn.push('fillText') },
+  strokeRect: function () { drawn.push('strokeRect') },
+  beginPath: function () {},
+  moveTo: function () {},
+  lineTo: function () {},
+  stroke: function () { drawn.push('stroke') },
+  save: function () {},
+  restore: function () {},
+  setLineDash: function () {}
+}, layout)
+assert.ok(drawn.indexOf('fillText') >= 0)
+assert.ok(drawn.indexOf('strokeRect') >= 0)
+assert.ok(drawn.indexOf('stroke') >= 0)
 
 const walkin = slipImage.layoutSlip(sampleSlip({
   hasCustomer: false,
