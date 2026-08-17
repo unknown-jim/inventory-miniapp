@@ -43,7 +43,7 @@ function productById(products) {
   return map
 }
 
-function withSlipView(order, receivable, products) {
+function withSlipView(order, receivable, products, shopName) {
   const records = order.records && order.records.length ? order.records : [order]
   const first = records[0]
   const amount = order.amount != null
@@ -55,6 +55,7 @@ function withSlipView(order, receivable, products) {
   const totalDebt = inventory.toNumber(receivable)
   const prevDebt = inventory.round2(totalDebt - thisDebt)
   const productsMap = productById(products)
+  const operatorName = String(order.operatorName || first.operatorName || '').trim()
   return {
     docNo: formatDocNo({
       createdAt: order.createdAt || first.createdAt,
@@ -63,6 +64,9 @@ function withSlipView(order, receivable, products) {
       orderId: order.id || first.orderId
     }, 'SH'),
     timeText: formatDateTime(order.createdAt || first.createdAt),
+    shopName: String(shopName || '').trim(),
+    operatorName: operatorName,
+    operatorText: operatorName || '—',
     lines: records.map(function (item) {
       const parts = inventory.specParts(item, productsMap[item.productId])
       return {
@@ -91,9 +95,9 @@ function withSlipView(order, receivable, products) {
   }
 }
 
-function withSlipViewFromRecord(records, record, products) {
+function withSlipViewFromRecord(records, record, products, shopName) {
   const order = inventory.buildSaleOrder(records, record)
-  return withSlipView(order, inventory.receivableAt(records, order.customerId, order.createdAt), products)
+  return withSlipView(order, inventory.receivableAt(records, order.customerId, order.createdAt), products, shopName)
 }
 
 function pad(n) {

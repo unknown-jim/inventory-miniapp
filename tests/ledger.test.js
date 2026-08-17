@@ -179,6 +179,13 @@ async function rejects(promise, re) {
   const shopBRes = await call(db, ids, 'user-b', 'createShop', '', { name: '乙店' })
   const shopA = shopARes.shop.id
   const shopB = shopBRes.shop.id
+  const ownerDoc = Object.keys(db.members).map(function (key) {
+    return db.members[key]
+  }).find(function (item) {
+    return item.shopId === shopA && item.openid === 'user-a'
+  })
+  assert.ok(ownerDoc)
+  assert.ok(!Object.prototype.hasOwnProperty.call(ownerDoc, 'displayName'))
 
   await rejects(
     call(db, ids, 'user-b', 'getLedger', shopA),
@@ -221,6 +228,12 @@ async function rejects(promise, re) {
 
   const after = await call(db, ids, 'user-a', 'getLedger', shopA)
   assert.strictEqual(after.ledger.products[0].stock, 0)
+  const firstOut = after.ledger.records.find(function (item) {
+    return item.type === 'out'
+  })
+  assert.ok(firstOut)
+  assert.strictEqual(firstOut.operatorOpenid, 'user-a')
+  assert.strictEqual(firstOut.operatorName, '')
   assert.strictEqual(after.ledger.records.filter(function (item) {
     return item.type === 'out'
   }).length, 1)
@@ -235,10 +248,102 @@ async function rejects(promise, re) {
   await call(db, ids, 'user-a', 'addMember', shopA, { openid: 'staff-c' })
   const members = await call(db, ids, 'staff-c', 'listMembers', shopA)
   assert.strictEqual(members.members.length, 2)
+  const listedOwner = members.members.find(function (item) {
+    return item.openid === 'user-a'
+  })
+  const listedStaff = members.members.find(function (item) {
+    return item.openid === 'staff-c'
+  })
+  assert.strictEqual(listedOwner.displayName, '')
+  assert.strictEqual(listedStaff.displayName, '')
   await rejects(
     call(db, ids, 'staff-c', 'addMember', shopA, { openid: 'staff-d' }),
     /只有店主能改成员/
   )
+  await rejects(
+    call(db, ids, 'staff-c', 'updateMember', shopA, { openid: 'user-a', displayName: '老板' }),
+    /只能改自己的称呼/
+  )
+  const selfNamed = await call(db, ids, 'staff-c', 'updateMember', shopA, { displayName: '小李' })
+  assert.strictEqual(selfNamed.member.displayName, '小李')
+  await call(db, ids, 'staff-c', 'updateMember', shopA, { openid: '', displayName: '店员小李' })
+  await call(db, ids, 'user-a', 'updateMember', shopA, { openid: 'staff-c', displayName: '小李' })
+  await call(db, ids, 'user-a', 'addMember', shopA, { openid: 'staff-d', displayName: '小李' })
+  const namedMembers = await call(db, ids, 'user-a', 'listMembers', shopA)
+  assert.strictEqual(namedMembers.members.filter(function (item) {
+    return item.displayName === '小李'
+  }).length, 2)
+  await rejects(
+    call(db, ids, 'user-a', 'updateMember', shopA, {
+      displayName: '一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十甲乙丙'
+    }),
+    /称呼最多 32 个字/
+  )
+  await call(db, ids, 'user-a', 'saveProduct', shopA, {
+    name: '经手人货',
+    costPrice: 1,
+    salePrice: 2,
+    stock: 10
+  })
+  const opLedger = await call(db, ids, 'user-a', 'getLedger', shopA)
+  const opProduct = opLedger.ledger.products.find(function (item) {
+    return item.name === '经手人货'
+  })
+  await call(db, ids, 'user-a', 'updateMember', shopA, { displayName: '老板甲' })
+  const stamped = await call(db, ids, 'user-a', 'addSale', shopA, {
+    payType: 'cash',
+    items: [{ productId: opProduct.id, qty: 1, unitPrice: 2 }]
+  })
+  assert.strictEqual(stamped.result.order.operatorOpenid, 'user-a')
+  assert.strictEqual(stamped.result.order.operatorName, '老板甲')
+  const namedSale = await call(db, ids, 'user-a', 'addSale', shopA, {
+    payType: 'cash',
+    operatorName: '临时工',
+    items: [{ productId: opProduct.id, qty: 1, unitPrice: 2 }]
+  })
+  assert.strictEqual(namedSale.result.order.operatorOpenid, '')
+  assert.strictEqual(namedSale.result.order.operatorName, '临时工')
+  const memberSale = await call(db, ids, 'user-a', 'addSale', shopA, {
+    payType: 'cash',
+    operatorOpenid: 'staff-c',
+    items: [{ productId: opProduct.id, qty: 1, unitPrice: 2 }]
+  })
+  assert.strictEqual(memberSale.result.order.operatorOpenid, 'staff-c')
+  assert.strictEqual(memberSale.result.order.operatorName, '小李')
+  const overrideSale = await call(db, ids, 'user-a', 'addSale', shopA, {
+    payType: 'cash',
+    operatorOpenid: 'staff-c',
+    operatorName: '现场帮忙',
+    items: [{ productId: opProduct.id, qty: 1, unitPrice: 2 }]
+  })
+  assert.strictEqual(overrideSale.result.order.operatorOpenid, 'staff-c')
+  assert.strictEqual(overrideSale.result.order.operatorName, '现场帮忙')
+  const leftSale = await call(db, ids, 'user-a', 'addSale', shopA, {
+    payType: 'cash',
+    operatorOpenid: 'gone-user',
+    operatorName: '老王',
+    items: [{ productId: opProduct.id, qty: 1, unitPrice: 2 }]
+  })
+  assert.strictEqual(leftSale.result.order.operatorOpenid, 'gone-user')
+  assert.strictEqual(leftSale.result.order.operatorName, '老王')
+  const stampId = stamped.result.order.records[0].id
+  await call(db, ids, 'user-a', 'updateMember', shopA, { displayName: '新老板' })
+  const kept = await call(db, ids, 'user-a', 'updateRecord', shopA, {
+    id: stampId,
+    qty: 1,
+    unitPrice: 2
+  })
+  assert.strictEqual(kept.result.record.operatorOpenid, 'user-a')
+  assert.strictEqual(kept.result.record.operatorName, '老板甲')
+  const rewritten = await call(db, ids, 'user-a', 'updateRecord', shopA, {
+    id: stampId,
+    qty: 1,
+    unitPrice: 2,
+    operatorOpenid: '',
+    operatorName: ''
+  })
+  assert.strictEqual(rewritten.result.record.operatorOpenid, '')
+  assert.strictEqual(rewritten.result.record.operatorName, '')
 
   const dbRetry = new MemoryDb()
   const retryIds = idFactory()

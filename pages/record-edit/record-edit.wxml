@@ -56,6 +56,20 @@
       </view>
       <view wx:else class="field-input readonly">{{payTypeText}}</view>
     </view>
+    <view class="field">
+      <view class="field-label">经手人</view>
+      <input wx:if="{{editing}}" class="field-input" maxlength="32" value="{{operatorName}}" bindinput="onOperatorName" placeholder="可选" hidden="{{showCustomerPicker || showSlip}}" />
+      <view wx:else class="field-input readonly">{{operatorName || '—'}}</view>
+      <view class="chips" wx:if="{{editing}}">
+        <view
+          class="chip {{item.on ? 'on' : ''}}"
+          wx:for="{{members}}"
+          wx:key="openid"
+          data-openid="{{item.openid}}"
+          bindtap="pickOperator"
+        >{{item.label}}</view>
+      </view>
+    </view>
     <view class="order-lines">
       <view class="line-block" wx:for="{{lines}}" wx:key="id">
         <view class="item-name">{{item.productName}}</view>

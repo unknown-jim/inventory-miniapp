@@ -3,6 +3,18 @@ const util = require('../../utils/util')
 const inventory = require('../../utils/inventory')
 const slipActions = require('../../utils/slip-actions')
 
+function memberChips(members, selectedOpenid) {
+  return (members || []).map(function (item) {
+    const displayName = String(item.displayName || '').trim()
+    return {
+      openid: item.openid,
+      displayName: displayName,
+      label: displayName || '未命名',
+      on: item.openid === selectedOpenid
+    }
+  })
+}
+
 Page({
   data: {
     products: [],
@@ -32,6 +44,11 @@ Page({
     qty: '',
     unitPrice: '',
     remark: '',
+    operatorOpenid: '',
+    operatorName: '',
+    operatorTouched: false,
+    members: [],
+    myOpenid: '',
     lineAmountText: '0.00',
     cart: [],
     amountText: '0.00',
@@ -56,9 +73,30 @@ Page({
     }
     const products = store.getProducts()
     const skus = store.getSkus()
+    let memberList = this._members || []
+    let openid = this.data.myOpenid || ''
+    try {
+      openid = await store.whoami()
+      const res = await store.listMembers()
+      memberList = res.members || []
+    } catch (error) {
+      util.showError(error)
+    }
+    this._members = memberList
+    const operatorPatch = {
+      myOpenid: openid,
+      members: memberChips(memberList, this.data.operatorTouched ? this.data.operatorOpenid : openid)
+    }
+    if (!this.data.operatorTouched) {
+      const me = memberList.find(function (item) {
+        return item.openid === openid
+      })
+      operatorPatch.operatorOpenid = openid
+      operatorPatch.operatorName = me ? String(me.displayName || '').trim() : ''
+    }
     const selectedId = getApp().consumeSelectedProduct()
     const selectedCustomerId = getApp().consumeSelectedCustomer()
-    this.setData({ products: products, skus: skus, pageLoading: false })
+    this.setData(Object.assign({ products: products, skus: skus, pageLoading: false }, operatorPatch))
     this.data.skus = skus
     this.data.products = products
     this.applyFilter(this.data.keyword, products, skus)
@@ -388,6 +426,37 @@ Page({
     this.setData(Object.assign(patch, this.totals(this.data.cart, qty, price)))
   },
 
+  onOperatorName(e) {
+    const name = e.detail.value
+    const selectedOpenid = this.data.operatorOpenid
+    const selected = (this._members || []).find(function (item) {
+      return item.openid === selectedOpenid
+    })
+    const selectedName = selected ? String(selected.displayName || '').trim() : ''
+    const patch = {
+      operatorName: name,
+      operatorTouched: true
+    }
+    if (selectedOpenid && name !== selectedName) {
+      patch.operatorOpenid = ''
+    }
+    patch.members = memberChips(this._members, patch.operatorOpenid != null ? patch.operatorOpenid : selectedOpenid)
+    this.setData(patch)
+  },
+
+  pickOperator(e) {
+    const openid = e.currentTarget.dataset.openid
+    const member = (this._members || []).find(function (item) {
+      return item.openid === openid
+    })
+    this.setData({
+      operatorOpenid: openid,
+      operatorName: member ? String(member.displayName || '').trim() : '',
+      operatorTouched: true,
+      members: memberChips(this._members, openid)
+    })
+  },
+
   currentLine() {
     const product = store.getProduct(this.data.productId)
     if (!product) return null
@@ -481,6 +550,8 @@ Page({
         customerId: this.data.customerId,
         payType: this.data.payType,
         remark: this.data.remark,
+        operatorOpenid: this.data.operatorOpenid,
+        operatorName: this.data.operatorName,
         items: cart.map(function (item) {
           return {
             productId: item.productId,
@@ -499,7 +570,7 @@ Page({
       this.data.skus = skus
       const product = this.data.productId ? store.getProduct(this.data.productId) : null
       const sku = this.currentSku(product)
-      const slipView = util.withSlipView(order, receivable, store.getProducts())
+      const slipView = util.withSlipView(order, receivable, store.getProducts(), store.getShopName())
       this.slipImagePath = ''
       this.setData(Object.assign({
         skus: skus,

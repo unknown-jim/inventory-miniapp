@@ -66,7 +66,56 @@ function publicMember(member) {
     shopId: member.shopId,
     openid: member.openid,
     role: member.role,
+    displayName: String(member.displayName || '').trim(),
     createdAt: member.createdAt || 0
+  }
+}
+
+function normalizeDisplayName(value) {
+  const name = String(value == null ? '' : value).trim()
+  if (name.length > 32) {
+    throw new Error('称呼最多 32 个字')
+  }
+  return name
+}
+
+function normalizeOperatorName(value) {
+  return String(value == null ? '' : value).trim().slice(0, 32)
+}
+
+function operatorSnapshot(members, shopId, actorOpenid, payload, opts) {
+  opts = opts || {}
+  const name = normalizeOperatorName(payload && payload.operatorName)
+  const requested = String((payload && payload.operatorOpenid) || '').trim()
+  const selected = requested ? findMember(members, shopId, requested) : null
+  if (selected) {
+    return {
+      operatorOpenid: selected.openid,
+      operatorName: name || String(selected.displayName || '').trim()
+    }
+  }
+  if (requested) {
+    return {
+      operatorOpenid: requested,
+      operatorName: name
+    }
+  }
+  if (name) {
+    return {
+      operatorOpenid: '',
+      operatorName: name
+    }
+  }
+  if (opts.defaultToActor) {
+    const actor = findMember(members, shopId, actorOpenid)
+    return {
+      operatorOpenid: actorOpenid,
+      operatorName: actor ? String(actor.displayName || '').trim() : ''
+    }
+  }
+  return {
+    operatorOpenid: '',
+    operatorName: ''
   }
 }
 
@@ -217,6 +266,29 @@ async function dispatch(input) {
         role: role,
         createdAt: now
       }
+      const displayName = normalizeDisplayName(payload.displayName)
+      if (displayName) {
+        member.displayName = displayName
+      }
+      await tx.setMember(member)
+      return { member: publicMember(member) }
+    })
+  }
+
+  if (action === 'updateMember') {
+    const target = String(payload.openid || '').trim() || openid
+    const displayName = normalizeDisplayName(payload.displayName)
+    return db.runTransaction(async function (tx) {
+      const members = await membersOfShop(db, tx, shopId)
+      const actor = requireMember(members, shopId, openid)
+      const existing = findMember(members, shopId, target)
+      if (!existing) {
+        throw new Error('不是该店成员')
+      }
+      if (actor.role !== 'owner' && target !== openid) {
+        throw new Error('只能改自己的称呼')
+      }
+      const member = Object.assign({}, existing, { displayName: displayName })
       await tx.setMember(member)
       return { member: publicMember(member) }
     })
@@ -363,6 +435,23 @@ async function dispatch(input) {
       await tx.putClearSnapshot(adopted.snapshot.id, clearDoc(shopId, adopted.snapshot))
     }
     current = adopted.ledger
+    let mutationPayload = payload
+    if (action === 'addSale') {
+      mutationPayload = Object.assign({}, payload, operatorSnapshot(members, shopId, openid, payload, {
+        defaultToActor: true
+      }))
+    } else if (action === 'updateRecord') {
+      const existing = (current.records || []).find(function (item) {
+        return item.id === payload.id
+      })
+      const hasOperator = Object.prototype.hasOwnProperty.call(payload, 'operatorName')
+        || Object.prototype.hasOwnProperty.call(payload, 'operatorOpenid')
+      if (existing && existing.type === 'out' && hasOperator) {
+        mutationPayload = Object.assign({}, payload, operatorSnapshot(members, shopId, openid, payload, {
+          defaultToActor: false
+        }))
+      }
+    }
     let applied
     if (action === 'restoreCleared') {
       const latest = apply.latestClearMeta(current)
@@ -375,7 +464,7 @@ async function dispatch(input) {
       }
       applied = apply.applyMutation(current, action, { snapshot: snapshot }, now, nextId)
     } else {
-      applied = apply.applyMutation(current, action, payload, now, nextId)
+      applied = apply.applyMutation(current, action, mutationPayload, now, nextId)
       if (applied.result && applied.result.clearSnapshot) {
         const snapshot = applied.result.clearSnapshot
         await tx.putClearSnapshot(snapshot.id, clearDoc(shopId, snapshot))

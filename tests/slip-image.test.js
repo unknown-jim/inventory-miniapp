@@ -127,6 +127,7 @@ const walkin = slipImage.layoutSlip(sampleSlip({
 const walkinText = textsOf(walkin)
 assert.ok(walkinText.indexOf('收货人') < 0)
 assert.ok(walkinText.indexOf('累计欠款') < 0)
+assert.ok(walkinText.indexOf('经手人') >= 0)
 assert.ok(walkin.height < layout.height)
 
 const many = slipImage.layoutSlip(sampleSlip({
@@ -322,5 +323,65 @@ const openingSlip = util.withSlipViewFromRecord(openingThenSale, openingThenSale
 assert.strictEqual(openingSlip.prevDebtText, '50.00')
 assert.strictEqual(openingSlip.thisDebtText, '9.00')
 assert.strictEqual(openingSlip.receivableText, '59.00')
+
+const namedShop = util.withSlipView({
+  id: 'order-shop',
+  createdAt: new Date('2026-08-15T12:00:00').getTime(),
+  amount: 9,
+  payType: 'cash',
+  operatorOpenid: 'oxxxxxxxxxxxxxxxxxx',
+  operatorName: '小李',
+  records: [{
+    id: 'r-shop',
+    productName: '纯牛奶 250ml',
+    qty: 2,
+    unitPrice: 4.5,
+    amount: 9,
+    operatorOpenid: 'oxxxxxxxxxxxxxxxxxx',
+    operatorName: '小李',
+    createdAt: new Date('2026-08-15T12:00:00').getTime()
+  }]
+}, 0, [], '甲店')
+assert.strictEqual(namedShop.shopName, '甲店')
+assert.strictEqual(namedShop.operatorName, '小李')
+assert.strictEqual(namedShop.operatorText, '小李')
+assert.strictEqual(namedShop.operatorOpenid, undefined)
+const namedShopLayout = slipImage.layoutSlip(namedShop)
+const namedShopText = textsOf(namedShopLayout)
+assert.ok(namedShopText.indexOf('甲店') >= 0)
+assert.ok(namedShopText.indexOf('送货单') >= 0)
+assert.ok(namedShopText.indexOf('经手人') >= 0)
+assert.ok(namedShopText.indexOf('小李') >= 0)
+assert.ok(namedShopText.indexOf('oxxxxxxxxxxxxxxxxxx') < 0)
+const shopTitle = namedShopLayout.commands.find(function (item) {
+  return item.type === 'text' && item.text === '甲店'
+})
+const slipTitle = namedShopLayout.commands.find(function (item) {
+  return item.type === 'text' && item.text === '送货单'
+})
+assert.strictEqual(shopTitle.font, slipImage.FONT.title)
+assert.strictEqual(slipTitle.font, slipImage.FONT.head)
+const defaultTitle = layout.commands.find(function (item) {
+  return item.type === 'text' && item.text === '送货单'
+})
+assert.strictEqual(defaultTitle.font, slipImage.FONT.title)
+
+const emptyOperator = util.withSlipView({
+  id: 'order-empty-op',
+  createdAt: new Date('2026-08-15T12:00:00').getTime(),
+  amount: 9,
+  payType: 'cash',
+  records: [{
+    id: 'r-empty-op',
+    productName: '纯牛奶 250ml',
+    qty: 2,
+    unitPrice: 4.5,
+    amount: 9,
+    createdAt: new Date('2026-08-15T12:00:00').getTime()
+  }]
+}, 0)
+assert.strictEqual(emptyOperator.shopName, '')
+assert.strictEqual(emptyOperator.operatorText, '—')
+assert.ok(textsOf(slipImage.layoutSlip(emptyOperator)).indexOf('—') >= 0)
 
 console.log('slip-image tests passed')
