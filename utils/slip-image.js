@@ -247,19 +247,21 @@ function layoutMeta(cmds, slip, y, measure) {
   if (!slip.hasCustomer) {
     layoutLabeled(cmds, '单号', slip.docNo, PAD, y, colW, measure)
     layoutLabeled(cmds, '日期', slip.timeText, x2, y, colW, measure)
-    return layoutLabeled(cmds, '结算', slip.payText, x3, y, colW, measure) + 8
+    y = layoutLabeled(cmds, '结算', slip.payText, x3, y, colW, measure)
+  } else {
+    const row1 = Math.max(
+      layoutLabeled(cmds, '收货人', slip.customerName, PAD, y, colW, measure),
+      layoutLabeled(cmds, '电话', slip.customerPhone, x2, y, colW, measure),
+      layoutLabeled(cmds, '单号', slip.docNo, x3, y, colW, measure)
+    )
+    y = Math.max(
+      layoutLabeled(cmds, '地址', slip.customerAddress, PAD, row1, colW, measure),
+      layoutLabeled(cmds, '结算', slip.payText, x2, row1, colW, measure),
+      layoutLabeled(cmds, '日期', slip.timeText, x3, row1, colW, measure)
+    )
   }
-  const row1 = Math.max(
-    layoutLabeled(cmds, '收货人', slip.customerName, PAD, y, colW, measure),
-    layoutLabeled(cmds, '电话', slip.customerPhone, x2, y, colW, measure),
-    layoutLabeled(cmds, '单号', slip.docNo, x3, y, colW, measure)
-  )
-  const row2 = Math.max(
-    layoutLabeled(cmds, '地址', slip.customerAddress, PAD, row1, colW, measure),
-    layoutLabeled(cmds, '结算', slip.payText, x2, row1, colW, measure),
-    layoutLabeled(cmds, '日期', slip.timeText, x3, row1, colW, measure)
-  )
-  return row2 + 8
+  y = layoutLabeled(cmds, '经手人', slip.operatorText || '—', PAD, y, contentWidth, measure)
+  return y + 8
 }
 
 function layoutTable(cmds, slip, y, measure) {
@@ -383,9 +385,17 @@ function layoutSlip(slip, measure) {
   const measureFn = measure || estimateWidth
   const cmds = []
   let y = PAD
+  const shopName = String(slip.shopName || '').trim()
 
-  pushText(cmds, '送货单', WIDTH / 2, y, FONT.title, COLORS.title, 'center')
-  y += 50
+  if (shopName) {
+    pushText(cmds, shopName, WIDTH / 2, y, FONT.title, COLORS.title, 'center')
+    y += 50
+    pushText(cmds, '送货单', WIDTH / 2, y, FONT.head, COLORS.title, 'center')
+    y += 32
+  } else {
+    pushText(cmds, '送货单', WIDTH / 2, y, FONT.title, COLORS.title, 'center')
+    y += 50
+  }
   pushText(cmds, '请核对后签收', WIDTH / 2, y, FONT.kicker, COLORS.muted, 'center')
   y += 32
   pushLine(cmds, PAD, y, WIDTH - PAD, y, 2)

@@ -10,22 +10,51 @@
     <text>{{shopName || '本店'}}成员</text>
   </view>
   <view class="card member-card" wx:for="{{members}}" wx:key="id">
-    <view>
-      <view class="item-name">{{item.openid}}</view>
+    <block wx:if="{{item.editing}}">
+      <view class="field">
+        <view class="field-label">称呼</view>
+        <input
+          class="field-input"
+          maxlength="32"
+          value="{{item.editName}}"
+          data-openid="{{item.openid}}"
+          bindinput="onEditName"
+          placeholder="店里怎么叫，可选"
+        />
+      </view>
+      <view class="action-strip">
+        <button class="btn-primary" data-openid="{{item.openid}}" bindtap="saveDisplayName">保存</button>
+        <button class="btn-ghost" bindtap="cancelEditName">取消</button>
+      </view>
+    </block>
+    <block wx:else>
+      <view class="item-name">{{item.displayTitle}}</view>
       <view class="muted">{{item.roleText}}<block wx:if="{{item.isMe}}"> · 我</block></view>
-    </view>
-    <button
-      wx:if="{{isOwner && !item.isMe}}"
-      class="btn-danger mini"
-      data-openid="{{item.openid}}"
-      bindtap="removeMember"
-    >移出</button>
+      <view class="action-strip" wx:if="{{item.canEditName || (isOwner && !item.isMe)}}">
+        <button
+          wx:if="{{item.canEditName}}"
+          class="btn-ghost"
+          data-openid="{{item.openid}}"
+          bindtap="startEditName"
+        >改称呼</button>
+        <button
+          wx:if="{{isOwner && !item.isMe}}"
+          class="btn-danger"
+          data-openid="{{item.openid}}"
+          bindtap="removeMember"
+        >移出</button>
+      </view>
+    </block>
   </view>
 
   <view wx:if="{{isOwner}}" class="card">
     <view class="field">
       <view class="field-label">添加店员</view>
       <input class="field-input" value="{{newOpenid}}" bindinput="onNewOpenid" placeholder="粘贴店员的 openid" />
+    </view>
+    <view class="field">
+      <view class="field-label">称呼</view>
+      <input class="field-input" maxlength="32" value="{{newDisplayName}}" bindinput="onNewDisplayName" placeholder="店里怎么叫，可选" />
     </view>
     <button class="btn-primary" bindtap="addMember">加入白名单</button>
   </view>

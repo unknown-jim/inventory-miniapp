@@ -23,6 +23,19 @@
       </view>
     </view>
     <view class="field">
+      <view class="field-label">经手人</view>
+      <input class="field-input" maxlength="32" value="{{operatorName}}" bindinput="onOperatorName" placeholder="可选，默认自己" hidden="{{showPicker || showCustomerPicker || showSlip}}" />
+      <view class="chips">
+        <view
+          class="chip {{item.on ? 'on' : ''}}"
+          wx:for="{{members}}"
+          wx:key="openid"
+          data-openid="{{item.openid}}"
+          bindtap="pickOperator"
+        >{{item.label}}</view>
+      </view>
+    </view>
+    <view class="field">
       <view class="field-label">备注</view>
       <input class="field-input" data-field="remark" value="{{remark}}" bindinput="onField" placeholder="可选，会写在送货单上" hidden="{{showPicker || showCustomerPicker || showSlip}}" />
     </view>

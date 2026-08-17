@@ -7,6 +7,7 @@ Page({
     members: [],
     isOwner: false,
     newOpenid: '',
+    newDisplayName: '',
     shopName: ''
   },
 
@@ -15,14 +16,21 @@ Page({
     try {
       const openid = await store.whoami()
       const res = await store.listMembers()
+      const isOwner = res.role === 'owner'
       this.setData({
         openid: openid,
         shopName: store.getShopName(),
-        isOwner: res.role === 'owner',
+        isOwner: isOwner,
         members: (res.members || []).map(function (item) {
+          const displayName = String(item.displayName || '').trim()
           return Object.assign({}, item, {
+            displayName: displayName,
+            displayTitle: displayName || '未命名',
             roleText: item.role === 'owner' ? '店主' : '店员',
-            isMe: item.openid === openid
+            isMe: item.openid === openid,
+            canEditName: isOwner || item.openid === openid,
+            editing: false,
+            editName: displayName
           })
         })
       })
@@ -33,6 +41,10 @@ Page({
 
   onNewOpenid(e) {
     this.setData({ newOpenid: e.detail.value })
+  },
+
+  onNewDisplayName(e) {
+    this.setData({ newDisplayName: e.detail.value })
   },
 
   copyOpenid() {
@@ -50,9 +62,55 @@ Page({
 
   async addMember() {
     try {
-      await store.addMember(this.data.newOpenid)
-      this.setData({ newOpenid: '' })
+      await store.addMember(this.data.newOpenid, '', this.data.newDisplayName)
+      this.setData({ newOpenid: '', newDisplayName: '' })
       wx.showToast({ title: '已加入白名单', icon: 'success' })
+      this.onShow()
+    } catch (error) {
+      util.showError(error)
+    }
+  },
+
+  startEditName(e) {
+    const openid = e.currentTarget.dataset.openid
+    this.setData({
+      members: this.data.members.map(function (item) {
+        const editing = item.openid === openid
+        return Object.assign({}, item, {
+          editing: editing,
+          editName: editing ? item.displayName : item.editName
+        })
+      })
+    })
+  },
+
+  onEditName(e) {
+    const openid = e.currentTarget.dataset.openid
+    const value = e.detail.value
+    this.setData({
+      members: this.data.members.map(function (item) {
+        if (item.openid !== openid) return item
+        return Object.assign({}, item, { editName: value })
+      })
+    })
+  },
+
+  cancelEditName() {
+    this.setData({
+      members: this.data.members.map(function (item) {
+        return Object.assign({}, item, { editing: false, editName: item.displayName })
+      })
+    })
+  },
+
+  async saveDisplayName(e) {
+    const openid = e.currentTarget.dataset.openid
+    const member = this.data.members.find(function (item) {
+      return item.openid === openid
+    })
+    try {
+      await store.updateMember(openid, member ? member.editName : '')
+      wx.showToast({ title: '已保存称呼', icon: 'success' })
       this.onShow()
     } catch (error) {
       util.showError(error)
