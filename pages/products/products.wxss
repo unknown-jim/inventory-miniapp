@@ -45,36 +45,26 @@
   font-weight: 600;
 }
 
-.bar {
-  height: 12rpx;
-  margin: 20rpx 0 12rpx;
-  background: #E2E8F0;
-  border-radius: 999rpx;
-  overflow: hidden;
+.goods-price-grid {
+  margin-top: var(--space-md);
 }
 
-.bar-fill {
-  height: 100%;
-  background: #0F766E;
-  border-radius: 999rpx;
-}
-
-.bar-fill.danger {
-  background: #DC2626;
-}
-
-.price-row {
+.goods-spec-toggle {
   display: flex;
-  flex-wrap: wrap;
-  gap: 16rpx 24rpx;
-  margin-top: 16rpx;
-  color: #334155;
-  font-size: var(--fs-sm);
+  align-items: center;
+  min-height: var(--tap-sm);
+  font-size: var(--fs-md);
+  color: #0F766E;
 }
 
-.profit {
-  color: #0F766E;
-  font-weight: 600;
+.goods-spec-panel {
+  margin-top: var(--space-sm);
+}
+
+.goods-spec-group-title {
+  margin-bottom: var(--space-sm);
+  color: #64748B;
+  font-size: var(--fs-sm);
 }
 
 .warm {
