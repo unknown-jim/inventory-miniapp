@@ -25,7 +25,7 @@ Page({
           const displayName = String(item.displayName || '').trim()
           return Object.assign({}, item, {
             displayName: displayName,
-            displayTitle: displayName || '未命名',
+            displayTitle: displayName || '还没写称呼',
             roleText: item.role === 'owner' ? '店主' : '店员',
             isMe: item.openid === openid,
             canEditName: isOwner || item.openid === openid,
@@ -47,24 +47,11 @@ Page({
     this.setData({ newDisplayName: e.detail.value })
   },
 
-  copyOpenid() {
-    if (!this.data.openid) {
-      wx.showToast({ title: '还没有 openid', icon: 'none' })
-      return
-    }
-    wx.setClipboardData({
-      data: this.data.openid,
-      success: function () {
-        wx.showToast({ title: '已复制 openid', icon: 'success' })
-      }
-    })
-  },
-
   async addMember() {
     try {
       await store.addMember(this.data.newOpenid, '', this.data.newDisplayName)
       this.setData({ newOpenid: '', newDisplayName: '' })
-      wx.showToast({ title: '已加入白名单', icon: 'success' })
+      wx.showToast({ title: '已添加店员', icon: 'success' })
       this.onShow()
     } catch (error) {
       util.showError(error)

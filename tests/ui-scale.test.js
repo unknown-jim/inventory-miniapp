@@ -108,7 +108,25 @@ assert.ok(shopWxml.indexOf('js-clear') >= 0, 'shop page should have js-clear')
 assert.ok(shopWxml.indexOf('js-restore') >= 0, 'shop page should have js-restore')
 assert.ok(shopWxml.indexOf('js-delete-shop') >= 0, 'shop page should have js-delete-shop')
 assert.ok(shopWxml.indexOf('成员名单') >= 0, 'shop page should keep 成员名单')
+assert.ok(shopWxml.indexOf('hasCurrentShop') >= 0, 'shop page current header should require membership')
+const shopJs = read('pages/shop/shop.js')
+assert.ok(
+  /async onShow\(\) \{[\s\S]*?shopsReady:\s*false[\s\S]*?listShops/.test(shopJs),
+  'shop onShow should hide stale shop UI until listShops returns'
+)
+assert.ok(shopWxml.indexOf('shopsLoadError') >= 0, 'shop page should have a shops load error state')
+assert.ok(shopWxml.indexOf('!shops.length && !hasCurrentShop') >= 0, 'empty onboarding should not run when current shop is known')
+assert.ok(shopJs.indexOf('retryShops') >= 0, 'shop page should retry shops after load error')
+assert.ok(shopJs.indexOf('hasCurrentShop: !!status.shopId') >= 0, 'listShops failure should still treat a selected shop as current')
+assert.ok(shopWxml.indexOf('加入别人的店') >= 0, 'shop page should offer 加入别人的店')
+assert.ok(shopWxml.indexOf('我的 openid') < 0, 'shop page should not title the identity block 我的 openid')
 assert.ok(shopWxml.indexOf('流水与毛利汇总') < 0, 'shop page should not link 流水与毛利汇总')
+
+const membersWxml = read('pages/members/members.wxml')
+assert.ok(membersWxml.indexOf('我的 openid') < 0, 'members page should not repeat identity copy')
+assert.ok(membersWxml.indexOf('添加店员') >= 0, 'members page should say 添加店员')
+assert.ok(membersWxml.indexOf('加入白名单') < 0, 'members page should not say 加入白名单')
+assert.ok(read('pages/members/members.js').indexOf('还没写称呼') >= 0, 'empty display name should read 还没写称呼')
 
 const project = JSON.parse(read('project.config.json'))
 const include = ((project.packOptions && project.packOptions.include) || [])

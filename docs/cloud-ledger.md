@@ -19,7 +19,7 @@
 - 环境 ID 写在 [`utils/cloud-config.js`](../utils/cloud-config.js) 的 `CLOUD_ENV_ID`，必须等于开发者工具「云开发 → 设置」里的那一串（微信侧）。腾讯云控制台里另一套环境填进来会报 Environment not found。空着不能记账，也不要用客户端 `DYNAMIC_CURRENT_ENV` 代替填写。
 - 集合：`shops`、`members`、`ledgers`、`ledger_clears`。前三张是当前店账；`ledger_clears` 保存每一次清空的完整快照，不回传给小程序。不要第一期就拆当前流水表。
 
-建店、加成员、选店、店主删店在低频页，不进 tab，不挂全局组件。tab 仍留主包。`lazyCodeLoading` 保持开启。`cloudfunctions/` 不进小程序包。
+建店、加成员、选店、店主删店在低频页，不进 tab，不挂全局组件。店铺页按有没有店分流：没店只展示创建和复制身份，有店后才展示本店、切换、账本和删除。tab 仍留主包。`lazyCodeLoading` 保持开启。`cloudfunctions/` 不进小程序包。
 
 ## 上线前在控制台做的事
 

@@ -4,38 +4,109 @@
     <view class="muted">{{blockedMessage}}</view>
   </view>
 
-  <block wx:else>
-    <view class="card">
-      <view class="field-label">我的 openid</view>
-      <view class="muted">发给老板，加进本店白名单后就能记账。没有邀请码。</view>
-      <view class="openid" selectable="true">{{openid || '加载中…'}}</view>
-      <button class="btn-ghost copy-btn" bindtap="copyOpenid">复制 openid</button>
+  <block wx:elif="{{!shopsReady}}">
+    <view class="card empty">
+      <view class="muted">加载中…</view>
+    </view>
+  </block>
+
+  <block wx:elif="{{!shops.length && !hasCurrentShop}}">
+    <view wx:if="{{shopsLoadError}}" class="card empty">
+      <view class="muted">店铺列表没加载成功。可以重试，或先创建、把身份发给老板。</view>
+      <button class="btn-ghost copy-btn" bindtap="retryShops">重试</button>
+    </view>
+    <view wx:else class="card empty">
+      <view class="empty-title">还没有店铺</view>
+      <view class="muted">自己创建一个，或把身份发给老板，加进店里就能记账。</view>
     </view>
 
     <view class="card">
       <view class="field">
-        <view class="field-label">创建店铺</view>
+        <view class="field-label">创建一家店</view>
         <input class="field-input" value="{{newShopName}}" bindinput="onShopName" placeholder="店铺名称" />
       </view>
       <button class="btn-primary" bindtap="createShop">创建并进入</button>
     </view>
 
-    <view class="section-title">
+    <view class="card">
+      <view class="field-label">加入别人的店</view>
+      <view class="muted">把这一串发给老板。没有邀请码。</view>
+      <view class="openid" selectable="true">{{openid || '加载中…'}}</view>
+      <button class="btn-ghost copy-btn" bindtap="copyOpenid">复制我的身份</button>
+    </view>
+  </block>
+
+  <block wx:else>
+    <view wx:if="{{shopsLoadError}}" class="card empty">
+      <view class="muted">{{shops.length ? '店铺列表没刷新成功，下面仍是上次看到的店。' : '店铺列表没加载成功。'}}</view>
+      <button class="btn-ghost copy-btn" bindtap="retryShops">重试</button>
+    </view>
+    <view wx:if="{{hasCurrentShop}}" class="card current-shop">
+      <view class="item-name">{{shopName || '未命名店铺'}}</view>
+      <view class="muted">
+        <block wx:if="{{currentRoleText}}">{{currentRoleText}} · </block>当前
+      </view>
+    </view>
+    <view wx:else class="card empty">
+      <view class="muted">点下面一家店进入，才能记账。</view>
+    </view>
+
+    <view wx:if="{{hasCurrentShop}}" class="section-title">
+      <text>本店</text>
+    </view>
+    <view wx:if="{{hasCurrentShop}}" class="card list-card">
+      <view class="list-item" bindtap="goMembers">
+        <view class="item-name">成员名单</view>
+        <view class="cell-go">›</view>
+      </view>
+    </view>
+
+    <view wx:if="{{shops.length}}" class="section-title">
       <text>我加入的店</text>
     </view>
-    <view wx:if="{{!shops.length}}" class="card empty">
-      <view class="muted">还没有店铺。自己创建一个，或把 openid 发给老板。</view>
+    <view wx:if="{{shops.length}}" class="card list-card">
+      <view
+        class="list-item"
+        wx:for="{{shops}}"
+        wx:key="id"
+        data-id="{{item.id}}"
+        data-name="{{item.name}}"
+        bindtap="selectShop"
+      >
+        <view class="item-main">
+          <view class="item-name">{{item.name}}</view>
+          <view class="muted">{{item.role === 'owner' ? '店主' : '店员'}}<block wx:if="{{item.current}}"> · 当前</block></view>
+        </view>
+      </view>
     </view>
-    <view
-      class="card shop-card {{item.current ? 'current' : ''}}"
-      wx:for="{{shops}}"
-      wx:key="id"
-      data-id="{{item.id}}"
-      data-name="{{item.name}}"
-      bindtap="selectShop"
-    >
-      <view class="item-name">{{item.name}}</view>
-      <view class="muted">{{item.role === 'owner' ? '店主' : '店员'}}<block wx:if="{{item.current}}"> · 当前</block></view>
+
+    <view class="card">
+      <view class="fold-head" bindtap="toggleCreate">
+        <view class="item-name">再建一家</view>
+        <view class="cell-go">{{showCreate ? '收起' : '展开'}}</view>
+      </view>
+      <view wx:if="{{showCreate}}" class="fold-body">
+        <view class="field">
+          <view class="field-label">店铺名称</view>
+          <input class="field-input" value="{{newShopName}}" bindinput="onShopName" placeholder="店铺名称" />
+        </view>
+        <button class="btn-primary" bindtap="createShop">创建并进入</button>
+      </view>
+    </view>
+
+    <view class="card">
+      <view class="fold-head" bindtap="toggleIdentity">
+        <view class="item-main">
+          <view class="item-name">加入别人的店</view>
+          <view class="muted">把身份发给老板</view>
+        </view>
+        <view class="cell-go">{{showIdentity ? '收起' : '展开'}}</view>
+      </view>
+      <view wx:if="{{showIdentity}}" class="fold-body">
+        <view class="muted">发给老板，加进店里就能记账。没有邀请码。</view>
+        <view class="openid" selectable="true">{{openid || '加载中…'}}</view>
+        <button class="btn-ghost copy-btn" bindtap="copyOpenid">复制我的身份</button>
+      </view>
     </view>
 
     <view wx:if="{{canMigrate}}" class="card">
@@ -44,21 +115,26 @@
       <button class="btn-primary seed-btn" bindtap="migrateLocal">把本机账本上传到当前店</button>
     </view>
 
+    <view wx:if="{{showLedgerReset}}" class="section-title">
+      <text>账本</text>
+    </view>
     <view wx:if="{{showLedgerReset}}" class="card">
-      <view class="field-label">当前店账本</view>
-      <view class="muted">只清当前店的商品、客户、种类模板和流水。店铺和成员还在。</view>
-      <button wx:if="{{!isEmpty}}" class="btn-danger seed-btn js-clear" bindtap="clearData">清空数据</button>
-      <button wx:if="{{canRestore}}" class="btn-ghost js-restore" bindtap="restoreCleared">恢复清空前数据</button>
+      <block wx:if="{{!isEmpty}}">
+        <view class="muted">只清商品、客户、种类模板和流水。店铺和成员还在。</view>
+        <button class="btn-danger seed-btn js-clear" bindtap="clearData">清空数据</button>
+      </block>
+      <block wx:if="{{canRestore}}">
+        <view class="muted restore-copy">可恢复到最近一次清空前。清空之后新记的账会丢掉。</view>
+        <button class="btn-ghost js-restore" bindtap="restoreCleared">恢复清空前数据</button>
+      </block>
     </view>
 
+    <view wx:if="{{canDeleteShop}}" class="section-title">
+      <text>危险操作</text>
+    </view>
     <view wx:if="{{canDeleteShop}}" class="card">
-      <view class="field-label">删除当前店铺</view>
-      <view class="muted">店铺、成员、账本和清空记录都会删掉。这和「清空数据」不同，清空只抹账、店还在。</view>
+      <view class="muted">店铺、成员、账本和清空记录都会删掉，不能从本程序找回。</view>
       <button class="btn-danger seed-btn js-delete-shop" bindtap="deleteShop">删除店铺</button>
-    </view>
-
-    <view wx:if="{{currentShopId}}" class="footer-actions">
-      <text class="link" bindtap="goMembers">成员名单</text>
     </view>
   </block>
 </view>
