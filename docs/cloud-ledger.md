@@ -25,7 +25,7 @@
 
 1. 开通云开发，把**开发者工具云开发面板里的**环境 ID 填进 `utils/cloud-config.js`。
 2. 建集合 `shops`、`members`、`ledgers`、`ledger_clears`，权限选「仅管理端可读写」。
-3. 用微信云托管 CLI（`wxcloud login` 后上传 `ledger`）或开发者工具对 `cloudfunctions/ledger` 右键「上传并部署：云端安装依赖」（超时已设 20 秒）。不要用腾讯云账号的 `tcb` 去管微信侧环境。
+3. 用微信云托管 CLI 部署 `ledger`：密钥只放环境变量 `WXCLOUD_PRIVATE_KEY`（或 gitignore 的 `.env`），执行 `node scripts/wxcloud-login.js` 和 `node scripts/wxcloud-deploy-ledger.js`。不要用腾讯云账号的 `tcb`，也不要把密钥写进仓库。Agent 步骤见 [`.cursor/skills/wxcloud-cli/SKILL.md`](../.cursor/skills/wxcloud-cli/SKILL.md)。开发者工具右键「上传并部署：云端安装依赖」也可以。超时已设 20 秒。
 4. 开发者工具使用正式 AppID（测试号没有云开发）。
 
 可选：给 `members` 的 `openid`、`shopId` 加索引，名单变长时列表更快。
@@ -48,4 +48,5 @@
 - 离线开单队列。断网卖货和同时卖货冲突无法在本地裁决。
 - 把现场规矩写成软件限制。记账仍要自洽，见 [accounting-vs-policy.md](accounting-vs-policy.md)。
 - 把 `CLOUD_ENV_ID` 留空却指望开发者工具自动选环境，或把腾讯云控制台里另一套环境 ID 填进小程序。
+- 把微信云托管 CLI 密钥写进仓库、skill 或提交说明。只放 `WXCLOUD_PRIVATE_KEY` 或 `.env`。
 - 改了 `utils/inventory.js` 或 `utils/ledger-apply.js` 却不跑 `npm run sync:ledger-inventory`。

@@ -72,6 +72,7 @@ npm run test:ui
 - 待加工 / 分规格 / 退货 / 改规格，见 [docs/blank-process.md](docs/blank-process.md)
 - 操作界面字号、点击区域和密度规则，见 [docs/ui-scale.md](docs/ui-scale.md)
 - 云函数记账、多店隔离、环境 ID，见 [docs/cloud-ledger.md](docs/cloud-ledger.md)
+- 部署云函数用微信云托管 CLI，密钥放环境变量 `WXCLOUD_PRIVATE_KEY`，见 [docs/cloud-ledger.md](docs/cloud-ledger.md)
 
 ## 刻意没做的
 
