@@ -1,16 +1,3 @@
-.openid {
-  margin: 16rpx 0;
-  padding: 20rpx 24rpx;
-  background: #F8FAF9;
-  border-radius: 14rpx;
-  word-break: break-all;
-  font-size: var(--fs-sm);
-}
-
-.copy-btn {
-  margin-top: 12rpx;
-}
-
 .member-card {
   margin-bottom: 16rpx;
 }

@@ -5,8 +5,11 @@ Page({
   data: {
     openid: '',
     shops: [],
+    shopsReady: false,
+    shopsLoadError: false,
     currentShopId: '',
     shopName: '',
+    currentRoleText: '',
     newShopName: '',
     canMigrate: false,
     blockedMessage: '',
@@ -15,7 +18,10 @@ Page({
     isEmpty: true,
     canRestore: false,
     showLedgerReset: false,
-    canDeleteShop: false
+    canDeleteShop: false,
+    hasCurrentShop: false,
+    showCreate: false,
+    showIdentity: false
   },
 
   refreshLedgerReset(canBookkeep) {
@@ -38,7 +44,8 @@ Page({
       configured: status.configured,
       blockedMessage: status.configured ? '' : status.message,
       canMigrate: !!store.getPendingMigrate(),
-      canDeleteShop: false
+      shopsReady: false,
+      shopsLoadError: false
     })
     if (status.canBookkeep) {
       try {
@@ -54,18 +61,46 @@ Page({
     if (!status.configured && status.mode !== 'memory') return
     try {
       const openid = await store.whoami()
+      this.setData({ openid: openid })
+    } catch (error) {
+      util.showError(error)
+    }
+    try {
       const shops = await store.listShops()
       const current = shops.find(function (item) {
         return item.id === status.shopId
       })
       this.setData({
-        openid: openid,
+        shopsReady: true,
+        shopsLoadError: false,
         shops: shops.map(function (item) {
           return Object.assign({}, item, { current: item.id === status.shopId })
         }),
-        canDeleteShop: !!(current && current.role === 'owner')
+        canDeleteShop: !!(current && current.role === 'owner'),
+        hasCurrentShop: !!current,
+        shopName: current ? current.name : status.shopName,
+        currentRoleText: current
+          ? (current.role === 'owner' ? '店主' : '店员')
+          : ''
       })
     } catch (error) {
+      const shops = (this.data.shops || []).map(function (item) {
+        return Object.assign({}, item, { current: item.id === status.shopId })
+      })
+      const current = shops.find(function (item) {
+        return item.id === status.shopId
+      })
+      this.setData({
+        shopsReady: true,
+        shopsLoadError: true,
+        shops: shops,
+        hasCurrentShop: !!status.shopId,
+        shopName: (current && current.name) || status.shopName,
+        canDeleteShop: !!(current && current.role === 'owner'),
+        currentRoleText: current
+          ? (current.role === 'owner' ? '店主' : '店员')
+          : ''
+      })
       util.showError(error)
     }
   },
@@ -74,9 +109,22 @@ Page({
     this.setData({ newShopName: e.detail.value })
   },
 
+  toggleCreate() {
+    this.setData({ showCreate: !this.data.showCreate })
+  },
+
+  toggleIdentity() {
+    this.setData({ showIdentity: !this.data.showIdentity })
+  },
+
+  retryShops() {
+    this.onShow()
+  },
+
   async createShop() {
     try {
       await store.createShop(this.data.newShopName)
+      this.setData({ newShopName: '', showCreate: false })
       wx.showToast({ title: '已创建店铺', icon: 'success' })
       this.onShow()
     } catch (error) {
@@ -98,13 +146,13 @@ Page({
 
   copyOpenid() {
     if (!this.data.openid) {
-      wx.showToast({ title: '还没有 openid', icon: 'none' })
+      wx.showToast({ title: '还没有可复制的身份', icon: 'none' })
       return
     }
     wx.setClipboardData({
       data: this.data.openid,
       success: function () {
-        wx.showToast({ title: '已复制 openid', icon: 'success' })
+        wx.showToast({ title: '已复制身份', icon: 'success' })
       }
     })
   },
