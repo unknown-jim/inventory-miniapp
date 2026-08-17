@@ -1,6 +1,7 @@
 const store = require('../../utils/store')
 const util = require('../../utils/util')
 const inventory = require('../../utils/inventory')
+const saleSpecView = require('../../utils/sale-spec-view')
 const slipActions = require('../../utils/slip-actions')
 const memberChips = require('../../utils/member-chips').memberChips
 
@@ -240,41 +241,22 @@ Page({
   },
 
   specOptions(product, selectedColor, selectedSize, cart) {
-    const colors = (product && product.colors) || []
-    const sizes = (product && product.sizes) || []
-    const skus = this.data.skus
-    const reserved = this.cartItems(cart)
-    const blankProcess = inventory.isBlankProcess(product)
-    const colorOptions = colors.map(function (color) {
-      const related = inventory.skusOfProduct(skus, product.id).filter(function (item) {
-        return !item.isBlank && item.color === color
-      })
-      const stock = related.reduce(function (sum, item) {
-        return sum + inventory.toNumber(item.stock)
-      }, 0)
-      return { value: color, stock: stock, on: color === selectedColor }
-    })
-    const sizeOptions = sizes.map(function (size) {
-      if (blankProcess) {
-        const avail = selectedColor
-          ? inventory.blankAvailability(product, skus, selectedColor, size, reserved)
-          : { total: 0 }
-        return {
-          value: size,
-          stock: avail.total,
-          on: size === selectedSize,
-          low: false
-        }
-      }
-      const sku = inventory.findSkuBySpec(skus, product.id, selectedColor || '', size)
-      return {
-        value: size,
-        stock: sku ? sku.stock : 0,
-        on: size === selectedSize,
-        low: !!(sku && sku.stock <= sku.alertQty)
-      }
-    })
-    return { colorOptions: colorOptions, sizeOptions: sizeOptions }
+    return saleSpecView.saleSpecOptions(
+      product,
+      this.data.skus,
+      selectedColor,
+      selectedSize,
+      this.cartItems(cart)
+    )
+  },
+
+  stockPatch(product, sku, cart) {
+    if (!product) {
+      return { stockText: this.data.stockText }
+    }
+    return Object.assign({
+      stockText: this.stockLeft(product, sku, cart)
+    }, this.specOptions(product, this.data.selectedColor, this.data.selectedSize, cart))
   },
 
   totals(cart, qtyValue, priceValue) {
@@ -486,9 +468,8 @@ Page({
       const sku = line.skuId ? store.getSku(line.skuId) : null
       this.setData(Object.assign({
         cart: cart,
-        qty: '',
-        stockText: this.stockLeft(product, sku, cart)
-      }, this.totals(cart, 0)))
+        qty: ''
+      }, this.stockPatch(product, sku, cart), this.totals(cart, 0)))
       wx.showToast({ title: '已加入清单', icon: 'success' })
     } catch (error) {
       util.showError(error)
@@ -520,9 +501,8 @@ Page({
     const product = store.getProduct(this.data.productId)
     const sku = this.currentSku(product)
     this.setData(Object.assign({
-      cart: cart,
-      stockText: this.stockLeft(product, sku, cart)
-    }, this.totals(cart)))
+      cart: cart
+    }, this.stockPatch(product, sku, cart), this.totals(cart)))
   },
 
   async submit() {
@@ -571,9 +551,8 @@ Page({
         qty: '',
         remark: '',
         showSlip: true,
-        slip: slipView,
-        stockText: product ? this.stockLeft(product, sku, []) : this.data.stockText
-      }, this.totals([], 0)))
+        slip: slipView
+      }, this.stockPatch(product, sku, []), this.totals([], 0)))
       this.prepareSlipImage(slipView)
       if (this.data.customerId) {
         this.selectCustomer(this.data.customerId)
