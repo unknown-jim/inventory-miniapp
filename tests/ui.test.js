@@ -246,6 +246,7 @@ async function runNativeClearModal(miniProgram) {
   await home.waitFor(800)
   const shop = await miniProgram.currentPage()
   assert.ok(shop.path.indexOf('shop') >= 0, '未进入店铺页: ' + shop.path)
+  await waitPageReady(shop)
   await shop.waitFor('.js-clear')
   await tap(shop, '.js-clear')
   await shop.waitFor(async function () {

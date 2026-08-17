@@ -8,16 +8,22 @@ Page({
     isOwner: false,
     newOpenid: '',
     newDisplayName: '',
-    shopName: ''
+    shopName: '',
+    pageLoading: true
   },
 
   async onShow() {
-    if (!(await store.ready())) return
+    if (!store.isReady()) this.setData({ pageLoading: true })
+    if (!(await store.ready())) {
+      this.setData({ pageLoading: false })
+      return
+    }
     try {
       const openid = await store.whoami()
       const res = await store.listMembers()
       const isOwner = res.role === 'owner'
       this.setData({
+        pageLoading: false,
         openid: openid,
         shopName: store.getShopName(),
         isOwner: isOwner,
@@ -35,6 +41,7 @@ Page({
         })
       })
     } catch (error) {
+      this.setData({ pageLoading: false })
       util.showError(error)
     }
   },

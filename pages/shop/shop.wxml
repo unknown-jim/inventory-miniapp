@@ -1,12 +1,12 @@
 <view class="page">
-  <view wx:if="{{!configured}}" class="card empty">
-    <view class="empty-title">还不能记账</view>
-    <view class="muted">{{blockedMessage}}</view>
-  </view>
+  <block wx:if="{{pageLoading}}">
+    <include src="/pages/common/page-loading.wxml" />
+  </block>
 
-  <block wx:elif="{{!shopsReady}}">
+  <block wx:elif="{{!configured}}">
     <view class="card empty">
-      <view class="muted">加载中…</view>
+      <view class="empty-title">还不能记账</view>
+      <view class="muted">{{blockedMessage}}</view>
     </view>
   </block>
 

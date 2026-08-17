@@ -5,7 +5,7 @@ Page({
   data: {
     openid: '',
     shops: [],
-    shopsReady: false,
+    pageLoading: true,
     shopsLoadError: false,
     currentShopId: '',
     shopName: '',
@@ -15,7 +15,7 @@ Page({
     blockedMessage: '',
     configured: true,
     canBookkeep: false,
-    isEmpty: true,
+    isEmpty: false,
     canRestore: false,
     showLedgerReset: false,
     canDeleteShop: false,
@@ -38,13 +38,28 @@ Page({
 
   async onShow() {
     const status = store.getStatus()
+    if (!status.configured && status.mode !== 'memory') {
+      this.setData({
+        pageLoading: false,
+        configured: false,
+        blockedMessage: status.message,
+        currentShopId: status.shopId,
+        shopName: status.shopName,
+        canMigrate: !!store.getPendingMigrate(),
+        shopsLoadError: false,
+        hasCurrentShop: false,
+        canDeleteShop: false
+      })
+      this.refreshLedgerReset(false)
+      return
+    }
     this.setData({
+      pageLoading: true,
+      configured: true,
+      blockedMessage: '',
       currentShopId: status.shopId,
       shopName: status.shopName,
-      configured: status.configured,
-      blockedMessage: status.configured ? '' : status.message,
       canMigrate: !!store.getPendingMigrate(),
-      shopsReady: false,
       shopsLoadError: false
     })
     if (status.canBookkeep) {
@@ -58,7 +73,6 @@ Page({
     } else {
       this.refreshLedgerReset(false)
     }
-    if (!status.configured && status.mode !== 'memory') return
     try {
       const openid = await store.whoami()
       this.setData({ openid: openid })
@@ -71,7 +85,7 @@ Page({
         return item.id === status.shopId
       })
       this.setData({
-        shopsReady: true,
+        pageLoading: false,
         shopsLoadError: false,
         shops: shops.map(function (item) {
           return Object.assign({}, item, { current: item.id === status.shopId })
@@ -91,7 +105,7 @@ Page({
         return item.id === status.shopId
       })
       this.setData({
-        shopsReady: true,
+        pageLoading: false,
         shopsLoadError: true,
         shops: shops,
         hasCurrentShop: !!status.shopId,
