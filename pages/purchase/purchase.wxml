@@ -1,4 +1,8 @@
 <view class="page">
+  <block wx:if="{{pageLoading}}">
+    <include src="/pages/common/page-loading.wxml" />
+  </block>
+  <block wx:else>
   <view class="card">
     <view class="field">
       <view class="field-label">商品</view>
@@ -78,4 +82,5 @@
       </scroll-view>
     </view>
   </view>
+  </block>
 </view>

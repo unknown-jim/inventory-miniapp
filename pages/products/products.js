@@ -7,11 +7,16 @@ Page({
     keyword: '',
     onlyAlert: false,
     list: [],
-    alertCount: 0
+    alertCount: 0,
+    pageLoading: true
   },
 
   async onShow() {
-    if (!(await store.ready())) return
+    if (!store.isReady()) this.setData({ pageLoading: true })
+    if (!(await store.ready())) {
+      this.setData({ pageLoading: false })
+      return
+    }
     const filter = getApp().consumePendingInventoryFilter()
     if (filter === 'alert') {
       this.setData({ onlyAlert: true, keyword: '' })
@@ -29,6 +34,7 @@ Page({
     })
     const source = this.data.onlyAlert ? alerts : products
     this.setData({
+      pageLoading: false,
       list: source.map(function (item) {
         const view = util.withView(item, skus)
         const cap = item.alertQty * 3 || 1

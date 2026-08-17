@@ -1,0 +1,4 @@
+<view class="card empty page-loading js-page-loading">
+  <view class="empty-title">正在加载</view>
+  <view class="muted">请稍候，正在读取本店账本。</view>
+</view>

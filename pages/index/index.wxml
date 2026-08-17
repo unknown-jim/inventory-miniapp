@@ -1,9 +1,15 @@
 <view class="page">
-  <view wx:if="{{blocked}}" class="card empty-card">
-    <view class="empty-title">还不能记账</view>
-    <view class="muted">{{blockedMessage}}</view>
-    <button class="btn-primary seed-btn" bindtap="goShop">创建或选择店铺</button>
-  </view>
+  <block wx:if="{{pageLoading}}">
+    <include src="/pages/common/page-loading.wxml" />
+  </block>
+
+  <block wx:elif="{{blocked}}">
+    <view class="card empty-card">
+      <view class="empty-title">还不能记账</view>
+      <view class="muted">{{blockedMessage}}</view>
+      <button class="btn-primary seed-btn" bindtap="goShop">创建或选择店铺</button>
+    </view>
+  </block>
 
   <block wx:else>
   <view class="hero card">

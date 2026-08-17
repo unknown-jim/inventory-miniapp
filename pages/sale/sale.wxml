@@ -1,4 +1,8 @@
 <view class="page">
+  <block wx:if="{{pageLoading}}">
+    <include src="/pages/common/page-loading.wxml" />
+  </block>
+  <block wx:else>
   <view class="card">
     <view class="field">
       <view class="field-head">
@@ -159,5 +163,6 @@
   </view>
 
   <include src="/pages/common/slip-overlay.wxml" />
+  </block>
   <canvas type="2d" id="slipCanvas" class="slip-canvas"></canvas>
 </view>

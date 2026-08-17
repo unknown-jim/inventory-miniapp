@@ -99,6 +99,10 @@
       {
         "type": "file",
         "value": "pages/common/slip-overlay.wxml"
+      },
+      {
+        "type": "file",
+        "value": "pages/common/page-loading.wxml"
       }
     ]
   },
