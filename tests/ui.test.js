@@ -183,7 +183,7 @@ async function runRecordSlipExport(miniProgram) {
 
 async function runOpeningSheet(miniProgram) {
   step('客户页：记期初欠款，弹出层并确认')
-  const list = await miniProgram.navigateTo('/pages/customers/customers')
+  const list = await miniProgram.switchTab('/pages/customers/customers')
   await list.waitFor('.js-customer-item')
   await tap(list, '.js-customer-item')
 
@@ -205,7 +205,7 @@ async function runOpeningSheet(miniProgram) {
 
 async function runPaySheet(miniProgram) {
   step('客户页：点收款，弹出收款层并确认')
-  const list = await miniProgram.navigateTo('/pages/customers/customers')
+  const list = await miniProgram.switchTab('/pages/customers/customers')
   await list.waitFor('.js-collect')
   await tap(list, '.js-collect')
 

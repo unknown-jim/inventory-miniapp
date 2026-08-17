@@ -138,4 +138,28 @@ collectSources().forEach(function (file) {
 assert.strictEqual(missingFiles.length, 0, 'referenced file missing on disk:\n' + missingFiles.join('\n'))
 assert.strictEqual(missingInclude.length, 0, 'referenced file not in packOptions.include:\n' + missingInclude.join('\n'))
 
+const tabList = appJson.tabBar && appJson.tabBar.list ? appJson.tabBar.list : []
+assert.strictEqual(tabList.length, 5, 'tabBar should have 5 items')
+assert.deepStrictEqual(
+  tabList.map(function (item) { return item.text }),
+  ['看板', '商品', '进货', '销售', '客户']
+)
+assert.deepStrictEqual(
+  tabList.map(function (item) { return item.pagePath }),
+  [
+    'pages/index/index',
+    'pages/products/products',
+    'pages/purchase/purchase',
+    'pages/sale/sale',
+    'pages/customers/customers'
+  ]
+)
+tabList.forEach(function (item) {
+  assert.ok(item.iconPath && fs.existsSync(path.join(root, item.iconPath)), 'missing tab icon: ' + item.iconPath)
+  assert.ok(
+    item.selectedIconPath && fs.existsSync(path.join(root, item.selectedIconPath)),
+    'missing selected tab icon: ' + item.selectedIconPath
+  )
+})
+
 console.log('pack-refs: ' + Object.keys(included).length + ' include entries ok')

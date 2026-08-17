@@ -1,3 +1,27 @@
+.page {
+  padding-bottom: 140rpx;
+}
+
+.toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin: 8rpx 8rpx 20rpx;
+}
+
+.toolbar .chips {
+  margin-bottom: 0;
+}
+
+.toolbar .chip {
+  margin-bottom: 0;
+}
+
+.link {
+  color: #0F766E;
+  font-size: var(--fs-sm);
+}
+
 .goods-card {
   margin-bottom: 16rpx;
   padding: 24rpx 28rpx 20rpx;
@@ -19,6 +43,24 @@
 .item-name {
   font-size: var(--fs-lg);
   font-weight: 600;
+}
+
+.bar {
+  height: 12rpx;
+  margin: 20rpx 0 12rpx;
+  background: #E2E8F0;
+  border-radius: 999rpx;
+  overflow: hidden;
+}
+
+.bar-fill {
+  height: 100%;
+  background: #0F766E;
+  border-radius: 999rpx;
+}
+
+.bar-fill.danger {
+  background: #DC2626;
 }
 
 .price-row {

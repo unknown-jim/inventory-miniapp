@@ -90,20 +90,20 @@ Page({
   },
 
   goProducts() {
-    wx.switchTab({ url: '/pages/products/products' })
+    this.openGoods('all')
   },
 
   goInventory() {
-    this.openInventory('all')
+    this.openGoods('all')
   },
 
   goAlerts() {
-    this.openInventory('alert')
+    this.openGoods('alert')
   },
 
-  openInventory(filter) {
+  openGoods(filter) {
     getApp().setPendingInventoryFilter(filter)
-    wx.switchTab({ url: '/pages/inventory/inventory' })
+    wx.switchTab({ url: '/pages/products/products' })
   },
 
   goAddProduct() {
@@ -111,7 +111,7 @@ Page({
   },
 
   goCustomers() {
-    wx.navigateTo({ url: '/pages/customers/customers' })
+    wx.switchTab({ url: '/pages/customers/customers' })
   },
 
   goShop() {

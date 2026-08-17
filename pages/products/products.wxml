@@ -6,10 +6,28 @@
     bindinput="onSearch"
   />
 
+  <view class="toolbar">
+    <view class="chips">
+      <view class="chip {{onlyAlert ? '' : 'on'}}" bindtap="showAll">全部</view>
+      <view class="chip {{onlyAlert ? 'low' : ''}}" bindtap="showAlert">预警 {{alertCount}}</view>
+    </view>
+    <text class="link" bindtap="goRecords">流水</text>
+  </view>
+
   <view wx:if="{{!list.length}}" class="card empty">
-    <view class="empty-title">没有匹配的商品</view>
-    <view class="muted">先新增商品，再做进货和销售。</view>
-    <button class="btn-primary seed-btn" bindtap="goAdd">新增商品</button>
+    <block wx:if="{{keyword}}">
+      <view class="empty-title">没有匹配的商品</view>
+      <view class="muted">换个名称、货号或条码再搜。</view>
+    </block>
+    <block wx:elif="{{onlyAlert}}">
+      <view class="empty-title">当前没有低于预警的商品</view>
+      <view class="muted">预警数量在编辑商品里改。点「全部」看所有商品。</view>
+    </block>
+    <block wx:else>
+      <view class="empty-title">还没有商品</view>
+      <view class="muted">先新增商品，再做进货和销售。</view>
+      <button class="btn-primary seed-btn" bindtap="goAdd">新增商品</button>
+    </block>
   </view>
 
   <view class="card goods-card" wx:for="{{list}}" wx:key="id">
@@ -23,6 +41,10 @@
       </view>
       <view class="muted">货号 {{item.sku || '未填'}} · 条码 {{item.barcode || '未填'}}</view>
       <view wx:if="{{item.skuSummary}}" class="muted">{{item.skuSummary}}</view>
+      <view class="muted">预警 ≤ {{item.alertQty}}</view>
+      <view class="bar">
+        <view class="bar-fill {{item.lowStock ? 'danger' : ''}}" style="width: {{item.barWidth}}%;"></view>
+      </view>
       <view class="price-row">
         <text>进价 ¥{{item.costText}}</text>
         <text>售价 ¥{{item.saleText}}</text>

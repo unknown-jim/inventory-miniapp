@@ -370,7 +370,7 @@ Page({
   },
 
   goCustomers() {
-    wx.navigateTo({ url: '/pages/customers/customers' })
+    wx.switchTab({ url: '/pages/customers/customers' })
   },
 
   onField(e) {
