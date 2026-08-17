@@ -45,6 +45,18 @@
       {
         "type": "file",
         "value": "package-lock.json"
+      },
+      {
+        "type": "file",
+        "value": ".env"
+      },
+      {
+        "type": "file",
+        "value": ".env.example"
+      },
+      {
+        "type": "folder",
+        "value": ".cursor"
       }
     ],
     "include": [
