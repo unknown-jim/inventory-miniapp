@@ -114,11 +114,27 @@ MemoryDb.prototype.runTransaction = async function (fn) {
       async setShop(shop) {
         snap.shops[shop._id] = clone(shop)
       },
+      async removeShop(shopId) {
+        delete snap.shops[shopId]
+      },
       async setMember(member) {
         snap.members[member._id] = clone(member)
       },
       async removeMember(memberId) {
         delete snap.members[memberId]
+      },
+      async removeLedger(shopId) {
+        delete snap.ledgers[shopId]
+      },
+      async listClearSnapshotsByShop(shopId) {
+        return Object.keys(snap.clears).map(function (key) {
+          return snap.clears[key]
+        }).filter(function (item) {
+          return item.shopId === shopId
+        })
+      },
+      async removeClearSnapshot(id) {
+        delete snap.clears[id]
       }
     }
     const result = await fn(tx)
@@ -399,6 +415,56 @@ async function rejects(promise, re) {
     }),
     /不是该店成员/
   )
+
+  await rejects(
+    call(db, ids, 'staff-c', 'deleteShop', shopA),
+    /只有店主能删除店铺/
+  )
+  await rejects(
+    call(db, ids, 'user-b', 'deleteShop', shopA),
+    /不是该店成员/
+  )
+  await rejects(
+    call(db, ids, 'user-a', 'deleteShop', ''),
+    /请选择店铺/
+  )
+
+  const tempShop = await call(db, ids, 'user-a', 'createShop', '', { name: '临时店' })
+  await call(db, ids, 'user-a', 'deleteShop', tempShop.shop.id)
+  const shopsAfterTemp = await call(db, ids, 'user-a', 'listShops')
+  assert.strictEqual(shopsAfterTemp.shops.filter(function (item) {
+    return item.id === tempShop.shop.id
+  }).length, 0)
+  assert.strictEqual(shopsAfterTemp.shops.length, 1)
+  assert.strictEqual(shopsAfterTemp.shops[0].name, '甲店')
+
+  await call(db, ids, 'user-a', 'clearAll', shopA)
+  assert.ok(Object.keys(db.clears).some(function (id) {
+    return db.clears[id].shopId === shopA
+  }))
+  const deleted = await call(db, ids, 'user-a', 'deleteShop', shopA)
+  assert.strictEqual(deleted.deleted, true)
+  assert.strictEqual(db.shops[shopA], undefined)
+  assert.strictEqual(db.ledgers[shopA], undefined)
+  assert.strictEqual(Object.keys(db.members).filter(function (key) {
+    return db.members[key].shopId === shopA
+  }).length, 0)
+  assert.strictEqual(Object.keys(db.clears).filter(function (id) {
+    return db.clears[id].shopId === shopA
+  }).length, 0)
+  await rejects(
+    call(db, ids, 'user-a', 'getLedger', shopA),
+    /不是该店成员/
+  )
+  const shopsAfterDelete = await call(db, ids, 'user-a', 'listShops')
+  assert.strictEqual(shopsAfterDelete.shops.length, 0)
+  const staffShops = await call(db, ids, 'staff-c', 'listShops')
+  assert.strictEqual(staffShops.shops.length, 0)
+  const shopsB = await call(db, ids, 'user-b', 'listShops')
+  assert.strictEqual(shopsB.shops.length, 1)
+  assert.strictEqual(shopsB.shops[0].name, '乙店')
+  const ledgerBStill = await call(db, ids, 'user-b', 'getLedger', shopB)
+  assert.strictEqual(ledgerBStill.ledger.products.length, 0)
 
   console.log('ledger tests passed')
 })().catch(function (error) {

@@ -312,6 +312,9 @@ async function memoryCall(action, shopId, payload) {
   if (action === 'addMember' || action === 'removeMember') {
     throw new Error('本地测试账本不能改成员')
   }
+  if (action === 'deleteShop') {
+    throw new Error('本地测试账本不能删店')
+  }
   if (action === 'getLedger') {
     loadCacheFromStorage()
     const ledger = memoryLedger()
@@ -596,6 +599,26 @@ async function selectShop(shopId, shopName) {
   await ensureReady()
 }
 
+async function deleteShop() {
+  const shopId = getShopId()
+  if (!shopId) {
+    throw new Error('请选择店铺')
+  }
+  showBusy()
+  try {
+    const res = await request('deleteShop', {}, { shopId: shopId })
+    setShopMeta('', '')
+    wx.removeStorageSync(ARCHIVE_KEY)
+    wx.removeStorageSync(LAST_RESTORED_KEY)
+    applyLedger(apply.emptyLedger())
+    cache.shopId = ''
+    invalidateReady()
+    return res
+  } finally {
+    hideBusy()
+  }
+}
+
 async function listMembers() {
   await ensureReady()
   const res = await request('listMembers', {})
@@ -700,6 +723,7 @@ module.exports = {
   listShops: listShops,
   createShop: createShop,
   selectShop: selectShop,
+  deleteShop: deleteShop,
   listMembers: listMembers,
   addMember: addMember,
   removeMember: removeMember,

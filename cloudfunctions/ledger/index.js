@@ -44,8 +44,12 @@ function createDb() {
         return await db.runTransaction(async function (transaction) {
           const tx = {
             async getLedger(shopId) {
-              const res = await transaction.collection('ledgers').doc(shopId).get()
-              return res.data || null
+              try {
+                const res = await transaction.collection('ledgers').doc(shopId).get()
+                return res.data || null
+              } catch (error) {
+                return null
+              }
             },
             async putLedger(shopId, ledger) {
               await transaction.collection('ledgers').doc(shopId).set({
@@ -70,13 +74,20 @@ function createDb() {
               return res.data || []
             },
             async getShop(shopId) {
-              const res = await transaction.collection('shops').doc(shopId).get()
-              return res.data || null
+              try {
+                const res = await transaction.collection('shops').doc(shopId).get()
+                return res.data || null
+              } catch (error) {
+                return null
+              }
             },
             async setShop(shop) {
               await transaction.collection('shops').doc(shop._id).set({
                 data: cloneData(shop)
               })
+            },
+            async removeShop(shopId) {
+              await transaction.collection('shops').doc(shopId).remove()
             },
             async setMember(member) {
               await transaction.collection('members').doc(member._id).set({
@@ -85,6 +96,20 @@ function createDb() {
             },
             async removeMember(memberId) {
               await transaction.collection('members').doc(memberId).remove()
+            },
+            async removeLedger(shopId) {
+              await transaction.collection('ledgers').doc(shopId).remove()
+            },
+            async listClearSnapshotsByShop(shopId) {
+              const res = await transaction.collection('ledger_clears').where({ shopId: shopId }).limit(100).get()
+              return res.data || []
+            },
+            async removeClearSnapshot(id) {
+              try {
+                await transaction.collection('ledger_clears').doc(id).remove()
+              } catch (error) {
+                return
+              }
             }
           }
           return fn(tx)
