@@ -11,6 +11,10 @@
   margin-top: 12rpx;
 }
 
+.card + .card {
+  margin-top: var(--space-md);
+}
+
 .list-card {
   padding: 8rpx 28rpx;
 }
