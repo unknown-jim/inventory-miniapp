@@ -26,7 +26,11 @@
 }
 
 .seed-btn {
-  margin-top: 24rpx;
+  margin-top: var(--space-lg);
+}
+
+.js-restore {
+  margin-top: var(--space-md);
 }
 
 .footer-actions {

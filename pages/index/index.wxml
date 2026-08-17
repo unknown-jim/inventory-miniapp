@@ -3,11 +3,14 @@
     <view class="empty-title">还不能记账</view>
     <view class="muted">{{blockedMessage}}</view>
     <button class="btn-primary seed-btn" bindtap="goShop">创建或选择店铺</button>
-    <button class="btn-ghost" bindtap="goMembers">成员名单</button>
   </view>
 
   <block wx:else>
   <view class="hero card">
+    <view class="hero-shop js-shop" hover-class="hero-press" bindtap="goShop">
+      <view class="hero-shop-name">{{shopName || '未命名店铺'}}</view>
+      <view class="hero-shop-go">店铺 ›</view>
+    </view>
     <view class="hero-top" hover-class="hero-press" bindtap="goRecords">
       <view>
         <view class="hero-kicker">{{dateText}}</view>
@@ -38,12 +41,6 @@
     </view>
   </view>
 
-  <view class="action-strip">
-    <button class="action" bindtap="goPurchase">进货入库</button>
-    <button class="action action-warm" bindtap="goSale">销售出库</button>
-    <button class="action action-plain" bindtap="goAddProduct">新增商品</button>
-  </view>
-
   <view wx:if="{{hasReceivable}}" class="card debt-banner" bindtap="goCustomers">
     <view>
       <view class="muted">客户欠款</view>
@@ -56,6 +53,7 @@
     <view class="empty-title">还没有商品</view>
     <view class="muted">可以先填一份示例数据，看看进货、销售、预警和毛利怎么记。</view>
     <button class="btn-primary seed-btn js-seed" bindtap="seedDemo">填充示例数据</button>
+    <button class="btn-ghost" bindtap="goAddProduct">新增商品</button>
   </view>
 
   <block wx:else>
@@ -103,15 +101,5 @@
     </view>
     <view wx:else class="card quiet">今天还没有进销记录</view>
   </block>
-
-  <view class="footer-actions">
-    <text class="link" bindtap="goRecords">流水与毛利汇总</text>
-    <text class="link" bindtap="goCustomers">客户管理</text>
-    <text class="link" bindtap="goCategories">种类模板</text>
-    <text class="link" bindtap="goShop">店铺</text>
-    <text class="link" bindtap="goMembers">成员</text>
-    <text wx:if="{{!isEmpty}}" class="danger-link js-clear" bindtap="clearData">清空数据</text>
-    <text wx:if="{{canRestore}}" class="link js-restore" bindtap="restoreCleared">恢复清空前数据</text>
-  </view>
   </block>
 </view>
