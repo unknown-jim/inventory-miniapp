@@ -1,4 +1,8 @@
 <view class="page">
+  <block wx:if="{{pageLoading}}">
+    <include src="/pages/common/page-loading.wxml" />
+  </block>
+  <block wx:else>
   <input
     class="search"
     placeholder="搜索名称 / 货号 / 条码"
@@ -59,4 +63,5 @@
   </view>
 
   <view class="fab" bindtap="goAdd">+ 新增</view>
+  </block>
 </view>

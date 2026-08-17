@@ -378,6 +378,12 @@ function invalidateReady() {
   cache.ready = false
 }
 
+function isReady() {
+  if (isMemoryMode()) return !!(readyState.ok && cache.ready)
+  const shopId = getShopId()
+  return !!(shopId && readyState.ok && readyState.shopId === shopId && cache.ready)
+}
+
 function lists() {
   if (isMemoryMode()) {
     return {
@@ -655,6 +661,7 @@ module.exports = {
   initCloud: initCloud,
   ensureReady: ensureReady,
   ready: ready,
+  isReady: isReady,
   getShopId: getShopId,
   getShopName: getShopName,
   getProducts: getProducts,

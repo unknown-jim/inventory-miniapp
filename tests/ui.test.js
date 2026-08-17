@@ -81,10 +81,18 @@ async function resetStorage(miniProgram) {
   })
 }
 
+async function waitPageReady(page) {
+  await page.waitFor(async function () {
+    const data = await page.data()
+    return data && data.pageLoading === false
+  })
+}
+
 async function seedFromHome(miniProgram) {
   step('清空本地数据并点「填充示例数据」')
   await resetStorage(miniProgram)
   const home = await miniProgram.reLaunch('/pages/index/index')
+  await waitPageReady(home)
   await home.waitFor('.js-seed')
   await tap(home, '.js-seed')
   await home.waitFor(async function () {
@@ -97,6 +105,7 @@ async function seedFromHome(miniProgram) {
 async function runSalePickerAndSlip(miniProgram) {
   step('销售：点选商品、客户，赊账出库，核对送货单')
   const sale = await miniProgram.switchTab('/pages/sale/sale')
+  await waitPageReady(sale)
   await sale.waitFor('.js-product-picker')
 
   await tap(sale, '.js-product-picker')
@@ -206,6 +215,7 @@ async function runOpeningSheet(miniProgram) {
 async function runPaySheet(miniProgram) {
   step('客户页：点收款，弹出收款层并确认')
   const list = await miniProgram.switchTab('/pages/customers/customers')
+  await waitPageReady(list)
   await list.waitFor('.js-collect')
   await tap(list, '.js-collect')
 
@@ -220,6 +230,7 @@ async function runPaySheet(miniProgram) {
 async function runNativeClearModal(miniProgram) {
   step('店铺页：点清空（原生弹窗用 mock 自动确认）')
   const home = await miniProgram.reLaunch('/pages/index/index')
+  await waitPageReady(home)
   await home.waitFor('.js-shop')
   await tap(home, '.js-shop')
   await home.waitFor(800)
@@ -233,6 +244,7 @@ async function runNativeClearModal(miniProgram) {
   })
   await miniProgram.navigateBack()
   const backHome = await miniProgram.currentPage()
+  await waitPageReady(backHome)
   await backHome.waitFor('.js-seed')
 }
 

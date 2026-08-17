@@ -5,11 +5,16 @@ const inventory = require('../../utils/inventory')
 Page({
   data: {
     keyword: '',
-    list: []
+    list: [],
+    pageLoading: true
   },
 
   async onShow() {
-    if (!(await store.ready())) return
+    if (!store.isReady()) this.setData({ pageLoading: true })
+    if (!(await store.ready())) {
+      this.setData({ pageLoading: false })
+      return
+    }
     this.refresh()
   },
 
@@ -24,7 +29,7 @@ Page({
       if (debtDiff) return debtDiff
       return 0
     })
-    this.setData({ list: list })
+    this.setData({ pageLoading: false, list: list })
   },
 
   onSearch(e) {

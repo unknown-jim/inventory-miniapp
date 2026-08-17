@@ -44,16 +44,21 @@ Page({
     filtered: [],
     filteredCustomers: [],
     slip: null,
-    exporting: false
+    exporting: false,
+    pageLoading: true
   },
 
   async onShow() {
-    if (!(await store.ready())) return
+    if (!store.isReady()) this.setData({ pageLoading: true })
+    if (!(await store.ready())) {
+      this.setData({ pageLoading: false })
+      return
+    }
     const products = store.getProducts()
     const skus = store.getSkus()
     const selectedId = getApp().consumeSelectedProduct()
     const selectedCustomerId = getApp().consumeSelectedCustomer()
-    this.setData({ products: products, skus: skus })
+    this.setData({ products: products, skus: skus, pageLoading: false })
     this.data.skus = skus
     this.data.products = products
     this.applyFilter(this.data.keyword, products, skus)

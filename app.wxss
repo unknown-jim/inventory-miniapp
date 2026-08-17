@@ -242,6 +242,10 @@ button::after {
   margin-bottom: var(--space-sm);
 }
 
+.page-loading {
+  margin-top: var(--space-xl);
+}
+
 .stat-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;

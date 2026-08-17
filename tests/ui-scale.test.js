@@ -67,10 +67,41 @@ assert.ok(indexWxml.indexOf('js-shop') >= 0, 'home page should have js-shop')
 assert.ok(indexWxml.indexOf('今日看板') >= 0, 'home page should show 今日看板')
 assert.ok(indexWxml.indexOf('去收款') >= 0, 'home page should keep 去收款')
 assert.ok(indexWxml.indexOf('js-seed') >= 0, 'home page should keep js-seed')
+assert.ok(indexWxml.indexOf('pageLoading') >= 0, 'home page should gate content on pageLoading')
+assert.ok(indexWxml.indexOf('/pages/common/page-loading.wxml') >= 0, 'home page should include shared loading view')
+const loadingWxml = read('pages/common/page-loading.wxml')
+assert.ok(loadingWxml.indexOf('js-page-loading') >= 0, 'loading view should expose js-page-loading')
+assert.ok(loadingWxml.indexOf('正在加载') >= 0, 'loading view should say 正在加载')
 assert.ok(indexWxml.indexOf('填充示例数据') >= 0, 'home page should keep 填充示例数据')
 assert.ok(indexWxml.indexOf('新增商品') >= 0, 'home page should keep 新增商品')
 assert.ok(indexWxml.indexOf('查看全部') >= 0, 'home page should keep 查看全部')
 assert.ok(indexWxml.indexOf('bindtap="goRecords"') >= 0, 'home page should bind goRecords')
+
+const indexJs = read('pages/index/index.js')
+assert.ok(indexJs.indexOf('pageLoading: true') >= 0, 'home page should start in loading state')
+assert.ok(indexJs.indexOf('isEmpty: false') >= 0, 'home page should not treat unloaded ledger as empty')
+
+const tabPages = [
+  'pages/index/index',
+  'pages/products/products',
+  'pages/purchase/purchase',
+  'pages/sale/sale',
+  'pages/customers/customers'
+]
+tabPages.forEach(function (page) {
+  const wxml = read(page + '.wxml')
+  const js = read(page + '.js')
+  assert.ok(
+    wxml.indexOf('/pages/common/page-loading.wxml') >= 0,
+    page + ' should include shared loading view'
+  )
+  assert.ok(js.indexOf('pageLoading: true') >= 0, page + ' should start in loading state')
+  assert.ok(js.indexOf('store.isReady()') >= 0, page + ' should wait for ledger before showing data')
+})
+
+const storeJs = read('utils/store.js')
+assert.ok(storeJs.indexOf('function isReady(') >= 0, 'store should expose isReady')
+assert.ok(storeJs.indexOf('isReady: isReady') >= 0, 'store should export isReady')
 
 const shopWxml = read('pages/shop/shop.wxml')
 assert.ok(shopWxml.indexOf('js-clear') >= 0, 'shop page should have js-clear')

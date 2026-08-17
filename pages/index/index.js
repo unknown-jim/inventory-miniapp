@@ -14,7 +14,8 @@ Page({
     alertCount: 0,
     alerts: [],
     recent: [],
-    isEmpty: true,
+    isEmpty: false,
+    pageLoading: true,
     blocked: false,
     blockedMessage: '',
     shopName: ''
@@ -24,6 +25,7 @@ Page({
     const status = store.getStatus()
     if (!status.canBookkeep) {
       this.setData({
+        pageLoading: false,
         blocked: true,
         blockedMessage: status.message,
         shopName: '',
@@ -38,17 +40,21 @@ Page({
         alertCount: 0,
         alerts: [],
         recent: [],
-        isEmpty: true
+        isEmpty: false
       })
       return
+    }
+    if (!store.isReady()) {
+      this.setData({ pageLoading: true, blocked: false })
     }
     try {
       await store.ensureReady()
     } catch (error) {
       this.setData({
+        pageLoading: false,
         blocked: true,
         blockedMessage: error.message || '无法记账',
-        isEmpty: true
+        isEmpty: false
       })
       return
     }
@@ -64,6 +70,7 @@ Page({
     const dash = store.dashboard()
     const skus = store.getSkus()
     this.setData({
+      pageLoading: false,
       dateText: util.formatDate(Date.now()),
       productCount: dash.productCount,
       totalStock: dash.totalStock,
