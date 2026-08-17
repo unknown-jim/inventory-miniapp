@@ -1,6 +1,7 @@
 <view wx:if="{{showSlip && slip}}" class="mask slip-mask js-slip" bindtap="closeSlip">
   <view class="slip" catchtap="closePickerKeep">
     <view class="slip-kicker">请核对后签收</view>
+    <view wx:if="{{slip.shopName}}" class="slip-shop js-slip-shop">{{slip.shopName}}</view>
     <view class="slip-title js-slip-title">送货单</view>
     <view class="slip-meta">
       <text>单号 {{slip.docNo}}</text>
@@ -19,6 +20,10 @@
         <text class="muted">地址</text>
         <text class="slip-val">{{slip.customerAddress}}</text>
       </view>
+    </view>
+    <view class="slip-row">
+      <text class="muted">经手人</text>
+      <text class="slip-val js-slip-operator">{{slip.operatorText}}</text>
     </view>
     <view class="slip-lines">
       <view class="slip-line" wx:for="{{slip.lines}}" wx:key="id">

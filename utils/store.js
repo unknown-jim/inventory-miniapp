@@ -305,11 +305,12 @@ async function memoryCall(action, shopId, payload) {
         shopId: shopId || getShopId(),
         openid: 'ui-test-openid',
         role: 'owner',
+        displayName: '测试店主',
         createdAt: 0
       }]
     }
   }
-  if (action === 'addMember' || action === 'removeMember') {
+  if (action === 'addMember' || action === 'removeMember' || action === 'updateMember') {
     throw new Error('本地测试账本不能改成员')
   }
   if (action === 'getLedger') {
@@ -602,10 +603,19 @@ async function listMembers() {
   return res
 }
 
-async function addMember(openid, role) {
+async function addMember(openid, role, displayName) {
   showBusy()
   try {
-    return await request('addMember', { openid: openid, role: role })
+    return await request('addMember', { openid: openid, role: role, displayName: displayName })
+  } finally {
+    hideBusy()
+  }
+}
+
+async function updateMember(openid, displayName) {
+  showBusy()
+  try {
+    return await request('updateMember', { openid: openid, displayName: displayName })
   } finally {
     hideBusy()
   }
@@ -702,6 +712,7 @@ module.exports = {
   selectShop: selectShop,
   listMembers: listMembers,
   addMember: addMember,
+  updateMember: updateMember,
   removeMember: removeMember,
   migrateLocal: migrateLocal
 }

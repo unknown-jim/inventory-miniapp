@@ -3,6 +3,18 @@ const util = require('../../utils/util')
 const inventory = require('../../utils/inventory')
 const slipActions = require('../../utils/slip-actions')
 
+function memberChips(members, selectedOpenid) {
+  return (members || []).map(function (item) {
+    const displayName = String(item.displayName || '').trim()
+    return {
+      openid: item.openid,
+      displayName: displayName,
+      label: displayName || '未命名',
+      on: item.openid === selectedOpenid
+    }
+  })
+}
+
 function navTitle(view, editing) {
   if (view.isPay) return editing ? '修改收款' : '收款详情'
   if (view.isOpening) return editing ? '修改期初欠款' : '期初欠款详情'
@@ -43,6 +55,9 @@ Page({
     customerName: '散客（可不选）',
     customerPhone: '',
     customerAddress: '',
+    operatorOpenid: '',
+    operatorName: '',
+    members: [],
     showCustomerPicker: false,
     showPicker: false,
     customerKeyword: '',
@@ -61,10 +76,10 @@ Page({
 
   async onLoad(query) {
     if (!(await store.ready())) return
-    this.loadRecord(query.id)
+    await this.loadRecord(query.id)
   },
 
-  loadRecord(id) {
+  async loadRecord(id) {
     const record = store.getRecord(id)
     if (!record) {
       wx.showToast({ title: '流水不存在', icon: 'none' })
@@ -105,6 +120,17 @@ Page({
       productName = lines.length === 1 ? lines[0].productName : '本单 ' + lines.length + ' 种商品'
       specText = lines.length === 1 ? lines[0].specText : ''
     }
+    let members = []
+    if (view.isOut) {
+      try {
+        const res = await store.listMembers()
+        this._members = res.members || []
+        members = memberChips(this._members, record.operatorOpenid || '')
+      } catch (error) {
+        this._members = []
+        util.showError(error)
+      }
+    }
     this.setData({
       id: record.id,
       type: record.type,
@@ -134,6 +160,9 @@ Page({
       customerName: record.customerName || (view.isOut ? '散客（可不选）' : (record.customerName || '')),
       customerPhone: record.customerPhone || '',
       customerAddress: record.customerAddress || '',
+      operatorOpenid: record.operatorOpenid || '',
+      operatorName: record.operatorName || '',
+      members: members,
       costText: view.isOut || view.isReturn ? util.money(record.costPrice) : '',
       hasOrder: !!(record.orderId),
       directionText: view.isAdjust ? (record.type === 'adjust_out' ? '出库' : '入库') : '',
@@ -199,6 +228,35 @@ Page({
     patch[e.currentTarget.dataset.field] = e.detail.value
     this.setData(patch)
     this.refreshAmount()
+  },
+
+  onOperatorName(e) {
+    if (!this.data.editing) return
+    const name = e.detail.value
+    const selectedOpenid = this.data.operatorOpenid
+    const selected = (this._members || []).find(function (item) {
+      return item.openid === selectedOpenid
+    })
+    const selectedName = selected ? String(selected.displayName || '').trim() : ''
+    const patch = { operatorName: name }
+    if (selectedOpenid && name !== selectedName) {
+      patch.operatorOpenid = ''
+    }
+    patch.members = memberChips(this._members, patch.operatorOpenid != null ? patch.operatorOpenid : selectedOpenid)
+    this.setData(patch)
+  },
+
+  pickOperator(e) {
+    if (!this.data.editing) return
+    const openid = e.currentTarget.dataset.openid
+    const member = (this._members || []).find(function (item) {
+      return item.openid === openid
+    })
+    this.setData({
+      operatorOpenid: openid,
+      operatorName: member ? String(member.displayName || '').trim() : '',
+      members: memberChips(this._members, openid)
+    })
   },
 
   onLineField(e) {
@@ -321,7 +379,7 @@ Page({
   openSlip() {
     try {
       const record = store.getRecord(this.data.id)
-      const slipView = util.withSlipViewFromRecord(store.getRecords(), record, store.getProducts())
+      const slipView = util.withSlipViewFromRecord(store.getRecords(), record, store.getProducts(), store.getShopName())
       this.slipImagePath = ''
       this.setData({
         showSlip: true,
@@ -355,6 +413,8 @@ Page({
           remark: this.data.remark,
           payType: this.data.payType,
           customerId: this.data.customerId,
+          operatorOpenid: this.data.operatorOpenid,
+          operatorName: this.data.operatorName,
           items: this.data.lines.map(function (item) {
             return {
               id: item.id,

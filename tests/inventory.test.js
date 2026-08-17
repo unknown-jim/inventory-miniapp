@@ -83,6 +83,8 @@ assert.strictEqual(sold.products[0].stock, 11)
 assert.strictEqual(sold.record.profit, 7.6)
 assert.strictEqual(sold.record.amount, 18)
 assert.strictEqual(sold.record.payType, 'cash')
+assert.strictEqual(sold.record.operatorOpenid, '')
+assert.strictEqual(sold.record.operatorName, '')
 
 const low = sampleProduct({ stock: 5, alertQty: 5 })
 assert.strictEqual(inv.isLowStock(low), true)
@@ -1211,5 +1213,86 @@ assert.throws(function () {
     size: ''
   }]))
 }, /待加工格|规格不存在/)
+
+const opProduct = inv.createProduct({
+  name: '经手人货',
+  costPrice: 1,
+  salePrice: 2,
+  stock: 20
+}, 30000, 'p-op')
+const longOperator = '一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十甲乙丙'
+assert.strictEqual(longOperator.length > 32, true)
+const opSale = inv.applySale([opProduct], [], {
+  productId: 'p-op',
+  qty: 1,
+  unitPrice: 2,
+  operatorOpenid: 'staff-1',
+  operatorName: '  小李  '
+}, 30010, 'r-op')
+assert.strictEqual(opSale.record.operatorOpenid, 'staff-1')
+assert.strictEqual(opSale.record.operatorName, '小李')
+const opLong = inv.applySale(opSale.products, opSale.records, {
+  productId: 'p-op',
+  qty: 1,
+  unitPrice: 2,
+  operatorName: longOperator
+}, 30020, 'r-op-long')
+assert.strictEqual(opLong.record.operatorOpenid, '')
+assert.strictEqual(opLong.record.operatorName, longOperator.slice(0, 32))
+assert.strictEqual(opLong.record.operatorName.length, 32)
+
+const opOrder = inv.applySaleOrder(opLong.products, opLong.records, {
+  items: [
+    { productId: 'p-op', qty: 1, unitPrice: 2 },
+    { productId: 'p-op', qty: 1, unitPrice: 2 }
+  ],
+  operatorOpenid: 'staff-1',
+  operatorName: '小李'
+}, 30030, 'order-op', idFactory())
+assert.strictEqual(opOrder.order.operatorOpenid, 'staff-1')
+assert.strictEqual(opOrder.order.operatorName, '小李')
+assert.ok(opOrder.order.records.every(function (item) {
+  return item.operatorOpenid === 'staff-1' && item.operatorName === '小李'
+}))
+const groupedOp = inv.groupRecords(opOrder.records)
+const groupedSale = groupedOp.find(function (item) {
+  return item.orderId === 'order-op'
+})
+assert.ok(groupedSale)
+assert.ok(!Object.prototype.hasOwnProperty.call(groupedSale, 'operatorOpenid'))
+assert.ok(!Object.prototype.hasOwnProperty.call(groupedSale, 'operatorName'))
+
+const opKept = inv.updateRecord(opSale.products, opSale.records, {
+  id: 'r-op',
+  qty: 1,
+  unitPrice: 2
+}, 30040, [])
+assert.strictEqual(opKept.record.operatorOpenid, 'staff-1')
+assert.strictEqual(opKept.record.operatorName, '小李')
+
+const opRenamed = inv.updateRecord(opSale.products, opSale.records, {
+  id: 'r-op',
+  qty: 1,
+  unitPrice: 2,
+  operatorName: '只改称呼'
+}, 30050, [])
+assert.strictEqual(opRenamed.record.operatorOpenid, 'staff-1')
+assert.strictEqual(opRenamed.record.operatorName, '只改称呼')
+
+const opItemsEdit = inv.updateRecord(opOrder.products, opOrder.records, {
+  id: opOrder.order.records[0].id,
+  items: [
+    { id: opOrder.order.records[0].id, qty: 1, unitPrice: 2 },
+    { id: opOrder.order.records[1].id, qty: 1, unitPrice: 2 }
+  ],
+  operatorOpenid: 'boss',
+  operatorName: '老板'
+}, 30060, [])
+assert.ok(opItemsEdit.records.filter(function (item) {
+  return item.orderId === 'order-op'
+}).every(function (item) {
+  return item.operatorOpenid === 'boss' && item.operatorName === '老板'
+}))
+assert.strictEqual(inv.buildSaleOrder(opItemsEdit.records, opItemsEdit.record).operatorName, '老板')
 
 console.log('inventory tests passed')

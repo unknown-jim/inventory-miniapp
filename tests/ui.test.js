@@ -149,6 +149,11 @@ async function runSalePickerAndSlip(miniProgram) {
   assert.ok(customerName.length > 0, '送货单没有收货人')
   const payText = await textOf(sale, '.js-slip-pay')
   assert.strictEqual(payText.replace(/\s/g, ''), '赊账')
+  const shopName = await textOf(sale, '.js-slip-shop')
+  assert.ok(shopName.indexOf('测试店') >= 0, '送货单没有店名: ' + shopName)
+  const operator = await textOf(sale, '.js-slip-operator')
+  assert.ok(operator.indexOf('测试店主') >= 0, '送货单没有经手人: ' + operator)
+  assert.ok(operator.indexOf('ui-test-openid') < 0, '送货单不应印 openid: ' + operator)
 
   await tap(sale, '.js-slip-close')
   await waitGone(sale, '.js-slip')
@@ -175,6 +180,11 @@ async function runRecordSlipExport(miniProgram) {
   await edit.waitFor('.js-slip')
   const title = await textOf(edit, '.js-slip-title')
   assert.ok(title.indexOf('送货单') >= 0, '再次导出时送货单标题不对: ' + title)
+  const shopName = await textOf(edit, '.js-slip-shop')
+  assert.ok(shopName.indexOf('测试店') >= 0, '再次导出没有店名: ' + shopName)
+  const operator = await textOf(edit, '.js-slip-operator')
+  assert.ok(operator.indexOf('测试店主') >= 0, '再次导出没有经手人: ' + operator)
+  assert.ok(operator.indexOf('ui-test-openid') < 0, '再次导出不应印 openid: ' + operator)
   await tap(edit, '.js-slip-close')
   await waitGone(edit, '.js-slip')
 

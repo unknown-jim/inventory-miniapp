@@ -12,24 +12,26 @@
 }
 
 .member-card {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
   margin-bottom: 16rpx;
 }
 
 .item-name {
-  font-size: var(--fs-sm);
+  font-size: var(--fs-md);
   font-weight: 600;
   word-break: break-all;
   margin-bottom: 8rpx;
-  padding-right: 16rpx;
 }
 
-.mini {
-  margin: 0;
-  flex-shrink: 0;
-  min-width: 140rpx;
+.member-card .action-strip {
+  margin-top: var(--space-md);
+}
+
+.member-card .action-strip .btn-danger {
+  height: auto;
+  min-height: var(--tap-sm);
+  line-height: 1.3;
+  padding-top: var(--space-sm);
+  padding-bottom: var(--space-sm);
 }
 
 .quiet {

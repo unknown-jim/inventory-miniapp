@@ -1165,6 +1165,8 @@ function applySale(products, records, payload, now, id, skus) {
     customerAddress: String(payload.customerAddress || '').trim(),
     payType: payType,
     orderId: String(payload.orderId || id),
+    operatorOpenid: String(payload.operatorOpenid || ''),
+    operatorName: String(payload.operatorName || '').trim().slice(0, 32),
     allocations: consumed.allocations || [],
     createdAt: now
   }
@@ -1208,7 +1210,9 @@ function applySaleOrder(products, records, payload, now, orderId, nextId, skus) 
     customerAddress: payload.customerAddress,
     payType: payType,
     remark: payload.remark,
-    orderId: orderId
+    orderId: orderId,
+    operatorOpenid: payload.operatorOpenid,
+    operatorName: payload.operatorName
   }
 
   items.forEach(function (item) {
@@ -1236,7 +1240,9 @@ function applySaleOrder(products, records, payload, now, orderId, nextId, skus) 
       customerId: customerId,
       customerName: payload.customerName,
       customerPhone: payload.customerPhone,
-      customerAddress: payload.customerAddress
+      customerAddress: payload.customerAddress,
+      operatorOpenid: payload.operatorOpenid,
+      operatorName: payload.operatorName
     }, now)
   }
 }
@@ -1528,6 +1534,8 @@ function makeSaleOrder(orderId, orderRecords, fields, createdAt) {
     customerName: String(fields.customerName || '').trim(),
     customerPhone: String(fields.customerPhone || '').trim(),
     customerAddress: String(fields.customerAddress || '').trim(),
+    operatorOpenid: String(fields.operatorOpenid || ''),
+    operatorName: String(fields.operatorName || '').trim().slice(0, 32),
     createdAt: createdAt
   }
 }
@@ -1764,7 +1772,7 @@ function updateRecord(products, records, payload, now, skus) {
       if (!allowed[item.id]) {
         throw new Error('流水不存在')
       }
-      const result = updateRecord(workingProducts, workingRecords, {
+      const linePayload = {
         id: item.id,
         qty: item.qty,
         unitPrice: item.unitPrice,
@@ -1774,7 +1782,14 @@ function updateRecord(products, records, payload, now, skus) {
         customerName: payload.customerName,
         customerPhone: payload.customerPhone,
         customerAddress: payload.customerAddress
-      }, now, workingSkus)
+      }
+      if (Object.prototype.hasOwnProperty.call(payload, 'operatorOpenid')) {
+        linePayload.operatorOpenid = payload.operatorOpenid
+      }
+      if (Object.prototype.hasOwnProperty.call(payload, 'operatorName')) {
+        linePayload.operatorName = payload.operatorName
+      }
+      const result = updateRecord(workingProducts, workingRecords, linePayload, now, workingSkus)
       workingProducts = result.products
       workingRecords = result.records
       workingSkus = result.skus
@@ -1895,6 +1910,12 @@ function updateRecord(products, records, payload, now, skus) {
       next.customerName = String(payload.customerName || '').trim()
       next.customerPhone = String(payload.customerPhone || '').trim()
       next.customerAddress = String(payload.customerAddress || '').trim()
+      if (Object.prototype.hasOwnProperty.call(payload, 'operatorOpenid')) {
+        next.operatorOpenid = String(payload.operatorOpenid || '')
+      }
+      if (Object.prototype.hasOwnProperty.call(payload, 'operatorName')) {
+        next.operatorName = String(payload.operatorName || '').trim().slice(0, 32)
+      }
     }
   } else if (existing.type === 'return') {
     const qty = round2(payload.qty)
@@ -1993,14 +2014,21 @@ function updateRecord(products, records, payload, now, skus) {
   nextRecords[index] = next
 
   if (existing.type === 'out') {
-    nextRecords = patchOrderCustomer(nextRecords, existing.orderId, {
+    const orderFields = {
       payType: next.payType,
       customerId: next.customerId,
       customerName: next.customerName,
       customerPhone: next.customerPhone,
       customerAddress: next.customerAddress,
       remark: next.remark
-    })
+    }
+    if (Object.prototype.hasOwnProperty.call(payload, 'operatorOpenid')) {
+      orderFields.operatorOpenid = next.operatorOpenid
+    }
+    if (Object.prototype.hasOwnProperty.call(payload, 'operatorName')) {
+      orderFields.operatorName = next.operatorName
+    }
+    nextRecords = patchOrderCustomer(nextRecords, existing.orderId, orderFields)
   }
 
   if (existing.type === 'in') {
