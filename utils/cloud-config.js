@@ -1,6 +1,6 @@
 // 填开发者工具 → 云开发 → 设置里的环境 ID（微信侧）。
 // 不要填腾讯云控制台里另一套环境。空着则不能记账。
-const CLOUD_ENV_ID = 'cloud1-d4gnytngn0068f7ab'
+const CLOUD_ENV_ID = 'cloud1-d3g8tukt6525022b6'
 
 function getCloudEnvId() {
   return String(CLOUD_ENV_ID || '').trim()
