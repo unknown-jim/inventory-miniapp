@@ -108,6 +108,33 @@ Page({
   async onShow() {
     if (!(await store.ready())) return
     this.refreshCategories()
+    if (this.data.isEdit && this.data.id) {
+      this.refreshStockDisplay()
+    }
+  },
+
+  refreshStockDisplay() {
+    const product = store.getProduct(this.data.id)
+    if (!product) return
+    const skus = store.getSkusByProduct(product.id)
+    const blank = inventory.findBlankSku(skus, product.id)
+    const liveRows = this.rowsFromSkus(skus)
+    const skuRows = (this.data.skuRows || []).map(function (row) {
+      const live = liveRows.find(function (item) {
+        return item.id === row.id || item.key === row.key
+      })
+      if (!live) return row
+      return Object.assign({}, row, { stock: live.stock, id: live.id || row.id })
+    })
+    this.setData(this.withSkuCards({
+      stockText: String(product.stock),
+      blankStockText: blank ? String(blank.stock) : '0',
+      skuRows: skuRows
+    }))
+  },
+
+  goAdjust() {
+    wx.navigateTo({ url: '/pages/adjust/adjust?id=' + this.data.id })
   },
 
   categoryChips(categoryId) {

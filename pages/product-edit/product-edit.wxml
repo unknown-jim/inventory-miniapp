@@ -72,7 +72,7 @@
       </view>
       <view class="field" wx:else>
         <view class="field-label">当前库存</view>
-        <view class="field-input readonly">{{stockText}}（通过进货 / 销售变动）</view>
+        <view class="field-input readonly">{{stockText}}</view>
       </view>
       <view class="field last">
         <view class="field-label">库存预警数量</view>
@@ -91,7 +91,7 @@
       </view>
       <view class="field last" wx:else>
         <view class="field-label">待加工库存</view>
-        <view class="field-input readonly">{{blankStockText}}（通过进货 / 销售 / 退货变动）</view>
+        <view class="field-input readonly">{{blankStockText}}</view>
       </view>
       <view class="muted spec-desc" wx:if="{{specTip}}">{{specTip}}</view>
     </block>
@@ -100,6 +100,11 @@
       <view class="field-label">库存合计</view>
       <view class="field-input readonly">{{stockText}}（各规格相加）</view>
     </view>
+    <block wx:if="{{isEdit}}">
+      <view class="muted spec-desc" wx:if="{{productKind === 'blank'}}">待加工和现货要分开调。库存调整不计入进货、不改进价。</view>
+      <view class="muted spec-desc" wx:else>件数通过进货、销售、退货、改规格或库存调整变动。库存调整不计入进货、不改进价。</view>
+      <button class="btn-ghost adjust-btn" bindtap="goAdjust">库存调整</button>
+    </block>
   </view>
 
   <view class="card spec-card" wx:if="{{productKind !== 'plain'}}">

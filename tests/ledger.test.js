@@ -360,6 +360,46 @@ async function rejects(promise, re) {
     /不是该店成员/
   )
 
+  await call(db, ids, 'user-a', 'saveProduct', shopA, {
+    name: '调整轴',
+    costPrice: 8,
+    salePrice: 16,
+    stock: 4
+  })
+  const ledgerAdjust = await call(db, ids, 'user-a', 'getLedger', shopA)
+  const adjustProduct = ledgerAdjust.ledger.products.find(function (item) {
+    return item.name === '调整轴'
+  })
+  assert.ok(adjustProduct)
+  await call(db, ids, 'user-a', 'addAdjust', shopA, {
+    productId: adjustProduct.id,
+    direction: 'in',
+    reason: 'surplus',
+    qty: 2
+  })
+  const afterAdjust = await call(db, ids, 'user-a', 'getLedger', shopA)
+  const adjusted = afterAdjust.ledger.products.find(function (item) {
+    return item.id === adjustProduct.id
+  })
+  assert.strictEqual(adjusted.stock, 6)
+  assert.strictEqual(adjusted.costPrice, 8)
+  assert.ok(afterAdjust.ledger.records.some(function (item) {
+    return item.type === 'adjust_in'
+  }))
+  const ledgerBAfter = await call(db, ids, 'user-b', 'getLedger', shopB)
+  assert.strictEqual(ledgerBAfter.ledger.records.filter(function (item) {
+    return item.type === 'adjust_in' || item.type === 'adjust_out'
+  }).length, 0)
+  await rejects(
+    call(db, ids, 'user-b', 'addAdjust', shopA, {
+      productId: adjustProduct.id,
+      direction: 'out',
+      reason: 'damage',
+      qty: 1
+    }),
+    /不是该店成员/
+  )
+
   console.log('ledger tests passed')
 })().catch(function (error) {
   console.error(error && error.stack ? error.stack : error)

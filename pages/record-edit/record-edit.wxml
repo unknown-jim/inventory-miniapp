@@ -1,6 +1,10 @@
 <view class="page">
   <view class="card">
-    <view class="field">
+    <view class="field" wx:if="{{isAdjust}}">
+      <view class="field-label">方向</view>
+      <view class="field-input readonly">{{directionText}}</view>
+    </view>
+    <view class="field" wx:else>
       <view class="field-label">类型</view>
       <view class="field-input readonly">{{typeText}}</view>
     </view>
@@ -82,6 +86,32 @@
     </view>
   </view>
 
+  <view class="card form-card" wx:elif="{{isAdjust}}">
+    <view class="field">
+      <view class="field-label">原因</view>
+      <view wx:if="{{editing}}" class="chips">
+        <view
+          class="chip {{item.on ? 'on' : ''}}"
+          wx:for="{{reasonOptions}}"
+          wx:key="value"
+          data-value="{{item.value}}"
+          bindtap="pickReason"
+        >{{item.label}}</view>
+      </view>
+      <view wx:else class="field-input readonly">{{typeText}}</view>
+    </view>
+    <view class="field">
+      <view class="field-label">数量</view>
+      <input wx:if="{{editing}}" class="field-input" type="digit" data-field="qty" value="{{qty}}" bindinput="onField" placeholder="0" hidden="{{showCustomerPicker}}" />
+      <view wx:else class="field-input readonly">{{qty}}</view>
+    </view>
+    <view class="field last">
+      <view class="field-label">备注</view>
+      <input wx:if="{{editing}}" class="field-input" data-field="remark" value="{{remark}}" bindinput="onField" placeholder="{{reason === 'other' ? '必填，说明原因' : '可选'}}" hidden="{{showCustomerPicker}}" />
+      <view wx:else class="field-input readonly">{{remark}}</view>
+    </view>
+  </view>
+
   <view class="card form-card" wx:else>
     <view class="field-row">
       <view class="field {{isConvert ? 'last' : 'half'}}">
@@ -109,6 +139,7 @@
 
   <view class="muted tip" wx:if="{{isOpening}}">期初欠款不改库存，也不计入销售和毛利。</view>
   <view class="muted tip" wx:elif="{{isPay}}">收款只冲减欠款，不改库存。</view>
+  <view class="muted tip" wx:elif="{{isAdjust}}">{{adjustHint}}</view>
   <view class="muted tip" wx:elif="{{editing}}">改数量会同步改库存。记错商品请删除后重新开单。<text wx:if="{{isOut}}">删除销售会去掉本单全部商品。同一张送货单的客户、结算和备注会一起改。</text></view>
 
   <button wx:if="{{canReturn && !editing}}" class="btn-ghost export-btn" bindtap="goReturn" hidden="{{showCustomerPicker || showSlip}}">退货入库</button>

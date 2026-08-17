@@ -157,6 +157,11 @@ button::after {
   color: #6D28D9;
 }
 
+.tag-adjust {
+  background: #F1F5F9;
+  color: #334155;
+}
+
 .chips {
   display: flex;
   flex-wrap: wrap;

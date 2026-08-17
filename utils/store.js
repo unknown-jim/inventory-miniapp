@@ -515,6 +515,11 @@ async function addConvert(payload) {
   return res.result && res.result.record
 }
 
+async function addAdjust(payload) {
+  const res = await mutate('addAdjust', payload)
+  return res.result && res.result.record
+}
+
 async function addPayment(payload) {
   const res = await mutate('addPayment', payload)
   return res.result && res.result.record
@@ -674,6 +679,7 @@ module.exports = {
   addSale: addSale,
   addReturn: addReturn,
   addConvert: addConvert,
+  addAdjust: addAdjust,
   addPayment: addPayment,
   addOpening: addOpening,
   updateRecord: updateRecord,
