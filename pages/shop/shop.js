@@ -14,7 +14,8 @@ Page({
     canBookkeep: false,
     isEmpty: true,
     canRestore: false,
-    showLedgerReset: false
+    showLedgerReset: false,
+    canDeleteShop: false
   },
 
   refreshLedgerReset(canBookkeep) {
@@ -36,7 +37,8 @@ Page({
       shopName: status.shopName,
       configured: status.configured,
       blockedMessage: status.configured ? '' : status.message,
-      canMigrate: !!store.getPendingMigrate()
+      canMigrate: !!store.getPendingMigrate(),
+      canDeleteShop: false
     })
     if (status.canBookkeep) {
       try {
@@ -53,11 +55,15 @@ Page({
     try {
       const openid = await store.whoami()
       const shops = await store.listShops()
+      const current = shops.find(function (item) {
+        return item.id === status.shopId
+      })
       this.setData({
         openid: openid,
         shops: shops.map(function (item) {
           return Object.assign({}, item, { current: item.id === status.shopId })
-        })
+        }),
+        canDeleteShop: !!(current && current.role === 'owner')
       })
     } catch (error) {
       util.showError(error)
@@ -115,6 +121,25 @@ Page({
 
   goMembers() {
     wx.navigateTo({ url: '/pages/members/members' })
+  },
+
+  deleteShop() {
+    const name = this.data.shopName || '当前店铺'
+    wx.showModal({
+      title: '删除店铺',
+      content: '将删除「' + name + '」以及本店账本、成员和清空记录。删掉后不能从本程序找回。',
+      confirmColor: '#DC2626',
+      success: async (res) => {
+        if (!res.confirm) return
+        try {
+          await store.deleteShop()
+          wx.showToast({ title: '已删除店铺', icon: 'success' })
+          this.onShow()
+        } catch (error) {
+          util.showError(error)
+        }
+      }
+    })
   },
 
   clearData() {

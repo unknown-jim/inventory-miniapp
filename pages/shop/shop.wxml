@@ -51,7 +51,13 @@
       <button wx:if="{{canRestore}}" class="btn-ghost js-restore" bindtap="restoreCleared">恢复清空前数据</button>
     </view>
 
-    <view class="footer-actions">
+    <view wx:if="{{canDeleteShop}}" class="card">
+      <view class="field-label">删除当前店铺</view>
+      <view class="muted">店铺、成员、账本和清空记录都会删掉。这和「清空数据」不同，清空只抹账、店还在。</view>
+      <button class="btn-danger seed-btn js-delete-shop" bindtap="deleteShop">删除店铺</button>
+    </view>
+
+    <view wx:if="{{currentShopId}}" class="footer-actions">
       <text class="link" bindtap="goMembers">成员名单</text>
     </view>
   </block>

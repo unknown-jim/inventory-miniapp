@@ -319,6 +319,67 @@ async function dispatch(input) {
     })
   }
 
+  if (action === 'deleteShop') {
+    return db.runTransaction(async function (tx) {
+      const members = await membersOfShop(db, tx, shopId)
+      const member = requireMember(members, shopId, openid)
+      if (member.role !== 'owner') {
+        throw new Error('只有店主能删除店铺')
+      }
+      const shop = tx.getShop ? await tx.getShop(shopId) : null
+      if (!shop) {
+        throw new Error('店铺不存在')
+      }
+      let ledger = null
+      if (tx.getLedger) {
+        try {
+          ledger = await tx.getLedger(shopId)
+        } catch (error) {
+          ledger = null
+        }
+      }
+      const clearIds = {}
+      function addClearId(id) {
+        const key = String(id || '')
+        if (key) clearIds[key] = true
+      }
+      ((ledger && ledger.clearSnapshots) || []).forEach(function (item) {
+        addClearId(item && item.id)
+      })
+      if (tx.listClearSnapshotsByShop) {
+        try {
+          const clears = await tx.listClearSnapshotsByShop(shopId)
+          clears.forEach(function (item) {
+            addClearId(item._id || item.id)
+          })
+        } catch (error) {
+          // 没有 shopId 索引时仍按账本里的快照 id 删
+        }
+      }
+      const memberIds = members.map(function (item) {
+        return item._id || item.id || memberDocId(shopId, item.openid)
+      })
+      for (let i = 0; i < memberIds.length; i++) {
+        await tx.removeMember(memberIds[i])
+      }
+      const snapshotIds = Object.keys(clearIds)
+      for (let i = 0; i < snapshotIds.length; i++) {
+        if (tx.removeClearSnapshot) {
+          await tx.removeClearSnapshot(snapshotIds[i])
+        }
+      }
+      if (tx.removeLedger) {
+        try {
+          await tx.removeLedger(shopId)
+        } catch (error) {
+          if (ledger) throw error
+        }
+      }
+      await tx.removeShop(shopId)
+      return { deleted: true, shopId: shopId }
+    })
+  }
+
   if (action === 'getLedger') {
     const members = await db.listMembersByShop(shopId)
     requireMember(members, shopId, openid)

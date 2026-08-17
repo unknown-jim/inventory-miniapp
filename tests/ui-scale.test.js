@@ -106,6 +106,7 @@ assert.ok(storeJs.indexOf('isReady: isReady') >= 0, 'store should export isReady
 const shopWxml = read('pages/shop/shop.wxml')
 assert.ok(shopWxml.indexOf('js-clear') >= 0, 'shop page should have js-clear')
 assert.ok(shopWxml.indexOf('js-restore') >= 0, 'shop page should have js-restore')
+assert.ok(shopWxml.indexOf('js-delete-shop') >= 0, 'shop page should have js-delete-shop')
 assert.ok(shopWxml.indexOf('成员名单') >= 0, 'shop page should keep 成员名单')
 assert.ok(shopWxml.indexOf('流水与毛利汇总') < 0, 'shop page should not link 流水与毛利汇总')
 
