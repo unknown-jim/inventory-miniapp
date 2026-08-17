@@ -44,6 +44,13 @@
       <button class="btn-primary seed-btn" bindtap="migrateLocal">把本机账本上传到当前店</button>
     </view>
 
+    <view wx:if="{{showLedgerReset}}" class="card">
+      <view class="field-label">当前店账本</view>
+      <view class="muted">只清当前店的商品、客户、种类模板和流水。店铺和成员还在。</view>
+      <button wx:if="{{!isEmpty}}" class="btn-danger seed-btn js-clear" bindtap="clearData">清空数据</button>
+      <button wx:if="{{canRestore}}" class="btn-ghost js-restore" bindtap="restoreCleared">恢复清空前数据</button>
+    </view>
+
     <view class="footer-actions">
       <text class="link" bindtap="goMembers">成员名单</text>
     </view>

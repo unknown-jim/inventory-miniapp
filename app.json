@@ -4,7 +4,6 @@
     "pages/products/products",
     "pages/purchase/purchase",
     "pages/sale/sale",
-    "pages/inventory/inventory",
     "pages/records/records",
     "pages/record-edit/record-edit",
     "pages/sale-return/sale-return",
@@ -56,10 +55,10 @@
         "selectedIconPath": "assets/tab/out-active.png"
       },
       {
-        "pagePath": "pages/inventory/inventory",
-        "text": "库存",
-        "iconPath": "assets/tab/stock.png",
-        "selectedIconPath": "assets/tab/stock-active.png"
+        "pagePath": "pages/customers/customers",
+        "text": "客户",
+        "iconPath": "assets/tab/people.png",
+        "selectedIconPath": "assets/tab/people-active.png"
       }
     ]
   },
