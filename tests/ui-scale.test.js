@@ -126,6 +126,11 @@ assert.ok(shopJs.indexOf('hasCurrentShop: !!status.shopId') >= 0, 'listShops fai
 assert.ok(shopWxml.indexOf('加入别人的店') >= 0, 'shop page should offer 加入别人的店')
 assert.ok(shopWxml.indexOf('我的 openid') < 0, 'shop page should not title the identity block 我的 openid')
 assert.ok(shopWxml.indexOf('流水与毛利汇总') < 0, 'shop page should not link 流水与毛利汇总')
+const shopWxss = read('pages/shop/shop.wxss')
+assert.ok(
+  shopWxss.indexOf('.card + .card') >= 0 && shopWxss.indexOf('margin-top: var(--space-md)') >= 0,
+  'shop page consecutive cards should keep vertical spacing'
+)
 
 const membersWxml = read('pages/members/members.wxml')
 const membersJs = read('pages/members/members.js')
