@@ -25,6 +25,7 @@
     <view class="chip {{type === 'pay' ? 'on' : ''}}" data-type="pay" bindtap="setType">收款</view>
     <view class="chip {{type === 'return' ? 'on' : ''}}" data-type="return" bindtap="setType">退货</view>
     <view class="chip {{type === 'convert' ? 'on' : ''}}" data-type="convert" bindtap="setType">改规格</view>
+    <view class="chip {{type === 'adjust' ? 'on' : ''}}" data-type="adjust" bindtap="setType">调整</view>
   </view>
 
   <view wx:if="{{!list.length}}" class="card empty">还没有流水</view>
@@ -36,14 +37,14 @@
         <view class="muted" wx:if="{{item.hasSpec}}">{{item.specText}}</view>
         <view class="muted">
           {{item.timeText}}
-          <block wx:if="{{item.isOut || item.isIn}}"> · {{item.qtyText}} 件<block wx:if="{{item.isMulti}}"> · {{item.lineCount}} 种</block><block wx:else> · 单价 ¥{{item.priceText}}</block></block>
+          <block wx:if="{{item.isOut || item.isIn || item.isAdjust}}"> · {{item.qtyText}} 件<block wx:if="{{item.isMulti}}"> · {{item.lineCount}} 种</block><block wx:elif="{{!item.isAdjust}}"> · 单价 ¥{{item.priceText}}</block></block>
         </view>
         <view wx:if="{{item.customerText}}" class="muted">客户 {{item.customerText}}</view>
         <view wx:if="{{item.remark}}" class="muted">{{item.remark}}</view>
       </view>
       <view class="item-right">
         <text class="tag {{item.tagClass}}">{{item.typeText}}</text>
-        <view class="amount">¥{{item.amountText}}</view>
+        <view wx:if="{{!item.isAdjust}}" class="amount">¥{{item.amountText}}</view>
           <view wx:if="{{item.isOut}}" class="muted">毛利 ¥{{item.profitText}}</view>
           <view wx:elif="{{item.isReturn}}" class="muted">冲减毛利 ¥{{item.profitText}}</view>
       </view>

@@ -892,4 +892,324 @@ const unshared = inv.updateProduct(sharedProduct, {
 }, 1100)
 assert.strictEqual(unshared.sharedPrice, false)
 
+const adjPlain = inv.createProduct({
+  name: '调整牛奶',
+  sku: 'ADJ-001',
+  costPrice: 10,
+  salePrice: 20,
+  stock: 5,
+  alertQty: 1
+}, 20000, 'p-adj')
+assert.strictEqual(adjPlain.stock, 5)
+const adjPlainSkus = inv.applyProductSkus(adjPlain, [], null, 20000, idFactory())
+assert.ok(!Object.prototype.hasOwnProperty.call(adjPlainSkus, 'records'))
+
+const beforeAdjSummary = inv.summarizeRecords([])
+const beforeAdjDash = inv.getDashboard([adjPlain], [], 20000, [])
+const adjIn = inv.applyAdjust([adjPlain], [], {
+  productId: 'p-adj',
+  direction: 'in',
+  reason: 'surplus',
+  qty: 2,
+  unitPrice: 99
+}, 20010, 'r-adj-in')
+assert.strictEqual(adjIn.products[0].stock, 7)
+assert.strictEqual(adjIn.products[0].costPrice, 10)
+assert.strictEqual(adjIn.record.type, 'adjust_in')
+assert.strictEqual(adjIn.record.reason, 'surplus')
+assert.strictEqual(adjIn.record.unitPrice, 0)
+assert.strictEqual(adjIn.record.costPrice, 0)
+assert.strictEqual(adjIn.record.amount, 0)
+assert.strictEqual(adjIn.record.profit, 0)
+assert.ok(!adjIn.record.customerId)
+assert.ok(!adjIn.record.skuId)
+const afterAdjSummary = inv.summarizeRecords(adjIn.records)
+assert.strictEqual(afterAdjSummary.purchaseAmount, beforeAdjSummary.purchaseAmount)
+assert.strictEqual(afterAdjSummary.salesAmount, beforeAdjSummary.salesAmount)
+assert.strictEqual(afterAdjSummary.profit, beforeAdjSummary.profit)
+assert.strictEqual(afterAdjSummary.receivable, beforeAdjSummary.receivable)
+const afterAdjDash = inv.getDashboard(adjIn.products, adjIn.records, 20010, adjIn.skus)
+assert.strictEqual(afterAdjDash.todayInAmount, beforeAdjDash.todayInAmount)
+assert.strictEqual(afterAdjDash.todaySalesAmount, beforeAdjDash.todaySalesAmount)
+assert.strictEqual(afterAdjDash.todayProfit, beforeAdjDash.todayProfit)
+assert.strictEqual(afterAdjDash.totalReceivable, beforeAdjDash.totalReceivable)
+assert.strictEqual(afterAdjDash.totalStock, 7)
+assert.strictEqual(inv.filterRecords(adjIn.records, 'adjust').length, 1)
+assert.strictEqual(inv.filterRecords(adjIn.records, 'in').length, 0)
+assert.strictEqual(inv.filterRecords(adjIn.records, 'adjust_in').length, 1)
+
+const adjOut = inv.applyAdjust(adjIn.products, adjIn.records, {
+  productId: 'p-adj',
+  direction: 'out',
+  reason: 'damage',
+  qty: 1
+}, 20020, 'r-adj-out', adjIn.skus)
+assert.strictEqual(adjOut.products[0].stock, 6)
+assert.strictEqual(adjOut.products[0].costPrice, 10)
+assert.strictEqual(adjOut.record.type, 'adjust_out')
+assert.strictEqual(inv.filterRecords(adjOut.records, 'adjust').length, 2)
+assert.strictEqual(inv.filterRecords(adjOut.records, 'out').length, 0)
+assert.strictEqual(inv.summarizeRecords(adjOut.records).salesAmount, 0)
+assert.ok(!adjOut.record.customerId)
+
+const giftIn = inv.applyAdjust(adjOut.products, adjOut.records, {
+  productId: 'p-adj',
+  direction: 'in',
+  reason: 'gift',
+  qty: 1
+}, 20030, 'r-adj-gift-in', adjOut.skus)
+assert.strictEqual(giftIn.record.remark, '')
+const giftOut = inv.applyAdjust(giftIn.products, giftIn.records, {
+  productId: 'p-adj',
+  direction: 'out',
+  reason: 'gift',
+  qty: 1
+}, 20040, 'r-adj-gift-out', giftIn.skus)
+assert.strictEqual(giftOut.products[0].stock, 6)
+
+const editedIn = inv.updateRecord(giftOut.products, giftOut.records, {
+  id: 'r-adj-in',
+  qty: 4,
+  reason: 'surplus',
+  remark: ''
+}, 20050, giftOut.skus)
+assert.strictEqual(editedIn.products[0].stock, 8)
+assert.strictEqual(editedIn.products[0].costPrice, 10)
+assert.strictEqual(editedIn.record.qty, 4)
+
+const editedReason = inv.updateRecord(editedIn.products, editedIn.records, {
+  id: 'r-adj-in',
+  qty: 4,
+  reason: 'gift'
+}, 20060, editedIn.skus)
+assert.strictEqual(editedReason.products[0].stock, 8)
+assert.strictEqual(editedReason.record.reason, 'gift')
+
+assert.throws(function () {
+  inv.updateRecord(editedReason.products, editedReason.records, {
+    id: 'r-adj-out',
+    qty: 20,
+    reason: 'damage'
+  }, 20070, editedReason.skus)
+}, /库存不足/)
+assert.strictEqual(editedReason.products[0].stock, 8)
+
+assert.throws(function () {
+  inv.updateRecord(editedReason.products, editedReason.records, {
+    id: 'r-adj-in',
+    qty: 4,
+    type: 'in'
+  }, 20080, editedReason.skus)
+}, /不能改调整方向/)
+assert.throws(function () {
+  inv.updateRecord(editedReason.products, editedReason.records, {
+    id: 'r-adj-in',
+    qty: 4,
+    skuId: 'nope'
+  }, 20090, editedReason.skus)
+}, /不能改调整方向/)
+
+const deletedIn = inv.deleteRecord(editedReason.products, editedReason.records, 'r-adj-in', 20100, editedReason.skus)
+assert.strictEqual(deletedIn.products[0].stock, 4)
+assert.strictEqual(deletedIn.products[0].costPrice, 10)
+const deletedOut = inv.deleteRecord(deletedIn.products, deletedIn.records, 'r-adj-out', 20110, deletedIn.skus)
+assert.strictEqual(deletedOut.products[0].stock, 5)
+
+assert.throws(function () {
+  inv.applyAdjust([adjPlain], [], {
+    productId: 'p-adj',
+    direction: 'in',
+    reason: 'surplus',
+    qty: 0
+  }, 20120, 'r-adj-zero')
+}, /调整数量必须大于 0/)
+assert.throws(function () {
+  inv.applyAdjust([adjPlain], [], {
+    productId: 'p-adj',
+    direction: 'in',
+    reason: 'surplus',
+    qty: -1
+  }, 20121, 'r-adj-neg')
+}, /调整数量必须大于 0/)
+assert.throws(function () {
+  inv.applyAdjust([adjPlain], [], {
+    productId: 'p-adj',
+    reason: 'surplus',
+    qty: 1
+  }, 20122, 'r-adj-dir')
+}, /请选择入库或出库/)
+assert.throws(function () {
+  inv.applyAdjust([adjPlain], [], {
+    productId: 'p-adj',
+    direction: 'in',
+    reason: 'damage',
+    qty: 1
+  }, 20123, 'r-adj-reason')
+}, /请选择原因/)
+assert.throws(function () {
+  inv.applyAdjust([adjPlain], [], {
+    productId: 'p-adj',
+    direction: 'in',
+    reason: 'other',
+    qty: 1
+  }, 20124, 'r-adj-other')
+}, /选择其他时请填写备注/)
+assert.throws(function () {
+  inv.applyAdjust([adjPlain], [], {
+    productId: 'p-adj',
+    direction: 'out',
+    reason: 'damage',
+    qty: 99
+  }, 20125, 'r-adj-lack')
+}, /库存不足/)
+assert.throws(function () {
+  inv.applyReturn([adjPlain], [], { qty: 1 }, 20126, 'r-adj-free-return')
+}, /销售流水不存在/)
+
+const lockP = inv.createProduct({
+  name: '对照进价',
+  costPrice: 1,
+  salePrice: 10,
+  stock: 0
+}, 21000, 'p-lock')
+const boughtLock = inv.applyPurchase([lockP], [], {
+  productId: 'p-lock',
+  qty: 2,
+  unitPrice: 3
+}, 21010, 'r-lock-in')
+assert.strictEqual(boughtLock.products[0].costPrice, 3)
+const adjLock = inv.applyAdjust(boughtLock.products, boughtLock.records, {
+  productId: 'p-lock',
+  direction: 'in',
+  reason: 'surplus',
+  qty: 4,
+  unitPrice: 99
+}, 21020, 'r-lock-adj', boughtLock.skus)
+assert.strictEqual(adjLock.products[0].costPrice, 3)
+assert.strictEqual(adjLock.products[0].stock, 6)
+assert.strictEqual(inv.summarizeRecords(adjLock.records).purchaseAmount, 6)
+const soldLock = inv.applySale(adjLock.products, adjLock.records, {
+  productId: 'p-lock',
+  qty: 1,
+  unitPrice: 10
+}, 21030, 'r-lock-out', adjLock.skus)
+assert.strictEqual(soldLock.record.profit, 7)
+assert.strictEqual(inv.summarizeRecords(soldLock.records).salesAmount, 10)
+
+const soldAdjIn = inv.applyAdjust([inv.createProduct({
+  name: '卖掉调整',
+  costPrice: 8,
+  salePrice: 16,
+  stock: 0
+}, 22000, 'p-adj-sold')], [], {
+  productId: 'p-adj-sold',
+  direction: 'in',
+  reason: 'surplus',
+  qty: 5
+}, 22010, 'r-adj-sold-in')
+const soldAfterAdj = inv.applySale(soldAdjIn.products, soldAdjIn.records, {
+  productId: 'p-adj-sold',
+  qty: 5,
+  unitPrice: 16
+}, 22020, 'r-adj-sold-out', soldAdjIn.skus)
+assert.throws(function () {
+  inv.deleteRecord(soldAfterAdj.products, soldAfterAdj.records, 'r-adj-sold-in', 22030, soldAfterAdj.skus)
+}, /库存不足/)
+assert.ok(soldAfterAdj.records.some(function (item) {
+  return item.id === 'r-adj-sold-in'
+}))
+
+const blankAdjMade = inv.applyProductSkus(inv.createProduct({
+  name: '调整卫衣',
+  costPrice: 40,
+  salePrice: 80,
+  stock: 10,
+  colors: ['白', '黑'],
+  sizes: ['M'],
+  blankProcess: true
+}, 23000, 'p-adj-blank'), [], null, 23010, idFactory())
+const blankAdjSku = inv.findBlankSku(blankAdjMade.skus, 'p-adj-blank')
+const whiteAdjSku = inv.findSkuBySpec(blankAdjMade.skus, 'p-adj-blank', '白', 'M')
+const blackAdjSku = inv.findSkuBySpec(blankAdjMade.skus, 'p-adj-blank', '黑', 'M')
+assert.throws(function () {
+  inv.applyAdjust([blankAdjMade.product], [], {
+    productId: 'p-adj-blank',
+    direction: 'in',
+    reason: 'surplus',
+    qty: 2
+  }, 23020, 'r-adj-blank-nosku', blankAdjMade.skus)
+}, /请选择/)
+const blankIn = inv.applyAdjust([blankAdjMade.product], [], {
+  productId: 'p-adj-blank',
+  skuId: blankAdjSku.id,
+  direction: 'in',
+  reason: 'surplus',
+  qty: 3
+}, 23030, 'r-adj-blank-in', blankAdjMade.skus)
+assert.strictEqual(inv.findBlankSku(blankIn.skus, 'p-adj-blank').stock, 13)
+assert.strictEqual(inv.findSkuBySpec(blankIn.skus, 'p-adj-blank', '白', 'M').stock, 0)
+assert.strictEqual(blankIn.products[0].costPrice, 40)
+assert.strictEqual(inv.findBlankSku(blankIn.skus, 'p-adj-blank').costPrice, blankAdjSku.costPrice)
+assert.strictEqual(blankIn.record.skuId, blankAdjSku.id)
+assert.ok(!blankIn.record.color)
+assert.ok(!blankIn.record.size)
+const readyIn = inv.applyAdjust(blankIn.products, blankIn.records, {
+  productId: 'p-adj-blank',
+  skuId: whiteAdjSku.id,
+  direction: 'in',
+  reason: 'surplus',
+  qty: 2
+}, 23040, 'r-adj-ready-in', blankIn.skus)
+assert.strictEqual(inv.findBlankSku(readyIn.skus, 'p-adj-blank').stock, 13)
+assert.strictEqual(inv.findSkuBySpec(readyIn.skus, 'p-adj-blank', '白', 'M').stock, 2)
+assert.strictEqual(inv.findSkuBySpec(readyIn.skus, 'p-adj-blank', '黑', 'M').stock, 0)
+
+const specAdjMade = inv.applyProductSkus(inv.createProduct({
+  name: '调整T恤',
+  costPrice: 20,
+  salePrice: 50,
+  stock: 0,
+  colors: ['红', '蓝']
+}, 24000, 'p-adj-spec'), [], [
+  { color: '红', size: '', stock: 4, costPrice: 20, salePrice: 50 },
+  { color: '蓝', size: '', stock: 6, costPrice: 22, salePrice: 50 }
+], 24010, idFactory())
+const redAdjSku = inv.findSkuBySpec(specAdjMade.skus, 'p-adj-spec', '红', '')
+const blueAdjSku = inv.findSkuBySpec(specAdjMade.skus, 'p-adj-spec', '蓝', '')
+const specAdjIn = inv.applyAdjust([specAdjMade.product], [], {
+  productId: 'p-adj-spec',
+  skuId: redAdjSku.id,
+  direction: 'in',
+  reason: 'surplus',
+  qty: 1
+}, 24020, 'r-adj-spec-in', specAdjMade.skus)
+assert.strictEqual(inv.findSkuBySpec(specAdjIn.skus, 'p-adj-spec', '红', '').stock, 5)
+assert.strictEqual(inv.findSkuBySpec(specAdjIn.skus, 'p-adj-spec', '蓝', '').stock, 6)
+assert.strictEqual(inv.findSkuBySpec(specAdjIn.skus, 'p-adj-spec', '红', '').costPrice, 20)
+assert.strictEqual(inv.findSkuBySpec(specAdjIn.skus, 'p-adj-spec', '蓝', '').costPrice, 22)
+assert.throws(function () {
+  inv.applyAdjust([specAdjMade.product], [], {
+    productId: 'p-adj-spec',
+    direction: 'in',
+    reason: 'surplus',
+    qty: 1
+  }, 24030, 'r-adj-spec-nosku', specAdjMade.skus)
+}, /请选择/)
+assert.throws(function () {
+  inv.applyAdjust([specAdjMade.product], [], {
+    productId: 'p-adj-spec',
+    skuId: 'sku-blank-fake',
+    direction: 'in',
+    reason: 'surplus',
+    qty: 1
+  }, 24040, 'r-adj-spec-blank', specAdjMade.skus.concat([{
+    id: 'sku-blank-fake',
+    productId: 'p-adj-spec',
+    isBlank: true,
+    stock: 3,
+    color: '',
+    size: ''
+  }]))
+}, /待加工格|规格不存在/)
+
 console.log('inventory tests passed')

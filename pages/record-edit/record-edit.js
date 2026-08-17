@@ -9,6 +9,7 @@ function navTitle(view, editing) {
   if (view.isIn) return editing ? '修改进货' : '进货详情'
   if (view.isReturn) return editing ? '修改退货' : '退货详情'
   if (view.isConvert) return editing ? '修改改规格' : '改规格详情'
+  if (view.isAdjust) return editing ? '修改调整' : '调整详情'
   return editing ? '修改销售' : '销售详情'
 }
 
@@ -23,6 +24,7 @@ Page({
     isOpening: false,
     isReturn: false,
     isConvert: false,
+    isAdjust: false,
     canReturn: false,
     editing: false,
     productName: '',
@@ -47,6 +49,10 @@ Page({
     filteredCustomers: [],
     hasOrder: false,
     isMulti: false,
+    directionText: '',
+    reason: '',
+    reasonOptions: [],
+    adjustHint: '',
     lines: [],
     showSlip: false,
     slip: null,
@@ -109,6 +115,7 @@ Page({
       isOpening: view.isOpening,
       isReturn: view.isReturn,
       isConvert: view.isConvert,
+      isAdjust: view.isAdjust,
       isMulti: lines.length > 1,
       canReturn: canReturn,
       editing: false,
@@ -116,7 +123,7 @@ Page({
       specText: specText,
       timeText: util.formatDateTime(record.createdAt),
       qty: view.isPay || view.isOpening ? '' : String(record.qty),
-      unitPrice: view.isPay || view.isOpening || view.isConvert ? '' : String(record.unitPrice),
+      unitPrice: view.isPay || view.isOpening || view.isConvert || view.isAdjust ? '' : String(record.unitPrice),
       amount: view.isPay || view.isOpening ? String(record.amount) : '',
       amountText: amountText,
       profitText: profitText,
@@ -129,6 +136,16 @@ Page({
       customerAddress: record.customerAddress || '',
       costText: view.isOut || view.isReturn ? util.money(record.costPrice) : '',
       hasOrder: !!(record.orderId),
+      directionText: view.isAdjust ? (record.type === 'adjust_out' ? '出库' : '入库') : '',
+      reason: record.reason || '',
+      reasonOptions: view.isAdjust
+        ? inventory.adjustReasons(record.type).map(function (item) {
+          return Object.assign({}, item, { on: item.value === record.reason })
+        })
+        : [],
+      adjustHint: record.type === 'adjust_out'
+        ? '不计入销售和毛利，不开送货单'
+        : '不计入进货、不改进价',
       lines: lines,
       showCustomerPicker: false
     })
@@ -218,6 +235,17 @@ Page({
     this.setData({
       payType: payType,
       payTypeText: payType === 'credit' ? '赊账' : '现结'
+    })
+  },
+
+  pickReason(e) {
+    if (!this.data.editing) return
+    const reason = e.currentTarget.dataset.value
+    this.setData({
+      reason: reason,
+      reasonOptions: this.data.reasonOptions.map(function (item) {
+        return Object.assign({}, item, { on: item.value === reason })
+      })
     })
   },
 
@@ -335,6 +363,12 @@ Page({
             }
           })
         })
+      } else if (this.data.isAdjust) {
+        await store.updateRecord(this.data.id, {
+          qty: this.data.qty,
+          remark: this.data.remark,
+          reason: this.data.reason
+        })
       } else if (this.data.isReturn || this.data.isConvert) {
         await store.updateRecord(this.data.id, {
           qty: this.data.qty,
@@ -373,9 +407,11 @@ Page({
           ? '删除后退货入库会改回去。'
           : (this.data.isConvert
             ? '删除后规格会改回原来的那一格。'
+            : (this.data.isAdjust
+              ? '删除后会把这件商品这一格的件数改回去。'
             : (this.data.isOut
               ? '删除后会把本单全部商品的库存改回去。记错商品时用这个，然后重新开单。'
-              : '删除后会把库存改回去。记错商品时用这个，然后重新开单。')))),
+              : '删除后会把库存改回去。记错商品时用这个，然后重新开单。'))))),
       confirmColor: '#DC2626',
       success: async (res) => {
         if (!res.confirm) return

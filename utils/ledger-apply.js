@@ -12,6 +12,7 @@ const MUTATIONS = [
   'addSale',
   'addReturn',
   'addConvert',
+  'addAdjust',
   'addPayment',
   'addOpening',
   'updateRecord',
@@ -279,6 +280,19 @@ function applyMutation(ledger, action, payload, now, nextId) {
     result.recordsCreated = applied.recordsCreated
   } else if (action === 'addConvert') {
     const applied = inventory.applyConvert(
+      next.products,
+      next.records,
+      payload,
+      now,
+      nextId(),
+      next.skus
+    )
+    next.products = applied.products
+    next.skus = applied.skus
+    next.records = applied.records
+    result.record = applied.record
+  } else if (action === 'addAdjust') {
+    const applied = inventory.applyAdjust(
       next.products,
       next.records,
       payload,

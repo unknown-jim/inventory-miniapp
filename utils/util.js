@@ -130,6 +130,7 @@ function withRecordView(record) {
   const isOpening = record.type === 'opening'
   const isReturn = record.type === 'return'
   const isConvert = record.type === 'convert'
+  const isAdjust = inventory.isAdjust(record)
   const isCredit = isOut && record.payType === 'credit'
   const lineCount = record.lineCount || 1
   const isMulti = isOut && lineCount > 1
@@ -141,10 +142,11 @@ function withRecordView(record) {
   else if (isOpening) typeText = '期初'
   else if (isReturn) typeText = '退货'
   else if (isConvert) typeText = '改规格'
+  else if (isAdjust) typeText = inventory.adjustTypeText(record)
   else if (isCredit) typeText = '赊账'
   let specText = spec
   if (isConvert) specText = fromSpec + ' → ' + spec
-  if (isIn && !spec && record.skuId) specText = inventory.blankStockLabel()
+  if ((isIn || isAdjust) && !spec && record.skuId) specText = inventory.blankStockLabel()
   return Object.assign({}, record, {
     isIn: isIn,
     isOut: isOut,
@@ -152,13 +154,16 @@ function withRecordView(record) {
     isOpening: isOpening,
     isReturn: isReturn,
     isConvert: isConvert,
+    isAdjust: isAdjust,
     isCredit: isCredit,
     isMulti: isMulti,
     lineCount: lineCount,
     typeText: typeText,
-    tagClass: isPay
+    tagClass: isAdjust
+      ? 'tag-adjust'
+      : (isPay
       ? 'tag-pay'
-      : (isOpening || isCredit ? 'tag-credit' : (isIn ? 'tag-in' : (isReturn ? 'tag-return' : (isConvert ? 'tag-convert' : 'tag-out')))),
+      : (isOpening || isCredit ? 'tag-credit' : (isIn ? 'tag-in' : (isReturn ? 'tag-return' : (isConvert ? 'tag-convert' : 'tag-out'))))),
     timeText: formatTime(record.createdAt),
     amountText: money(record.amount),
     priceText: money(record.unitPrice),

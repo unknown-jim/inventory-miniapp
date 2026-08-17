@@ -15,7 +15,7 @@ Page({
 
   onLoad(options) {
     const type = options && options.type
-    if (type === 'in' || type === 'out' || type === 'pay' || type === 'return' || type === 'convert') {
+    if (type === 'in' || type === 'out' || type === 'pay' || type === 'return' || type === 'convert' || type === 'adjust') {
       this.setData({ type: type })
     }
   },

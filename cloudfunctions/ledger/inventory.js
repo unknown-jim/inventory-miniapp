@@ -935,6 +935,57 @@ function isOpening(record) {
   return record && record.type === 'opening'
 }
 
+function isAdjust(record) {
+  return record && (record.type === 'adjust_in' || record.type === 'adjust_out')
+}
+
+function isInboundStock(record) {
+  return record && (record.type === 'in' || record.type === 'adjust_in')
+}
+
+function adjustReasons(type) {
+  if (type === 'adjust_in') {
+    return [
+      { value: 'surplus', label: '盘盈' },
+      { value: 'gift', label: '赠品' },
+      { value: 'other', label: '其他' }
+    ]
+  }
+  if (type === 'adjust_out') {
+    return [
+      { value: 'damage', label: '报损' },
+      { value: 'shortage', label: '盘亏' },
+      { value: 'gift', label: '赠品' },
+      { value: 'other', label: '其他' }
+    ]
+  }
+  return []
+}
+
+function adjustReasonAllowed(type, reason) {
+  return adjustReasons(type).some(function (item) {
+    return item.value === reason
+  })
+}
+
+function adjustTypeText(record) {
+  if (!record) return '调整'
+  if (record.type === 'adjust_in') {
+    if (record.reason === 'surplus') return '盘盈'
+    if (record.reason === 'gift') return '赠品入库'
+    if (record.reason === 'other') return '其他入库'
+    return '调整入库'
+  }
+  if (record.type === 'adjust_out') {
+    if (record.reason === 'damage') return '报损'
+    if (record.reason === 'shortage') return '盘亏'
+    if (record.reason === 'gift') return '赠品出库'
+    if (record.reason === 'other') return '其他出库'
+    return '调整出库'
+  }
+  return '调整'
+}
+
 function isCustomerAccountRecord(record) {
   return record && (
     record.type === 'out'
@@ -1260,6 +1311,82 @@ function applyConvert(products, records, payload, now, id, skus) {
   return {
     products: nextProducts,
     skus: skuList,
+    records: [record].concat(records),
+    record: record
+  }
+}
+
+function applyAdjust(products, records, payload, now, id, skus) {
+  const direction = payload && payload.direction
+  if (direction !== 'in' && direction !== 'out') {
+    throw new Error('请选择入库或出库')
+  }
+  const type = direction === 'out' ? 'adjust_out' : 'adjust_in'
+  const qty = round2(payload.qty)
+  if (qty <= 0) {
+    throw new Error('调整数量必须大于 0')
+  }
+  const reason = String(payload.reason || '').trim()
+  if (!adjustReasonAllowed(type, reason)) {
+    throw new Error('请选择原因')
+  }
+  const remark = String(payload.remark || '').trim()
+  if (reason === 'other' && !remark) {
+    throw new Error('选择其他时请填写备注')
+  }
+
+  const index = products.findIndex(function (item) {
+    return item.id === payload.productId
+  })
+  if (index < 0) {
+    throw new Error('商品不存在')
+  }
+  const product = products[index]
+  const record = {
+    id: id,
+    type: type,
+    productId: product.id,
+    productName: product.name,
+    sku: product.sku,
+    qty: qty,
+    unitPrice: 0,
+    costPrice: 0,
+    amount: 0,
+    profit: 0,
+    reason: reason,
+    remark: remark,
+    createdAt: now
+  }
+
+  if (productHasSpecs(product)) {
+    if (!payload.skuId) {
+      throw new Error(specSelectHint(product) || '请选择规格')
+    }
+    const sku = (skus || []).find(function (item) {
+      return item.id === payload.skuId
+    })
+    if (!sku || sku.productId !== product.id) {
+      throw new Error('规格不存在')
+    }
+    if (!isBlankProcess(product) && sku.isBlank) {
+      throw new Error('分规格现货没有待加工格')
+    }
+    record.skuId = sku.id
+    record.sku = sku.sku || product.sku
+    if (sku.isBlank) {
+      record.color = ''
+      record.size = ''
+    } else {
+      record.color = sku.color
+      record.size = sku.size
+    }
+  }
+
+  const stockDelta = type === 'adjust_in' ? qty : -qty
+  const adjusted = adjustStock(products, skus, record, stockDelta, now)
+  return {
+    products: adjusted.products,
+    skus: adjusted.skus,
     records: [record].concat(records),
     record: record
   }
@@ -1735,7 +1862,7 @@ function updateRecord(products, records, payload, now, skus) {
       next.costPrice = consumed.costPrice
       next.profit = round2((unitPrice - consumed.costPrice) * qty)
     } else {
-      const stockDelta = existing.type === 'in'
+      const stockDelta = isInboundStock(existing)
         ? round2(qty - existing.qty)
         : round2(existing.qty - qty)
       const adjusted = adjustStock(nextProducts, nextSkus, existing, stockDelta, now)
@@ -1816,6 +1943,48 @@ function updateRecord(products, records, payload, now, skus) {
     }
     next.qty = qty
     next.remark = String(payload.remark || '').trim()
+  } else if (isAdjust(existing)) {
+    if (payload.type && payload.type !== existing.type) {
+      throw new Error('不能改调整方向，请删除后重记')
+    }
+    if (payload.direction === 'in' || payload.direction === 'out') {
+      const nextType = payload.direction === 'out' ? 'adjust_out' : 'adjust_in'
+      if (nextType !== existing.type) {
+        throw new Error('不能改调整方向，请删除后重记')
+      }
+    }
+    if (payload.productId && payload.productId !== existing.productId) {
+      throw new Error('不能改调整方向，请删除后重记')
+    }
+    if (Object.prototype.hasOwnProperty.call(payload, 'skuId')
+      && String(payload.skuId || '') !== String(existing.skuId || '')) {
+      throw new Error('不能改调整方向，请删除后重记')
+    }
+    const qty = round2(payload.qty)
+    if (qty <= 0) {
+      throw new Error('调整数量必须大于 0')
+    }
+    const reason = payload.reason != null ? String(payload.reason).trim() : existing.reason
+    if (!adjustReasonAllowed(existing.type, reason)) {
+      throw new Error('请选择原因')
+    }
+    const remark = String(payload.remark != null ? payload.remark : (existing.remark || '')).trim()
+    if (reason === 'other' && !remark) {
+      throw new Error('选择其他时请填写备注')
+    }
+    const stockDelta = isInboundStock(existing)
+      ? round2(qty - existing.qty)
+      : round2(existing.qty - qty)
+    const adjusted = adjustStock(nextProducts, nextSkus, existing, stockDelta, now)
+    nextProducts = adjusted.products
+    nextSkus = adjusted.skus
+    next.qty = qty
+    next.reason = reason
+    next.remark = remark
+    next.unitPrice = 0
+    next.costPrice = 0
+    next.amount = 0
+    next.profit = 0
   } else {
     throw new Error('流水不存在')
   }
@@ -1871,12 +2040,12 @@ function restoreRecordStock(products, skus, existing, now) {
         updatedAt: now
       })
     }
-  } else if (existing.type === 'in' || existing.type === 'out') {
+  } else if (existing.type === 'in' || existing.type === 'out' || isAdjust(existing)) {
     const product = products.find(function (item) {
       return item.id === existing.productId
     })
     if (product) {
-      const stockDelta = existing.type === 'in' ? round2(-existing.qty) : round2(existing.qty)
+      const stockDelta = isInboundStock(existing) ? round2(-existing.qty) : round2(existing.qty)
       const adjusted = adjustStock(nextProducts, nextSkus, existing, stockDelta, now)
       nextProducts = adjusted.products
       nextSkus = adjusted.skus
@@ -2031,6 +2200,9 @@ function filterProducts(products, keyword, skus) {
 function filterRecords(records, type) {
   if (!type || type === 'all') {
     return records.slice()
+  }
+  if (type === 'adjust') {
+    return records.filter(isAdjust)
   }
   return records.filter(function (item) {
     return item.type === type
@@ -2296,10 +2468,16 @@ module.exports = {
   getTotalReceivable: getTotalReceivable,
   isCreditSale: isCreditSale,
   isOpening: isOpening,
+  isAdjust: isAdjust,
+  isInboundStock: isInboundStock,
+  adjustReasons: adjustReasons,
+  adjustReasonAllowed: adjustReasonAllowed,
+  adjustTypeText: adjustTypeText,
   applyPurchase: applyPurchase,
   applySale: applySale,
   applySaleOrder: applySaleOrder,
   applyConvert: applyConvert,
+  applyAdjust: applyAdjust,
   applyReturn: applyReturn,
   applyReturnOrder: applyReturnOrder,
   buildSaleOrder: buildSaleOrder,

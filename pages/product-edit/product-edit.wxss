@@ -101,3 +101,11 @@
   margin-bottom: 16rpx;
   font-weight: 600;
 }
+
+.adjust-btn {
+  width: 100%;
+  margin: 8rpx 0 0;
+  min-height: var(--tap-md);
+  height: var(--tap-md);
+  line-height: var(--tap-md);
+}
