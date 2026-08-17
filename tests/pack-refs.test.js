@@ -21,7 +21,7 @@ function walkDir(dir, out) {
 
 function collectSources() {
   const files = []
-  ;['pages', 'utils', 'styles'].forEach(function (dir) {
+  ;['pages', 'utils', 'styles', 'components'].forEach(function (dir) {
     const full = path.join(root, dir)
     if (fs.existsSync(full)) walkDir(full, files)
   })
@@ -88,7 +88,31 @@ function extractQuoted(src, re) {
 }
 
 function mustPackInclude(rel) {
-  return rel.indexOf('utils/') === 0 || rel.indexOf('pages/') === 0 || rel.indexOf('styles/') === 0
+  return (
+    rel.indexOf('utils/') === 0 ||
+    rel.indexOf('pages/') === 0 ||
+    rel.indexOf('styles/') === 0 ||
+    rel.indexOf('components/') === 0
+  )
+}
+
+function listImmediateDirs(rel) {
+  const full = path.join(root, rel)
+  if (!fs.existsSync(full)) return []
+  return fs.readdirSync(full, { withFileTypes: true })
+    .filter(function (entry) {
+      return entry.isDirectory()
+    })
+    .map(function (entry) {
+      return entry.name
+    })
+}
+
+function resolveComponentBase(fromFile, spec) {
+  const trimmed = String(spec || '').trim()
+  if (!trimmed) return null
+  if (trimmed.charAt(0) === '/') return path.join(root, trimmed.slice(1))
+  return path.resolve(path.dirname(fromFile), trimmed)
 }
 
 const project = readJson('project.config.json')
@@ -161,5 +185,77 @@ tabList.forEach(function (item) {
     'missing selected tab icon: ' + item.selectedIconPath
   )
 })
+
+listImmediateDirs('pages').forEach(function (name) {
+  const registered = (appJson.pages || []).some(function (page) {
+    return page === 'pages/' + name + '/' + name || page.indexOf('pages/' + name + '/') === 0
+  })
+  assert.ok(registered, 'pages/' + name + ' is not in app.json; code quality flags unused page files')
+})
+
+assert.ok(!fs.existsSync(path.join(root, 'pages/common')), 'do not keep include fragments in pages/common')
+assert.ok(!fs.existsSync(path.join(root, 'styles/slip.wxss')), 'slip overlay styles belong in components/slip-overlay')
+assert.ok(!included['styles/slip.wxss'], 'packOptions.include should not list styles/slip.wxss')
+assert.ok(!included['pages/common/slip-overlay.wxml'], 'packOptions.include should not list slip-overlay.wxml')
+assert.ok(!included['pages/common/page-loading.wxml'], 'packOptions.include should not list page-loading.wxml')
+
+const includeHits = []
+const unusedDecls = []
+const missingComponentFiles = []
+const usedComponents = {}
+const pageJsonFiles = []
+walkDir(path.join(root, 'pages'), pageJsonFiles)
+pageJsonFiles.forEach(function (file) {
+  if (path.extname(file) !== '.json') return
+  const json = JSON.parse(fs.readFileSync(file, 'utf8'))
+  const wxmlPath = file.replace(/\.json$/, '.wxml')
+  const wxml = fs.existsSync(wxmlPath) ? fs.readFileSync(wxmlPath, 'utf8') : ''
+  if (/<(include|import)\b/.test(wxml)) includeHits.push(toProjectRel(wxmlPath))
+  const placeholders = json.componentPlaceholder || {}
+  assert.ok(!placeholders['page-loading'], toProjectRel(file) + ' should not placeholder first-screen page-loading')
+  const comps = json.usingComponents || {}
+  Object.keys(comps).forEach(function (tag) {
+    if (wxml.indexOf('<' + tag) < 0) {
+      unusedDecls.push(toProjectRel(file) + ' unused usingComponents.' + tag)
+    }
+    const base = resolveComponentBase(file, comps[tag])
+    const rel = toProjectRel(base)
+    usedComponents[rel] = true
+    ;['.js', '.json', '.wxml', '.wxss'].forEach(function (ext) {
+      if (!fs.existsSync(base + ext)) missingComponentFiles.push(rel + ext)
+    })
+    if (fs.existsSync(base + '.json')) {
+      const compJson = JSON.parse(fs.readFileSync(base + '.json', 'utf8'))
+      assert.strictEqual(compJson.component, true, rel + ' should set component: true')
+    }
+  })
+})
+
+if (fs.existsSync(path.join(root, 'components'))) {
+  const componentFiles = []
+  walkDir(path.join(root, 'components'), componentFiles)
+  componentFiles.forEach(function (file) {
+    if (path.extname(file) === '.wxml' && /<(include|import)\b/.test(fs.readFileSync(file, 'utf8'))) {
+      includeHits.push(toProjectRel(file))
+    }
+  })
+}
+
+assert.strictEqual(
+  includeHits.length,
+  0,
+  'WXML include/import is invisible to the unused-file scan:\n' + includeHits.join('\n')
+)
+assert.strictEqual(unusedDecls.length, 0, unusedDecls.join('\n'))
+assert.strictEqual(missingComponentFiles.length, 0, 'component file missing:\n' + missingComponentFiles.join('\n'))
+
+const unusedComponentDirs = []
+listImmediateDirs('components').forEach(function (name) {
+  const rel = 'components/' + name + '/index'
+  if (!usedComponents[rel]) unusedComponentDirs.push(rel)
+})
+assert.strictEqual(unusedComponentDirs.length, 0, 'unreferenced component:\n' + unusedComponentDirs.join('\n'))
+assert.ok(usedComponents['components/page-loading/index'], 'page-loading should be declared on a page')
+assert.ok(usedComponents['components/slip-overlay/index'], 'slip-overlay should be declared on a page')
 
 console.log('pack-refs: ' + Object.keys(included).length + ' include entries ok')

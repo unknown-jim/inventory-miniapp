@@ -1,4 +1,6 @@
 {
   "navigationBarTitleText": "客户",
-  "usingComponents": {}
+  "usingComponents": {
+    "page-loading": "/components/page-loading/index"
+  }
 }

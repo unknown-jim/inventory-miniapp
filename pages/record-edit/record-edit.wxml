@@ -194,6 +194,14 @@
     </view>
   </view>
 
-  <include src="/pages/common/slip-overlay.wxml" />
+  <slip-overlay
+    show-slip="{{showSlip}}"
+    slip="{{slip}}"
+    exporting="{{exporting}}"
+    show-picker="{{showPicker}}"
+    show-customer-picker="{{showCustomerPicker}}"
+    bind:close="closeSlip"
+    bind:export="exportSlip"
+  />
   <canvas type="2d" id="slipCanvas" class="slip-canvas"></canvas>
 </view>

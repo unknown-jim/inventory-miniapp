@@ -26,11 +26,11 @@
 
 - `app.json` 必须保留 `"lazyCodeLoading": "requiredComponents"`，不得删除。
 - 不要在 `app.json` 的 `permission` 里写 `scope.writePhotosAlbum`（基础库只认地理位置 scope；相册说明写在后台隐私指引和保存弹窗里）。
-- `ignoreDevUnusedFiles` / `ignoreUploadUnusedFiles` 必须为 false，送货单文件留在 `packOptions.include`。详见 [docs/code-injection.md](docs/code-injection.md)。
+- `ignoreDevUnusedFiles` / `ignoreUploadUnusedFiles` 必须为 false。JS 工具模块留在 `packOptions.include`；加载态和送货单弹层用页面 `usingComponents`，不要再用 `<include>` / `@import` 片段。详见 [docs/code-injection.md](docs/code-injection.md)。
 - 不要把低频自定义组件写进 `app.json` 的全局 `usingComponents`。
 - 页面 JSON 只声明本页真正用到的组件。
-- 非首屏重组件才配 `componentPlaceholder`；首屏立刻展示的组件不要配。
-- 当前没有自定义组件时，不要为了用时注入去硬拆页面。
+- 非首屏重组件才配 `componentPlaceholder`；首屏立刻展示的组件不要配。`page-loading` 是首屏，不要配占位。
+- 不要为了用时注入去硬拆页面。共用 WXML/WXSS 片段改成组件，是为了让代码质量扫描能看见依赖。
 - tabBar 页面必须留在主包。
 - `lazyloadPlaceholderEnable` 只用于调试占位态，日常保持 `false`。
 - 不要只把约定写进 `.cursor/rules/`；有新约定就更新 `docs/`，并在本文件补上入口。

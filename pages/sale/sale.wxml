@@ -1,7 +1,5 @@
 <view class="page">
-  <block wx:if="{{pageLoading}}">
-    <include src="/pages/common/page-loading.wxml" />
-  </block>
+  <page-loading wx:if="{{pageLoading}}" />
   <block wx:else>
   <view class="card">
     <view class="field">
@@ -175,7 +173,15 @@
     </view>
   </view>
 
-  <include src="/pages/common/slip-overlay.wxml" />
+  <slip-overlay
+    show-slip="{{showSlip}}"
+    slip="{{slip}}"
+    exporting="{{exporting}}"
+    show-picker="{{showPicker}}"
+    show-customer-picker="{{showCustomerPicker}}"
+    bind:close="closeSlip"
+    bind:export="exportSlip"
+  />
   </block>
   <canvas type="2d" id="slipCanvas" class="slip-canvas"></canvas>
 </view>

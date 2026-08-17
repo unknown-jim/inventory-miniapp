@@ -8,23 +8,23 @@
 - [占位组件](https://developers.weixin.qq.com/miniprogram/dev/framework/custom-component/placeholder.html)（微信官方文档）
 - [小程序性能优化指南](https://developers.weixin.qq.com/community/develop/doc/00040e5a0846706e893dcc24256009)（官方社区置顶，对应开发者工具「代码质量」扫描）
 
-下面的「必须 / 建议」以这两处官方材料为准；「本仓库怎么做」由当前项目形态推导：原生小程序、无自定义组件、无插件、无分包、5 个 tab 页必须留在主包。
+下面的「必须 / 建议」以这两处官方材料为准；「本仓库怎么做」由当前项目形态推导：原生小程序、两个共用自定义组件（加载态、送货单弹层）、无插件、无分包、5 个 tab 页必须留在主包。
 
 ## 当前状态
 
 | 项 | 状态 |
 |---|---|
-| 自定义组件 | 无，各页 `usingComponents` 为空 |
+| 自定义组件 | `page-loading`（账本加载）、`slip-overlay`（送货单弹层）。各页 JSON 按需声明，不进全局 `usingComponents` |
 | 插件 / 分包 | 无 |
 | `lazyCodeLoading` | 已写入 `app.json`，之后不得删除 |
 | JS / WXSS / WXML 压缩 | 已开（`project.config.json`） |
-| 上传过滤无依赖文件 | **关闭**。开发者工具的无依赖分析会漏掉 `require` / `@import` / `<include>` 的送货单文件，主包加载失败后看板白屏 |
-| 必须打进包的文件 | `utils/slip-actions.js`、`utils/slip-image.js`、`styles/slip.wxss`、`pages/common/slip-overlay.wxml` 写在 `packOptions.include` |
+| 上传过滤无依赖文件 | **关闭**。分析器仍可能漏掉 `require` 的 JS；共用 WXML/WXSS 已改成自定义组件，让扫描能看见 `usingComponents` |
+| 必须打进包的文件 | `utils/slip-actions.js`、`utils/slip-image.js` 等 JS 仍写在 `packOptions.include`。加载态和送货单弹层走组件，不再 include 那三个 WXML/WXSS |
 | 不进代码包 | `.git/`、`tests/`、`node_modules`、`docs/`、`cloudfunctions/`、`scripts/`、`.cursor/`、`.env`、仓库说明与 npm 清单已在 `packOptions.ignore` |
 | 基础库 | `3.8.0`（高于按需注入 2.11.1、用时注入 2.11.2） |
 | 相册权限 | 不要写 `permission["scope.writePhotosAlbum"]`。`permission` 只认地理位置；`requiredPrivateInfos` 也只认地理位置接口。用途说明放后台「用户隐私保护指引」，运行时弹窗在 `utils/slip-image.js` |
 
-用时注入目前没有对象。不要为了「看起来用了占位组件」去硬拆页面。
+用时注入目前没有对象。不要为了「看起来用了占位组件」去硬拆页面。`page-loading` 是首屏，不要配 `componentPlaceholder`。`slip-overlay` 虽是弹层，但体量很小、以前随页注入；也不配占位，避免第一次弹出先闪一层 `view`。
 
 ## 1. 按需注入（必须长期开启）
 
@@ -55,7 +55,7 @@
 2. 第一次渲染时先画占位，当前渲染流程结束后再注入。
 3. 注入完成后替换回真实组件。
 
-**要配占位：** 弹层、筛选器、图表、编辑器、扫码结果区等，默认不在首屏、用 `wx-if` 才出现的重组件。
+**要配占位：** 筛选器、图表、编辑器、扫码结果区等默认不在首屏、用 `wx-if` 才出现的**重组件**。轻量弹层（现在的 `slip-overlay`）不配，避免第一次弹出先闪占位。
 
 **不要配占位：** 首屏立刻要出现的块。配了会先闪一层占位再替换。
 
@@ -105,7 +105,7 @@
 |---|---|
 | 必须：开启组件懒注入 | `app.json` 保留 `lazyCodeLoading` |
 | 必须：去掉无用插件 | 不在 `app.json` 留死插件 |
-| 必须：去掉无依赖文件 | 无用文件用 `packOptions.ignore` 排除；**不要**开 `ignoreUploadUnusedFiles` / `ignoreDevUnusedFiles`，分析器会把送货单模块当成无依赖丢掉 |
+| 必须：去掉无依赖文件 | 无用文件删掉或用 `packOptions.ignore` 排除。共用 WXML/WXSS 不要用 `<include>` / `@import`（分析器看不见，代码质量会判无依赖）；改成页面 JSON 声明的自定义组件。**不要**开 `ignoreUploadUnusedFiles` / `ignoreDevUnusedFiles`，分析器仍可能漏掉送货单 JS |
 | 压缩 JS / WXSS / WXML | 保持 `minified`、`minifyWXSS`、`minifyWXML` 为 true |
 | 建议：图片/音频 >200KB | tab 图标可留包内；超过 200KB 的静态资源走 CDN |
 | 建议：主包仅被分包依赖的 JS/组件 | 有分包之后再挪；现在无分包则不适用 |
@@ -113,11 +113,12 @@
 ## 5. 不要做
 
 - 为了「用上用时注入」把现有页面硬拆成自定义组件。
+- 用 `<include>` / `@import` 放共用 WXML/WXSS。开发者工具的无依赖扫描看不见它们，代码质量过不了；若再打开上传过滤，销售页会白屏。
 - 把 WeUI / Vant 等整包挂到 `app.json` 全局组件（按需注入会形同虚设）。
-- 给首屏关键块配 `componentPlaceholder`。
+- 给首屏关键块配 `componentPlaceholder`。`page-loading` 也不要配。
 - 把 tab 页塞进分包。
 - 把 `lazyCodeLoading` 删掉，或把 `lazyloadPlaceholderEnable` 长期设为 true。
-- 打开 `ignoreDevUnusedFiles` 或 `ignoreUploadUnusedFiles`。开发者工具会漏掉送货单的 `require` / `@import` / `<include>`，销售页加载失败后整个主包白屏。
+- 打开 `ignoreDevUnusedFiles` 或 `ignoreUploadUnusedFiles`。分析器仍可能漏掉送货单的 `require`，销售页加载失败后整个主包白屏。
 - 在用时注入组件的 `attached` 里做页面占位阶段就必须完成的逻辑。
 
 ## 6. 改代码时的检查清单
@@ -127,9 +128,10 @@
 - [ ] `lazyCodeLoading` 仍在 `app.json`
 - [ ] 没有把低频组件写进全局 `usingComponents`
 - [ ] 页面 JSON 没有未使用的组件声明
-- [ ] 非首屏重组件配了 `componentPlaceholder`；首屏组件没有
+- [ ] `page-loading` 没有 `componentPlaceholder`；非首屏重组件才配占位
+- [ ] 没有用 `<include>` / `@import` 放共用 WXML/WXSS
 - [ ] 没有新增无用插件或无依赖文件
 - [ ] `ignoreDevUnusedFiles`、`ignoreUploadUnusedFiles` 为 false
-- [ ] 送货单相关文件仍在 `packOptions.include`
+- [ ] 送货单 JS 仍在 `packOptions.include`；弹层由 `usingComponents` 引入
 - [ ] tab 页仍在主包
 - [ ] 准备上传时跑过代码质量扫描

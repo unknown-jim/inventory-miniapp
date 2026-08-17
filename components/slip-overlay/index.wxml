@@ -1,5 +1,5 @@
-<view wx:if="{{showSlip && slip}}" class="mask slip-mask js-slip" bindtap="closeSlip">
-  <view class="slip" catchtap="closePickerKeep">
+<view wx:if="{{showSlip && slip}}" class="slip-mask js-slip" bindtap="onClose">
+  <view class="slip" catchtap="onKeep">
     <view class="slip-kicker">请核对后签收</view>
     <view wx:if="{{slip.shopName}}" class="slip-shop js-slip-shop">{{slip.shopName}}</view>
     <view class="slip-title js-slip-title">送货单</view>
@@ -63,8 +63,8 @@
       </view>
     </view>
     <view class="slip-actions">
-      <button class="btn-ghost slip-btn js-slip-export" bindtap="exportSlip" disabled="{{exporting}}" hidden="{{showPicker || showCustomerPicker}}">导出图片</button>
-      <button class="btn-primary slip-btn js-slip-close" bindtap="closeSlip">完成</button>
+      <button class="btn-ghost slip-btn js-slip-export" bindtap="onExport" disabled="{{exporting}}" hidden="{{showPicker || showCustomerPicker}}">导出图片</button>
+      <button class="btn-primary slip-btn js-slip-close" bindtap="onClose">完成</button>
     </view>
   </view>
 </view>

@@ -1,7 +1,5 @@
 <view class="page">
-  <block wx:if="{{pageLoading}}">
-    <include src="/pages/common/page-loading.wxml" />
-  </block>
+  <page-loading wx:if="{{pageLoading}}" />
   <block wx:else>
   <input
     class="search"
