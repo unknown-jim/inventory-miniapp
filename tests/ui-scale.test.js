@@ -143,6 +143,19 @@ assert.ok(membersWxml.indexOf('添加店员') >= 0, 'members page should say 添
 assert.ok(membersWxml.indexOf('加入白名单') < 0, 'members page should not say 加入白名单')
 assert.ok(membersJs.indexOf('还没写称呼') >= 0, 'empty display name should read 还没写称呼')
 
+const saleWxml = read('pages/sale/sale.wxml')
+const saleJs = read('pages/sale/sale.js')
+const recordEditWxml = read('pages/record-edit/record-edit.wxml')
+const recordEditJs = read('pages/record-edit/record-edit.js')
+assert.ok(saleWxml.indexOf('点选本店成员，也可手写') >= 0, 'sale operator chips should say what they are')
+assert.ok(recordEditWxml.indexOf('点选本店成员，也可手写') >= 0, 'record-edit operator chips should say what they are')
+assert.ok(saleJs.indexOf("|| '未命名'") < 0, 'sale chips should not fall back to 未命名')
+assert.ok(recordEditJs.indexOf("|| '未命名'") < 0, 'record-edit chips should not fall back to 未命名')
+assert.ok(saleJs.indexOf("utils/member-chips") >= 0, 'sale should use shared member chips')
+assert.ok(recordEditJs.indexOf("utils/member-chips") >= 0, 'record-edit should use shared member chips')
+assert.ok(appWxss.indexOf('.field-input + .chips') >= 0, 'chips under an input should have a shared top gap')
+assert.ok(appWxss.indexOf('.field-hint') >= 0, 'app.wxss should define .field-hint')
+
 const project = JSON.parse(read('project.config.json'))
 const include = ((project.packOptions && project.packOptions.include) || [])
   .map(function (item) {

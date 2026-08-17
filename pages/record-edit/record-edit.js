@@ -2,18 +2,7 @@ const store = require('../../utils/store')
 const util = require('../../utils/util')
 const inventory = require('../../utils/inventory')
 const slipActions = require('../../utils/slip-actions')
-
-function memberChips(members, selectedOpenid) {
-  return (members || []).map(function (item) {
-    const displayName = String(item.displayName || '').trim()
-    return {
-      openid: item.openid,
-      displayName: displayName,
-      label: displayName || '未命名',
-      on: item.openid === selectedOpenid
-    }
-  })
-}
+const memberChips = require('../../utils/member-chips').memberChips
 
 function navTitle(view, editing) {
   if (view.isPay) return editing ? '修改收款' : '收款详情'
@@ -58,6 +47,7 @@ Page({
     operatorOpenid: '',
     operatorName: '',
     members: [],
+    myOpenid: '',
     showCustomerPicker: false,
     showPicker: false,
     customerKeyword: '',
@@ -121,11 +111,13 @@ Page({
       specText = lines.length === 1 ? lines[0].specText : ''
     }
     let members = []
+    let myOpenid = ''
     if (view.isOut) {
       try {
+        myOpenid = await store.whoami()
         const res = await store.listMembers()
         this._members = res.members || []
-        members = memberChips(this._members, record.operatorOpenid || '')
+        members = memberChips(this._members, record.operatorOpenid || '', myOpenid)
       } catch (error) {
         this._members = []
         util.showError(error)
@@ -163,6 +155,7 @@ Page({
       operatorOpenid: record.operatorOpenid || '',
       operatorName: record.operatorName || '',
       members: members,
+      myOpenid: myOpenid,
       costText: view.isOut || view.isReturn ? util.money(record.costPrice) : '',
       hasOrder: !!(record.orderId),
       directionText: view.isAdjust ? (record.type === 'adjust_out' ? '出库' : '入库') : '',
@@ -242,7 +235,11 @@ Page({
     if (selectedOpenid && name !== selectedName) {
       patch.operatorOpenid = ''
     }
-    patch.members = memberChips(this._members, patch.operatorOpenid != null ? patch.operatorOpenid : selectedOpenid)
+    patch.members = memberChips(
+      this._members,
+      patch.operatorOpenid != null ? patch.operatorOpenid : selectedOpenid,
+      this.data.myOpenid
+    )
     this.setData(patch)
   },
 
@@ -255,7 +252,7 @@ Page({
     this.setData({
       operatorOpenid: openid,
       operatorName: member ? String(member.displayName || '').trim() : '',
-      members: memberChips(this._members, openid)
+      members: memberChips(this._members, openid, this.data.myOpenid)
     })
   },
 

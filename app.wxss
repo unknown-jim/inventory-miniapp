@@ -169,6 +169,19 @@ button::after {
   margin-bottom: var(--space-md);
 }
 
+.field-input + .chips,
+.axis-title + .chips {
+  margin-top: var(--space-md);
+}
+
+.field-hint {
+  margin-top: var(--space-md);
+}
+
+.field-hint + .chips {
+  margin-top: var(--space-sm);
+}
+
 .chip {
   display: flex;
   align-items: center;

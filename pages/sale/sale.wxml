@@ -23,7 +23,8 @@
     <view class="field">
       <view class="field-label">经手人</view>
       <input class="field-input" maxlength="32" value="{{operatorName}}" bindinput="onOperatorName" placeholder="可选，默认自己" hidden="{{showPicker || showCustomerPicker || showSlip}}" />
-      <view class="chips">
+      <view wx:if="{{members.length}}" class="muted field-hint">点选本店成员，也可手写</view>
+      <view class="chips" wx:if="{{members.length}}">
         <view
           class="chip {{item.on ? 'on' : ''}}"
           wx:for="{{members}}"
