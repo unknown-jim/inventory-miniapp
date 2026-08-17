@@ -183,7 +183,7 @@ async function runRecordSlipExport(miniProgram) {
 
 async function runOpeningSheet(miniProgram) {
   step('客户页：记期初欠款，弹出层并确认')
-  const list = await miniProgram.navigateTo('/pages/customers/customers')
+  const list = await miniProgram.switchTab('/pages/customers/customers')
   await list.waitFor('.js-customer-item')
   await tap(list, '.js-customer-item')
 
@@ -205,7 +205,7 @@ async function runOpeningSheet(miniProgram) {
 
 async function runPaySheet(miniProgram) {
   step('客户页：点收款，弹出收款层并确认')
-  const list = await miniProgram.navigateTo('/pages/customers/customers')
+  const list = await miniProgram.switchTab('/pages/customers/customers')
   await list.waitFor('.js-collect')
   await tap(list, '.js-collect')
 
@@ -218,14 +218,22 @@ async function runPaySheet(miniProgram) {
 }
 
 async function runNativeClearModal(miniProgram) {
-  step('首页：点清空（原生弹窗用 mock 自动确认）')
+  step('店铺页：点清空（原生弹窗用 mock 自动确认）')
   const home = await miniProgram.reLaunch('/pages/index/index')
-  await home.waitFor('.js-clear')
-  await tap(home, '.js-clear')
-  await home.waitFor(async function () {
-    const data = await home.data()
+  await home.waitFor('.js-shop')
+  await tap(home, '.js-shop')
+  await home.waitFor(800)
+  const shop = await miniProgram.currentPage()
+  assert.ok(shop.path.indexOf('shop') >= 0, '未进入店铺页: ' + shop.path)
+  await shop.waitFor('.js-clear')
+  await tap(shop, '.js-clear')
+  await shop.waitFor(async function () {
+    const data = await shop.data()
     return data && data.isEmpty === true
   })
+  await miniProgram.navigateBack()
+  const backHome = await miniProgram.currentPage()
+  await backHome.waitFor('.js-seed')
 }
 
 async function run() {

@@ -15,7 +15,6 @@ Page({
     alerts: [],
     recent: [],
     isEmpty: true,
-    canRestore: false,
     blocked: false,
     blockedMessage: '',
     shopName: ''
@@ -39,8 +38,7 @@ Page({
         alertCount: 0,
         alerts: [],
         recent: [],
-        isEmpty: true,
-        canRestore: false
+        isEmpty: true
       })
       return
     }
@@ -50,8 +48,7 @@ Page({
       this.setData({
         blocked: true,
         blockedMessage: error.message || '无法记账',
-        isEmpty: true,
-        canRestore: false
+        isEmpty: true
       })
       return
     }
@@ -80,8 +77,7 @@ Page({
         return util.withView(item, skus)
       }),
       recent: dash.recent.slice(0, 6).map(util.withRecordView),
-      isEmpty: dash.productCount === 0,
-      canRestore: store.hasClearedBackup()
+      isEmpty: dash.productCount === 0
     })
   },
 
@@ -94,28 +90,20 @@ Page({
   },
 
   goProducts() {
-    wx.switchTab({ url: '/pages/products/products' })
+    this.openGoods('all')
   },
 
   goInventory() {
-    this.openInventory('all')
+    this.openGoods('all')
   },
 
   goAlerts() {
-    this.openInventory('alert')
+    this.openGoods('alert')
   },
 
-  openInventory(filter) {
+  openGoods(filter) {
     getApp().setPendingInventoryFilter(filter)
-    wx.switchTab({ url: '/pages/inventory/inventory' })
-  },
-
-  goPurchase() {
-    wx.switchTab({ url: '/pages/purchase/purchase' })
-  },
-
-  goSale() {
-    wx.switchTab({ url: '/pages/sale/sale' })
+    wx.switchTab({ url: '/pages/products/products' })
   },
 
   goAddProduct() {
@@ -123,19 +111,11 @@ Page({
   },
 
   goCustomers() {
-    wx.navigateTo({ url: '/pages/customers/customers' })
-  },
-
-  goCategories() {
-    wx.navigateTo({ url: '/pages/categories/categories' })
+    wx.switchTab({ url: '/pages/customers/customers' })
   },
 
   goShop() {
     wx.navigateTo({ url: '/pages/shop/shop' })
-  },
-
-  goMembers() {
-    wx.navigateTo({ url: '/pages/members/members' })
   },
 
   onAlertTap(e) {
@@ -155,41 +135,5 @@ Page({
     } catch (error) {
       util.showError(error)
     }
-  },
-
-  clearData() {
-    wx.showModal({
-      title: '清空全部数据',
-      content: '商品、客户、种类模板和流水都会从当前店删掉。最近一次可以用「恢复清空前数据」免费找回；更早的清空记录会留在云端。',
-      confirmColor: '#DC2626',
-      success: async (res) => {
-        if (!res.confirm) return
-        try {
-          await store.clearAll()
-          this.refresh()
-          wx.showToast({ title: '已清空', icon: 'success' })
-        } catch (error) {
-          util.showError(error)
-        }
-      }
-    })
-  },
-
-  restoreCleared() {
-    wx.showModal({
-      title: '恢复清空前数据',
-      content: '将恢复到最近一次清空前的账本。清空之后新记的账会丢掉。更早的清空记录仍保存在云端。',
-      confirmColor: '#0F766E',
-      success: async (res) => {
-        if (!res.confirm) return
-        try {
-          await store.restoreCleared()
-          this.refresh()
-          wx.showToast({ title: '已恢复', icon: 'success' })
-        } catch (error) {
-          util.showError(error)
-        }
-      }
-    })
   }
 })
