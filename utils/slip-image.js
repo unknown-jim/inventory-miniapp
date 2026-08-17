@@ -309,7 +309,8 @@ function layoutTable(cmds, slip, y, measure) {
     pushLine(cmds, PAD, row.y + row.height, tableRight, row.y + row.height, 1)
   })
   defs.slice(1).forEach(function (col) {
-    pushLine(cmds, col.x, tableTop, col.x, y, 1)
+    const throughTotal = col.key === 'qty' || col.key === 'price' || col.key === 'amount'
+    pushLine(cmds, col.x, tableTop, col.x, throughTotal ? y : totalY, 1)
   })
 
   defs.forEach(function (col) {
@@ -328,10 +329,9 @@ function layoutTable(cmds, slip, y, measure) {
     })
   })
 
-  const nameCol = colByKey(cols, 'name')
   const qtyCol = colByKey(cols, 'qty')
   const amountCol = colByKey(cols, 'amount')
-  pushText(cmds, '合计', cellX(nameCol), textTop(totalY, totalH, FONT.total), FONT.total, COLORS.title, nameCol.align)
+  pushText(cmds, '合计', qtyCol.x - CELL_PAD_X, textTop(totalY, totalH, FONT.total), FONT.total, COLORS.title, 'right')
   pushText(cmds, qtyTotalText(lines), cellX(qtyCol), textTop(totalY, totalH, FONT.total), FONT.total, COLORS.title, qtyCol.align)
   pushText(cmds, '¥' + slip.amountText, cellX(amountCol), textTop(totalY, totalH, FONT.total), FONT.total, COLORS.title, amountCol.align)
   return y + 16
