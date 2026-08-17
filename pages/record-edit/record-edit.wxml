@@ -60,7 +60,8 @@
       <view class="field-label">经手人</view>
       <input wx:if="{{editing}}" class="field-input" maxlength="32" value="{{operatorName}}" bindinput="onOperatorName" placeholder="可选" hidden="{{showCustomerPicker || showSlip}}" />
       <view wx:else class="field-input readonly">{{operatorName || '—'}}</view>
-      <view class="chips" wx:if="{{editing}}">
+      <view wx:if="{{editing && members.length}}" class="muted field-hint">点选本店成员，也可手写</view>
+      <view class="chips" wx:if="{{editing && members.length}}">
         <view
           class="chip {{item.on ? 'on' : ''}}"
           wx:for="{{members}}"

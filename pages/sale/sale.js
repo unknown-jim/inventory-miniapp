@@ -2,18 +2,7 @@ const store = require('../../utils/store')
 const util = require('../../utils/util')
 const inventory = require('../../utils/inventory')
 const slipActions = require('../../utils/slip-actions')
-
-function memberChips(members, selectedOpenid) {
-  return (members || []).map(function (item) {
-    const displayName = String(item.displayName || '').trim()
-    return {
-      openid: item.openid,
-      displayName: displayName,
-      label: displayName || '未命名',
-      on: item.openid === selectedOpenid
-    }
-  })
-}
+const memberChips = require('../../utils/member-chips').memberChips
 
 Page({
   data: {
@@ -85,7 +74,7 @@ Page({
     this._members = memberList
     const operatorPatch = {
       myOpenid: openid,
-      members: memberChips(memberList, this.data.operatorTouched ? this.data.operatorOpenid : openid)
+      members: memberChips(memberList, this.data.operatorTouched ? this.data.operatorOpenid : openid, openid)
     }
     if (!this.data.operatorTouched) {
       const me = memberList.find(function (item) {
@@ -440,7 +429,11 @@ Page({
     if (selectedOpenid && name !== selectedName) {
       patch.operatorOpenid = ''
     }
-    patch.members = memberChips(this._members, patch.operatorOpenid != null ? patch.operatorOpenid : selectedOpenid)
+    patch.members = memberChips(
+      this._members,
+      patch.operatorOpenid != null ? patch.operatorOpenid : selectedOpenid,
+      this.data.myOpenid
+    )
     this.setData(patch)
   },
 
@@ -453,7 +446,7 @@ Page({
       operatorOpenid: openid,
       operatorName: member ? String(member.displayName || '').trim() : '',
       operatorTouched: true,
-      members: memberChips(this._members, openid)
+      members: memberChips(this._members, openid, this.data.myOpenid)
     })
   },
 
