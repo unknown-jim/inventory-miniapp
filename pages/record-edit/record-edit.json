@@ -1,3 +1,6 @@
 {
-  "navigationBarTitleText": "流水详情"
+  "navigationBarTitleText": "流水详情",
+  "usingComponents": {
+    "slip-overlay": "/components/slip-overlay/index"
+  }
 }

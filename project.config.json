@@ -95,18 +95,6 @@
       {
         "type": "file",
         "value": "utils/sku-list-view.js"
-      },
-      {
-        "type": "file",
-        "value": "styles/slip.wxss"
-      },
-      {
-        "type": "file",
-        "value": "pages/common/slip-overlay.wxml"
-      },
-      {
-        "type": "file",
-        "value": "pages/common/page-loading.wxml"
       }
     ]
   },

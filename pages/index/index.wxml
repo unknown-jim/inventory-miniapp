@@ -1,6 +1,6 @@
 <view class="page">
   <block wx:if="{{pageLoading}}">
-    <include src="/pages/common/page-loading.wxml" />
+    <page-loading />
   </block>
 
   <block wx:elif="{{blocked}}">

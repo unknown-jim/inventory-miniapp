@@ -1,5 +1,3 @@
-@import '/styles/slip.wxss';
-
 .picker {
   line-height: var(--tap-md);
 }
@@ -166,4 +164,14 @@
 .item-name {
   font-weight: 600;
   margin-bottom: 6rpx;
+}
+
+.slip-canvas {
+  position: fixed;
+  left: -2000px;
+  top: 0;
+  width: 1760px;
+  height: 4000px;
+  pointer-events: none;
+  opacity: 0;
 }

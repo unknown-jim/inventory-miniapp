@@ -68,8 +68,8 @@ assert.ok(indexWxml.indexOf('今日看板') >= 0, 'home page should show 今日�
 assert.ok(indexWxml.indexOf('去收款') >= 0, 'home page should keep 去收款')
 assert.ok(indexWxml.indexOf('js-seed') >= 0, 'home page should keep js-seed')
 assert.ok(indexWxml.indexOf('pageLoading') >= 0, 'home page should gate content on pageLoading')
-assert.ok(indexWxml.indexOf('/pages/common/page-loading.wxml') >= 0, 'home page should include shared loading view')
-const loadingWxml = read('pages/common/page-loading.wxml')
+assert.ok(indexWxml.indexOf('<page-loading') >= 0, 'home page should use shared loading view')
+const loadingWxml = read('components/page-loading/index.wxml')
 assert.ok(loadingWxml.indexOf('js-page-loading') >= 0, 'loading view should expose js-page-loading')
 assert.ok(loadingWxml.indexOf('正在加载') >= 0, 'loading view should say 正在加载')
 assert.ok(indexWxml.indexOf('填充示例数据') >= 0, 'home page should keep 填充示例数据')
@@ -92,8 +92,8 @@ tabPages.forEach(function (page) {
   const wxml = read(page + '.wxml')
   const js = read(page + '.js')
   assert.ok(
-    wxml.indexOf('/pages/common/page-loading.wxml') >= 0,
-    page + ' should include shared loading view'
+    wxml.indexOf('<page-loading') >= 0,
+    page + ' should use shared loading view'
   )
   assert.ok(js.indexOf('pageLoading: true') >= 0, page + ' should start in loading state')
   assert.ok(js.indexOf('store.isReady()') >= 0, page + ' should wait for ledger before showing data')
@@ -109,7 +109,7 @@ assert.ok(shopWxml.indexOf('js-restore') >= 0, 'shop page should have js-restore
 assert.ok(shopWxml.indexOf('js-delete-shop') >= 0, 'shop page should have js-delete-shop')
 assert.ok(shopWxml.indexOf('成员名单') >= 0, 'shop page should keep 成员名单')
 assert.ok(shopWxml.indexOf('hasCurrentShop') >= 0, 'shop page current header should require membership')
-assert.ok(shopWxml.indexOf('/pages/common/page-loading.wxml') >= 0, 'shop page should include shared loading view')
+assert.ok(shopWxml.indexOf('<page-loading') >= 0, 'shop page should use shared loading view')
 assert.ok(shopWxml.indexOf('pageLoading') >= 0, 'shop page should gate content on pageLoading')
 assert.ok(shopWxml.indexOf('shopsReady') < 0, 'shop page should not use a separate shopsReady empty card')
 const shopJs = read('pages/shop/shop.js')
@@ -129,7 +129,7 @@ assert.ok(shopWxml.indexOf('流水与毛利汇总') < 0, 'shop page should not l
 
 const membersWxml = read('pages/members/members.wxml')
 const membersJs = read('pages/members/members.js')
-assert.ok(membersWxml.indexOf('/pages/common/page-loading.wxml') >= 0, 'members page should include shared loading view')
+assert.ok(membersWxml.indexOf('<page-loading') >= 0, 'members page should use shared loading view')
 assert.ok(membersWxml.indexOf('pageLoading') >= 0, 'members page should gate content on pageLoading')
 assert.ok(membersJs.indexOf('pageLoading: true') >= 0, 'members page should start in loading state')
 assert.ok(membersJs.indexOf('store.isReady()') >= 0, 'members page should wait for ledger before showing data')
@@ -159,14 +159,14 @@ pages.forEach(function (page) {
   assert.ok(wxml.indexOf('class="page"') >= 0, page + ' root should be class="page"')
 })
 
-const sourceDirs = ['pages', 'utils']
+const sourceDirs = ['pages', 'utils', 'components']
 const forbiddenHits = []
 sourceDirs.forEach(function (dir) {
   const files = []
   walk(path.join(root, dir), files)
   files.forEach(function (file) {
     const rel = path.relative(root, file).replace(/\\/g, '/')
-    if (rel.indexOf('pages/common/') === 0) return
+    if (rel.indexOf('components/slip-overlay/') === 0) return
     const src = fs.readFileSync(file, 'utf8')
     if (src.indexOf('ui-std') >= 0) forbiddenHits.push(rel + ' contains ui-std')
     if (src.indexOf('显示大小') >= 0) forbiddenHits.push(rel + ' contains 显示大小')
@@ -192,9 +192,10 @@ assert.strictEqual(
 const tinyHits = []
 const wxssFiles = [path.join(root, 'app.wxss')]
 walk(path.join(root, 'pages'), wxssFiles, '.wxss')
+if (fs.existsSync(path.join(root, 'components'))) walk(path.join(root, 'components'), wxssFiles, '.wxss')
 wxssFiles.forEach(function (file) {
   const rel = path.relative(root, file).replace(/\\/g, '/')
-  if (rel.indexOf('pages/common/') === 0) return
+  if (rel.indexOf('components/slip-overlay/') === 0) return
   const src = fs.readFileSync(file, 'utf8')
   const re = /font-size:\s*(\d+)rpx/g
   let match

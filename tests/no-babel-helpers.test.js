@@ -20,6 +20,7 @@ function collectFiles() {
   const files = []
   walkJs(path.join(root, 'pages'), files)
   walkJs(path.join(root, 'utils'), files)
+  walkJs(path.join(root, 'components'), files)
   const appJs = path.join(root, 'app.js')
   if (fs.existsSync(appJs)) files.push(appJs)
   return files
