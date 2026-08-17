@@ -16,16 +16,16 @@
 - 写：进货 / 销售 / 退货 / 改规格 / 改档都走 `ledger` 的 `action`。函数里用现有 [`utils/inventory.js`](../utils/inventory.js)，在**事务回调中重新读取** `ledgers` 文档再计算再写回。
 - 读：云函数按店返回整本账；小程序内存 + `wx.storage` 只做缓存，不是权威来源。
 - 扣账内核只有一份。云函数不能 `require('../../utils/inventory')`，用 `npm run sync:ledger-inventory` 复制到 `cloudfunctions/ledger/`。`npm test` 会在两份不一致时失败。
-- 环境 ID 写在 [`utils/cloud-config.js`](../utils/cloud-config.js) 的 `CLOUD_ENV_ID`。空着则不能记账，也不会悄悄用「第一个云环境」。
+- 环境 ID 写在 [`utils/cloud-config.js`](../utils/cloud-config.js) 的 `CLOUD_ENV_ID`，必须等于开发者工具「云开发 → 设置」里的那一串（微信侧）。腾讯云控制台里另一套环境填进来会报 Environment not found。空着不能记账，也不要用客户端 `DYNAMIC_CURRENT_ENV` 代替填写。
 - 集合：`shops`、`members`、`ledgers`、`ledger_clears`。前三张是当前店账；`ledger_clears` 保存每一次清空的完整快照，不回传给小程序。不要第一期就拆当前流水表。
 
 建店、加成员、选店在低频页，不进 tab，不挂全局组件。tab 仍留主包。`lazyCodeLoading` 保持开启。`cloudfunctions/` 不进小程序包。
 
 ## 上线前在控制台做的事
 
-1. 开通云开发，把环境 ID 填进 `utils/cloud-config.js`。
+1. 开通云开发，把**开发者工具云开发面板里的**环境 ID 填进 `utils/cloud-config.js`。
 2. 建集合 `shops`、`members`、`ledgers`、`ledger_clears`，权限选「仅管理端可读写」。
-3. 上传并部署云函数 `ledger`（超时已设 20 秒）。
+3. 用微信云托管 CLI（`wxcloud login` 后上传 `ledger`）或开发者工具对 `cloudfunctions/ledger` 右键「上传并部署：云端安装依赖」（超时已设 20 秒）。不要用腾讯云账号的 `tcb` 去管微信侧环境。
 4. 开发者工具使用正式 AppID（测试号没有云开发）。
 
 可选：给 `members` 的 `openid`、`shopId` 加索引，名单变长时列表更快。
@@ -47,5 +47,5 @@
 - 小程序端 `wx.cloud.database()` 读写业务集合，或「本地写一份云写一份」。
 - 离线开单队列。断网卖货和同时卖货冲突无法在本地裁决。
 - 把现场规矩写成软件限制。记账仍要自洽，见 [accounting-vs-policy.md](accounting-vs-policy.md)。
-- 把 `CLOUD_ENV_ID` 留空却指望开发者工具自动选环境。
+- 把 `CLOUD_ENV_ID` 留空却指望开发者工具自动选环境，或把腾讯云控制台里另一套环境 ID 填进小程序。
 - 改了 `utils/inventory.js` 或 `utils/ledger-apply.js` 却不跑 `npm run sync:ledger-inventory`。

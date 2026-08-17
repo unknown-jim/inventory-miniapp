@@ -46,6 +46,6 @@
 ### 云开发
 
 - 业务库只允许云函数 `ledger` 读写。小程序禁止 `wx.cloud.database()` 访问 `shops` / `members` / `ledgers` / `ledger_clears`。
-- `utils/cloud-config.js` 必须有明确的环境 ID 才记账；不要依赖「第一个云环境」。
+- `utils/cloud-config.js` 必须有明确的环境 ID 才记账；填开发者工具「云开发」里的 ID，不要填腾讯云控制台另一套环境，也不要依赖「第一个云环境」。
 - 改 `utils/inventory.js` 或 `utils/ledger-apply.js` 后运行 `npm run sync:ledger-inventory`，保持云函数副本一致。
 - `app.json` 的 `lazyCodeLoading` 仍须保留；`cloudfunctions/` 不进小程序包。详见 [docs/cloud-ledger.md](docs/cloud-ledger.md)。
