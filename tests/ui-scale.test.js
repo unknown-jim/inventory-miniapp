@@ -109,10 +109,15 @@ assert.ok(shopWxml.indexOf('js-restore') >= 0, 'shop page should have js-restore
 assert.ok(shopWxml.indexOf('js-delete-shop') >= 0, 'shop page should have js-delete-shop')
 assert.ok(shopWxml.indexOf('成员名单') >= 0, 'shop page should keep 成员名单')
 assert.ok(shopWxml.indexOf('hasCurrentShop') >= 0, 'shop page current header should require membership')
+assert.ok(shopWxml.indexOf('/pages/common/page-loading.wxml') >= 0, 'shop page should include shared loading view')
+assert.ok(shopWxml.indexOf('pageLoading') >= 0, 'shop page should gate content on pageLoading')
+assert.ok(shopWxml.indexOf('shopsReady') < 0, 'shop page should not use a separate shopsReady empty card')
 const shopJs = read('pages/shop/shop.js')
+assert.ok(shopJs.indexOf('pageLoading: true') >= 0, 'shop page should start in loading state')
+assert.ok(shopJs.indexOf('isEmpty: false') >= 0, 'shop page should not treat unloaded ledger as empty')
 assert.ok(
-  /async onShow\(\) \{[\s\S]*?shopsReady:\s*false[\s\S]*?listShops/.test(shopJs),
-  'shop onShow should hide stale shop UI until listShops returns'
+  /async onShow\(\) \{[\s\S]*?pageLoading:\s*true[\s\S]*?listShops/.test(shopJs),
+  'shop onShow should hide shop UI until listShops returns'
 )
 assert.ok(shopWxml.indexOf('shopsLoadError') >= 0, 'shop page should have a shops load error state')
 assert.ok(shopWxml.indexOf('!shops.length && !hasCurrentShop') >= 0, 'empty onboarding should not run when current shop is known')
@@ -123,10 +128,15 @@ assert.ok(shopWxml.indexOf('我的 openid') < 0, 'shop page should not title the
 assert.ok(shopWxml.indexOf('流水与毛利汇总') < 0, 'shop page should not link 流水与毛利汇总')
 
 const membersWxml = read('pages/members/members.wxml')
+const membersJs = read('pages/members/members.js')
+assert.ok(membersWxml.indexOf('/pages/common/page-loading.wxml') >= 0, 'members page should include shared loading view')
+assert.ok(membersWxml.indexOf('pageLoading') >= 0, 'members page should gate content on pageLoading')
+assert.ok(membersJs.indexOf('pageLoading: true') >= 0, 'members page should start in loading state')
+assert.ok(membersJs.indexOf('store.isReady()') >= 0, 'members page should wait for ledger before showing data')
 assert.ok(membersWxml.indexOf('我的 openid') < 0, 'members page should not repeat identity copy')
 assert.ok(membersWxml.indexOf('添加店员') >= 0, 'members page should say 添加店员')
 assert.ok(membersWxml.indexOf('加入白名单') < 0, 'members page should not say 加入白名单')
-assert.ok(read('pages/members/members.js').indexOf('还没写称呼') >= 0, 'empty display name should read 还没写称呼')
+assert.ok(membersJs.indexOf('还没写称呼') >= 0, 'empty display name should read 还没写称呼')
 
 const project = JSON.parse(read('project.config.json'))
 const include = ((project.packOptions && project.packOptions.include) || [])

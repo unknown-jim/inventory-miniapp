@@ -1,4 +1,8 @@
 <view class="page">
+  <block wx:if="{{pageLoading}}">
+    <include src="/pages/common/page-loading.wxml" />
+  </block>
+  <block wx:else>
   <view class="section-title">
     <text>{{shopName || '本店'}}成员</text>
   </view>
@@ -54,4 +58,5 @@
   <view wx:else class="card quiet">
     <view class="muted">只有店主能加减成员。店员把身份发给老板，在店铺页复制。</view>
   </view>
+  </block>
 </view>
