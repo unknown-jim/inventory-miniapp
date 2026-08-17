@@ -75,6 +75,18 @@ assert.ok(text.indexOf('数量') >= 0)
 assert.ok(text.indexOf('单价') >= 0)
 assert.ok(text.indexOf('金额') >= 0)
 assert.ok(text.indexOf('合计') >= 0)
+const totalLabel = layout.commands.find(function (item) {
+  return item.type === 'text' && item.text === '合计'
+})
+const qtyHead = layout.commands.find(function (item) {
+  return item.type === 'text' && item.text === '数量'
+})
+const nameHead = layout.commands.find(function (item) {
+  return item.type === 'text' && item.text === '品名'
+})
+assert.strictEqual(totalLabel.align, 'right')
+assert.ok(totalLabel.x > nameHead.x)
+assert.ok(totalLabel.x <= qtyHead.x)
 assert.ok(text.indexOf('客户签收') >= 0)
 assert.ok(text.indexOf('件 ×') < 0)
 assert.ok(text.indexOf('未填') < 0)
