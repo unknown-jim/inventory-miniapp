@@ -180,4 +180,11 @@ assert.strictEqual(
   'operation UI should not use font-size below --fs-xs (' + minFont + 'rpx):\n' + tinyHits.join('\n')
 )
 
+const productsWxss = read('pages/products/products.wxss')
+assert.ok(
+  productsWxss.indexOf('min-height: var(--tap-sm)') >= 0,
+  'products.wxss toggle should use min-height: var(--tap-sm)'
+)
+assert.ok(productsWxss.indexOf('.bar-fill') < 0, 'products.wxss should not keep .bar-fill')
+
 console.log('ui-scale tests passed')

@@ -51,7 +51,31 @@ const productsWxml = fs.readFileSync(
   'utf8'
 )
 assert.ok(productsWxml.indexOf('action-strip') >= 0)
+assert.ok(productsWxml.indexOf('stat-grid') >= 0)
+assert.ok(productsWxml.indexOf('goods-spec-toggle') >= 0)
+assert.ok(productsWxml.indexOf('查看规格') >= 0)
+assert.ok(productsWxml.indexOf('收起规格') >= 0)
+assert.ok(productsWxml.indexOf('catchtap="toggleSpecs"') >= 0)
+assert.ok(productsWxml.indexOf('skuSummary') < 0)
+assert.ok(productsWxml.indexOf('bar-fill') < 0)
+assert.ok(productsWxml.indexOf('barWidth') < 0)
+assert.ok(productsWxml.indexOf('item.specTag') < 0)
+assert.ok(productsWxml.indexOf('profitText') < 0)
+assert.ok(productsWxml.indexOf('rateText') < 0)
+assert.ok(productsWxml.indexOf('毛利') < 0)
+assert.ok(productsWxml.indexOf("item.sku || '未填'") < 0)
 assert.ok(productsWxml.indexOf('库存调整') < 0)
+const productsCard = productsWxml.slice(productsWxml.indexOf('class="card goods-card"'))
+assert.ok(productsCard.indexOf('条码') < 0)
+
+const productsJs = fs.readFileSync(
+  path.join(__dirname, '../pages/products/products.js'),
+  'utf8'
+)
+assert.ok(productsJs.indexOf('expandedId') >= 0)
+assert.ok(productsJs.indexOf('toggleSpecs') >= 0)
+assert.ok(productsJs.indexOf('skuListView') >= 0)
+assert.ok(productsJs.indexOf('barWidth') < 0)
 
 const recordsWxml = fs.readFileSync(
   path.join(__dirname, '../pages/records/records.wxml'),

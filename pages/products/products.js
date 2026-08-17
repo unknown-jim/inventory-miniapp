@@ -1,6 +1,7 @@
 const store = require('../../utils/store')
 const util = require('../../utils/util')
 const inventory = require('../../utils/inventory')
+const skuListView = require('../../utils/sku-list-view').skuListView
 
 Page({
   data: {
@@ -8,6 +9,7 @@ Page({
     onlyAlert: false,
     list: [],
     alertCount: 0,
+    expandedId: '',
     pageLoading: true
   },
 
@@ -36,10 +38,7 @@ Page({
     this.setData({
       pageLoading: false,
       list: source.map(function (item) {
-        const view = util.withView(item, skus)
-        const cap = item.alertQty * 3 || 1
-        view.barWidth = Math.max(8, Math.min(100, Math.round(item.stock / cap * 100)))
-        return view
+        return Object.assign(util.withView(item, skus), skuListView(item, skus))
       }),
       alertCount: alerts.length
     })
@@ -58,6 +57,11 @@ Page({
   showAlert() {
     this.setData({ onlyAlert: true })
     this.refresh()
+  },
+
+  toggleSpecs(e) {
+    const id = e.currentTarget.dataset.id
+    this.setData({ expandedId: this.data.expandedId === id ? '' : id })
   },
 
   goAdd() {

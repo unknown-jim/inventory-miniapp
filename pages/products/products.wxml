@@ -39,21 +39,33 @@
       <view class="goods-top">
         <view class="item-name">{{item.name}}</view>
         <view class="goods-tags">
-          <text wx:if="{{item.specTag}}" class="tag {{item.blankProcess ? 'tag-blank' : 'tag-spec'}}">{{item.specTag}}</text>
           <text class="tag {{item.lowStock ? 'tag-alert' : 'tag-ok'}}">库存 {{item.stock}}</text>
         </view>
       </view>
-      <view class="muted">货号 {{item.sku || '未填'}} · 条码 {{item.barcode || '未填'}}</view>
-      <view wx:if="{{item.skuSummary}}" class="muted">{{item.skuSummary}}</view>
-      <view class="muted">预警 ≤ {{item.alertQty}}</view>
-      <view class="bar">
-        <view class="bar-fill {{item.lowStock ? 'danger' : ''}}" style="width: {{item.barWidth}}%;"></view>
+      <view wx:if="{{item.sku}}" class="muted">货号 {{item.sku}}</view>
+      <view wx:if="{{item.hasSpecs}}" class="muted">{{item.specLineText}}</view>
+      <view class="stat-grid goods-price-grid">
+        <view class="stat">
+          <view class="muted">进价</view>
+          <view class="stat-num">¥{{item.costText}}</view>
+        </view>
+        <view class="stat">
+          <view class="muted">售价</view>
+          <view class="stat-num">¥{{item.saleText}}</view>
+        </view>
       </view>
-      <view class="price-row">
-        <text>进价 ¥{{item.costText}}</text>
-        <text>售价 ¥{{item.saleText}}</text>
-        <text class="profit">毛利 ¥{{item.profitText}}（{{item.rateText}}）</text>
-      </view>
+    </view>
+    <view wx:if="{{item.hasSpecs}}" class="goods-spec-toggle" data-id="{{item.id}}" catchtap="toggleSpecs">
+      {{item.id === expandedId ? '收起规格' : '查看规格'}}
+    </view>
+    <view wx:if="{{item.hasSpecs && item.id === expandedId}}" class="goods-spec-panel">
+      <view wx:if="{{!item.specGroups.length}}" class="muted">当前各规格都没有库存</view>
+      <block wx:for="{{item.specGroups}}" wx:for-item="group" wx:key="key">
+        <view wx:if="{{group.title}}" class="goods-spec-group-title">{{group.title}}</view>
+        <view class="chips">
+          <view class="chip {{chip.low ? 'low' : ''}}" wx:for="{{group.chips}}" wx:for-item="chip" wx:key="key">{{chip.label}}</view>
+        </view>
+      </block>
     </view>
     <view class="action-strip">
       <button class="btn-ghost" data-id="{{item.id}}" catchtap="goPurchase">进货</button>
