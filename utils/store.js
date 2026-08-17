@@ -193,6 +193,12 @@ function mapCloudError(error) {
   if (/conflict|transaction/i.test(msg)) {
     return new Error('库存刚被别人改过，请再提交')
   }
+  if (/-501000|Environment not found|INVALID_ENV/i.test(msg)) {
+    return new Error('找不到云环境。请核对 cloud-config.js 是否等于开发者工具「云开发」里的环境 ID。')
+  }
+  if (/-601034|开通云开发|云托管/i.test(msg)) {
+    return new Error('当前小程序还不能用这个云环境。请在开发者工具点「云开发」开通，并确认 AppID 不是测试号。')
+  }
   if (error && error.message) return error
   return new Error(msg || '记账失败')
 }
