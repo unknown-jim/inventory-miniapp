@@ -81,6 +81,9 @@ function withSlipView(order, receivable, products, shopName) {
       }
     }),
     amountText: money(amount),
+    // 只有现结/赊账两档：现结实收全额，赊账实收为零。应收恒等于货物总额。
+    dueText: money(amount),
+    paidText: money(inventory.round2(amount - thisDebt)),
     remark: order.remark || first.remark || '',
     hasCustomer: !!(order.customerName || first.customerName),
     customerName: order.customerName || first.customerName || '',
