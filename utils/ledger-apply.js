@@ -32,6 +32,8 @@ function emptyLedger() {
     revision: 0,
     clearSnapshots: [],
     lastRestoredClearAt: 0,
+    accounts: {},
+    aggregate: inventory.emptyTerms(),
     totals: { salesAmount: 0, purchaseAmount: 0, profit: 0, receivable: 0, count: 0 }
   }
 }
@@ -47,13 +49,21 @@ function emptyCustomerAccount() {
 }
 
 function withAggregates(lists) {
-  const accounts = inventory.summarizeAllCustomerAccounts(lists.records)
+  // 累加器（分）算好之后存进 lists.accounts / lists.aggregate —— 这两个字段
+  // 会随 lists 一起落库，是账本的缓存值。回传给客户端的 customers[].account /
+  // totals 是从累加器投影出来的元。2b-0 里这份累加器仍是每次全量重折叠，
+  // 不做增量维护；增量入口 applyTermsDelta 只在测试里验证等价性。
+  const accounts = inventory.foldAccountTerms(lists.records)
+  const aggregate = inventory.foldTotalTerms(lists.records)
+  lists.accounts = accounts
+  lists.aggregate = aggregate
   lists.customers = (lists.customers || []).map(function (customer) {
+    const terms = accounts[customer.id]
     return Object.assign({}, customer, {
-      account: accounts[customer.id] || emptyCustomerAccount()
+      account: terms ? inventory.accountOf(terms) : emptyCustomerAccount()
     })
   })
-  lists.totals = inventory.computeTotals(lists.records)
+  lists.totals = inventory.totalsOf(aggregate)
   return lists
 }
 

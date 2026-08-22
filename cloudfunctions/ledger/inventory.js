@@ -1009,6 +1009,173 @@ function isCustomerAccountRecord(record) {
   )
 }
 
+// 聚合累加器用整数分存：增量维护要反复加减，浮点会漂，整数在 2^53 内精确
+// （约 9 万亿元）。
+//
+// 等价性的前提（不是"fuzz 试过很多次没炸"，是可证的）：所有记录的 amount /
+// profit 都是 round2() 或 sumBy() 的输出，而 cents(round2(n/100)) 对整数 n
+// 恒等，所以「先转分再累加」与「先累加再 round2」在这类输入上必然同解。
+//
+// 前提一旦被破坏就会静默算错账：金额若带第三位小数，误差 =
+// Σ(逐条舍入误差) − 整体舍入误差，随记录条数线性增长、无上界、方向不固定。
+// **新增写入路径不得绕过 round2 往记录上写 amount / profit。**
+// 反例已钉在 tests/ledger-terms.test.js 的「边界情况 (c)」。
+function cents(value) {
+  return Math.round(toNumber(value) * 100)
+}
+
+function yuan(c) {
+  return round2(c / 100)
+}
+
+function emptyTerms() {
+  return {
+    saleCount: 0,
+    salesSum: 0,
+    returnsSum: 0,
+    creditSalesSum: 0,
+    creditReturnsSum: 0,
+    openingsSum: 0,
+    paidSum: 0,
+    purchaseSum: 0,
+    profitSum: 0,
+    count: 0
+  }
+}
+
+// 单条流水对聚合的贡献，单位「分」。
+// 全量重算和增量维护共用这一份定义 —— 两者不可能算出不同的数。
+function recordTerms(record) {
+  const amount = cents(record && record.amount)
+  const profit = cents(record && record.profit)
+  const type = record && record.type
+  return {
+    saleCount: type === 'out' ? 1 : 0,
+    salesSum: type === 'out' ? amount : 0,
+    returnsSum: type === 'return' ? amount : 0,
+    creditSalesSum: isCreditSale(record) ? amount : 0,
+    creditReturnsSum: isCreditReturn(record) ? amount : 0,
+    openingsSum: isOpening(record) ? amount : 0,
+    paidSum: type === 'pay' ? amount : 0,
+    purchaseSum: type === 'in' ? amount : 0,
+    profitSum: (type === 'out' || type === 'return') ? profit : 0,
+    count: 1
+  }
+}
+
+function termsCustomerId(record) {
+  return (isCustomerAccountRecord(record) && record.customerId) || ''
+}
+
+// sign = +1 记入，-1 冲销。返回新对象，不改动入参。
+function addTerms(target, terms, sign) {
+  const t = target || emptyTerms()
+  const s = sign < 0 ? -1 : 1
+  return {
+    saleCount: t.saleCount + s * terms.saleCount,
+    salesSum: t.salesSum + s * terms.salesSum,
+    returnsSum: t.returnsSum + s * terms.returnsSum,
+    creditSalesSum: t.creditSalesSum + s * terms.creditSalesSum,
+    creditReturnsSum: t.creditReturnsSum + s * terms.creditReturnsSum,
+    openingsSum: t.openingsSum + s * terms.openingsSum,
+    paidSum: t.paidSum + s * terms.paidSum,
+    purchaseSum: t.purchaseSum + s * terms.purchaseSum,
+    profitSum: t.profitSum + s * terms.profitSum,
+    count: t.count + s * terms.count
+  }
+}
+
+// terms -> 单个客户账户的对外形状（元）。summarizeAllCustomerAccounts /
+// summarizeCustomerAccount 的字段完全靠这份投影定义，两者不能各算一套。
+function accountOf(terms) {
+  const t = terms || emptyTerms()
+  const creditAmount = t.creditSalesSum + t.openingsSum - t.creditReturnsSum
+  return {
+    count: t.saleCount,
+    amount: yuan(t.salesSum - t.returnsSum),
+    creditAmount: yuan(creditAmount),
+    paidAmount: yuan(t.paidSum),
+    receivable: yuan(creditAmount - t.paidSum)
+  }
+}
+
+// terms -> 全店汇总的对外形状（元）。computeTotals / summarizeRecords 共用。
+function totalsOf(terms) {
+  const t = terms || emptyTerms()
+  return {
+    salesAmount: yuan(t.salesSum - t.returnsSum),
+    purchaseAmount: yuan(t.purchaseSum),
+    profit: yuan(t.profitSum),
+    receivable: yuan(t.creditSalesSum + t.openingsSum - t.creditReturnsSum - t.paidSum),
+    count: t.count
+  }
+}
+
+// -> { [customerId]: terms }，跳过 customerId 为空或非客户账记录的流水
+function foldAccountTerms(records) {
+  const stats = Object.create(null)
+  ;(records || []).forEach(function (record) {
+    const customerId = termsCustomerId(record)
+    if (!customerId) return
+    stats[customerId] = addTerms(stats[customerId], recordTerms(record), 1)
+  })
+  const result = {}
+  Object.keys(stats).forEach(function (customerId) {
+    result[customerId] = stats[customerId]
+  })
+  return result
+}
+
+// -> terms，全量流水折叠成一份全店汇总
+function foldTotalTerms(records) {
+  let terms = emptyTerms()
+  ;(records || []).forEach(function (record) {
+    terms = addTerms(terms, recordTerms(record), 1)
+  })
+  return terms
+}
+
+// 唯一的聚合改动入口。before / after 至少一个非空：
+// before 为空 = 新增；after 为空 = 删除；都非空 = 就地改（含换客户）。
+// state = { accounts: {cid: terms}, aggregate: terms }
+// 某客户的 terms 冲销到 count === 0 时删掉该 key，
+// 以保持与 foldAccountTerms（只给有流水的客户建条目）逐字段一致。
+function applyTermsDelta(state, before, after) {
+  const accounts = Object.assign({}, state && state.accounts)
+  let aggregate = (state && state.aggregate) || emptyTerms()
+
+  function bump(record, sign) {
+    if (!record) return
+    const terms = recordTerms(record)
+    aggregate = addTerms(aggregate, terms, sign)
+    const customerId = termsCustomerId(record)
+    if (!customerId) return
+    const next = addTerms(accounts[customerId], terms, sign)
+    if (next.count === 0) {
+      delete accounts[customerId]
+    } else {
+      accounts[customerId] = next
+    }
+  }
+
+  bump(before, -1)
+  bump(after, 1)
+
+  return { accounts: accounts, aggregate: aggregate }
+}
+
+// 一段流水对某客户欠款的净贡献，口径与 summarizeCustomerAccount 完全一致。单位「元」。
+// 送货单欠款用它从「当前欠款」倒推「截断到某时刻的欠款」，见 receivableAt。
+function receivableDelta(records, customerId) {
+  if (!customerId) return 0
+  let terms = emptyTerms()
+  ;(records || []).forEach(function (record) {
+    if (termsCustomerId(record) !== customerId) return
+    terms = addTerms(terms, recordTerms(record), 1)
+  })
+  return accountOf(terms).receivable
+}
+
 function summarizeCustomerAccount(records, customerId) {
   const related = records.filter(function (item) {
     return item.customerId === customerId && isCustomerAccountRecord(item)
@@ -1054,64 +1221,16 @@ function summarizeCustomerAccount(records, customerId) {
 }
 
 function summarizeAllCustomerAccounts(records) {
-  const stats = Object.create(null)
-  function ensure(customerId) {
-    if (!stats[customerId]) {
-      stats[customerId] = {
-        creditSalesSum: 0,
-        openingsSum: 0,
-        creditReturnsSum: 0,
-        paidSum: 0,
-        salesSum: 0,
-        returnsSum: 0,
-        saleCount: 0
-      }
-    }
-    return stats[customerId]
-  }
-  records.forEach(function (item) {
-    if (!item.customerId || !isCustomerAccountRecord(item)) return
-    const entry = ensure(item.customerId)
-    if (item.type === 'out') {
-      entry.salesSum += toNumber(item.amount)
-      if (isCreditSale(item)) {
-        entry.creditSalesSum += toNumber(item.amount)
-      }
-      entry.saleCount += 1
-    } else if (item.type === 'return') {
-      entry.returnsSum += toNumber(item.amount)
-      if (isCreditReturn(item)) {
-        entry.creditReturnsSum += toNumber(item.amount)
-      }
-    } else if (item.type === 'pay') {
-      entry.paidSum += toNumber(item.amount)
-    } else if (isOpening(item)) {
-      entry.openingsSum += toNumber(item.amount)
-    }
-  })
+  const terms = foldAccountTerms(records)
   const result = {}
-  Object.keys(stats).forEach(function (customerId) {
-    const entry = stats[customerId]
-    const creditAmount = round2(entry.creditSalesSum + entry.openingsSum - entry.creditReturnsSum)
-    const paidAmount = round2(entry.paidSum)
-    result[customerId] = {
-      count: entry.saleCount,
-      amount: round2(entry.salesSum - entry.returnsSum),
-      creditAmount: creditAmount,
-      paidAmount: paidAmount,
-      receivable: round2(creditAmount - paidAmount)
-    }
+  Object.keys(terms).forEach(function (customerId) {
+    result[customerId] = accountOf(terms[customerId])
   })
   return result
 }
 
 function getTotalReceivable(records) {
-  return round2(records.reduce(function (sum, item) {
-    if (isCreditSale(item) || isOpening(item)) return sum + toNumber(item.amount)
-    if (isCreditReturn(item)) return sum - toNumber(item.amount)
-    if (item.type === 'pay') return sum - toNumber(item.amount)
-    return sum
-  }, 0))
+  return totalsOf(foldTotalTerms(records)).receivable
 }
 
 function applyPayment(records, payload, now, id) {
@@ -2352,36 +2471,7 @@ function filterRecords(records, type) {
 }
 
 function summarizeRecords(records) {
-  const sales = records.filter(function (item) {
-    return item.type === 'out'
-  })
-  const returns = records.filter(function (item) {
-    return item.type === 'return'
-  })
-  const purchases = records.filter(function (item) {
-    return item.type === 'in'
-  })
-  return {
-    salesAmount: round2(
-      sales.reduce(function (sum, item) {
-        return sum + toNumber(item.amount)
-      }, 0) - returns.reduce(function (sum, item) {
-        return sum + toNumber(item.amount)
-      }, 0)
-    ),
-    purchaseAmount: round2(purchases.reduce(function (sum, item) {
-      return sum + toNumber(item.amount)
-    }, 0)),
-    profit: round2(
-      sales.reduce(function (sum, item) {
-        return sum + toNumber(item.profit)
-      }, 0) + returns.reduce(function (sum, item) {
-        return sum + toNumber(item.profit)
-      }, 0)
-    ),
-    receivable: getTotalReceivable(records),
-    count: records.length
-  }
+  return totalsOf(foldTotalTerms(records))
 }
 
 function computeTotals(records) {
@@ -2604,6 +2694,15 @@ module.exports = {
   summarizeCustomerAccount: summarizeCustomerAccount,
   summarizeAllCustomerAccounts: summarizeAllCustomerAccounts,
   getTotalReceivable: getTotalReceivable,
+  emptyTerms: emptyTerms,
+  recordTerms: recordTerms,
+  addTerms: addTerms,
+  accountOf: accountOf,
+  totalsOf: totalsOf,
+  foldAccountTerms: foldAccountTerms,
+  foldTotalTerms: foldTotalTerms,
+  applyTermsDelta: applyTermsDelta,
+  receivableDelta: receivableDelta,
   isCreditSale: isCreditSale,
   isOpening: isOpening,
   isAdjust: isAdjust,
