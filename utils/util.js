@@ -51,7 +51,12 @@ function withSlipView(order, receivable, products, shopName) {
     : inventory.round2(records.reduce(function (sum, item) {
       return sum + inventory.toNumber(item.amount)
     }, 0))
-  const thisDebt = (order.payType || first.payType) === 'credit' ? amount : 0
+  const paidAmount = order.paidAmount != null
+    ? inventory.toNumber(order.paidAmount)
+    : inventory.round2(records.reduce(function (sum, item) {
+      return sum + inventory.salePaidAmount(item)
+    }, 0))
+  const thisDebt = inventory.round2(amount - paidAmount)
   const totalDebt = inventory.toNumber(receivable)
   const prevDebt = inventory.round2(totalDebt - thisDebt)
   const productsMap = productById(products)
@@ -81,16 +86,15 @@ function withSlipView(order, receivable, products, shopName) {
       }
     }),
     amountText: money(amount),
-    // 只有现结/赊账两档：现结实收全额，赊账实收为零。应收恒等于货物总额。
+    // 应收恒等于货物总额；实收是开单时填的那个数，欠款是两者之差。
     dueText: money(amount),
-    paidText: money(inventory.round2(amount - thisDebt)),
+    paidText: money(paidAmount),
     remark: order.remark || first.remark || '',
     hasCustomer: !!(order.customerName || first.customerName),
     customerName: order.customerName || first.customerName || '',
     customerPhone: order.customerPhone || first.customerPhone || '',
     customerAddress: order.customerAddress || first.customerAddress || '',
-    isCredit: (order.payType || first.payType) === 'credit',
-    payText: (order.payType || first.payType) === 'credit' ? '赊账' : '现结',
+    isCredit: thisDebt > 0,
     prevDebtText: money(prevDebt),
     thisDebtText: money(thisDebt),
     receivableText: money(totalDebt),
@@ -138,7 +142,9 @@ function withRecordView(record) {
   const isReturn = record.type === 'return'
   const isConvert = record.type === 'convert'
   const isAdjust = inventory.isAdjust(record)
-  const isCredit = isOut && record.payType === 'credit'
+  const paidAmount = isOut ? inventory.salePaidAmount(record) : 0
+  const debtAmount = isOut ? inventory.round2(inventory.toNumber(record.amount) - paidAmount) : 0
+  const isCredit = debtAmount > 0
   const lineCount = record.lineCount || 1
   const isMulti = isOut && lineCount > 1
   const spec = inventory.specText(record.color, record.size)
@@ -173,6 +179,9 @@ function withRecordView(record) {
       : (isOpening || isCredit ? 'tag-credit' : (isIn ? 'tag-in' : (isReturn ? 'tag-return' : (isConvert ? 'tag-convert' : 'tag-out'))))),
     timeText: formatTime(record.createdAt),
     amountText: money(record.amount),
+    paidText: money(paidAmount),
+    debtText: money(debtAmount),
+    hasDebt: debtAmount > 0,
     priceText: money(record.unitPrice),
     profitText: money(record.profit),
     qtyText: isPay || isOpening ? '' : String(record.qty),

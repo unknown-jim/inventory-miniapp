@@ -14,13 +14,6 @@
       <text wx:if="{{hasDebt}}"> · 当前欠款 ¥{{receivableText}}</text>
     </view>
     <view class="field">
-      <view class="field-label">结算</view>
-      <view class="seg">
-        <view class="seg-item js-pay-cash {{payType === 'cash' ? 'on' : ''}}" data-type="cash" bindtap="setPayType">现结</view>
-        <view class="seg-item js-pay-credit {{payType === 'credit' ? 'on' : ''}}" data-type="credit" bindtap="setPayType">赊账</view>
-      </view>
-    </view>
-    <view class="field">
       <view class="field-label">经手人</view>
       <input class="field-input" maxlength="32" value="{{operatorName}}" bindinput="onOperatorName" placeholder="可选，默认自己" hidden="{{showPicker || showCustomerPicker || showSlip}}" />
       <view wx:if="{{members.length}}" class="muted field-hint">点选本店成员，也可手写</view>
@@ -105,7 +98,7 @@
   <view class="card total-card">
     <view class="total">
       <view>
-        <view class="muted">本单销售额</view>
+        <view class="muted">本单应收</view>
         <view class="total-num">¥{{amountText}}</view>
       </view>
       <view class="right">
@@ -113,7 +106,19 @@
         <view class="profit-num">¥{{profitText}}</view>
       </view>
     </view>
-    <view class="muted tip">可加入多种商品，确认后开一张送货单。赊账必须选客户。待加工款先扣同一格现货，不够再扣待加工库存。</view>
+    <view class="field paid-field">
+      <view class="field-label">本单实收</view>
+      <input class="field-input js-paid" type="digit" value="{{paidAmount}}" bindinput="onPaidInput" placeholder="0.00" hidden="{{showPicker || showCustomerPicker || showSlip}}" />
+      <view class="muted field-hint">默认收满全款；收多少填多少，差额记成这位客户的欠款</view>
+      <view class="chips">
+        <view class="chip js-paid-full" bindtap="fillPaidFull">收满 ¥{{amountText}}</view>
+        <view class="chip js-paid-none" bindtap="fillPaidNone">一分未收</view>
+      </view>
+    </view>
+    <view class="paid-note over" wx:if="{{paidOver}}">实收比应收多 ¥{{overText}}，多收的钱请单独记收款</view>
+    <view class="paid-note debt" wx:elif="{{hasNewDebt}}">本单欠款 ¥{{debtText}}</view>
+    <view class="paid-note done" wx:else>本单已收讫</view>
+    <view class="muted tip">可加入多种商品，确认后开一张送货单。实收少于应收要先选客户。待加工款先扣同一格现货，不够再扣待加工库存。</view>
   </view>
 
   <button class="btn-primary save-btn js-sale-submit" bindtap="submit" hidden="{{showPicker || showCustomerPicker || showSlip}}">确认出库</button>

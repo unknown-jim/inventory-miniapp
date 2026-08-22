@@ -258,6 +258,7 @@ function applyMutation(ledger, action, payload, now, nextId) {
       next.products,
       next.records,
       Object.assign({}, extra, {
+        paidAmount: payload.paidAmount,
         payType: payload.payType,
         remark: payload.remark,
         operatorOpenid: payload.operatorOpenid,
