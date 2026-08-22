@@ -82,7 +82,8 @@ const sold = inv.applySale(purchased.products, purchased.records, {
 assert.strictEqual(sold.products[0].stock, 11)
 assert.strictEqual(sold.record.profit, 7.6)
 assert.strictEqual(sold.record.amount, 18)
-assert.strictEqual(sold.record.payType, 'cash')
+assert.strictEqual(sold.record.paidAmount, 18)
+assert.strictEqual(sold.record.payType, undefined)
 assert.strictEqual(sold.record.operatorOpenid, '')
 assert.strictEqual(sold.record.operatorName, '')
 
@@ -187,9 +188,20 @@ assert.throws(function () {
     productId: 'p1',
     qty: 1,
     unitPrice: 4.5,
-    payType: 'credit'
+    paidAmount: 0
   }, 8100, 'r-credit-no-customer')
 }, /客户/)
+
+assert.throws(function () {
+  inv.applySale(purchased.products, purchased.records, {
+    productId: 'p1',
+    qty: 1,
+    unitPrice: 4.5,
+    customerId: 'c1',
+    customerName: '张三超市',
+    paidAmount: 5
+  }, 8100, 'r-over-paid')
+}, /实收不能超过应收/)
 
 const creditSale = inv.applySale(purchased.products, purchased.records, {
   productId: 'p1',
@@ -197,10 +209,18 @@ const creditSale = inv.applySale(purchased.products, purchased.records, {
   unitPrice: 4.5,
   customerId: 'c1',
   customerName: '张三超市',
-  payType: 'credit'
+  paidAmount: 0
 }, 8200, 'r-credit')
-assert.strictEqual(creditSale.record.payType, 'credit')
+assert.strictEqual(creditSale.record.paidAmount, 0)
 assert.strictEqual(inv.summarizeCustomerAccount(creditSale.records, 'c1').receivable, 9)
+
+// 老流水只有 payType 没有实收：读的时候按现结收满、赊账一分未收回推。
+const legacyCredit = { id: 'legacy-credit', type: 'out', customerId: 'c-legacy', amount: 100, qty: 1, unitPrice: 100, payType: 'credit', orderId: 'legacy-credit', createdAt: 1 }
+const legacyCash = { id: 'legacy-cash', type: 'out', customerId: 'c-legacy', amount: 60, qty: 1, unitPrice: 60, payType: 'cash', orderId: 'legacy-cash', createdAt: 2 }
+assert.strictEqual(inv.salePaidAmount(legacyCredit), 0)
+assert.strictEqual(inv.salePaidAmount(legacyCash), 60)
+assert.strictEqual(inv.summarizeCustomerAccount([legacyCredit, legacyCash], 'c-legacy').receivable, 100)
+assert.strictEqual(inv.getTotalReceivable([legacyCredit, legacyCash]), 100)
 
 const paid = inv.applyPayment(creditSale.records, {
   customerId: 'c1',
@@ -321,7 +341,7 @@ const multi = inv.applySaleOrder(
     ],
     customerId: 'c1',
     customerName: '张三超市',
-    payType: 'credit'
+    paidAmount: 0
   },
   9100,
   'order-1',
@@ -403,7 +423,7 @@ const orderItemsEdit = inv.updateRecord(multi.products, multi.records, {
     { id: multi.order.records[0].id, qty: 3, unitPrice: 4.5 },
     { id: multi.order.records[1].id, qty: 1, unitPrice: 9.9 }
   ],
-  payType: 'credit',
+  paidAmount: 0,
   customerId: 'c1',
   customerName: '张三超市',
   remark: '整单备注'
@@ -655,15 +675,15 @@ const orderEdit = inv.updateRecord(multi.products, multi.records, {
   id: multi.order.records[0].id,
   qty: 2,
   unitPrice: 4.5,
-  payType: 'cash',
+  paidAmount: 9,
   customerId: 'c1',
   customerName: '张三超市'
 }, 2900, [])
-assert.strictEqual(orderEdit.record.payType, 'cash')
+assert.strictEqual(orderEdit.record.paidAmount, 9)
 assert.ok(orderEdit.records.filter(function (item) {
   return item.orderId === 'order-1'
 }).every(function (item) {
-  return item.payType === 'cash'
+  return item.payType === undefined
 }))
 
 const specEdited = inv.updateRecord(soldTee.products, soldTee.records, {
@@ -819,7 +839,7 @@ const creditBlank = inv.applySale([hoodieMade.product], [], {
   unitPrice: 99,
   customerId: 'c-blank',
   customerName: '测试客户',
-  payType: 'credit'
+  paidAmount: 0
 }, 2100, 'r-credit-blank', hoodieMade.skus)
 assert.strictEqual(inv.summarizeCustomerAccount(creditBlank.records, 'c-blank').receivable, 99)
 const creditReturn = inv.applyReturn(creditBlank.products, creditBlank.records, {
@@ -1294,5 +1314,162 @@ assert.ok(opItemsEdit.records.filter(function (item) {
   return item.operatorOpenid === 'boss' && item.operatorName === '老板'
 }))
 assert.strictEqual(inv.buildSaleOrder(opItemsEdit.records, opItemsEdit.record).operatorName, '老板')
+
+// —— 部分付款 ——
+// 以前只有「全付」和「全欠」两种，现在实收可以落在中间。下面三段分别盯住
+// 欠款计算、退货怎么冲、以及改流水时整单实收怎么摊回每一行。
+
+const partialTee = inv.createProduct({
+  name: '部分付款样品',
+  costPrice: 10,
+  salePrice: 25,
+  stock: 20,
+  alertQty: 1
+}, 40000, 'p-partial')
+
+// 1）欠款计算：卖 100 只收 40，欠款就是 60。
+const partialSale = inv.applySale([partialTee], [], {
+  productId: 'p-partial',
+  qty: 4,
+  unitPrice: 25,
+  customerId: 'c-partial',
+  customerName: '半款客户',
+  paidAmount: 40
+}, 40100, 'r-partial')
+assert.strictEqual(partialSale.record.amount, 100)
+assert.strictEqual(partialSale.record.paidAmount, 40)
+const partialAccount = inv.summarizeCustomerAccount(partialSale.records, 'c-partial')
+assert.strictEqual(partialAccount.creditAmount, 60)
+assert.strictEqual(partialAccount.receivable, 60)
+assert.strictEqual(inv.getTotalReceivable(partialSale.records), 60)
+assert.strictEqual(inv.summarizeAllCustomerAccounts(partialSale.records)['c-partial'].receivable, 60)
+
+// 收满不欠、一分不收全欠，两头也要对。
+const paidInFull = inv.applySale([partialTee], [], {
+  productId: 'p-partial',
+  qty: 4,
+  unitPrice: 25,
+  customerId: 'c-full',
+  customerName: '付清客户',
+  paidAmount: 100
+}, 40110, 'r-paid-full')
+assert.strictEqual(inv.summarizeCustomerAccount(paidInFull.records, 'c-full').receivable, 0)
+const paidNone = inv.applySale([partialTee], [], {
+  productId: 'p-partial',
+  qty: 4,
+  unitPrice: 25,
+  customerId: 'c-none',
+  customerName: '全欠客户',
+  paidAmount: 0
+}, 40120, 'r-paid-none')
+assert.strictEqual(inv.summarizeCustomerAccount(paidNone.records, 'c-none').receivable, 100)
+
+// 有欠款就必须挂到客户名下，散客不能欠钱。
+assert.throws(function () {
+  inv.applySale([partialTee], [], {
+    productId: 'p-partial',
+    qty: 4,
+    unitPrice: 25,
+    paidAmount: 40
+  }, 40130, 'r-partial-walkin')
+}, /客户/)
+
+// 收款仍然只冲欠款：再收 25，欠款剩 35。
+const partialPay = inv.applyPayment(partialSale.records, {
+  customerId: 'c-partial',
+  customerName: '半款客户',
+  amount: 25
+}, 40140, 'r-partial-pay')
+assert.strictEqual(inv.summarizeCustomerAccount(partialPay.records, 'c-partial').receivable, 35)
+
+// 2）退货：退的钱先冲这张单没收到的部分，冲不掉的才算退现金。
+const partialReturn = inv.applyReturn(partialSale.products, partialSale.records, {
+  saleRecordId: 'r-partial',
+  qty: 1
+}, 40200, 'r-partial-return', partialSale.skus)
+assert.strictEqual(inv.summarizeCustomerAccount(partialReturn.records, 'c-partial').receivable, 35)
+// 再退两件（累计退 75 > 欠款 60）：欠款冲到 0 就停，不会做成负数。
+const partialReturnMore = inv.applyReturn(partialReturn.products, partialReturn.records, {
+  saleRecordId: 'r-partial',
+  qty: 2
+}, 40300, 'r-partial-return-2', partialReturn.skus)
+assert.strictEqual(inv.summarizeCustomerAccount(partialReturnMore.records, 'c-partial').receivable, 0)
+// 全额收讫的单退货不产生欠款；一分未收的单退货全额冲欠款（和改造前一致）。
+const fullPaidReturn = inv.applyReturn(paidInFull.products, paidInFull.records, {
+  saleRecordId: 'r-paid-full',
+  qty: 2
+}, 40310, 'r-full-return', paidInFull.skus)
+assert.strictEqual(inv.summarizeCustomerAccount(fullPaidReturn.records, 'c-full').receivable, 0)
+const nonePaidReturn = inv.applyReturn(paidNone.products, paidNone.records, {
+  saleRecordId: 'r-paid-none',
+  qty: 2
+}, 40320, 'r-none-return', paidNone.skus)
+assert.strictEqual(inv.summarizeCustomerAccount(nonePaidReturn.records, 'c-none').receivable, 50)
+
+// 3）改流水：整单实收按各行金额摊回去，合计等于填进去的实收。
+const partialBread = inv.createProduct({
+  name: '部分付款面包',
+  costPrice: 5,
+  salePrice: 10,
+  stock: 20,
+  alertQty: 1
+}, 40000, 'p-partial-2')
+const partialOrder = inv.applySaleOrder([partialTee, partialBread], [], {
+  items: [
+    { productId: 'p-partial', qty: 2, unitPrice: 25 },
+    { productId: 'p-partial-2', qty: 5, unitPrice: 10 }
+  ],
+  customerId: 'c-partial-order',
+  customerName: '半款客户二',
+  paidAmount: 30
+}, 40400, 'order-partial', idFactory(), [])
+assert.strictEqual(partialOrder.order.amount, 100)
+assert.strictEqual(partialOrder.order.paidAmount, 30)
+assert.strictEqual(partialOrder.order.debtAmount, 70)
+assert.strictEqual(partialOrder.order.records[0].paidAmount, 15)
+assert.strictEqual(partialOrder.order.records[1].paidAmount, 15)
+assert.strictEqual(inv.summarizeCustomerAccount(partialOrder.records, 'c-partial-order').receivable, 70)
+
+const partialEdit = inv.updateRecord(partialOrder.products, partialOrder.records, {
+  id: partialOrder.order.records[0].id,
+  items: [
+    { id: partialOrder.order.records[0].id, qty: 2, unitPrice: 25 },
+    { id: partialOrder.order.records[1].id, qty: 5, unitPrice: 10 }
+  ],
+  paidAmount: 80,
+  customerId: 'c-partial-order',
+  customerName: '半款客户二'
+}, 40500, [])
+const partialEdited = inv.buildSaleOrder(partialEdit.records, partialEdit.record)
+assert.strictEqual(partialEdited.amount, 100)
+assert.strictEqual(partialEdited.paidAmount, 80)
+assert.strictEqual(partialEdited.debtAmount, 20)
+assert.strictEqual(inv.summarizeCustomerAccount(partialEdit.records, 'c-partial-order').receivable, 20)
+
+// 改数量把应收压到实收以下：实收自动收口到新的应收，不会记成负欠款。
+const shrunk = inv.updateRecord(paidInFull.products, paidInFull.records, {
+  id: 'r-paid-full',
+  qty: 2,
+  unitPrice: 25,
+  customerId: 'c-full',
+  customerName: '付清客户'
+}, 40600, [])
+assert.strictEqual(shrunk.record.amount, 50)
+assert.strictEqual(shrunk.record.paidAmount, 50)
+assert.strictEqual(inv.summarizeCustomerAccount(shrunk.records, 'c-full').receivable, 0)
+
+// 实收不能超过应收，改流水也一样。
+assert.throws(function () {
+  inv.updateRecord(partialOrder.products, partialOrder.records, {
+    id: partialOrder.order.records[0].id,
+    items: [
+      { id: partialOrder.order.records[0].id, qty: 2, unitPrice: 25 },
+      { id: partialOrder.order.records[1].id, qty: 5, unitPrice: 10 }
+    ],
+    paidAmount: 120,
+    customerId: 'c-partial-order',
+    customerName: '半款客户二'
+  }, 40700, [])
+}, /实收不能超过应收/)
 
 console.log('inventory tests passed')

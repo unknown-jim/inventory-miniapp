@@ -196,4 +196,35 @@ assert.throws(function () {
   return error.message === '改完后收款会超过赊账，请先改收款记录'
 })
 
+// ---------------------------------------------------------------------------
+// 5) 部分付款走一遍云端记账口：账本文档里的客户账和 totals 都要认这个中间态
+// ---------------------------------------------------------------------------
+
+const partialOrder = mut('addSale', {
+  customerId: custA.id,
+  customerName: custA.name,
+  paidAmount: 30,
+  items: [{ productId: product.id, qty: 5, unitPrice: 20 }]
+}).order
+assert.strictEqual(partialOrder.amount, 100)
+assert.strictEqual(partialOrder.paidAmount, 30)
+assert.strictEqual(partialOrder.debtAmount, 70)
+const custAPartial = ledger.customers.find(function (item) {
+  return item.id === custA.id
+})
+assert.strictEqual(
+  custAPartial.account.receivable,
+  inv.summarizeCustomerAccount(ledger.records, custA.id).receivable
+)
+assert.strictEqual(ledger.totals.receivable, inv.getTotalReceivable(ledger.records))
+// 老客户端只会送 payType，云函数仍要认：赊账 = 一分未收。
+const legacyOrder = mut('addSale', {
+  customerId: custB.id,
+  customerName: custB.name,
+  payType: 'credit',
+  items: [{ productId: product.id, qty: 1, unitPrice: 20 }]
+}).order
+assert.strictEqual(legacyOrder.paidAmount, 0)
+assert.strictEqual(legacyOrder.debtAmount, 20)
+
 console.log('ledger aggregates tests passed')

@@ -175,3 +175,25 @@
   pointer-events: none;
   opacity: 0;
 }
+
+.paid-field {
+  margin-top: 24rpx;
+}
+
+.paid-note {
+  margin-top: 16rpx;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.paid-note.debt {
+  color: #C2410C;
+}
+
+.paid-note.over {
+  color: #DC2626;
+}
+
+.paid-note.done {
+  color: #0F766E;
+}

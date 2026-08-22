@@ -40,6 +40,7 @@
           <block wx:if="{{item.isOut || item.isIn || item.isAdjust}}"> · {{item.qtyText}} 件<block wx:if="{{item.isMulti}}"> · {{item.lineCount}} 种</block><block wx:elif="{{!item.isAdjust}}"> · 单价 ¥{{item.priceText}}</block></block>
         </view>
         <view wx:if="{{item.customerText}}" class="muted">客户 {{item.customerText}}</view>
+        <view wx:if="{{item.isOut && item.hasDebt}}" class="muted">已收 ¥{{item.paidText}} · 欠 ¥{{item.debtText}}</view>
         <view wx:if="{{item.remark}}" class="muted">{{item.remark}}</view>
       </view>
       <view class="item-right">

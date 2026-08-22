@@ -49,14 +49,6 @@
       {{customerPhone}}<text wx:if="{{customerPhone && customerAddress}}"> · </text>{{customerAddress}}
     </view>
     <view class="field">
-      <view class="field-label">结算</view>
-      <view wx:if="{{editing}}" class="seg">
-        <view class="seg-item {{payType === 'cash' ? 'on' : ''}}" data-type="cash" bindtap="setPayType">现结</view>
-        <view class="seg-item {{payType === 'credit' ? 'on' : ''}}" data-type="credit" bindtap="setPayType">赊账</view>
-      </view>
-      <view wx:else class="field-input readonly">{{payTypeText}}</view>
-    </view>
-    <view class="field">
       <view class="field-label">经手人</view>
       <input wx:if="{{editing}}" class="field-input" maxlength="32" value="{{operatorName}}" bindinput="onOperatorName" placeholder="可选" hidden="{{showCustomerPicker || showSlip}}" />
       <view wx:else class="field-input readonly">{{operatorName || '—'}}</view>
@@ -91,9 +83,21 @@
       </view>
     </view>
     <view class="total">
-      <text>本单金额</text>
+      <text>本单应收</text>
       <text class="total-num">¥{{amountText}}</text>
     </view>
+    <view class="field">
+      <view class="field-label">本单实收</view>
+      <input wx:if="{{editing}}" class="field-input js-paid" type="digit" value="{{paidAmount}}" bindinput="onPaidInput" placeholder="0.00" hidden="{{showCustomerPicker || showSlip}}" />
+      <view wx:else class="field-input readonly">{{paidAmount}}</view>
+      <view class="chips" wx:if="{{editing}}">
+        <view class="chip js-paid-full" bindtap="fillPaidFull">收满 ¥{{amountText}}</view>
+        <view class="chip js-paid-none" bindtap="fillPaidNone">一分未收</view>
+      </view>
+    </view>
+    <view class="paid-note over" wx:if="{{paidOver}}">实收比应收多 ¥{{overText}}，多收的钱请单独记收款</view>
+    <view class="paid-note debt" wx:elif="{{hasNewDebt}}">本单欠款 ¥{{debtText}}</view>
+    <view class="paid-note done" wx:else>本单已收讫</view>
     <view class="field last">
       <view class="field-label">备注</view>
       <input wx:if="{{editing}}" class="field-input" data-field="remark" value="{{remark}}" bindinput="onField" placeholder="可选" hidden="{{showCustomerPicker}}" />
@@ -155,7 +159,7 @@
   <view class="muted tip" wx:if="{{isOpening}}">期初欠款不改库存，也不计入销售和毛利。</view>
   <view class="muted tip" wx:elif="{{isPay}}">收款只冲减欠款，不改库存。</view>
   <view class="muted tip" wx:elif="{{isAdjust}}">{{adjustHint}}</view>
-  <view class="muted tip" wx:elif="{{editing}}">改数量会同步改库存。记错商品请删除后重新开单。<text wx:if="{{isOut}}">删除销售会去掉本单全部商品。同一张送货单的客户、结算和备注会一起改。</text></view>
+  <view class="muted tip" wx:elif="{{editing}}">改数量会同步改库存。记错商品请删除后重新开单。<text wx:if="{{isOut}}">删除销售会去掉本单全部商品。同一张送货单的客户、实收和备注会一起改。</text></view>
 
   <button wx:if="{{canReturn && !editing}}" class="btn-ghost export-btn" bindtap="goReturn" hidden="{{showCustomerPicker || showSlip}}">退货入库</button>
   <button wx:if="{{isOut && !editing}}" class="btn-ghost export-btn js-export-slip" bindtap="openSlip" hidden="{{showCustomerPicker || showSlip}}">导出送货单</button>

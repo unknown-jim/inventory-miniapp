@@ -103,7 +103,7 @@ async function seedFromHome(miniProgram) {
 }
 
 async function runSalePickerAndSlip(miniProgram) {
-  step('销售：点选商品、客户，赊账出库，核对送货单')
+  step('销售：点选商品、客户，一分未收出库，核对送货单')
   const sale = await miniProgram.switchTab('/pages/sale/sale')
   await waitPageReady(sale)
   await sale.waitFor('.js-product-picker')
@@ -122,11 +122,6 @@ async function runSalePickerAndSlip(miniProgram) {
   await customers[0].tap()
   await waitGone(sale, '.js-customer-item')
 
-  await tapWhen(sale, '.js-pay-credit')
-  await sale.waitFor(200)
-  const afterPayType = await sale.data('payType')
-  assert.strictEqual(afterPayType, 'credit')
-
   const qty = await sale.$('.js-qty')
   if (!qty) {
     throw new Error('找不到数量输入框')
@@ -138,6 +133,19 @@ async function runSalePickerAndSlip(miniProgram) {
     return data && data.cart && data.cart.length > 0
   })
 
+  // 默认实收等于应收，本单不欠钱
+  const fullPaid = await sale.data()
+  assert.strictEqual(fullPaid.paidAmount, fullPaid.amountText)
+  assert.strictEqual(fullPaid.hasNewDebt, false)
+
+  // 点「一分未收」：欠款等于整单应收
+  await tapWhen(sale, '.js-paid-none')
+  await sale.waitFor(200)
+  const nonePaid = await sale.data()
+  assert.strictEqual(nonePaid.paidAmount, '0')
+  assert.strictEqual(nonePaid.hasNewDebt, true)
+  assert.strictEqual(nonePaid.debtText, nonePaid.amountText)
+
   await tapWhen(sale, '.js-sale-submit')
   await sale.waitFor('.js-slip')
 
@@ -147,8 +155,8 @@ async function runSalePickerAndSlip(miniProgram) {
   assert.ok(productName.length > 0, '送货单没有商品名')
   const customerName = await textOf(sale, '.js-slip-customer')
   assert.ok(customerName.length > 0, '送货单没有收货人')
-  const payText = await textOf(sale, '.js-slip-pay')
-  assert.strictEqual(payText.replace(/\s/g, ''), '赊账')
+  const paidText = await textOf(sale, '.js-slip-paid')
+  assert.strictEqual(paidText.replace(/\s/g, ''), '¥0.00')
   const shopName = await textOf(sale, '.js-slip-shop')
   assert.ok(shopName.indexOf('测试店') >= 0, '送货单没有店名: ' + shopName)
   const operator = await textOf(sale, '.js-slip-operator')

@@ -20,13 +20,14 @@ function sampleSlip(overrides) {
       amountText: '118.00'
     }],
     amountText: '118.00',
+    dueText: '118.00',
+    paidText: '0.00',
     remark: '门口放',
     hasCustomer: true,
     customerName: '张三超市',
     customerPhone: '13800138000',
     customerAddress: '建设路12号',
     isCredit: true,
-    payText: '赊账',
     prevDebtText: '17.00',
     thisDebtText: '118.00',
     receivableText: '135.00',
@@ -140,7 +141,7 @@ assert.ok(drawn.indexOf('stroke') >= 0)
 const walkin = slipImage.layoutSlip(sampleSlip({
   hasCustomer: false,
   customerName: '',
-  payText: '现结',
+  paidText: '118.00',
   isCredit: false,
   remark: ''
 }))
@@ -166,7 +167,7 @@ const fromOrder = util.withSlipView({
   id: 'order-1',
   createdAt: new Date('2026-08-15T12:00:00').getTime(),
   amount: 9,
-  payType: 'credit',
+  paidAmount: 0,
   remark: '',
   customerName: '李记便利',
   customerPhone: '13900139000',
@@ -242,7 +243,7 @@ const named = util.withSlipView({
   id: 'order-named',
   createdAt: new Date('2026-08-15T12:00:00').getTime(),
   amount: 118,
-  payType: 'credit',
+  paidAmount: 0,
   customerName: '李记便利',
   records: [{
     id: 'r-tee',
@@ -265,7 +266,7 @@ const blankSku = util.withSlipView({
   id: 'order-blank-sku',
   createdAt: new Date('2026-08-15T12:00:00').getTime(),
   amount: 9,
-  payType: 'cash',
+  paidAmount: 9,
   records: [{
     id: 'r-blank',
     productName: '纯牛奶 250ml',
@@ -316,7 +317,8 @@ const reprintRecords = [
 const reprint = util.withSlipViewFromRecord(reprintRecords, reprintRecords[1])
 assert.strictEqual(reprint.lines.length, 2)
 assert.strictEqual(reprint.lines[0].productName, '纯牛奶 250ml')
-assert.strictEqual(reprint.payText, '赊账')
+assert.strictEqual(reprint.dueText, '18.90')
+assert.strictEqual(reprint.paidText, '0.00')
 assert.strictEqual(reprint.thisDebtText, '18.90')
 assert.strictEqual(reprint.prevDebtText, '0.00')
 assert.strictEqual(reprint.receivableText, '18.90')
@@ -351,7 +353,7 @@ const namedShop = util.withSlipView({
   id: 'order-shop',
   createdAt: new Date('2026-08-15T12:00:00').getTime(),
   amount: 9,
-  payType: 'cash',
+  paidAmount: 9,
   operatorOpenid: 'oxxxxxxxxxxxxxxxxxx',
   operatorName: '小李',
   records: [{
@@ -395,7 +397,7 @@ const emptyOperator = util.withSlipView({
   id: 'order-empty-op',
   createdAt: new Date('2026-08-15T12:00:00').getTime(),
   amount: 9,
-  payType: 'cash',
+  paidAmount: 9,
   records: [{
     id: 'r-empty-op',
     productName: '纯牛奶 250ml',
@@ -449,5 +451,33 @@ assert.strictEqual(tall.width, shortSku.width)
 assert.strictEqual(tall.contentHeight, shortSku.contentHeight)
 assert.ok(tall.height > shortSku.height)
 assert.strictEqual(tall.height, Math.round(tall.width * 2.16))
+
+// 部分付款：送货单的应收 / 实收 / 本次欠款要能表达「收了一半」。
+const partialSlip = util.withSlipViewFromRecord([
+  {
+    id: 'r-partial-slip',
+    type: 'out',
+    orderId: 'order-partial-slip',
+    productName: '短袖 T恤',
+    qty: 2,
+    unitPrice: 59,
+    amount: 118,
+    paidAmount: 50,
+    customerId: 'c-partial',
+    customerName: '半款客户',
+    createdAt: 1000
+  }
+], {
+  id: 'r-partial-slip',
+  type: 'out',
+  orderId: 'order-partial-slip'
+})
+assert.strictEqual(partialSlip.dueText, '118.00')
+assert.strictEqual(partialSlip.paidText, '50.00')
+assert.strictEqual(partialSlip.thisDebtText, '68.00')
+assert.strictEqual(partialSlip.isCredit, true)
+const partialSlipText = textsOf(slipImage.layoutSlip(partialSlip))
+assert.ok(partialSlipText.indexOf('应收') >= 0)
+assert.ok(partialSlipText.indexOf('实收') >= 0)
 
 console.log('slip-image tests passed')

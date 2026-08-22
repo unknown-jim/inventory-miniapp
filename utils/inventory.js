@@ -923,12 +923,49 @@ function filterCategories(categories, keyword) {
   })
 }
 
-function isCreditSale(record) {
-  return record && record.type === 'out' && record.payType === 'credit'
+// 一张销售流水收到的钱。老流水只有 payType，没有 paidAmount，读的时候回推：
+// 现结当作收满、赊账当作一分未收。不写迁移脚本，理由见 docs/cloud-ledger.md：
+// 聚合值本来就每次全量重算，缺字段在读写时自愈即可。
+function salePaidAmount(record) {
+  if (!record) return 0
+  const amount = toNumber(record.amount)
+  if (record.paidAmount == null || record.paidAmount === '') {
+    return record.payType === 'credit' ? 0 : amount
+  }
+  const paid = round2(record.paidAmount)
+  if (paid <= 0) return 0
+  return paid > amount ? amount : paid
 }
 
-function isCreditReturn(record) {
-  return record && record.type === 'return' && record.payType === 'credit'
+// 写实收的同时抹掉老的 payType：一条流水只留一份结算数据，不留两处对打。
+function withPaidAmount(record, paidAmount) {
+  const next = Object.assign({}, record, { paidAmount: round2(paidAmount) })
+  delete next.payType
+  return next
+}
+
+// 退货金额按原销售流水归堆。退货冲的是它自己那张单，不是客户的总欠款。
+function returnedAmountBySale(records) {
+  const map = Object.create(null)
+  ;(records || []).forEach(function (item) {
+    if (!item || item.type !== 'return') return
+    const saleId = String(item.saleRecordId || '')
+    if (!saleId) return
+    map[saleId] = round2(toNumber(map[saleId]) + toNumber(item.amount))
+  })
+  return map
+}
+
+// 一张销售流水还欠多少：应收 − 实收 − 已退货金额，负数按 0 算。
+// 退货先冲这张单没收的钱，冲不掉的部分才算退现金。所以「卖 100 收 40 退 30」
+// 是欠款 60 变 30，而不是先退 18 现金再留 42 欠款。挑这条规则的原因是它的
+// 出错方向可补救：真退了现金，再记一笔收款就对上了；反过来则需要负数收款。
+// 全退时两种算法结果一样，只有部分收款又部分退货才分得出来。
+function saleReceivable(record, returnedAmount) {
+  if (!record || record.type !== 'out') return 0
+  const credit = round2(toNumber(record.amount) - salePaidAmount(record))
+  const left = round2(credit - toNumber(returnedAmount))
+  return left > 0 ? left : 0
 }
 
 function isOpening(record) {
@@ -1009,13 +1046,14 @@ function summarizeCustomerAccount(records, customerId) {
     return item.type === 'pay'
   })
   const openings = related.filter(isOpening)
+  // 退货按全部流水归堆，不按客户过滤：改过客户的老单子上，退货流水可能还留着
+  // 原来的 customerId，仍要冲回它自己那张销售单。
+  const returnedBySale = returnedAmountBySale(records)
   const creditAmount = round2(
     sales.reduce(function (sum, item) {
-      return isCreditSale(item) ? sum + toNumber(item.amount) : sum
+      return sum + saleReceivable(item, returnedBySale[item.id])
     }, 0) + openings.reduce(function (sum, item) {
       return sum + toNumber(item.amount)
-    }, 0) - returns.reduce(function (sum, item) {
-      return isCreditReturn(item) ? sum + toNumber(item.amount) : sum
     }, 0)
   )
   const paidAmount = round2(payments.reduce(function (sum, item) {
@@ -1044,13 +1082,13 @@ function summarizeCustomerAccount(records, customerId) {
 }
 
 function summarizeAllCustomerAccounts(records) {
+  const returnedBySale = returnedAmountBySale(records)
   const stats = Object.create(null)
   function ensure(customerId) {
     if (!stats[customerId]) {
       stats[customerId] = {
-        creditSalesSum: 0,
+        creditSum: 0,
         openingsSum: 0,
-        creditReturnsSum: 0,
         paidSum: 0,
         salesSum: 0,
         returnsSum: 0,
@@ -1064,15 +1102,10 @@ function summarizeAllCustomerAccounts(records) {
     const entry = ensure(item.customerId)
     if (item.type === 'out') {
       entry.salesSum += toNumber(item.amount)
-      if (isCreditSale(item)) {
-        entry.creditSalesSum += toNumber(item.amount)
-      }
+      entry.creditSum += saleReceivable(item, returnedBySale[item.id])
       entry.saleOrders[saleOrderIdOf(item)] = true
     } else if (item.type === 'return') {
       entry.returnsSum += toNumber(item.amount)
-      if (isCreditReturn(item)) {
-        entry.creditReturnsSum += toNumber(item.amount)
-      }
     } else if (item.type === 'pay') {
       entry.paidSum += toNumber(item.amount)
     } else if (isOpening(item)) {
@@ -1082,7 +1115,7 @@ function summarizeAllCustomerAccounts(records) {
   const result = {}
   Object.keys(stats).forEach(function (customerId) {
     const entry = stats[customerId]
-    const creditAmount = round2(entry.creditSalesSum + entry.openingsSum - entry.creditReturnsSum)
+    const creditAmount = round2(entry.creditSum + entry.openingsSum)
     const paidAmount = round2(entry.paidSum)
     result[customerId] = {
       count: Object.keys(entry.saleOrders).length,
@@ -1096,9 +1129,11 @@ function summarizeAllCustomerAccounts(records) {
 }
 
 function getTotalReceivable(records) {
+  const returnedBySale = returnedAmountBySale(records)
+  // 退货已经在 saleReceivable 里冲掉了，这里不再单独减一次。
   return round2(records.reduce(function (sum, item) {
-    if (isCreditSale(item) || isOpening(item)) return sum + toNumber(item.amount)
-    if (isCreditReturn(item)) return sum - toNumber(item.amount)
+    if (item.type === 'out') return sum + saleReceivable(item, returnedBySale[item.id])
+    if (isOpening(item)) return sum + toNumber(item.amount)
     if (item.type === 'pay') return sum - toNumber(item.amount)
     return sum
   }, 0))
@@ -1134,7 +1169,6 @@ function applyPayment(records, payload, now, id) {
     customerName: String(payload.customerName || '').trim(),
     customerPhone: String(payload.customerPhone || '').trim(),
     customerAddress: String(payload.customerAddress || '').trim(),
-    payType: 'cash',
     createdAt: now
   }
 
@@ -1179,6 +1213,58 @@ function applyOpening(records, payload, now, id) {
   }
 }
 
+// 本单实收。新写法直接给 paidAmount；没给就按老的 payType 回推，让还没更新的
+// 小程序也能继续开单（云函数和小程序不是同一次部署）。两个都没有时按收满算，
+// 和以前默认现结一致。fallback 用于改流水：不动实收时保留原值，并跟着新应收收口。
+function resolvePaidAmount(payload, amount, fallback) {
+  const due = round2(amount)
+  if (payload && payload.paidAmount != null && payload.paidAmount !== '') {
+    const paid = round2(payload.paidAmount)
+    if (paid < 0) {
+      throw new Error('实收不能为负数')
+    }
+    if (paid > due) {
+      throw new Error('实收不能超过应收 ' + due)
+    }
+    return paid
+  }
+  if (payload && payload.payType === 'credit') return 0
+  if (payload && payload.payType === 'cash') return due
+  if (fallback == null) return due
+  const kept = round2(fallback)
+  if (kept <= 0) return 0
+  return kept > due ? due : kept
+}
+
+// 整单实收摊到每一行。按累计占比取整：每行拿的是「前 N 行应得」减「已分出去的」，
+// 各行合起来恰好等于整单实收，不会让逐行四舍五入把尾差丢掉。
+function allocatePaid(lineAmounts, paidAmount) {
+  const amounts = (lineAmounts || []).map(toNumber)
+  const total = round2(amounts.reduce(function (sum, value) {
+    return sum + value
+  }, 0))
+  const paid = round2(paidAmount)
+  let cumulative = 0
+  let allocated = 0
+  return amounts.map(function (lineAmount, index) {
+    if (total <= 0 || paid <= 0) return 0
+    cumulative = round2(cumulative + lineAmount)
+    const isLast = index === amounts.length - 1
+    const target = isLast ? paid : round2(cumulative * paid / total)
+    let share = round2(target - allocated)
+    if (share < 0) share = 0
+    if (share > lineAmount) share = round2(lineAmount)
+    allocated = round2(allocated + share)
+    return share
+  })
+}
+
+function assertCustomerForDebt(paidAmount, amount, customerId) {
+  if (round2(paidAmount) < round2(amount) && !customerId) {
+    throw new Error('实收少于应收，欠款必须记在客户名下，请先选择客户')
+  }
+}
+
 function applySale(products, records, payload, now, id, skus) {
   const qty = round2(payload.qty)
   const unitPrice = round2(payload.unitPrice)
@@ -1189,11 +1275,10 @@ function applySale(products, records, payload, now, id, skus) {
     throw new Error('售价不能为负数')
   }
 
-  const payType = payload.payType === 'credit' ? 'credit' : 'cash'
+  const amount = round2(qty * unitPrice)
+  const paidAmount = resolvePaidAmount(payload, amount)
   const customerId = String(payload.customerId || '')
-  if (payType === 'credit' && !customerId) {
-    throw new Error('赊账必须选择客户')
-  }
+  assertCustomerForDebt(paidAmount, amount, customerId)
 
   const consumed = consumeSaleLine(products, skus, payload, now)
   const record = {
@@ -1208,14 +1293,14 @@ function applySale(products, records, payload, now, id, skus) {
     qty: qty,
     unitPrice: unitPrice,
     costPrice: consumed.costPrice,
-    amount: round2(qty * unitPrice),
+    amount: amount,
     profit: round2((unitPrice - consumed.costPrice) * qty),
     remark: String(payload.remark || '').trim(),
     customerId: customerId,
     customerName: String(payload.customerName || '').trim(),
     customerPhone: String(payload.customerPhone || '').trim(),
     customerAddress: String(payload.customerAddress || '').trim(),
-    payType: payType,
+    paidAmount: paidAmount,
     orderId: String(payload.orderId || id),
     operatorOpenid: String(payload.operatorOpenid || ''),
     operatorName: String(payload.operatorName || '').trim().slice(0, 32),
@@ -1237,11 +1322,26 @@ function applySaleOrder(products, records, payload, now, orderId, nextId, skus) 
     throw new Error('请先加入商品')
   }
 
-  const payType = payload.payType === 'credit' ? 'credit' : 'cash'
+  // 先把每行金额算出来，整单应收才有得比；顺带把数量和售价挡在实收校验前面，
+  // 免得填错数量时先报「实收超过应收」这种看不懂的错。
+  const lineAmounts = items.map(function (item) {
+    const qty = round2(item.qty)
+    const unitPrice = round2(item.unitPrice)
+    if (qty <= 0) {
+      throw new Error('销售数量必须大于 0')
+    }
+    if (unitPrice < 0) {
+      throw new Error('售价不能为负数')
+    }
+    return round2(qty * unitPrice)
+  })
+  const amount = round2(lineAmounts.reduce(function (sum, value) {
+    return sum + value
+  }, 0))
+  const paidAmount = resolvePaidAmount(payload, amount)
   const customerId = String(payload.customerId || '')
-  if (payType === 'credit' && !customerId) {
-    throw new Error('赊账必须选择客户')
-  }
+  assertCustomerForDebt(paidAmount, amount, customerId)
+  const linePaid = allocatePaid(lineAmounts, paidAmount)
 
   let previewProducts = cloneList(products)
   let previewSkus = cloneList(skus || [])
@@ -1260,21 +1360,21 @@ function applySaleOrder(products, records, payload, now, orderId, nextId, skus) 
     customerName: payload.customerName,
     customerPhone: payload.customerPhone,
     customerAddress: payload.customerAddress,
-    payType: payType,
     remark: payload.remark,
     orderId: orderId,
     operatorOpenid: payload.operatorOpenid,
     operatorName: payload.operatorName
   }
 
-  items.forEach(function (item) {
+  items.forEach(function (item, index) {
     const result = applySale(workingProducts, workingRecords, Object.assign({}, shared, {
       productId: item.productId,
       skuId: item.skuId,
       color: item.color,
       size: item.size,
       qty: item.qty,
-      unitPrice: item.unitPrice
+      unitPrice: item.unitPrice,
+      paidAmount: linePaid[index]
     }), now, nextId(), workingSkus)
     workingProducts = result.products
     workingRecords = result.records
@@ -1287,7 +1387,6 @@ function applySaleOrder(products, records, payload, now, orderId, nextId, skus) 
     skus: workingSkus,
     records: workingRecords,
     order: makeSaleOrder(orderId, orderRecords, {
-      payType: payType,
       remark: payload.remark,
       customerId: customerId,
       customerName: payload.customerName,
@@ -1514,7 +1613,6 @@ function applyReturn(products, records, payload, now, id, skus) {
     customerName: sale.customerName || '',
     customerPhone: sale.customerPhone || '',
     customerAddress: sale.customerAddress || '',
-    payType: sale.payType === 'credit' ? 'credit' : 'cash',
     orderId: sale.orderId || sale.id,
     saleRecordId: sale.id,
     createdAt: now
@@ -1571,16 +1669,21 @@ function saleOrderRecords(records, record) {
 }
 
 function makeSaleOrder(orderId, orderRecords, fields, createdAt) {
+  const amount = round2(orderRecords.reduce(function (sum, item) {
+    return sum + toNumber(item.amount)
+  }, 0))
+  const paidAmount = round2(orderRecords.reduce(function (sum, item) {
+    return sum + salePaidAmount(item)
+  }, 0))
   return {
     id: orderId,
     records: orderRecords,
-    amount: round2(orderRecords.reduce(function (sum, item) {
-      return sum + toNumber(item.amount)
-    }, 0)),
+    amount: amount,
     profit: round2(orderRecords.reduce(function (sum, item) {
       return sum + toNumber(item.profit)
     }, 0)),
-    payType: fields.payType === 'credit' ? 'credit' : 'cash',
+    paidAmount: paidAmount,
+    debtAmount: round2(amount - paidAmount),
     remark: String(fields.remark || '').trim(),
     customerId: String(fields.customerId || ''),
     customerName: String(fields.customerName || '').trim(),
@@ -1655,7 +1758,9 @@ function groupRecords(records) {
       customerName: first.customerName,
       customerPhone: first.customerPhone,
       customerAddress: first.customerAddress,
-      payType: first.payType,
+      paidAmount: round2(orderRecords.reduce(function (sum, line) {
+        return sum + salePaidAmount(line)
+      }, 0)),
       createdAt: first.createdAt,
       lineCount: lineCount
     })
@@ -1795,6 +1900,14 @@ function patchOrderCustomer(records, orderId, fields) {
 }
 
 function updateRecord(products, records, payload, now, skus) {
+  const result = updateRecordInner(products, records, payload, now, skus)
+  // 只在最外层查一次。整单改价时中间状态可能短暂「收款超过赊账」，
+  // 但那只是还没轮到下一行，不该拦。
+  assertReceivableValid(result.records)
+  return result
+}
+
+function updateRecordInner(products, records, payload, now, skus) {
   const id = String(payload.id || '')
   const index = records.findIndex(function (item) {
     return item.id === id
@@ -1806,24 +1919,56 @@ function updateRecord(products, records, payload, now, skus) {
   const existing = records[index]
 
   if (existing.type === 'out' && payload.items && payload.items.length) {
+    const orderLines = saleOrderRecords(records, existing)
     const allowed = {}
-    saleOrderRecords(records, existing).forEach(function (item) {
+    orderLines.forEach(function (item) {
       allowed[item.id] = true
     })
+    const edited = {}
+    payload.items.forEach(function (item) {
+      if (!allowed[item.id]) {
+        throw new Error('流水不存在')
+      }
+      edited[item.id] = item
+    })
+    // 实收是整单的，得先按改完之后的各行金额算出整单应收，再摊回每一行。
+    // 没送来的行按它现在的金额算，整单应收才不会漏掉。
+    const lineAmounts = orderLines.map(function (line) {
+      const item = edited[line.id]
+      if (!item) return round2(toNumber(line.amount))
+      const qty = round2(item.qty)
+      const unitPrice = round2(item.unitPrice)
+      if (qty <= 0) {
+        throw new Error('销售数量必须大于 0')
+      }
+      if (unitPrice < 0) {
+        throw new Error('售价不能为负数')
+      }
+      return round2(qty * unitPrice)
+    })
+    const orderAmount = round2(lineAmounts.reduce(function (sum, value) {
+      return sum + value
+    }, 0))
+    const orderPaid = resolvePaidAmount(payload, orderAmount, round2(orderLines.reduce(function (sum, line) {
+      return sum + salePaidAmount(line)
+    }, 0)))
+    assertCustomerForDebt(orderPaid, orderAmount, String(payload.customerId || ''))
+    const shares = {}
+    allocatePaid(lineAmounts, orderPaid).forEach(function (value, i) {
+      shares[orderLines[i].id] = value
+    })
+
     let workingProducts = products
     let workingRecords = records
     let workingSkus = skus || []
     let last = existing
     payload.items.forEach(function (item) {
-      if (!allowed[item.id]) {
-        throw new Error('流水不存在')
-      }
       const linePayload = {
         id: item.id,
         qty: item.qty,
         unitPrice: item.unitPrice,
         remark: payload.remark,
-        payType: payload.payType,
+        paidAmount: shares[item.id],
         customerId: payload.customerId,
         customerName: payload.customerName,
         customerPhone: payload.customerPhone,
@@ -1835,17 +1980,24 @@ function updateRecord(products, records, payload, now, skus) {
       if (Object.prototype.hasOwnProperty.call(payload, 'operatorName')) {
         linePayload.operatorName = payload.operatorName
       }
-      const result = updateRecord(workingProducts, workingRecords, linePayload, now, workingSkus)
+      const result = updateRecordInner(workingProducts, workingRecords, linePayload, now, workingSkus)
       workingProducts = result.products
       workingRecords = result.records
       workingSkus = result.skus
       last = result.record
     })
+    // 没送来的行金额没变，但摊到的实收变了，一起写回去，整单实收才对得上。
+    workingRecords = workingRecords.map(function (item) {
+      if (item.type !== 'out' || !allowed[item.id] || edited[item.id]) return item
+      return withPaidAmount(item, shares[item.id])
+    })
     return {
       products: workingProducts,
       skus: workingSkus,
       records: workingRecords,
-      record: last
+      record: workingRecords.find(function (item) {
+        return item.id === last.id
+      }) || last
     }
   }
 
@@ -1943,15 +2095,14 @@ function updateRecord(products, records, payload, now, skus) {
       next.costPrice = unitPrice
       next.profit = 0
     } else {
-      const payType = payload.payType === 'credit' ? 'credit' : 'cash'
       const customerId = String(payload.customerId || '')
-      if (payType === 'credit' && !customerId) {
-        throw new Error('赊账必须选择客户')
-      }
+      const paidAmount = resolvePaidAmount(payload, next.amount, salePaidAmount(existing))
+      assertCustomerForDebt(paidAmount, next.amount, customerId)
       if (!(existing.allocations && existing.allocations.length)) {
         next.profit = round2((unitPrice - toNumber(existing.costPrice)) * qty)
       }
-      next.payType = payType
+      next.paidAmount = paidAmount
+      delete next.payType
       next.customerId = customerId
       next.customerName = String(payload.customerName || '').trim()
       next.customerPhone = String(payload.customerPhone || '').trim()
@@ -2060,8 +2211,8 @@ function updateRecord(products, records, payload, now, skus) {
   nextRecords[index] = next
 
   if (existing.type === 'out') {
+    // 实收是按行摊的，不能整单覆盖，所以不进这份共享字段。
     const orderFields = {
-      payType: next.payType,
       customerId: next.customerId,
       customerName: next.customerName,
       customerPhone: next.customerPhone,
@@ -2082,8 +2233,6 @@ function updateRecord(products, records, payload, now, skus) {
     nextProducts = costed.products
     nextSkus = costed.skus
   }
-
-  assertReceivableValid(nextRecords)
 
   return {
     products: nextProducts,
@@ -2393,7 +2542,7 @@ function buildSeed(now, nextId) {
     customerName: customerA.name,
     customerPhone: customerA.phone,
     customerAddress: customerA.address,
-    payType: 'credit'
+    paidAmount: 0
   }, now - 40 * 60000, nextId(), skus)
   working = saleMilk.products
   records = saleMilk.records
@@ -2417,8 +2566,7 @@ function buildSeed(now, nextId) {
     customerId: customerB.id,
     customerName: customerB.name,
     customerPhone: customerB.phone,
-    customerAddress: customerB.address,
-    payType: 'cash'
+    customerAddress: customerB.address
   }, now - 25 * 60000, nextId(), skus)
   working = saleBread.products
   records = saleBread.records
@@ -2436,8 +2584,7 @@ function buildSeed(now, nextId) {
     customerId: customerB.id,
     customerName: customerB.name,
     customerPhone: customerB.phone,
-    customerAddress: customerB.address,
-    payType: 'cash'
+    customerAddress: customerB.address
   }, now - 18 * 60000, nextId(), skus)
   working = saleTee.products
   records = saleTee.records
@@ -2455,8 +2602,7 @@ function buildSeed(now, nextId) {
     customerId: customerB.id,
     customerName: customerB.name,
     customerPhone: customerB.phone,
-    customerAddress: customerB.address,
-    payType: 'cash'
+    customerAddress: customerB.address
   }, now - 16 * 60000, nextId(), skus)
   working = saleHoodie.products
   records = saleHoodie.records
@@ -2526,7 +2672,9 @@ module.exports = {
   assertSaleItems: assertSaleItems,
   saleReturnQty: saleReturnQty,
   returnableQty: returnableQty,
-  isCreditReturn: isCreditReturn,
+  salePaidAmount: salePaidAmount,
+  saleReceivable: saleReceivable,
+  returnedAmountBySale: returnedAmountBySale,
   createProduct: createProduct,
   updateProduct: updateProduct,
   createSku: createSku,
@@ -2545,7 +2693,6 @@ module.exports = {
   summarizeCustomerAccount: summarizeCustomerAccount,
   summarizeAllCustomerAccounts: summarizeAllCustomerAccounts,
   getTotalReceivable: getTotalReceivable,
-  isCreditSale: isCreditSale,
   isOpening: isOpening,
   isAdjust: isAdjust,
   isInboundStock: isInboundStock,

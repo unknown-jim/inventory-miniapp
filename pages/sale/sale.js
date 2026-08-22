@@ -30,7 +30,12 @@ Page({
     customerAddress: '',
     receivableText: '',
     hasDebt: false,
-    payType: 'cash',
+    paidAmount: '',
+    paidTouched: false,
+    debtText: '0.00',
+    hasNewDebt: false,
+    paidOver: false,
+    overText: '0.00',
     qty: '',
     unitPrice: '',
     remark: '',
@@ -259,21 +264,41 @@ Page({
     }, this.specOptions(product, this.data.selectedColor, this.data.selectedSize, cart))
   },
 
+  cartDue(cart) {
+    return inventory.round2((cart || this.data.cart).reduce(function (sum, item) {
+      return sum + inventory.toNumber(item.qty) * inventory.toNumber(item.unitPrice)
+    }, 0))
+  },
+
+  // 实收和应收的差额。应收变了就重算一遍，店主不用自己盯着两个数字对。
+  paidPatch(dueAmount, paidValue) {
+    const debt = inventory.round2(dueAmount - inventory.round2(paidValue))
+    return {
+      debtText: util.money(debt > 0 ? debt : 0),
+      hasNewDebt: debt > 0,
+      paidOver: debt < 0,
+      overText: util.money(debt < 0 ? -debt : 0)
+    }
+  },
+
   totals(cart, qtyValue, priceValue) {
     const list = cart || this.data.cart
     const qty = qtyValue == null ? inventory.toNumber(this.data.qty) : inventory.toNumber(qtyValue)
     const price = priceValue == null ? inventory.toNumber(this.data.unitPrice) : inventory.toNumber(priceValue)
-    const cartAmount = list.reduce(function (sum, item) {
-      return sum + inventory.toNumber(item.qty) * inventory.toNumber(item.unitPrice)
-    }, 0)
+    const dueAmount = this.cartDue(list)
     const cartProfit = list.reduce(function (sum, item) {
       return sum + (inventory.toNumber(item.unitPrice) - inventory.toNumber(item.costPrice)) * inventory.toNumber(item.qty)
     }, 0)
-    return {
+    // 没动过实收就一直跟着应收走，默认就是收满。
+    const paid = this.data.paidTouched
+      ? this.data.paidAmount
+      : (dueAmount > 0 ? util.money(dueAmount) : '')
+    return Object.assign({
       lineAmountText: util.money(qty * price),
-      amountText: util.money(cartAmount),
-      profitText: util.money(cartProfit)
-    }
+      amountText: util.money(dueAmount),
+      profitText: util.money(cartProfit),
+      paidAmount: paid
+    }, this.paidPatch(dueAmount, paid))
   },
 
   applyProductState(product, selectedColor, selectedSize, cart) {
@@ -374,8 +399,28 @@ Page({
     })
   },
 
-  setPayType(e) {
-    this.setData({ payType: e.currentTarget.dataset.type })
+  onPaidInput(e) {
+    const value = e.detail.value
+    this.setData(Object.assign({
+      paidAmount: value,
+      paidTouched: true
+    }, this.paidPatch(this.cartDue(), value)))
+  },
+
+  fillPaidFull() {
+    const due = this.cartDue()
+    this.setData(Object.assign({
+      paidAmount: due > 0 ? util.money(due) : '',
+      paidTouched: false
+    }, this.paidPatch(due, due)))
+  },
+
+  fillPaidNone() {
+    const due = this.cartDue()
+    this.setData(Object.assign({
+      paidAmount: '0',
+      paidTouched: true
+    }, this.paidPatch(due, 0)))
   },
 
   goAddCustomer() {
@@ -519,9 +564,32 @@ Page({
           cart.push(item)
         })
       }
+      // 应收按最终清单重算：还没「加入清单」的那一行在这里已经并进来了，
+      // 没动过实收时不能拿旧的清单金额去当实收，否则会凭空记一笔欠款。
+      if (!cart.length) {
+        wx.showToast({ title: '请先加入商品', icon: 'none' })
+        return
+      }
+      const dueAmount = this.cartDue(cart)
+      // 空着不当 0：清空重填时手滑提交，不该悄悄记成一整单欠款。
+      if (this.data.paidTouched && !String(this.data.paidAmount).trim()) {
+        wx.showToast({ title: '请填实收，没收到就填 0', icon: 'none' })
+        return
+      }
+      const paidAmount = this.data.paidTouched
+        ? inventory.round2(this.data.paidAmount)
+        : dueAmount
+      if (paidAmount < 0) {
+        wx.showToast({ title: '实收不能为负数', icon: 'none' })
+        return
+      }
+      if (paidAmount > dueAmount) {
+        wx.showToast({ title: '实收比应收多，请改实收', icon: 'none' })
+        return
+      }
       const order = await store.addSale({
         customerId: this.data.customerId,
-        payType: this.data.payType,
+        paidAmount: paidAmount,
         remark: this.data.remark,
         operatorOpenid: this.data.operatorOpenid,
         operatorName: this.data.operatorName,
@@ -545,11 +613,14 @@ Page({
       const sku = this.currentSku(product)
       const slipView = util.withSlipView(order, receivable, store.getProducts(), store.getShopName())
       this.slipImagePath = ''
+      // 下一单重新默认收满，别把上一单填的实收留在框里。
+      this.data.paidTouched = false
       this.setData(Object.assign({
         skus: skus,
         cart: [],
         qty: '',
         remark: '',
+        paidTouched: false,
         showSlip: true,
         slip: slipView
       }, this.stockPatch(product, sku, []), this.totals([], 0)))

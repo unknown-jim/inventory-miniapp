@@ -41,12 +41,12 @@
       <text class="slip-val">{{slip.remark}}</text>
     </view>
     <view class="slip-row">
-      <text class="muted">结算</text>
-      <text class="slip-val js-slip-pay">{{slip.payText}}</text>
+      <text class="muted">实收</text>
+      <text class="slip-val js-slip-paid">¥{{slip.paidText}}</text>
     </view>
     <view class="slip-total">
-      <text class="muted">金额</text>
-      <text class="slip-total-num">¥{{slip.amountText}}</text>
+      <text class="muted">应收</text>
+      <text class="slip-total-num">¥{{slip.dueText}}</text>
     </view>
     <view class="slip-debt-box" wx:if="{{slip.hasCustomer}}">
       <view class="slip-row">
