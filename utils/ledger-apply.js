@@ -31,7 +31,8 @@ function emptyLedger() {
     categories: [],
     revision: 0,
     clearSnapshots: [],
-    lastRestoredClearAt: 0
+    lastRestoredClearAt: 0,
+    totals: { salesAmount: 0, purchaseAmount: 0, profit: 0, receivable: 0, count: 0 }
   }
 }
 
@@ -41,15 +42,30 @@ function cloneList(list) {
   })
 }
 
+function emptyCustomerAccount() {
+  return { count: 0, amount: 0, creditAmount: 0, paidAmount: 0, receivable: 0 }
+}
+
+function withAggregates(lists) {
+  const accounts = inventory.summarizeAllCustomerAccounts(lists.records)
+  lists.customers = (lists.customers || []).map(function (customer) {
+    return Object.assign({}, customer, {
+      account: accounts[customer.id] || emptyCustomerAccount()
+    })
+  })
+  lists.totals = inventory.computeTotals(lists.records)
+  return lists
+}
+
 function listsOf(ledger) {
-  return {
+  return withAggregates({
     products: cloneList(ledger && ledger.products),
     skus: cloneList(ledger && ledger.skus),
     records: cloneList(ledger && ledger.records),
     customers: cloneList(ledger && ledger.customers),
     categories: cloneList(ledger && ledger.categories),
     revision: (ledger && ledger.revision) || 0
-  }
+  })
 }
 
 function listsHaveData(lists) {
@@ -395,7 +411,7 @@ function applyMutation(ledger, action, payload, now, nextId) {
 
   next.revision = ((ledger && ledger.revision) || 0) + 1
   return {
-    ledger: next,
+    ledger: withAggregates(next),
     result: result
   }
 }

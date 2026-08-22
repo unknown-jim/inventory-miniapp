@@ -1043,6 +1043,58 @@ function summarizeCustomerAccount(records, customerId) {
   }
 }
 
+function summarizeAllCustomerAccounts(records) {
+  const stats = Object.create(null)
+  function ensure(customerId) {
+    if (!stats[customerId]) {
+      stats[customerId] = {
+        creditSalesSum: 0,
+        openingsSum: 0,
+        creditReturnsSum: 0,
+        paidSum: 0,
+        salesSum: 0,
+        returnsSum: 0,
+        saleOrders: {}
+      }
+    }
+    return stats[customerId]
+  }
+  records.forEach(function (item) {
+    if (!item.customerId || !isCustomerAccountRecord(item)) return
+    const entry = ensure(item.customerId)
+    if (item.type === 'out') {
+      entry.salesSum += toNumber(item.amount)
+      if (isCreditSale(item)) {
+        entry.creditSalesSum += toNumber(item.amount)
+      }
+      entry.saleOrders[saleOrderIdOf(item)] = true
+    } else if (item.type === 'return') {
+      entry.returnsSum += toNumber(item.amount)
+      if (isCreditReturn(item)) {
+        entry.creditReturnsSum += toNumber(item.amount)
+      }
+    } else if (item.type === 'pay') {
+      entry.paidSum += toNumber(item.amount)
+    } else if (isOpening(item)) {
+      entry.openingsSum += toNumber(item.amount)
+    }
+  })
+  const result = {}
+  Object.keys(stats).forEach(function (customerId) {
+    const entry = stats[customerId]
+    const creditAmount = round2(entry.creditSalesSum + entry.openingsSum - entry.creditReturnsSum)
+    const paidAmount = round2(entry.paidSum)
+    result[customerId] = {
+      count: Object.keys(entry.saleOrders).length,
+      amount: round2(entry.salesSum - entry.returnsSum),
+      creditAmount: creditAmount,
+      paidAmount: paidAmount,
+      receivable: round2(creditAmount - paidAmount)
+    }
+  })
+  return result
+}
+
 function getTotalReceivable(records) {
   return round2(records.reduce(function (sum, item) {
     if (isCreditSale(item) || isOpening(item)) return sum + toNumber(item.amount)
@@ -1726,15 +1778,9 @@ function applyLatestPurchaseCost(products, skus, records, productId, skuId, now)
 }
 
 function assertReceivableValid(records) {
-  const seen = {}
-  records.forEach(function (item) {
-    if (item.customerId && isCustomerAccountRecord(item)) {
-      seen[item.customerId] = true
-    }
-  })
-  Object.keys(seen).forEach(function (customerId) {
-    const account = summarizeCustomerAccount(records, customerId)
-    if (account.receivable < 0) {
+  const accounts = summarizeAllCustomerAccounts(records)
+  Object.keys(accounts).forEach(function (customerId) {
+    if (accounts[customerId].receivable < 0) {
       throw new Error('改完后收款会超过赊账，请先改收款记录')
     }
   })
@@ -2159,7 +2205,7 @@ function deleteRecord(products, records, id, now, skus) {
   }
 }
 
-function getDashboard(products, records, now, skus) {
+function getDashboard(products, records, now, skus, totals) {
   const start = startOfDay(now)
   const todayOut = records.filter(function (item) {
     return item.type === 'out' && item.createdAt >= start
@@ -2198,7 +2244,7 @@ function getDashboard(products, records, now, skus) {
     todayInAmount: round2(todayIn.reduce(function (sum, item) {
       return sum + toNumber(item.amount)
     }, 0)),
-    totalReceivable: getTotalReceivable(records),
+    totalReceivable: totals ? totals.receivable : getTotalReceivable(records),
     alertCount: alerts.length,
     alerts: alerts,
     recent: groupRecords(records).slice(0, 10)
@@ -2268,6 +2314,10 @@ function summarizeRecords(records) {
     receivable: getTotalReceivable(records),
     count: records.length
   }
+}
+
+function computeTotals(records) {
+  return summarizeRecords(records)
 }
 
 function buildSeed(now, nextId) {
@@ -2493,6 +2543,7 @@ module.exports = {
   categoryKindTag: categoryKindTag,
   skuPricesMatch: skuPricesMatch,
   summarizeCustomerAccount: summarizeCustomerAccount,
+  summarizeAllCustomerAccounts: summarizeAllCustomerAccounts,
   getTotalReceivable: getTotalReceivable,
   isCreditSale: isCreditSale,
   isOpening: isOpening,
@@ -2519,5 +2570,6 @@ module.exports = {
   filterProducts: filterProducts,
   filterRecords: filterRecords,
   summarizeRecords: summarizeRecords,
+  computeTotals: computeTotals,
   buildSeed: buildSeed
 }

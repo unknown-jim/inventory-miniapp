@@ -31,6 +31,7 @@ const cache = {
   categories: [],
   revision: 0,
   hasClearedBackup: false,
+  totals: null,
   ready: false
 }
 
@@ -118,6 +119,7 @@ function applyLedger(ledger) {
   cache.customers = lists.customers
   cache.categories = lists.categories
   cache.revision = lists.revision
+  cache.totals = lists.totals || null
   cache.ready = true
   writeList(KEYS.products, cache.products)
   writeList(KEYS.skus, cache.skus)
@@ -140,6 +142,7 @@ function loadCacheFromStorage() {
   cache.categories = readList(KEYS.categories)
   cache.revision = wx.getStorageSync(REVISION_KEY) || 0
   cache.hasClearedBackup = !!wx.getStorageSync(HAS_BACKUP_KEY)
+  cache.totals = inventory.computeTotals(cache.records)
   cache.ready = true
 }
 
@@ -423,6 +426,10 @@ function getCategories() {
   return lists().categories
 }
 
+function getTotals() {
+  return cache.totals || null
+}
+
 function getSkus() {
   return lists().skus
 }
@@ -568,7 +575,7 @@ function hasClearedBackup() {
 
 function dashboard() {
   const data = lists()
-  return inventory.getDashboard(data.products, data.records, Date.now(), data.skus)
+  return inventory.getDashboard(data.products, data.records, Date.now(), data.skus, getTotals())
 }
 
 async function whoami() {
@@ -701,6 +708,7 @@ module.exports = {
   getRecords: getRecords,
   getCustomers: getCustomers,
   getCategories: getCategories,
+  getTotals: getTotals,
   getSkus: getSkus,
   getProduct: getProduct,
   getSku: getSku,

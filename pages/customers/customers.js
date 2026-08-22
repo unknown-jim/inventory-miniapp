@@ -19,11 +19,16 @@ Page({
   },
 
   refresh() {
-    const records = store.getRecords()
     const list = inventory.sortCustomers(
       inventory.filterCustomers(store.getCustomers(), this.data.keyword)
     ).map(function (item) {
-      return util.withCustomerView(item, inventory.summarizeCustomerAccount(records, item.id))
+      return util.withCustomerView(item, item.account || {
+        count: 0,
+        amount: 0,
+        creditAmount: 0,
+        paidAmount: 0,
+        receivable: 0
+      })
     }).sort(function (a, b) {
       const debtDiff = inventory.toNumber(b.receivable) - inventory.toNumber(a.receivable)
       if (debtDiff) return debtDiff
