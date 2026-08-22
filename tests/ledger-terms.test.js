@@ -334,6 +334,11 @@ assertMatchesLegacy(singleHalfCent, '单条半分值记录')
 // 2b-0 审计已用闭合论证确认生产不可达：inventory.js 全部写入路径的
 // amount / profit 都是 round2() 或 sumBy() 的输出，且 cents(round2(n/100))
 // 对整数 n 恒等。新增写入路径若绕过 round2，这条前提就没了。
+//
+// **2b-2b 把这条分歧的影响面扩大了一处**：首页今日三项从 getDashboard 的
+// round2 浮点累加换成了 todayTotals 的整数分累加，用的就是这里的新口径。
+// 所以存量有亚分金额的店，首页数字会**跳一次**。这是个用户可见的变化，
+// 迁移预检 checkAggregates 要顺带查一遍哪些店有亚分金额（那个动作还没实现）。
 const multiHalfCent = [
   rec({ id: 'hc1', type: 'out', customerId: 'hc2', payType: 'credit', amount: 0.005, profit: 0 }),
   rec({ id: 'hc2', type: 'out', customerId: 'hc2', payType: 'credit', amount: 0.005, profit: 0 })
@@ -484,116 +489,13 @@ for (let trial = 0; trial < 500; trial++) {
 }
 
 // ---------------------------------------------------------------------------
-// mergeRecordDelta：客户端把「这次记账改了哪几条」合进流水缓存。
-// 会算错的部分必须在被测的纯函数里 —— 记账回传不再带整本流水，客户端拿它算欠款。
+// 2b-2b 删掉了 mergeRecordDelta（连同记账回传里的 recordDelta）：分页之后
+// 客户端每个列表都是服务端取的、每个金额都来自 accounts / totals 投影，没有
+// 任何一处消费 delta。这里原来那一整节用例跟着删 —— 留着一个没人用的算钱
+// 机制的测试，只会让下一个人以为它还在被依赖（方案 C-2，用户已明确点头）。
+// 它顶下来的覆盖面由 tests/ledger-records.test.js 的 T-B1 接手：3000 步守门员
+// 每步用 listRecords 翻页对账，覆盖面比原来更大。
 // ---------------------------------------------------------------------------
-
-function mrec(id, createdAt, mark) {
-  return { id: id, type: 'opening', amount: 1, profit: 0, createdAt: createdAt, remark: mark || '', lines: [] }
-}
-function mids(list) {
-  return list.map(function (item) { return item.id })
-}
-
-const mBase = [mrec('b', 300), mrec('a', 200), mrec('c', 100)]   // sortKey 倒序
-
-// 新增
-let m = apply.mergeRecordDelta(mBase, {
-  bookChanged: false, count: 4, writes: [{ op: 'set', record: mrec('d', 250) }]
-})
-assert.deepStrictEqual(mids(m.records), ['b', 'd', 'a', 'c'], '新增要按 sortKey 倒序插进去')
-assert.strictEqual(m.complete, true)
-
-// 就地改：同一个 id 换成新对象，位置由 sortKey 决定，不新增一条
-m = apply.mergeRecordDelta(mBase, {
-  bookChanged: false, count: 3, writes: [{ op: 'set', record: mrec('a', 200, '改过') }]
-})
-assert.deepStrictEqual(mids(m.records), ['b', 'a', 'c'])
-assert.strictEqual(m.records[1].remark, '改过')
-assert.strictEqual(m.complete, true)
-
-// 删
-m = apply.mergeRecordDelta(mBase, {
-  bookChanged: false, count: 2, writes: [{ op: 'remove', id: 'a' }]
-})
-assert.deepStrictEqual(mids(m.records), ['b', 'c'])
-assert.strictEqual(m.complete, true)
-
-// 同一批里既 set 又 remove 同一个 id：set 赢（退货那种「先删后写」的顺序不该丢数据）
-m = apply.mergeRecordDelta(mBase, {
-  bookChanged: false,
-  count: 3,
-  writes: [{ op: 'remove', id: 'a' }, { op: 'set', record: mrec('a', 200, '又写回来') }]
-})
-assert.deepStrictEqual(mids(m.records), ['b', 'a', 'c'])
-assert.strictEqual(m.records[1].remark, '又写回来')
-
-// remove 一个不存在的 id：无声跳过，不影响其余
-m = apply.mergeRecordDelta(mBase, {
-  bookChanged: false, count: 3, writes: [{ op: 'remove', id: 'zzz' }]
-})
-assert.deepStrictEqual(mids(m.records), ['b', 'a', 'c'])
-assert.strictEqual(m.complete, true)
-
-// 换账套：老缓存整份丢掉，只留 delta 里的
-m = apply.mergeRecordDelta(mBase, {
-  bookChanged: true, count: 1, writes: [{ op: 'set', record: mrec('n1', 900) }]
-})
-assert.deepStrictEqual(mids(m.records), ['n1'])
-assert.strictEqual(m.complete, true)
-
-// 换账套 + 空 writes（clearAll）
-m = apply.mergeRecordDelta(mBase, { bookChanged: true, count: 0, writes: [] })
-assert.deepStrictEqual(m.records, [])
-assert.strictEqual(m.complete, true)
-
-// 换账套 + 空 writes 但 count > 0（restoreCleared）-> 不完整，上层必须重拉
-m = apply.mergeRecordDelta(mBase, { bookChanged: true, count: 5, writes: [] })
-assert.deepStrictEqual(m.records, [])
-assert.strictEqual(m.complete, false, '恢复出来的流水不在 delta 里，条数对不上就是不完整')
-
-// delta 为 null：不猜，标记不完整，原样保留缓存
-m = apply.mergeRecordDelta(mBase, null)
-assert.deepStrictEqual(mids(m.records), ['b', 'a', 'c'])
-assert.strictEqual(m.complete, false)
-m = apply.mergeRecordDelta(null, null)
-assert.deepStrictEqual(m.records, [])
-assert.strictEqual(m.complete, false)
-
-// writes 为空且条数对得上（saveProduct 之类不碰流水的记账）
-m = apply.mergeRecordDelta(mBase, { bookChanged: false, count: 3, writes: [] })
-assert.deepStrictEqual(mids(m.records), ['b', 'a', 'c'])
-assert.strictEqual(m.complete, true)
-
-// 排序必须和 makeSortKey 倒序一致，含**同毫秒不同 id**
-const sameMsBase = [mrec('m2', 500), mrec('m1', 500)]
-m = apply.mergeRecordDelta(sameMsBase, {
-  bookChanged: false, count: 3, writes: [{ op: 'set', record: mrec('m0', 500) }]
-})
-assert.deepStrictEqual(mids(m.records), ['m2', 'm1', 'm0'], '同毫秒靠 id 拿到全序')
-const sorted = m.records.slice()
-for (let i = 1; i < sorted.length; i++) {
-  assert.ok(
-    apply.makeSortKey(sorted[i - 1].createdAt, sorted[i - 1].id)
-      > apply.makeSortKey(sorted[i].createdAt, sorted[i].id),
-    'mergeRecordDelta 的顺序必须严格等于 readAll 的 sortKey 倒序'
-  )
-}
-
-// complete 严格按条数判：多一条少一条都不算完整
-assert.strictEqual(apply.mergeRecordDelta(mBase, {
-  bookChanged: false, count: 4, writes: []
-}).complete, false)
-assert.strictEqual(apply.mergeRecordDelta(mBase, {
-  bookChanged: false, count: 2, writes: []
-}).complete, false)
-
-// 不就地改调用方的数组
-const frozenBase = [mrec('x', 100)]
-apply.mergeRecordDelta(frozenBase, {
-  bookChanged: false, count: 2, writes: [{ op: 'set', record: mrec('y', 200) }]
-})
-assert.strictEqual(frozenBase.length, 1, 'mergeRecordDelta 不许就地改传进来的缓存')
 
 // ---------------------------------------------------------------------------
 // T-A1（方案 D:\work\inventory-miniapp-handoffs\2b-2-pagination-design-2026-08-23.md

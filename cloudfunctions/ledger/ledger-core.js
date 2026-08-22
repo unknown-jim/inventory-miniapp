@@ -32,10 +32,11 @@ function publicListsOf(shopId, doc, opts) {
   lists.hasClearedBackup = apply.hasClearedBackup(source)
   lists.archivedClearCount = ((source && source.clearSnapshots) || []).length
   if (apply.recordsPending(source)) {
-    // 还没迁移：流水仍在账本文档的数组里，读时自愈后原样回传。
+    // 还没迁移：流水仍在账本文档的数组里，读时自愈之后只当**本地语料**用 ——
+    // 2b-2b 起 `ledger.records` 在线上彻底消失（含未迁移的店），流水一律走
+    // listRecords 分页取。线上只存在一种线协议形态（方案 Q1）。
     // 写路径已经被 assertRecordsReady 拦住，不会有一半在数组一半在集合的账。
     const legacy = apply.legacyRecordsOf(source)
-    lists.records = legacy
     // 迁移窗口内 accounts / aggregate 还是 2b-1 之前的形状（根本没有这两个字段），
     // 直接投影会把全店金额和每个客户的欠款都回传成 0，而 getSlip 的 legacy 分支
     // 走 receivableAt 算得对 —— 送货单印 200、客户页显示 0，自相矛盾（审计阻塞 1）。
@@ -44,7 +45,7 @@ function publicListsOf(shopId, doc, opts) {
     lists.aggregate = inventory.foldTotalTerms(legacy)
     apply.withAggregates(lists)
     lists.recordsPendingMigration = true
-    // 2b-2a：recent / today 同样从这份已经在内存里的老数组现切，零额外 IO ——
+    // recent / today 同样从这份已经在内存里的老数组现切，零额外 IO ——
     // 和 listRecords 走的是同一个 apply.pageRecords，一份定义、两处调用（方案 Q1）。
     lists.recent = apply.pageRecords(legacy, { limit: opts.recentLimit }).records
     if (opts.dayStart != null) {
@@ -58,33 +59,14 @@ function publicListsOf(shopId, doc, opts) {
   return lists
 }
 
-// 唯一会读 ledger_records 集合的回传函数。**只准从只读 action 调。**
-// 记账路径永远不能调它：事务已经提交，这里一抛错（或一超时）就变成
-// 「账记上了却报失败」，店员再点一次就真的记两笔。
+// getLedger 专用：给已迁移的账套补 recent / today。
+// **只准从只读 action 调**：分页查询有界，但仍然是 IO，记账路径不能碰 ——
+// 事务已经提交，这里一抛错（或一超时）就变成「账记上了却报失败」，
+// 店员再点一次就真的记两笔。
 // tests/ledger-records.test.js 的「提交之后不许读库」用例把这条钉死。
-async function attachRecords(db, shopId, lists) {
-  // 便宜的前置检查：aggregate.count 就在刚读到的账本文档里，一次比较。
-  // 不用先烧掉 20 次分页往返才发现拼不完。
-  const claimed = (lists.aggregate && lists.aggregate.count) || 0
-  if (claimed > records.COMPAT_MAX_RECORDS) throw new Error(records.TOO_MANY_RECORDS)
-  const store = records.recordStore(db.recordsCtx(), lists.bookId, shopId)
-  lists.records = await store.readAll()        // 真正的硬上限在 readAll 里
-  // 廉价哨兵：带外增删会让累加器和集合对不上。只报告不阻断 —— 这是读路径。
-  const total = await store.countAll()
-  if (total !== claimed) {
-    lists.aggregatesStale = true
-    console.warn('[ledger] aggregate drift shop=' + shopId + ' book=' + lists.bookId
-      + ' count=' + total + ' aggregate=' + claimed)
-  }
-  return lists
-}
-
-// getLedger 专用：给已迁移的账套补 recent / today（2b-2a 新增，纯加法）。
-// 和 attachRecords 一样**只准从只读 action 调**：分页查询有界，但仍然是 IO，
-// 记账路径不能碰。
-// 这里把 attachRecords 的 countAll() 漂移哨兵搬了一份过来：2b-2a 两个哨兵都在
-// 跑（attachRecords 没被动，仍然自己查一次），2b-2b 删掉 attachRecords 之后
-// 这里就是唯一的防线，不能等到那时候才补。
+//
+// countAll() 的漂移哨兵在这里：2b-2b 删掉 attachRecords 之后它是唯一的防线
+// （docs/cloud-ledger.md 的「怎么发现漂移」第 ② 条），不能顺手删。
 async function attachRecent(db, shopId, lists, dayStart, recentLimit) {
   const store = records.recordStore(db.recordsCtx(), lists.bookId, shopId)
   const got = await records.recentAndToday(store, dayStart, recentLimit)
@@ -95,7 +77,7 @@ async function attachRecent(db, shopId, lists, dayStart, recentLimit) {
   const total = await store.countAll()
   if (total !== claimed) {
     lists.aggregatesStale = true
-    console.warn('[ledger] aggregate drift (recent) shop=' + shopId + ' book=' + lists.bookId
+    console.warn('[ledger] aggregate drift shop=' + shopId + ' book=' + lists.bookId
       + ' count=' + total + ' aggregate=' + claimed)
   }
   return lists
@@ -561,7 +543,6 @@ async function dispatch(input) {
     const recentLimit = payload.recentLimit
     const lists = publicListsOf(shopId, ledger, { dayStart: dayStart, recentLimit: recentLimit })
     if (!lists.recordsPendingMigration) {
-      await attachRecords(db, shopId, lists)
       await attachRecent(db, shopId, lists, dayStart, recentLimit)
     }
     return { ledger: lists }
@@ -726,26 +707,21 @@ async function dispatch(input) {
     await tx.putLedger(shopId, applied.ledger)
     return {
       lists: applied.ledger,
-      result: applied.result,
-      recordWrites: applied.recordWrites,
-      bookChanged: applied.ledger.bookId !== current.bookId
+      result: applied.result
     }
   })
 
   // 事务已经提交。**从这里到 return 之间不允许出现任何 await。**
   // 提交之后再失败一次，客户端看到的就是「记账失败」，店员会再点一次，
   // 于是同一笔账真的落两遍（见 2b-1a 审计阻塞 3）。
-  // 回传要用的东西全部已经在内存里：lists 是事务里算好的账本，
-  // recordWrites 是刚刚写进集合的那几条 —— 客户端把它合进自己的缓存即可，
-  // 服务端写什么，客户端就合什么，是同一个数组。
+  // 回传要用的东西全部已经在内存里：lists 就是事务里算好的账本，
+  // publicListsOf 的签名里没有 db，所以这条路上根本写不出「提交之后再读库」。
+  //
+  // 2b-2b 起**不再回传 recordDelta**：分页之后客户端每个列表都是服务端取的、
+  // 每个金额都来自 accounts / totals 投影，没有任何一处消费 delta。留着一个
+  // 没人用的算钱字段就是给下一个人留坑（方案 C-2，用户已明确点头）。
   return {
     ledger: publicListsOf(shopId, outcome.lists),
-    recordDelta: {
-      bookId: String(outcome.lists.bookId || ''),
-      bookChanged: !!outcome.bookChanged,
-      count: (outcome.lists.aggregate && outcome.lists.aggregate.count) || 0,
-      writes: outcome.recordWrites || []
-    },
     result: outcome.result
   }
 }
@@ -849,12 +825,7 @@ async function migrateLocalShard(db, shopId, openid, payload, now, nextId) {
     next.clearSnapshots = current.clearSnapshots || []
     next.lastRestoredClearAt = current.lastRestoredClearAt || 0
     await tx.putLedger(shopId, next)
-    return {
-      lists: next,
-      shardWrites: shard.map(function (r) {
-        return { op: 'set', record: r }
-      })
-    }
+    return { lists: next }
   })
 
   if (!outcome.lists) {
@@ -867,17 +838,10 @@ async function migrateLocalShard(db, shopId, openid, payload, now, nextId) {
       skipped: !!outcome.skipped
     }
   }
-  // 同样是「事务提交之后零 IO」：一次性上传时 shardWrites 就是全部流水。
+  // 同样是「事务提交之后零 IO」：publicListsOf 只吃内存里那份账本文档。
+  // 迁完之后客户端要看流水，走 listRecords 分页取，不靠回传。
   return {
-    ledger: publicListsOf(shopId, outcome.lists),
-    recordDelta: {
-      bookId: String(outcome.lists.bookId || ''),
-      bookChanged: true,
-      count: (outcome.lists.aggregate && outcome.lists.aggregate.count) || 0,
-      // 一次性上传时这就是全部流水，零次读库；分片上传时只有最后一片，
-      // 客户端按条数发现对不上，自己再拉一次全量。
-      writes: outcome.shardWrites || []
-    }
+    ledger: publicListsOf(shopId, outcome.lists)
   }
 }
 
@@ -886,7 +850,6 @@ module.exports = {
   API_VERSION: API_VERSION,
   dispatch: dispatch,
   publicListsOf: publicListsOf,
-  attachRecords: attachRecords,
   attachRecent: attachRecent,
   withBookId: withBookId,
   requireMember: requireMember

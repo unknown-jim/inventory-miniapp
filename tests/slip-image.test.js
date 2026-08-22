@@ -1,6 +1,29 @@
 const assert = require('assert')
+const inv = require('../utils/inventory')
 const util = require('../utils/util')
 const slipImage = require('../utils/slip-image')
+
+// 2b-2b 删掉了 util.withSlipViewFromRecord：生产上「截断到某张老单据时刻的
+// 欠款」唯一的算法在服务端 getSlip，客户端拿不到流水全集。这里搬进本地的是
+// 同一份口径，下面的送货单渲染断言一个都不改。
+function slipFromRecord(records, record, products, shopName) {
+  if (!record || record.type !== 'out') {
+    throw new Error('不是销售流水')
+  }
+  const list = records || []
+  const missing = record.customerId && !list.some(function (item) {
+    return item.id === record.id
+  })
+  if (missing) {
+    throw new Error('流水不完整，无法算欠款')
+  }
+  return util.withSlipView(
+    record,
+    inv.receivableAt(list, record.customerId, record.createdAt),
+    products,
+    shopName
+  )
+}
 
 function sampleSlip(overrides) {
   return Object.assign({
@@ -279,7 +302,7 @@ const reprintRecords = [
     ]
   }
 ]
-const reprint = util.withSlipViewFromRecord(reprintRecords, reprintRecords[1])
+const reprint = slipFromRecord(reprintRecords, reprintRecords[1])
 assert.strictEqual(reprint.lines.length, 2)
 assert.strictEqual(reprint.lines[0].productName, '纯牛奶 250ml')
 assert.strictEqual(reprint.payText, '赊账')
@@ -289,11 +312,11 @@ assert.strictEqual(reprint.receivableText, '18.90')
 
 // 流水不完整就报错，不能拿残缺数据算欠款印在单据上
 assert.throws(function () {
-  util.withSlipViewFromRecord([], reprintRecords[1])
+  slipFromRecord([], reprintRecords[1])
 }, /不完整/)
 
 assert.throws(function () {
-  util.withSlipViewFromRecord(reprintRecords, reprintRecords[0])
+  slipFromRecord(reprintRecords, reprintRecords[0])
 }, /销售/)
 
 const openingThenSale = [
@@ -318,7 +341,7 @@ const openingThenSale = [
     ]
   }
 ]
-const openingSlip = util.withSlipViewFromRecord(openingThenSale, openingThenSale[1])
+const openingSlip = slipFromRecord(openingThenSale, openingThenSale[1])
 assert.strictEqual(openingSlip.prevDebtText, '50.00')
 assert.strictEqual(openingSlip.thisDebtText, '9.00')
 assert.strictEqual(openingSlip.receivableText, '59.00')

@@ -69,7 +69,17 @@ Page({
   },
 
   async loadRecord(id) {
-    const record = store.getRecord(id)
+    // 分页之后本地缓存里不一定有这条流水（可能是客户页的往来记录，也可能是
+    // 流水页翻到第 5 页的那条），一律按 id 去服务端取。
+    // try/catch 必须在这里面：onLoad 和 cancelEdit 都是 fire-and-forget，
+    // 抛出去没有人接，只会变成一个静默的未处理 rejection。
+    let record = null
+    try {
+      record = await store.fetchRecord(id)
+    } catch (error) {
+      util.showError(error)
+      return
+    }
     if (!record) {
       wx.showToast({ title: '流水不存在', icon: 'none' })
       return
@@ -374,11 +384,13 @@ Page({
     }
   },
 
-  openSlip() {
+  async openSlip() {
     try {
-      const record = store.getRecord(this.data.id)
-      // 重印老单要按当时的欠款算，只能用流水。缓存不完整就报错，不印错数。
-      const slipView = util.withSlipViewFromRecord(store.recordsForMoney(), record, store.getProducts(), store.getShopName())
+      // 重印老单要按**当时**的欠款算。客户端没有流水全集，这个数只有服务端
+      // 算得出来（当前欠款减去该单之后的后缀）。**算不出来就不开单** ——
+      // 宁可打不出单，也不能在客户手上的单据上印一个错数。
+      const slip = await store.getSlip(this.data.id)
+      const slipView = util.withSlipView(slip.record, slip.receivable, store.getProducts(), store.getShopName())
       this.slipImagePath = ''
       this.setData({
         showSlip: true,

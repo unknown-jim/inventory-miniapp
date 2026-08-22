@@ -39,3 +39,9 @@
   margin-top: 8rpx;
   font-weight: 600;
 }
+
+/* 触底加载的两条脚注。和 index / customer-edit 的 .quiet 同一套灰。 */
+.quiet {
+  text-align: center;
+  color: #64748B;
+}

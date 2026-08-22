@@ -90,9 +90,50 @@ Shop.prototype.open = async function (name) {
   return this
 }
 
+// 2b-2b：getLedger 不再回传整本流水（含未迁移的店）。
+//
+// 老断言的语料仍然需要「整本」，所以这里由 listRecords 翻完全本补上 ——
+// 于是**分页协议进了这个文件里每一条老断言的路径**：翻页只要漏一条、重一条、
+// 或者被空页的 cursor='' 冲回开头，四条记账不变量、returnedQty 双向一致性、
+// getSlip 等价性会一起变红。顺带把「线上不许再出现 ledger.records」钉死。
 Shop.prototype.ledger = async function () {
   const res = await this.call('getLedger', {})
+  assert.strictEqual(res.ledger.records, undefined,
+    'T-B2：getLedger 不许再回传整本流水')
+  res.ledger.records = await this.pagedAll()
   return res.ledger
+}
+
+// listRecords 翻完全本。maxPages 只翻前几页（守门员每步用它省钱）。
+Shop.prototype.pagedAll = async function (options, maxPages) {
+  options = options || {}
+  const limit = options.limit || recordsModule.PAGE_LIMIT
+  const cap = maxPages == null ? Infinity : maxPages
+  const out = []
+  let cursor = ''
+  for (let page = 0; page < cap; page++) {
+    const res = await this.call('listRecords', {
+      type: options.type || '',
+      customerId: options.customerId || '',
+      cursor: cursor,
+      limit: limit
+    })
+    res.records.forEach(function (item) { out.push(item) })
+    if (!res.hasMore) break
+    // 空页时服务端回 ''，直接赋值会把游标冲回开头 —— 客户端那条保护也是这么写的
+    cursor = res.cursor || cursor
+  }
+  return out
+}
+
+// 集合里这本账套的全部流水，按 sortKey 倒序。
+// **不经过任何查询层**：直接读 MemoryDb 的文档袋，所以它是分页结果的独立
+// 参照物（oracle），不会跟着 page() 一起错。
+Shop.prototype.collectionAll = function (bookId) {
+  return this.docsOfBook(bookId).slice().sort(function (a, b) {
+    if (a.sortKey === b.sortKey) return 0
+    return a.sortKey > b.sortKey ? -1 : 1
+  }).map(apply.fromRecordDoc)
 }
 
 // 集合里这本账套的全部记录（不经过 ledgers 文档）
@@ -103,6 +144,25 @@ Shop.prototype.docsOfBook = function (bookId) {
   }).filter(function (doc) {
     return doc.bookId === bookId
   })
+}
+
+// listRecords 翻完全本，给不走 Shop 夹具的裸 dispatch 用（老账本 / 迁移窗口）
+async function pagedAllVia(callFn, options) {
+  options = options || {}
+  const out = []
+  let cursor = ''
+  for (let page = 0; page < 1000; page++) {
+    const res = await callFn('listRecords', {
+      type: options.type || '',
+      customerId: options.customerId || '',
+      cursor: cursor,
+      limit: options.limit || 100
+    })
+    res.records.forEach(function (item) { out.push(item) })
+    if (!res.hasMore) break
+    cursor = res.cursor || cursor
+  }
+  return out
 }
 
 function rejects(fn, re) {
@@ -198,9 +258,26 @@ function totalStock(skus, productId) {
   const EXPECTED_ERRORS = /库存不足|请选择规格|规格不存在|收款不能超过当前欠款|改完后收款会超过赊账|可退数量|退货数量必须大于|销售数量必须大于|进货数量必须大于|调整数量必须大于|改规格数量必须大于|期初欠款必须大于|收款金额必须大于|请选择不同的规格|待加工库存不能改规格|请先删除退货记录|流水不存在|商品不存在|客户不存在|商品已删除|请选择客户|赊账必须选择客户|数量不能小于已退货|请填写退货数量|请先加入商品|不能改调整方向|退货请指明销售单|分规格现货没有待加工格|选择其他时请填写备注|待加工库存不存在|一次退货只能退同一张销售单|请选择原因|普通商品不用改规格/
 
   let ledger = await shop.ledger()
-  // 模拟客户端那份流水缓存：记账回传只给 recordDelta，客户端用 mergeRecordDelta
-  // 合进来。整个随机序列从此**由客户端缓存驱动**，这是对 mergeRecordDelta 最强的检验。
-  let clientRecords = ledger.records.slice()
+  const shopBookId = (await shop.db.getLedger(shop.shopId)).bookId
+  // T-B1：客户端镜像换成「listRecords 翻完全本」。
+  //
+  // 2b-2b 删掉 recordDelta / mergeRecordDelta 之后，「客户端那份缓存」这个
+  // 概念没有了，所以镜像的对象改成**分页协议本身**：每一步都翻前 3 页对头部，
+  // 每 100 步翻一次全本。参照物 collectionAll() 直接读文档袋、不经过查询层，
+  // 所以分页漏一条 / 重一条 / 空页把游标冲回开头，都会在这里当场变红。
+  //
+  // 成本（本机实测，末尾约 1950 条）：
+  //   每步都翻全本            44 s —— 太贵，慢机器上会顶到超时
+  //   前 3 页 + 每 10 步全本  10 s  ← 选这个
+  //   前 3 页 + 每 25 步全本   7 s
+  //   前 3 页 + 每 100 步全本  7 s（方案里给的降频档）
+  // 每 10 步一次 = 300 次全本核对，比方案给的 30 次强 10 倍，而整个 npm test
+  // 仍在 15 秒以内。真要再降频就改 FULL_EVERY，别去动 HEAD_PAGES ——
+  // 前几页是每一步都要对的那部分。
+  const HEAD_PAGES = 3
+  const HEAD_LIMIT = 20
+  const FULL_EVERY = 10
+  let bookRecords = shop.collectionAll(shopBookId)
   let applied = 0
   let refused = 0
   const usedActions = {}
@@ -401,8 +478,7 @@ function totalStock(skus, productId) {
   }
 
   for (let step = 0; step < 3000; step++) {
-    // 随机序列的语料是**客户端缓存**，不是服务端回传的流水（记账回传已经不带流水）
-    const plan = nextMutation(rng, Object.assign({}, ledger, { records: clientRecords }))
+    const plan = nextMutation(rng, Object.assign({}, ledger, { records: bookRecords }))
     if (!plan) continue
     let res = null
     try {
@@ -418,30 +494,37 @@ function totalStock(skus, productId) {
     ledger = res.ledger
     assert.strictEqual(ledger.records, undefined,
       'step ' + step + '：记账回传不许带整本流水（带了就说明提交后又读了库）')
+    // T-B3：recordDelta 已经删了。留着一个没人消费的算钱字段就是给下一个人留坑，
+    // 所以这里反过来钉死「不许再出现」，而不是钉住它的形状。
+    assert.strictEqual(res.recordDelta, undefined,
+      'step ' + step + '：记账回传不许再带 recordDelta（2b-2b 已删，方案 C-2）')
 
-    // ★ 客户端缓存：服务端往集合里写什么，客户端就往缓存里合什么
-    const merged = apply.mergeRecordDelta(clientRecords, res.recordDelta)
-    assert.strictEqual(merged.complete, true,
-      'step ' + step + ' ' + plan.action + '：客户端缓存条数和服务端对不上')
-    clientRecords = merged.records
+    // 参照物：直接读文档袋，不经过查询层
+    bookRecords = shop.collectionAll(ledger.bookId)
 
-    // ★ 客户端缓存必须逐条、逐顺序等于集合里的全量
-    const collection = await recordsModule
-      .recordStore(shop.db.recordsCtx(), ledger.bookId, shop.shopId).readAll()
-    assert.deepStrictEqual(clientRecords, collection,
-      'step ' + step + ' ' + plan.action + '：客户端缓存和集合逐条对不上')
+    // ★ T-B1：分页协议本身进了守门员。每步只翻前 3 页（省钱），
+    //   每 FULL_EVERY 步翻一次全本（覆盖到尾页、空页 cursor、整页倍数）。
+    const head = await shop.pagedAll({ limit: HEAD_LIMIT }, HEAD_PAGES)
+    assert.deepStrictEqual(head, bookRecords.slice(0, head.length),
+      'step ' + step + ' ' + plan.action + '：listRecords 前 ' + HEAD_PAGES + ' 页和集合对不上')
+    assert.strictEqual(head.length, Math.min(HEAD_PAGES * HEAD_LIMIT, bookRecords.length),
+      'step ' + step + '：前 ' + HEAD_PAGES + ' 页应该正好装满或者把全本翻完')
+    if (step % FULL_EVERY === 0) {
+      assert.deepStrictEqual(await shop.pagedAll({ limit: HEAD_LIMIT }), bookRecords,
+        'step ' + step + ' ' + plan.action + '：listRecords 翻完全本和集合逐条对不上')
+    }
 
     // ★ 漂移守门员：文档里增量维护出来的累加器，必须等于对全部记录的全量折叠
-    assert.deepStrictEqual(ledger.accounts, inv.foldAccountTerms(clientRecords),
+    assert.deepStrictEqual(ledger.accounts, inv.foldAccountTerms(bookRecords),
       'step ' + step + ' ' + plan.action + '：accounts 增量维护和全量折叠对不上')
-    assert.deepStrictEqual(ledger.aggregate, inv.foldTotalTerms(clientRecords),
+    assert.deepStrictEqual(ledger.aggregate, inv.foldTotalTerms(bookRecords),
       'step ' + step + ' ' + plan.action + '：aggregate 增量维护和全量折叠对不上')
-    assert.deepStrictEqual(ledger.totals, inv.summarizeRecords(clientRecords),
+    assert.deepStrictEqual(ledger.totals, inv.summarizeRecords(bookRecords),
       'step ' + step + '：totals 投影对不上')
-    assert.strictEqual(ledger.aggregate.count, clientRecords.length,
+    assert.strictEqual(ledger.aggregate.count, bookRecords.length,
       'step ' + step + '：聚合条数和集合条数对不上')
 
-    const expectedAccounts = inv.summarizeAllCustomerAccounts(clientRecords)
+    const expectedAccounts = inv.summarizeAllCustomerAccounts(bookRecords)
     ledger.customers.forEach(function (customer) {
       const want = expectedAccounts[customer.id] || {
         count: 0, amount: 0, creditAmount: 0, paidAmount: 0, receivable: 0
@@ -461,21 +544,21 @@ function totalStock(skus, productId) {
   // 每条流水都真的在集合里，_id 和 sortKey 形状正确
   const bookId = (await shop.db.getLedger(shop.shopId)).bookId
   const docs = shop.docsOfBook(bookId)
-  assert.strictEqual(docs.length, clientRecords.length)
+  assert.strictEqual(docs.length, bookRecords.length)
   docs.forEach(function (doc) {
     assert.strictEqual(doc._id, bookId + '_' + doc.id)
     assert.strictEqual(doc.sortKey, apply.makeSortKey(doc.createdAt, doc.id))
     assert.strictEqual(doc.shopId, shop.shopId)
   })
-  // 序列末尾必须仍在 COMPAT_MAX_RECORDS 之内，否则下面 getLedger 会直接报错
-  assert.ok(clientRecords.length < recordsModule.COMPAT_MAX_RECORDS,
-    '随机序列的流水条数必须留在兼容上限之内，实际 ' + clientRecords.length)
-  // 只读路径拿到的整本流水，必须逐条等于客户端一路合出来的那份
-  assert.deepStrictEqual((await shop.ledger()).records, clientRecords,
-    'getLedger 的整份替换和 recordDelta 一路合出来的必须是同一份')
+  // 分页翻完全本，逐条等于集合。序列末尾**不再有任何条数上限** ——
+  // COMPAT_MAX_RECORDS 那道悬崖是 2b-2b 的主要收益，它已经不存在了。
+  assert.deepStrictEqual(await shop.pagedAll({ limit: HEAD_LIMIT }), bookRecords,
+    'listRecords 翻完全本必须逐条等于集合')
+  assert.deepStrictEqual((await shop.ledger()).records, bookRecords,
+    'getLedger + 分页拼出来的必须就是集合里那一份')
 
   console.log('漂移守门员：3000 步跑完，记成 ' + applied + ' 笔、按业务规则拒绝 '
-    + refused + ' 笔，最终 ' + clientRecords.length + ' 条流水，覆盖动作 '
+    + refused + ' 笔，最终 ' + bookRecords.length + ' 条流水，覆盖动作 '
     + coveredActions.length + ' 种')
 
   // 哨兵：带外删掉一条记录，getLedger 要报告聚合不一致而不是装作没事。
@@ -953,12 +1036,12 @@ function totalStock(skus, productId) {
   const p2 = (await callOn('u2', 'getLedger', s2)).ledger.products[0]
   await callOn('u1', 'addSale', s1, { payType: 'cash', items: [{ productId: p1.id, qty: 1, unitPrice: 2 }] })
   await callOn('u2', 'addSale', s2, { payType: 'cash', items: [{ productId: p2.id, qty: 1, unitPrice: 2 }] })
-  const l1 = (await callOn('u1', 'getLedger', s1)).ledger
-  const l2 = (await callOn('u2', 'getLedger', s2)).ledger
-  assert.strictEqual(l1.records.length, 1)
-  assert.strictEqual(l2.records.length, 1)
+  const r1 = (await callOn('u1', 'listRecords', s1, { limit: 100 })).records
+  const r2 = (await callOn('u2', 'listRecords', s2, { limit: 100 })).records
+  assert.strictEqual(r1.length, 1)
+  assert.strictEqual(r2.length, 1)
   assert.strictEqual(Object.keys(twoShopDb.records).length, 2, '两店各一条，_id 不能撞')
-  assert.notStrictEqual(l1.records[0].lines[0].productName, l2.records[0].lines[0].productName)
+  assert.notStrictEqual(r1[0].lines[0].productName, r2[0].lines[0].productName)
 
   // -------------------------------------------------------------------------
   // 9) 迁移前的老账本：读得到，但写路径必须停下来报错
@@ -987,8 +1070,13 @@ function totalStock(skus, productId) {
   }
   const legacyRead = (await legacyCall('getLedger')).ledger
   assert.strictEqual(legacyRead.recordsPendingMigration, true)
-  assert.strictEqual(legacyRead.records.length, 1, '老的按行流水读时归并成一单一条')
-  assert.strictEqual(legacyRead.records[0].lines.length, 2)
+  // T-B2：未迁移的店也不再回传整本流水，流水一律走 listRecords（方案 Q1：
+  // 线上只存在一种线协议形态）
+  assert.strictEqual(legacyRead.records, undefined,
+    'T-B2：未迁移的店 getLedger 也不许回传整本流水')
+  const legacyPaged = await pagedAllVia(legacyCall)
+  assert.strictEqual(legacyPaged.length, 1, '老的按行流水读时归并成一单一条')
+  assert.strictEqual(legacyPaged[0].lines.length, 2)
   const legacySlip = await legacyCall('getSlip', { recordId: 'ord1' })
   assert.strictEqual(legacySlip.receivable, 15, '没搬完的账本 getSlip 走老口径')
   await rejects(function () {
@@ -1012,15 +1100,17 @@ function totalStock(skus, productId) {
   assert.deepStrictEqual(switched.records, keptRecords, '老数组是回滚路，记账不能抹掉它')
   const switchedRead = (await legacyCall('getLedger')).ledger
   assert.ok(!switchedRead.recordsPendingMigration)
-  assert.strictEqual(switchedRead.records.length, 1, '切开关之后只读集合，读不到老数组')
-  assert.strictEqual(switchedRead.records[0].type, 'in')
+  const switchedPaged = await pagedAllVia(legacyCall)
+  assert.strictEqual(switchedPaged.length, 1, '切开关之后只读集合，读不到老数组')
+  assert.strictEqual(switchedPaged[0].type, 'in')
 
   // 清回老路径：清掉 recordsMigratedAt，读写立刻退回老数组，用户无感
   legacyDb.ledgers[legacyShopId] = Object.assign({}, switched, { recordsMigratedAt: 0 })
   const rolledBack = (await legacyCall('getLedger')).ledger
   assert.strictEqual(rolledBack.recordsPendingMigration, true)
-  assert.strictEqual(rolledBack.records.length, 1)
-  assert.strictEqual(rolledBack.records[0].id, 'ord1', '回滚之后看到的是迁移前那张单')
+  const rolledBackPaged = await pagedAllVia(legacyCall)
+  assert.strictEqual(rolledBackPaged.length, 1)
+  assert.strictEqual(rolledBackPaged[0].id, 'ord1', '回滚之后看到的是迁移前那张单')
 
   // -------------------------------------------------------------------------
   // 10) migrateLocal 分片接收端：切换是最后一片的一次原子写
@@ -1058,10 +1148,7 @@ function totalStock(skus, productId) {
   })
   assert.ok(done.ledger)
   assert.strictEqual(done.ledger.records, undefined, '分片回传也不带整本流水')
-  // 分片上传只回最后一片：客户端按条数发现对不上，自己再拉一次全量
-  const doneMerged = apply.mergeRecordDelta([], done.recordDelta)
-  assert.strictEqual(doneMerged.complete, false, '只有最后一片，条数必然对不上')
-  assert.strictEqual(doneMerged.records.length, impRecords.length - 2)
+  assert.strictEqual(done.recordDelta, undefined, 'T-B3：分片回传也不许再带 recordDelta')
   const imported = await impShop.ledger()
   assert.strictEqual(imported.records.length, impRecords.length)
   assert.deepStrictEqual(imported.accounts, inv.foldAccountTerms(imported.records),
@@ -1078,11 +1165,11 @@ function totalStock(skus, productId) {
     ledger: Object.assign({}, localSource.lists, { records: impRecords })
   })
   assert.strictEqual(oneShotRes.ledger.records, undefined)
-  // 一次性上传时全部流水随 delta 回来，零次读库 —— 客户端一合就完整
-  const oneShotMerged = apply.mergeRecordDelta([], oneShotRes.recordDelta)
-  assert.strictEqual(oneShotMerged.complete, true)
-  assert.strictEqual(oneShotMerged.records.length, impRecords.length)
-  assert.deepStrictEqual(oneShotRes.ledger.accounts, inv.foldAccountTerms(oneShotMerged.records))
+  assert.strictEqual(oneShotRes.recordDelta, undefined, 'T-B3：一次性上传也不许再带 recordDelta')
+  // 迁完之后要看流水就分页取，不靠回传
+  const oneShotPaged = await oneShot.pagedAll()
+  assert.strictEqual(oneShotPaged.length, impRecords.length)
+  assert.deepStrictEqual(oneShotRes.ledger.accounts, inv.foldAccountTerms(oneShotPaged))
 
   // 分片上传不许把退货单和它的销售单切到两片里：切开之后退货行的 saleOrderId
   // 是空的，可退上限从此没有着落（审计阻塞 2 的两条现实路径之一）
@@ -1117,16 +1204,17 @@ function totalStock(skus, productId) {
   const qStore = recordsModule.recordStore(slipShop.db.recordsCtx(), qLedger.bookId, slipShop.shopId)
   assert.strictEqual(await qStore.countAll(), qLedger.records.length)
 
-  const allDesc = await qStore.readAll()
+  // 2b-2b：readAll 已经删了，「整本」现在只有一个来源 —— 分页翻完。
+  const allDesc = qLedger.records
   assert.deepStrictEqual(
     allDesc.map(function (item) { return item.id }),
-    qLedger.records.map(function (item) { return item.id }),
-    'readAll 的顺序就是 getLedger 回传的顺序'
+    slipShop.collectionAll(qLedger.bookId).map(function (item) { return item.id }),
+    '分页翻完的顺序就是集合按 sortKey 倒序的顺序'
   )
   for (let i = 1; i < allDesc.length; i++) {
     const prev = apply.makeSortKey(allDesc[i - 1].createdAt, allDesc[i - 1].id)
     const cur = apply.makeSortKey(allDesc[i].createdAt, allDesc[i].id)
-    assert.ok(prev > cur, 'readAll 必须按 sortKey 严格倒序')
+    assert.ok(prev > cur, '分页翻完必须按 sortKey 严格倒序')
   }
 
   // 分页游标：一页两条翻完，和一次读完逐条相同，不重不漏
@@ -1215,13 +1303,13 @@ function totalStock(skus, productId) {
     throw new Error('事务提交之后不该再读集合')
   }
 
-  // 每一步都要成功，且回传形状是「不带流水 + 带 delta」
+  // 每一步都要成功，且回传形状是「四张表 + 聚合投影，流水一条都没有」。
+  // T-B3：recordDelta 也不许再出现 —— 分页之后零消费者。
   async function noReadStep(action, payload) {
     const res = await noReadShop.call(action, payload)
     assert.strictEqual(res.ledger.records, undefined, action + ' 的回传不该带整本流水')
-    assert.ok(res.recordDelta, action + ' 的回传必须带 recordDelta')
-    assert.ok(Array.isArray(res.recordDelta.writes), action + ' 的 writes 必须是数组')
-    assert.strictEqual(typeof res.recordDelta.count, 'number', action + ' 的 count 必须是数字')
+    assert.strictEqual(res.recordDelta, undefined, action + ' 的回传不该再带 recordDelta')
+    assert.ok(res.ledger.aggregate, action + ' 的回传必须带聚合投影')
     return res
   }
 
@@ -1267,8 +1355,10 @@ function totalStock(skus, productId) {
     return realRecordsCtx.call(noReadShop.db)
   }
   const nrAfter = await noReadShop.ledger()
-  assert.ok(Array.isArray(nrAfter.records), 'getLedger 仍然回传整本流水')
-  assert.ok(sentinelReads > 0, 'getLedger 必须真的读集合，否则上面的断言不成立')
+  assert.ok(Array.isArray(nrAfter.records), '只读路径分页取得到流水')
+  assert.ok(sentinelReads > 0,
+    'getLedger / listRecords 必须真的读集合（attachRecent 的 recent + countAll 哨兵），'
+    + '否则上面「提交后一次都没读」的断言是假绿')
   noReadShop.db.recordsCtx = realRecordsCtx
 
   // -------------------------------------------------------------------------
@@ -1300,7 +1390,10 @@ function totalStock(skus, productId) {
   assert.strictEqual((await jitterShop.ledger()).products[0].stock, 94)
 
   // -------------------------------------------------------------------------
-  // 14) 超过兼容上限的店：**仍然能记账**，只是 getLedger 打不开
+  // 14) T-B4：**那道悬崖没了**。
+  //     2b-2b 之前，5000 条流水的店 getLedger 直接报「超过 2000 条」，账本
+  //     打不开、迁移完就是块砖头。删掉 COMPAT_MAX_RECORDS / readAll 之后，
+  //     同一家店必须能正常打开、能翻完、能继续记账。
   // -------------------------------------------------------------------------
   const bigShop = await new Shop({ ids: idFactory('bg') }).open('大店')
   const bigBookId = (await bigShop.db.getLedger(bigShop.shopId)).bookId
@@ -1324,36 +1417,32 @@ function totalStock(skus, productId) {
   const bigProduct = bigShop.db.ledgers[bigShop.shopId].products[0]
 
   const bigPay = await bigShop.call('addPayment', { customerId: 'bc1', amount: 2 })
-  assert.strictEqual(bigPay.recordDelta.count, 5001, '5000 条的店照样能记账')
-  const bigSale = await bigShop.call('addSale', {
+  assert.ok(bigPay.result.record, '5000 条的店照样能记账')
+  await bigShop.call('addSale', {
     payType: 'cash', items: [{ productId: bigProduct.id, qty: 1, unitPrice: 3 }]
   })
-  assert.strictEqual(bigSale.recordDelta.count, 5002)
   assert.strictEqual(bigShop.docsOfBook(bigBookId).length, 5002)
 
-  // getLedger 一次比较就报错，**不烧掉 20 次分页往返**
-  const bigRealCtx = bigShop.db.recordsCtx
-  let bigCtxCalls = 0
-  bigShop.db.recordsCtx = function () {
-    bigCtxCalls += 1
-    return bigRealCtx.call(bigShop.db)
-  }
-  await rejects(function () { return bigShop.ledger() }, /超过 2000 条/)
-  assert.strictEqual(bigCtxCalls, 0, '前置检查失败就不该再去分页')
+  // getLedger 打得开：不再有任何条数上限，回包里也不再有整本流水
+  const bigLedgerRes = await bigShop.call('getLedger', {})
+  assert.strictEqual(bigLedgerRes.ledger.records, undefined)
+  assert.strictEqual(bigLedgerRes.ledger.aggregate.count, 5002)
+  assert.ok(!bigLedgerRes.ledger.aggregatesStale, '5002 条时聚合和集合仍然对得上')
+  // recent 只回一页，不是 5002 条
+  assert.strictEqual(bigLedgerRes.ledger.recent.length, apply.RECORD_PAGE_DEFAULT)
 
-  // 前置检查失效（聚合漂移）时，硬上限仍在 readAll 里
-  bigShop.db.ledgers[bigShop.shopId] = Object.assign({}, bigShop.db.ledgers[bigShop.shopId], {
-    aggregate: Object.assign(inv.emptyTerms(), bigShop.db.ledgers[bigShop.shopId].aggregate, { count: 0 })
-  })
-  await rejects(function () { return bigShop.ledger() }, /超过 2000 条/)
-  assert.ok(bigCtxCalls > 0, '这一次必须真的走到 readAll 才报错')
-  bigShop.db.recordsCtx = bigRealCtx
+  // 翻得完：5002 条逐条等于集合
+  const bigPaged = await bigShop.pagedAll()
+  assert.strictEqual(bigPaged.length, 5002, 'T-B4：5002 条必须翻得完，不该再有 2000 条的悬崖')
+  assert.deepStrictEqual(bigPaged, bigShop.collectionAll(bigBookId))
 
   // -------------------------------------------------------------------------
   // 15) 上限边界 / off-by-one：判条数不判页数
-  //     正好 PAGE_LIMIT 的整数倍是老实现漏掉的那个点（名义 5000 实际 4999）
+  //     正好 PAGE_LIMIT 的整数倍是老实现漏掉的那个点（名义 5000 实际 4999）。
+  //     COMPAT_MAX_RECORDS / readAll 已经删了，样板只剩 suffixOfCustomer 一份。
   // -------------------------------------------------------------------------
-  assert.strictEqual(recordsModule.COMPAT_MAX_RECORDS, 2000, '兼容上限不要随手调大')
+  assert.strictEqual(recordsModule.COMPAT_MAX_RECORDS, undefined,
+    'T-B4：兼容上限已经删了，不要再加回来 —— 悬崖没了才是 2b-2 的主要收益')
   assert.strictEqual(recordsModule.SUFFIX_MAX_RECORDS, 5000, 'getSlip 倒推上限语义不同，别跟着改')
   const capBag = {}
   const capCount = recordsModule.PAGE_LIMIT   // 正好一整页
@@ -1367,9 +1456,14 @@ function totalStock(skus, productId) {
     capBag[doc._id] = doc
   }
   const capStore = recordsModule.recordStore(memory.memRecordsCtx(capBag), 'capbook', 'capshop')
-  assert.strictEqual((await capStore.readAll(capCount + 1)).length, capCount, 'cap-1 条要能读完')
-  assert.strictEqual((await capStore.readAll(capCount)).length, capCount, '正好 cap 条也要能读完')
-  await rejects(function () { return capStore.readAll(capCount - 1) }, /超过 2000 条/)
+  assert.strictEqual(capStore.readAll, undefined, 'T-B4：readAll 已经删了')
+  // 整页倍数：最后一页 0 条 + hasMore:false，游标为 ''。分页翻完仍要拿到全部。
+  const capLastPage = await capStore.page({
+    cursor: apply.makeSortKey(2000000, 'cap-0'), limit: capCount
+  })
+  assert.strictEqual(capLastPage.records.length, 0, '整页倍数时最后一页是空页')
+  assert.strictEqual(capLastPage.hasMore, false)
+  assert.strictEqual(capLastPage.cursor, '', '空页的 cursor 是 ——「直接赋值会冲回开头」的来源')
   assert.strictEqual((await capStore.suffixOfCustomer('cc1', '', capCount)).length, capCount,
     'suffixOfCustomer 同款：正好 cap 条要能读完')
   await rejects(function () {
@@ -1377,7 +1471,10 @@ function totalStock(skus, productId) {
   }, /流水太多/)
 
   // -------------------------------------------------------------------------
-  // 16) 换账套三条路的客户端缓存（clearAll / loadSeed / restoreCleared）
+  // 16) 换账套三条路（clearAll / loadSeed / restoreCleared）：分页永远只看得见
+  //     **当前账套**。2b-2b 之前这一节测的是 mergeRecordDelta 的 bookChanged
+  //     分支；delta 删掉之后，「换账套」对客户端就是「listRecords 换了一本账」，
+  //     所以直接对分页结果断言。
   // -------------------------------------------------------------------------
   const swShop = await new Shop({ ids: idFactory('sw') }).open('换账套店')
   await swShop.call('saveProduct', { name: '面包', costPrice: 5, salePrice: 10, stock: 50, alertQty: 1 })
@@ -1388,38 +1485,35 @@ function totalStock(skus, productId) {
     items: [{ productId: swLists.products[0].id, qty: 5, unitPrice: 10 }]
   })
   swLists = await swShop.ledger()
-  let swCache = swLists.records.slice()
-  assert.strictEqual(swCache.length, 1)
+  const swBefore = swLists.records.slice()
+  const swBookBefore = swLists.bookId
+  assert.strictEqual(swBefore.length, 1)
 
   const swCleared = await swShop.call('clearAll', {})
-  assert.strictEqual(swCleared.recordDelta.bookChanged, true)
-  assert.strictEqual(swCleared.recordDelta.count, 0)
-  let swMerged = apply.mergeRecordDelta(swCache, swCleared.recordDelta)
-  assert.deepStrictEqual(swMerged.records, [], 'clearAll 之后客户端缓存清空')
-  assert.strictEqual(swMerged.complete, true)
-  swCache = swMerged.records
+  assert.strictEqual(swCleared.ledger.records, undefined)
+  assert.notStrictEqual(swCleared.ledger.bookId, swBookBefore, 'clearAll = 换账套')
+  assert.deepStrictEqual(await swShop.pagedAll(), [], 'clearAll 之后当前账套翻不出流水')
 
   const swSeed = await swShop.call('loadSeed', {})
-  assert.strictEqual(swSeed.recordDelta.bookChanged, true)
-  assert.ok(swSeed.recordDelta.writes.length > 0, '种子流水随 delta 回来，零次读库')
-  swMerged = apply.mergeRecordDelta(swCache, swSeed.recordDelta)
-  assert.strictEqual(swMerged.complete, true)
-  assert.strictEqual(swMerged.records.length, swSeed.recordDelta.writes.length)
-  swCache = swMerged.records
-  assert.deepStrictEqual((await swShop.ledger()).records, swCache)
+  assert.notStrictEqual(swSeed.ledger.bookId, swCleared.ledger.bookId, 'loadSeed = 再换一本')
+  const swSeedPaged = await swShop.pagedAll()
+  assert.ok(swSeedPaged.length > 0, '种子账套翻得出流水')
+  assert.strictEqual(swSeedPaged.length, swSeed.ledger.aggregate.count,
+    '分页翻完的条数必须等于聚合里的条数')
+  assert.deepStrictEqual(swSeedPaged, swShop.collectionAll(swSeed.ledger.bookId))
 
-  // restoreCleared：writes 为空但 count > 0 -> complete=false -> 客户端自动重拉
+  // 再清一次，然后恢复：恢复的是**最近一次**清空的那本（种子账套），不是最早那本
   await swShop.call('clearAll', {})
   const swRestored = await swShop.call('restoreCleared', {})
-  assert.strictEqual(swRestored.recordDelta.bookChanged, true)
-  assert.strictEqual(swRestored.recordDelta.writes.length, 0)
-  assert.ok(swRestored.recordDelta.count > 0)
-  swMerged = apply.mergeRecordDelta([], swRestored.recordDelta)
-  assert.strictEqual(swMerged.complete, false, '恢复出来的流水不在 delta 里，必须重拉')
-  // 重拉：getLedger 对「完整」有最终解释权
-  const swRefilled = (await swShop.ledger()).records
-  assert.strictEqual(swRefilled.length, swRestored.recordDelta.count)
-  assert.deepStrictEqual(swRefilled, swCache, '恢复回来的就是 clear 之前那一份')
+  assert.strictEqual(swRestored.ledger.bookId, swSeed.ledger.bookId,
+    '恢复 = 指针指回最近一次清空前的那本')
+  assert.notStrictEqual(swRestored.ledger.bookId, swBookBefore)
+  const swRefilled = await swShop.pagedAll()
+  assert.strictEqual(swRefilled.length, swRestored.ledger.aggregate.count)
+  assert.deepStrictEqual(swRefilled, swSeedPaged, '恢复回来的就是 clear 之前那一份')
+  // 最早那本一条都没被动过：清空只是换指针，O(1)
+  assert.deepStrictEqual(swShop.collectionAll(swBookBefore), swBefore,
+    '换账套不许碰老账套里的流水')
 
   // -------------------------------------------------------------------------
   // 17) apiVersion 门：老客户端拿到不带流水的回传会把缓存清空并印 0.00 的前欠，
@@ -1437,8 +1531,10 @@ function totalStock(skus, productId) {
       payType: 'cash', items: [{ productId: verProduct.id, qty: 1, unitPrice: 2 }]
     })
   }, /请更新小程序/)
+  await rejects(function () { return verShop.callRaw('listRecords', {}) }, /请更新小程序/)
+  await rejects(function () { return verShop.callRaw('getRecord', { recordId: 'x' }) }, /请更新小程序/)
   // 挡住之后一笔账都没记
-  assert.strictEqual((await verShop.ledger()).records.length, 0)
+  assert.strictEqual((await verShop.pagedAll()).length, 0)
   // 不回传账本的 action 必须放行，否则老客户端连店都列不出来
   assert.ok((await verShop.callRaw('whoami', {})).openid)
   assert.ok((await verShop.callRaw('listShops', {})).shops)
@@ -1482,7 +1578,9 @@ function totalStock(skus, productId) {
   }
   const winLists = (await winCall('getLedger')).ledger
   assert.strictEqual(winLists.recordsPendingMigration, true)
-  const winLegacy = winLists.records
+  assert.strictEqual(winLists.records, undefined,
+    'T-B2：迁移窗口内的店同样不许回传整本流水')
+  const winLegacy = await pagedAllVia(winCall)
   assert.strictEqual(winLegacy.length, 3)
   assert.deepStrictEqual(winLists.totals, inv.summarizeRecords(winLegacy),
     '迁移窗口内 totals 必须等于对 legacy 数组的全量折叠，不能回传全 0')
@@ -1543,13 +1641,12 @@ function totalStock(skus, productId) {
   // 2b-2-pagination-design-2026-08-23.md §五 的 T-A1..T-A8。
   // -------------------------------------------------------------------------
 
-  // T-A3：分页翻完 == readAll == getLedger 回的 records —— 2b-2a 是唯一能同时
-  // 拿到「整本的答案」和「分页的答案」的时刻，2b-2b 停发整本之后这个 oracle 就没了。
+  // T-A3（2b-2b 改造）：整本回传那个 oracle 已经没了 —— getLedger 不再回
+  // records，readAll 也删了。换成**不经过查询层**的文档袋作参照物，仍然是三方
+  // 对照：recordStore.page（集合查询）/ listRecords（完整云函数栈）/ 文档袋。
   const a3Ledger = await shop.ledger()
+  const a3Truth = shop.collectionAll(a3Ledger.bookId)
   const a3Store = recordsModule.recordStore(shop.db.recordsCtx(), a3Ledger.bookId, shop.shopId)
-  const a3ReadAll = await a3Store.readAll()
-  assert.deepStrictEqual(a3ReadAll, a3Ledger.records,
-    'T-A3：readAll 必须逐条等于 getLedger 回的整本 records')
   const a3StorePaged = []
   let a3StoreCursor = ''
   for (;;) {
@@ -1558,8 +1655,8 @@ function totalStock(skus, productId) {
     if (!got.hasMore) break
     a3StoreCursor = got.cursor
   }
-  assert.deepStrictEqual(a3StorePaged, a3Ledger.records,
-    'T-A3：recordStore.page 分页翻完必须逐条等于整本 records')
+  assert.deepStrictEqual(a3StorePaged, a3Truth,
+    'T-A3：recordStore.page 分页翻完必须逐条等于集合')
   const a3ListPaged = []
   let a3ListCursor = ''
   for (;;) {
@@ -1568,9 +1665,10 @@ function totalStock(skus, productId) {
     if (!listRes.hasMore) break
     a3ListCursor = listRes.cursor
   }
-  assert.deepStrictEqual(a3ListPaged, a3Ledger.records,
-    'T-A3：listRecords 分页（走完整云函数栈）翻完也必须逐条等于整本 records')
-  console.log('T-A3：分页翻完 / readAll / getLedger 整本，' + a3Ledger.records.length + ' 条三方一致')
+  assert.deepStrictEqual(a3ListPaged, a3Truth,
+    'T-A3：listRecords 分页（走完整云函数栈）翻完也必须逐条等于集合')
+  console.log('T-A3：recordStore.page / listRecords / 集合文档袋，'
+    + a3Truth.length + ' 条三方一致')
 
   // T-A2：pageRecords（纯函数）== recordStore.page（集合查询），本步骤的核心
   // 交付物。{type}×7 × {customerId}×3 × {limit}×4 的笛卡尔积逐页翻完，逐字段
@@ -1660,6 +1758,33 @@ function totalStock(skus, productId) {
   }
   assert.strictEqual(a2Combos, a2Types.length * a2Customers.length * a2Limits.length)
   console.log('T-A2：pageRecords 与 recordStore.page 笛卡尔积等价性通过，' + a2Combos + ' 组合全部逐页核对')
+
+  // T-B7：pageRecords 的 type 语义必须和 filterRecords 逐条一致。
+  //
+  // 为什么单列一条：2b-2b 之前流水页用的是 filterRecords（本地过滤整本），
+  // 之后换成 listRecords 的 type 参数。两处对 'adjust' 的理解一旦分叉
+  // （一个认 adjust_in/adjust_out 两种、另一个只认字面量 'adjust'），
+  // 「调整」这个 chip 会静默变成空列表，而没有任何断言会红。
+  const b7Types = ['all', 'in', 'out', 'pay', 'return', 'convert', 'adjust',
+    'adjust_in', 'adjust_out', 'opening']
+  b7Types.forEach(function (type) {
+    const viaFilter = inv.filterRecords(pgFull, type).map(function (item) {
+      return item.id
+    }).sort()
+    const viaPage = []
+    let cursor = ''
+    for (let round = 0; round < 1000; round++) {
+      const got = apply.pageRecords(pgFull, { type: type, cursor: cursor, limit: 100 })
+      got.records.forEach(function (item) { viaPage.push(item.id) })
+      if (!got.hasMore) break
+      cursor = got.cursor
+    }
+    assert.deepStrictEqual(viaPage.sort(), viaFilter,
+      'T-B7：type=' + type + ' 时 pageRecords 和 filterRecords 的口径必须一致')
+  })
+  // 语料真的覆盖到了「调整」这两种，否则上面那条 adjust 是空对空
+  assert.ok(inv.filterRecords(pgFull, 'adjust').length > 0,
+    'T-B7 语料必须含 adjust_in / adjust_out，否则 adjust 那条断言没有意义')
 
   // T-A4：listRecords({customerId}) 翻完 == summarizeCustomerAccount(all, cid).ledger
   // 把 F18（只有 out/pay/return/opening 带 customerId）的推导钉成可执行断言。

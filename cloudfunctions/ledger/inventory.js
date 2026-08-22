@@ -2424,49 +2424,39 @@ function deleteRecord(products, records, id, now, skus, ctx) {
   }
 }
 
-function getDashboard(products, records, now, skus, totals) {
-  const start = startOfDay(now)
-  const todayOut = records.filter(function (item) {
-    return item.type === 'out' && item.createdAt >= start
-  })
-  const todayReturn = records.filter(function (item) {
-    return item.type === 'return' && item.createdAt >= start
-  })
-  const todayIn = records.filter(function (item) {
-    return item.type === 'in' && item.createdAt >= start
-  })
+// 2b-2b：首页看板不再吃「整本流水」。
+//
+//   recent —— 服务端按 sortKey 倒序给的**一页**，只用来列「最近流水」。
+//   today  —— 服务端按客户端给的 dayStart 现算的今日三项（todayTotals），
+//             算不出来时传 null，页面显示「—」而**不是 0**（0 是会被当真的错数）。
+//   totals —— accounts / aggregate 的投影，全店欠款的唯一来源。
+//
+// **不再有 getTotalReceivable(records) 兜底**：分页之后 records 只剩一页，
+// 兜底会算出一个偏小的欠款，比没有更糟。
+//
+// now 留在签名里只为调用点稳定：今日的口径已经整个搬到服务端（它拿的是客户端
+// 给的 dayStart），这里一个时间判断都不做了。
+function getDashboard(products, recent, now, skus, totals, today) {
   const alerts = products.filter(function (item) {
     return isLowStock(item, skus)
   }).sort(function (a, b) {
     return a.stock - b.stock
   })
+  const todayAvailable = !!today
 
   return {
     productCount: products.length,
     totalStock: round2(products.reduce(function (sum, item) {
       return sum + toNumber(item.stock)
     }, 0)),
-    todaySalesAmount: round2(
-      todayOut.reduce(function (sum, item) {
-        return sum + toNumber(item.amount)
-      }, 0) - todayReturn.reduce(function (sum, item) {
-        return sum + toNumber(item.amount)
-      }, 0)
-    ),
-    todayProfit: round2(
-      todayOut.reduce(function (sum, item) {
-        return sum + toNumber(item.profit)
-      }, 0) + todayReturn.reduce(function (sum, item) {
-        return sum + toNumber(item.profit)
-      }, 0)
-    ),
-    todayInAmount: round2(todayIn.reduce(function (sum, item) {
-      return sum + toNumber(item.amount)
-    }, 0)),
-    totalReceivable: totals ? totals.receivable : getTotalReceivable(records),
+    todayAvailable: todayAvailable,
+    todaySalesAmount: todayAvailable ? today.salesAmount : null,
+    todayProfit: todayAvailable ? today.profit : null,
+    todayInAmount: todayAvailable ? today.inAmount : null,
+    totalReceivable: totals ? totals.receivable : 0,
     alertCount: alerts.length,
     alerts: alerts,
-    recent: records.slice(0, 10)
+    recent: (recent || []).slice(0, 10)
   }
 }
 
@@ -2474,7 +2464,12 @@ function getDashboard(products, records, now, skus, totals) {
 // 用 cents/yuan 累加（recordTerms 那一套整数分算法），不用 round2 反复叠加浮点 ——
 // 理由和 recordTerms 顶部注释一致：金额都是 round2() 的输出，先转分再累加与先
 // 累加再 round2 在这类输入上必然同解；不这样做就会重演那条已钉住的浮点分歧。
-// 2b-2a 只新增这个纯函数，不接进 getDashboard（那是 2b-2b 的事，见方案 §3.4）。
+// 2b-2b 起 getDashboard 的今日三项就来自这里（服务端算，客户端一行都不算）。
+//
+// **存量亚分金额的店，首页数字会跳一次**：老 getDashboard 用 round2 浮点累加，
+// 这里用整数分累加，在亚分金额上必然分岔（1000 × 0.001 → 老 1 新 0；
+// 2 × 0.005 → 老 0.02 新 0.01）。这是仓库里已钉住的 D2 分歧，方案有意选了
+// 分口径；迁移预检要顺带查一遍哪些店有亚分金额。
 function todayTotals(records, dayStart) {
   const start = toNumber(dayStart)
   let salesCents = 0

@@ -14,28 +14,39 @@
 - 身份：云函数里的 `OPENID`，不做额外登录，也不做邀请码。
 - 租户：每条账带 `shopId`。先查 `members`，不是该店成员直接拒绝。
 - 写：进货 / 销售 / 退货 / 改规格 / 库存调整 / 改档都走 `ledger` 的 `action`（库存调整是 `addAdjust`）。函数里用现有 [`utils/inventory.js`](../utils/inventory.js)，在**事务回调中重新读取** `ledgers` 文档再计算再写回。
-- 读：云函数按店返回整本账；小程序内存 + `wx.storage` 只做缓存，不是权威来源。
+- 读：`getLedger` 返回**四张有界的表**（商品 / SKU / 客户 / 种类）+ **聚合投影**（`totals` / `customers[].account`）+ **最近一页流水** `recent` + **今日三项** `today`。流水一律分页取，`listRecords` 是唯一入口；按 id 打开某一张单走 `getRecord`。小程序内存 + `wx.storage` 只做缓存，不是权威来源。**客户端没有流水全集**，任何列表都是服务端取的一页。
+  - `recent` 和 `today` 是按客户端给的 `dayStart` 现算的**读时投影**，不落库、不冻结。它们和被否掉的 `receivableSnapshot` 不是一回事：投影的定义永远是「当前流水集合的折叠」，任意时刻有唯一正确值；冻结字段存的是另一个量。
 - 流水形状：`records[]` **一张单一条记录**，明细在 `lines[]`。单头只放跨行共享的东西（客户、结算方式、备注、经手人、时间、单级汇总 `amount`/`profit`），其余一律进 `lines`。收款和期初没有明细，`lines` 为空、金额在单头。进货 / 改规格 / 库存调整是单行单，用 `lines[0]`。
   - `lines[].allocations` 必须**逐行保留**（这一行是从哪个规格格、还是从待加工扣的货）。「退货原样入库」完全依赖它，不要拍平或丢弃。
   - 已退数量记在销售行的 `lines[].returnedQty` 上，不要扫全表数退货记录。新增退货要加、删退货要减、改退货数量要同步改，三条路径都要双向一致。
   - 一张退货单只能退同一张销售单。退货单头的客户和结算方式继承自被退销售单，跨单无法定义单头。
   - 老的按行流水由 `migrateRecordShape` 在 `legacyRecordsOf` 里**读时自愈**，不需要迁移脚本。**`listsOf` 不碰流水**（它只出四张表和聚合投影），`legacyRecordsOf` 只在「这本账还没搬进 `ledger_records`」时被兼容读和 `migrateLocal` 调到；同一本账的写路径已经被 `assertRecordsReady` 挡住，不会出现一半在数组一半在集合。**只有 `out` 按 `orderId || id` 归并，其余每条各自成单**——老退货记录和被退销售单共享同一个 `orderId`，一起归并会把退货并进销售单。
-- 送货单欠款：一律用 `receivableAt` 按**当前流水**、按单据时间截断现算。**不要加冻结欠款的字段。** 同一客户的送货单按时间排开，「合计欠款」必须构成一条连续余额线、末端等于该客户当前欠款；写入时冻结的值在改 / 删更早的记录后会制造一个不出现在任何单据上的断点，客户拿单据对账时对不上。
-- 聚合值：账本文档里存的是**累加器**（`accounts` 每个客户一份、`aggregate` 全店一份，单位分），回传给客户端的 `customers[].account`（销售单数 / 销售额 / 赊账 / 已收 / 欠款）和 `totals`（全店销售额 / 进货额 / 毛利 / 欠款 / 流水数）是它们的投影，见 [`ledger-apply.js`](../utils/ledger-apply.js) 的 `withAggregates`。**客户端要算「当前」的钱一律读这两个字段，不要自己遍历流水缓存现算**——流水缓存可能残缺（记账后的 delta 合并条数对不上、重拉又失败），现算出来是一个偏小的欠款；`account` / `totals` 是服务端权威值，任何时候都是对的。客户页的欠款和累计销售、销售页的客户欠款、送货单上的「本次前欠」都走这条。唯一算不出来的是「**截断到某张老单据时刻**的欠款」（重印老送货单要按当时的账），那要按时间倒推流水，只能走 `store.recordsForMoney()`——**缓存不完整就报错、不打单**，宁可打不出单，也不能在客户手上的单据上印一个错数。
+- 送货单欠款：一律按**当前流水**、按单据时间截断现算，**在服务端**（`getSlip`；未迁移的老账本走 `receivableAt`，迁完的走「当前欠款 − 后缀」，两条路的等价性由 `tests/ledger-records.test.js` 钉住）。**不要加冻结欠款的字段。** 同一客户的送货单按时间排开，「合计欠款」必须构成一条连续余额线、末端等于该客户当前欠款；写入时冻结的值在改 / 删更早的记录后会制造一个不出现在任何单据上的断点，客户拿单据对账时对不上。
+- 聚合值：账本文档里存的是**累加器**（`accounts` 每个客户一份、`aggregate` 全店一份，单位分），回传给客户端的 `customers[].account`（销售单数 / 销售额 / 赊账 / 已收 / 欠款）和 `totals`（全店销售额 / 进货额 / 毛利 / 欠款 / 流水数）是它们的投影，见 [`ledger-apply.js`](../utils/ledger-apply.js) 的 `withAggregates`。**客户端要算「当前」的钱一律读这两个字段**——分页之后客户端手上只有一页流水，拿它现折出来的必然是一个偏小的欠款；`account` / `totals` 是服务端权威值，任何时候都是对的。客户页的欠款和累计销售、销售页的客户欠款、流水页的汇总四项都走这条。
+  - 「**截断到某张老单据时刻**的欠款」（重印老送货单要按当时的账）**唯一的算法在服务端 `getSlip`**：用当前欠款减去该单之后的后缀（`suffixOfCustomer`，上限 `SUFFIX_MAX_RECORDS` 5000 条，超了报错不给数）。**客户端没有任何流水全集，因此也没有任何现算钱的路径**——这条由 `tests/no-client-cloud-db.test.js` 的**结构禁令**保证（正则扫 `pages/`，禁止 `summarizeCustomerAccount` / `receivableAt` / `getTotalReceivable` / `summarizeRecords` / `computeTotals` / `foldAccountTerms` / `foldTotalTerms` / `totalsOf`，`accountOf` 只允许 `accountOf(null)` 这个空账户构造器），**不再靠运行时守卫**。守卫要求调用者记得调它，结构禁令不给写错的机会。
+  - 客户端拿到 `getSlip` 的回包必须挑剔到 `typeof receivable === 'number'`：`null` / 缺字段走 `Number()` 都会变成 0，而 0.00 的前欠会被当成「这个客户不欠钱」印在单据上。**算不出当时欠款就不开单**，宁可打不出单。
   - **2b-1 起累加器由 `applyTermsDelta` 增量维护**，不再每次由 `records` 全量重折叠（流水已经不在账本文档里了，想全量重折叠就得读集合，那是无界 IO）。所以**漂移是可能发生的**，别再说「不可能漂移」。
   - **这和被推翻的 `receivableSnapshot` 不是一回事，两个结论不能互相套用。** `receivableSnapshot` 冻结的是「T 时刻的流水集合在 T 时刻的折叠」，而送货单要印的是「**当前**流水集合截断到 T 时刻的折叠」——那从来就是两个量，改一条更早的流水，冻结值就再也对不上任何一张单据。`accounts` / `aggregate` 的定义是「**当前**流水集合的全量折叠」，任意时刻有唯一正确值，增量只是计算方式，**它是真正的缓存**。不要拿 `receivableSnapshot` 的结论否掉这里的增量维护，也不要拿这里的增量维护给下一个冻结字段背书。
-  - 靠什么发现漂移：① `tests/ledger-records.test.js` 的 3000 步随机记账守门员，每步比对增量结果与集合全量折叠，**漏调 `applyTermsDelta` 会当场挂**；② 运行时 `attachRecords` 的 `aggregatesStale` 哨兵，`getLedger` 时比对 `aggregate.count` 和集合 `count()`，对不上就在回包里标记并 `console.warn`——只报告不阻断，因为那是读路径。常规记账路径不会漂（流水写和聚合写在同一个事务里），会漂的是带外增删和非原子的批量导入。
+  - 靠什么发现漂移：① `tests/ledger-records.test.js` 的 3000 步随机记账守门员，每步比对增量结果与集合全量折叠，**漏调 `applyTermsDelta` 会当场挂**；② 运行时 `attachRecent` 的 `aggregatesStale` 哨兵，`getLedger` 时比对 `aggregate.count` 和集合 `count()`，对不上就在回包里标记并 `console.warn`——只报告不阻断，因为那是读路径。`attachRecords` 在 2b-2 删掉之后，这个哨兵只剩 `attachRecent` 一份，**它是唯一的防线，不要顺手删掉那次 `count()`**。常规记账路径不会漂（流水写和聚合写在同一个事务里），会漂的是带外增删和非原子的批量导入。
   - 怎么修：用集合里当前账套的全部记录重新 `foldAccountTerms` / `foldTotalTerms`，写回账本文档。**这个动作现在还没实现**，真的漂了要先补一个 `recomputeAggregates`。
   - 还没迁移的老账本没有这两个字段，`cloneTerms` 只会把它补成空累加器 —— 那样全店金额和每个客户的欠款会一路回传成 0，而 `getSlip` 走 `receivableAt` 算得对，同一笔钱在送货单上印 200、在客户页显示 0。所以 `publicListsOf` 的 `recordsPending` 分支必须拿刚自愈出来的老数组现折一次（`foldAccountTerms` / `foldTotalTerms`），数组已经在内存里，零额外 IO。
-- **事务提交之后不允许有任何可能失败的 IO。** 回传要用的东西必须在事务里备齐。提交后再报一次错，客户端看到的是「记账失败」，店员会再点一次，账就记两遍。结构上靠签名保证：`publicListsOf(shopId, doc)` 是纯内存函数、**签名里没有 db**，记账返回处只准调它；唯一会读 `ledger_records` 的 `attachRecords(db, ...)` 只准从只读 action 调。记账回传给客户端的是 `recordDelta`（服务端往集合里写什么，客户端就往缓存里合什么），由纯函数 `mergeRecordDelta` 合并、按**条数**判完整。
-- 兼容期 `getLedger` 整本回传的上限是 **2000 条**（`COMPAT_MAX_RECORDS`），**超了报错不截断**。截断等于悄悄少给一批流水，送货单欠款会错。上限判**条数**不判页数：`hasMore = docs.length >= limit` 在总数正好是整页倍数时恒为真，按页数判会把「正好 N 条」也算成超限。`getSlip` 的 `SUFFIX_MAX_RECORDS` 是另一个量（倒推走多远，与返回包无关），值 5000，但同一个 off-by-one 用同样写法修。不要靠调大 `COMPAT_MAX_RECORDS` 硬撑：它同时是「哪些店可以在分页版本之前迁移」的判据。
-- 小程序调云函数**必须带 `apiVersion`**；服务端对会回传账本的 action（`getLedger` / `getSlip` / `migrateLocal` 和所有记账）设门，版本低就报「请更新小程序到最新版本」。老客户端拿到不带流水的回传会把本地缓存清空，下一张送货单印出 0.00 的前欠 —— 静默印错钱不可接受。`whoami` / `listShops` / `createShop` / `listMembers` 放行，否则老客户端连店都列不出来。上线顺序：先发小程序、逐店确认已更新，再部署云函数。
+- **事务提交之后不允许有任何可能失败的 IO。** 回传要用的东西必须在事务里备齐。提交后再报一次错，客户端看到的是「记账失败」，店员会再点一次，账就记两遍。结构上靠签名保证：`publicListsOf(shopId, doc, opts)` 是纯内存函数、**签名里没有 db**（`opts` 只是 `{dayStart, recentLimit}` 这样的纯数据），记账返回处只准调它；唯一会读 `ledger_records` 的 `attachRecent(db, ...)` 只准从只读 action 调。**记账回传只有四张表 + 聚合投影，一条流水都没有**——2b-2 起也不再有 `recordDelta`：分页之后客户端每个列表都是服务端取的、每个金额都来自 `accounts` / `totals` 投影，delta 零消费者，留着一个没人用的算钱字段就是给下一个人留坑。记账之后客户端只把本地的 `dataVersion` 标脏，页面 `onShow` 时再决定要不要重取，**不在提交之后再发一次可能失败的请求**。
+- 分页协议（`listRecords`）：
+  - 入参 `{ type?, customerId?, cursor?, limit? }`，返回 `{ records[], cursor, hasMore }`，`sortKey` 倒序。
+  - `limit` 由纯函数 `apply.clampPageLimit` 钳到 `[1, 100]`，缺省 20。集合查询、未迁移老账本的内存切片、小程序内存模式**三处用同一份定义** `apply.pageRecords`，等价性由 `tests/ledger-records.test.js` 的 T-A2 逐字段钉住。
+  - `hasMore = 本页条数 >= limit`：总数正好是整页倍数时最后一页是 **0 条 + `hasMore: false`**。判条数不判页数，按页数判会把「正好 N 条」也算成还有下一页。
+  - **本页为空时 `cursor` 返回 `''`**。客户端直接赋值会把游标冲回开头、从第一页重来（整页倍数时必然踩到），正确写法是 `res.cursor || 手上那个`。
+  - **`type` 与 `customerId` 不能同时非默认**（`type: 'all'` 不算非默认）：`recordStore.page` 代码上支持同时筛，但没有 `bookId + type + customerId + sortKey` 索引，那会变成一条**无索引查询**——10 条数据上飞快，10000 条上超时。在 API 边界显式报错，宁可报一条明确的错，也不要发一条会随数据量退化的查询。内存模式也照样拒绝，别让它变成「开发者工具里好好的，一上线就超时」。
+  - **不回 `total`**：流水页的「全部 N」用 `getLedger` 的 `totals.count`（零查询），其余 chip 和客户页都不显示条数。
+  - **没有条数上限**。2b-2 之前 `getLedger` 整本回传卡在 2000 条（`COMPAT_MAX_RECORDS`），超了报错、账本直接打不开；分页之后这道悬崖不存在了，这是 2b-2 的主要收益，**不要再加回来**。`getSlip` 的 `SUFFIX_MAX_RECORDS`（5000）是另一个量——倒推走多远、与返回包无关——它现在是仓里唯一一份「有界循环判条数不判页数」的样板，下一个写这种循环的人照着它写。
+- 小程序调云函数**必须带 `apiVersion`**；服务端对会回传账本或流水的 action（`getLedger` / `getSlip` / `listRecords` / `getRecord` / `migrateLocal` 和所有记账）设门，版本低就报「请更新小程序到最新版本」。`whoami` / `listShops` / `createShop` / `listMembers` 放行，否则老客户端连店都列不出来。
+  - **上线顺序：先部署云函数，再发布小程序**（和 2b-1 定的相反）。理由：2b-2 之前新客户端对老云函数是前向容忍的（老云函数照旧回传整本 `ledger.records`，客户端走整份替换分支）；2b-2 之后这条容忍没了——新客户端要调 `listRecords` / `getRecord`，老云函数会回「未知操作」，流水页直接空白。保住它就得在客户端保留整本缓存 + 本地分页，而那正是这一步要删的。所以只能反过来：① 部署云函数（此刻起老客户端撞 `apiVersion` 门，报「请更新小程序到最新版本」——设计好的响亮失败）→ ② 逐店跑流水迁移 → ③ 发布小程序新版并逐店确认已更新。②③ 之间店里是「老客户端被挡住」的状态，**必须打烊后一口气做完**。配 `wx.getUpdateManager` 冷启动提示更新。
 - 扣账内核只有一份。云函数不能 `require('../../utils/inventory')`，用 `npm run sync:ledger-inventory` 复制到 `cloudfunctions/ledger/`。`npm test` 会在两份不一致时失败。
 - 环境 ID 写在 [`utils/cloud-config.js`](../utils/cloud-config.js) 的 `CLOUD_ENV_ID`，必须等于开发者工具「云开发 → 设置」里的那一串（微信侧）。腾讯云控制台里另一套环境填进来会报 Environment not found。空着不能记账，也不要用客户端 `DYNAMIC_CURRENT_ENV` 代替填写。
 - 集合：`shops`、`members`、`ledgers`、`ledger_records`、`ledger_clears`。前四张是当前店账；`ledger_clears` 保存每一次清空的完整快照，不回传给小程序。
   - `ledger_records` 是 2b-1 从 `ledgers.records` 数组里拆出来的**当前流水表**，一单一条文档，`_id` = `bookId_recordId`，排序键 `sortKey` = `pad13(createdAt)_id`。账本文档里的 `records` 数组只剩没迁移的老店在用，迁完就是空的。
   - 它需要 **6 条索引**，定义和用途写在 [`cloudfunctions/ledger/ledger-records.js`](../cloudfunctions/ledger/ledger-records.js) 顶部注释里，和这里必须一致。全部避开数组字段：
-    1. `bookId` ASC, `sortKey` DESC —— `page` / `readAll`
+    1. `bookId` ASC, `sortKey` DESC —— `page` / `recentAndToday`
     2. `bookId` ASC, `customerId` ASC, `sortKey` DESC —— `page(customerId)` / `suffixOfCustomer`
     3. `bookId` ASC, `type` ASC, `sortKey` DESC —— `page(type)`
     4. `bookId` ASC, `saleOrderId` ASC —— 查一张销售单的退货
@@ -82,3 +93,7 @@
 - 迁移老流水时把非 `out` 记录也按 `orderId` 归并。老退货和被退销售单共享 `orderId`，会被并成一张单。
 - 在事务提交之后再读一次库来拼回传。也不要把「找不到被退销售行」吞成 `sale = null` 放行：可退上限和 `returnedQty` 同步会双双被跳过，改一下退货数量就能凭空入库、把退货单金额抬到任意值。
 - 分片上传时把退货单和它的被退销售单切到两片里。`legacyLine()` 对老退货行写死 `saleOrderId = ''`，只有 `backfillReturnedQty` 在**同一批**里找到被退销售单才补得上。
+- 在页面里从流水现算钱。客户端手上只有一页，折出来必然偏小，而偏小的欠款会被印在客户手上的单据上。`tests/no-client-cloud-db.test.js` 的结构禁令会挡住，别绕过它。
+- 给 `listRecords` 放开「同时按类型和客户筛」。代码上跑得通，但那是一条无索引查询，条数一多就超时。
+- 客户端把「今日三项算不出来」显示成 0。**要显示「—」**：0 是会被当真的错数，店主会拿它当今天真的没卖出东西。
+- 记账之后再顺手拉一次流水。提交之后每多一次可能失败的请求，就多一次「账记上了却报失败」的机会；标脏就够了。

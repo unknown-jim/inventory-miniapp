@@ -123,7 +123,13 @@ const sameDaySale = sale(sameDayPurchase.products, sameDayPurchase.records, {
   qty: 4,
   unitPrice: 4.5
 }, now - 1800000, 'r-day-out')
-const dashboard = inv.getDashboard(sameDaySale.products, sameDaySale.records, now)
+// T-B6：2b-2b 起 getDashboard 的签名是 (products, recent, now, skus, totals, today)。
+// 今日三项不再由它从整本流水现折 —— 那是服务端按客户端给的 dayStart 算好的
+// todayTotals 投影，这里把同一份纯函数当语料喂进去，口径一致。
+const dashboard = inv.getDashboard(
+  sameDaySale.products, sameDaySale.records, now, undefined, null,
+  inv.todayTotals(sameDaySale.records, inv.startOfDay(now))
+)
 assert.strictEqual(dashboard.productCount, 1)
 assert.strictEqual(dashboard.totalStock, 11)
 assert.strictEqual(dashboard.todaySalesAmount, 18)
@@ -261,10 +267,24 @@ assert.strictEqual(inv.summarizeCustomerAccount(opened.records, 'c-open').amount
 assert.strictEqual(inv.getTotalReceivable(opened.records), 80)
 assert.strictEqual(purchased.products[0].stock, 15)
 
-const openDash = inv.getDashboard(purchased.products, opened.records, now)
+const openDash = inv.getDashboard(
+  purchased.products, opened.records, now, undefined,
+  inv.summarizeRecords(opened.records),
+  inv.todayTotals(opened.records, inv.startOfDay(now))
+)
 assert.strictEqual(openDash.todaySalesAmount, 0)
 assert.strictEqual(openDash.todayProfit, 0)
 assert.strictEqual(openDash.totalReceivable, 80)
+// totals 缺席时不再有 getTotalReceivable(records) 兜底：分页之后 records 只剩
+// 一页，兜底会算出一个偏小的欠款 —— 比没有更糟，所以给 0 并让 today 为 null
+const noTotalsDash = inv.getDashboard(purchased.products, opened.records, now)
+assert.strictEqual(noTotalsDash.totalReceivable, 0,
+  'T-B6：没有 totals 就不许现折欠款')
+assert.strictEqual(noTotalsDash.todayAvailable, false)
+assert.strictEqual(noTotalsDash.todaySalesAmount, null,
+  'T-B6：今日三项算不出来给 null，页面显示「—」而不是 0')
+assert.strictEqual(noTotalsDash.todayProfit, null)
+assert.strictEqual(noTotalsDash.todayInAmount, null)
 
 const openPaid = inv.applyPayment(opened.records, {
   customerId: 'c-open',
@@ -368,7 +388,10 @@ assert.strictEqual(inv.receivableAt(multi.records, 'c1', multi.order.createdAt),
 
 assert.strictEqual(inv.orderProductTitle(multi.order.lines), '纯牛奶、全麦面包')
 assert.strictEqual(inv.summarizeCustomerAccount(multi.records, 'c1').count, 1)
+// recent 现在是服务端给的一页，getDashboard 只做 slice(0,10)
 assert.strictEqual(inv.getDashboard(multi.products, multi.records, 9100).recent[0].lines.length, 2)
+assert.strictEqual(inv.getDashboard(multi.products, undefined, 9100).recent.length, 0,
+  'T-B6：没有 recent 时不许炸，给空列表')
 
 const cookie = inv.createProduct({
   name: '苏打饼干',
@@ -941,7 +964,8 @@ const adjPlainSkus = inv.applyProductSkus(adjPlain, [], null, 20000, idFactory()
 assert.ok(!Object.prototype.hasOwnProperty.call(adjPlainSkus, 'records'))
 
 const beforeAdjSummary = inv.summarizeRecords([])
-const beforeAdjDash = inv.getDashboard([adjPlain], [], 20000, [])
+const beforeAdjDash = inv.getDashboard([adjPlain], [], 20000, [],
+  inv.summarizeRecords([]), inv.todayTotals([], inv.startOfDay(20000)))
 const adjIn = inv.applyAdjust([adjPlain], [], {
   productId: 'p-adj',
   direction: 'in',
@@ -964,7 +988,9 @@ assert.strictEqual(afterAdjSummary.purchaseAmount, beforeAdjSummary.purchaseAmou
 assert.strictEqual(afterAdjSummary.salesAmount, beforeAdjSummary.salesAmount)
 assert.strictEqual(afterAdjSummary.profit, beforeAdjSummary.profit)
 assert.strictEqual(afterAdjSummary.receivable, beforeAdjSummary.receivable)
-const afterAdjDash = inv.getDashboard(adjIn.products, adjIn.records, 20010, adjIn.skus)
+// 不变量 4 在看板这一层：库存调整只改件数，今日三项和欠款一点不动
+const afterAdjDash = inv.getDashboard(adjIn.products, adjIn.records, 20010, adjIn.skus,
+  inv.summarizeRecords(adjIn.records), inv.todayTotals(adjIn.records, inv.startOfDay(20010)))
 assert.strictEqual(afterAdjDash.todayInAmount, beforeAdjDash.todayInAmount)
 assert.strictEqual(afterAdjDash.todaySalesAmount, beforeAdjDash.todaySalesAmount)
 assert.strictEqual(afterAdjDash.todayProfit, beforeAdjDash.todayProfit)

@@ -9,6 +9,8 @@ Page({
     todaySalesAmount: '0.00',
     todayProfit: '0.00',
     todayInAmount: '0.00',
+    // 今日三项算不出来时显示「—」而不是 0：0 是会被当真的错数
+    todayAvailable: true,
     totalReceivable: '0.00',
     hasReceivable: false,
     alertCount: 0,
@@ -35,6 +37,7 @@ Page({
         todaySalesAmount: '0.00',
         todayProfit: '0.00',
         todayInAmount: '0.00',
+        todayAvailable: true,
         totalReceivable: '0.00',
         hasReceivable: false,
         alertCount: 0,
@@ -58,6 +61,10 @@ Page({
       })
       return
     }
+    // 今日三项和最近流水是服务端按 dayStart 现算的读时投影：记过账就过期，
+    // 跨了午夜也过期。refreshIfStale 自己判断要不要重取，**失败也不抛** ——
+    // 显示旧数据好过白屏，下一次 ensureReady 会诚实报错。
+    await store.refreshIfStale()
     this.setData({
       blocked: false,
       blockedMessage: '',
@@ -74,9 +81,10 @@ Page({
       dateText: util.formatDate(Date.now()),
       productCount: dash.productCount,
       totalStock: dash.totalStock,
-      todaySalesAmount: util.money(dash.todaySalesAmount),
-      todayProfit: util.money(dash.todayProfit),
-      todayInAmount: util.money(dash.todayInAmount),
+      todayAvailable: dash.todayAvailable,
+      todaySalesAmount: dash.todayAvailable ? util.money(dash.todaySalesAmount) : '—',
+      todayProfit: dash.todayAvailable ? util.money(dash.todayProfit) : '—',
+      todayInAmount: dash.todayAvailable ? util.money(dash.todayInAmount) : '—',
       totalReceivable: util.money(dash.totalReceivable),
       hasReceivable: dash.totalReceivable > 0,
       alertCount: dash.alertCount,

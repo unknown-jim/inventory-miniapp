@@ -93,27 +93,11 @@ function withSlipView(order, receivable, products, shopName) {
   }
 }
 
-function withSlipViewFromRecord(records, record, products, shopName) {
-  if (!record || record.type !== 'out') {
-    throw new Error('不是销售流水')
-  }
-  // 欠款一律按当前流水重算：改/删更早的记录后，重印的送货单必须跟账面对得上。
-  // 写入时冻结的快照做不到（见 2a 审计 B1），所以不存这个字段。
-  // 2b 之后 records 不再整份在内存里，这个调用点必须换成云函数按客户查一段流水再算。
-  const list = records || []
-  const missing = record.customerId && !list.some(function (item) {
-    return item.id === record.id
-  })
-  if (missing) {
-    throw new Error('流水不完整，无法算欠款')
-  }
-  return withSlipView(
-    record,
-    inventory.receivableAt(list, record.customerId, record.createdAt),
-    products,
-    shopName
-  )
-}
+// 2b-2b 删掉了 withSlipViewFromRecord。
+// 「截断到某张老单据时刻的欠款」现在唯一的算法在服务端 getSlip：客户端没有
+// 流水全集，也就没有任何现算钱的路径 —— 由 tests/no-client-cloud-db.test.js
+// 的结构禁令保证，不再靠运行时守卫。页面拿到 { record, receivable } 之后
+// 直接调 withSlipView。
 
 function pad(n) {
   return n < 10 ? '0' + n : '' + n
@@ -251,6 +235,5 @@ module.exports = {
   withRecordView: withRecordView,
   withCustomerView: withCustomerView,
   withSlipView: withSlipView,
-  withSlipViewFromRecord: withSlipViewFromRecord,
   showError: showError
 }

@@ -46,6 +46,21 @@ async function call(db, makeId, openid, action, shopId, payload, now) {
   })
 }
 
+// 2b-2b：getLedger 不再回传整本流水（含未迁移的店），流水一律走 listRecords
+// 分页取。老断言要的是「整本」，所以这里翻完全本。
+async function allRecords(db, makeId, openid, shopId) {
+  const out = []
+  let cursor = ''
+  for (let page = 0; page < 1000; page++) {
+    const res = await call(db, makeId, openid, 'listRecords', shopId, { cursor: cursor, limit: 100 })
+    res.records.forEach(function (item) { out.push(item) })
+    if (!res.hasMore) break
+    // 空页时服务端回 ''，直接赋值会把游标冲回开头
+    cursor = res.cursor || cursor
+  }
+  return out
+}
+
 async function rejects(promise, re) {
   try {
     await promise
@@ -113,13 +128,15 @@ async function rejects(promise, re) {
 
   const after = await call(db, ids, 'user-a', 'getLedger', shopA)
   assert.strictEqual(after.ledger.products[0].stock, 0)
-  const firstOut = after.ledger.records.find(function (item) {
+  assert.strictEqual(after.ledger.records, undefined, 'getLedger 不许再回传整本流水')
+  const afterRecords = await allRecords(db, ids, 'user-a', shopA)
+  const firstOut = afterRecords.find(function (item) {
     return item.type === 'out'
   })
   assert.ok(firstOut)
   assert.strictEqual(firstOut.operatorOpenid, 'user-a')
   assert.strictEqual(firstOut.operatorName, '')
-  assert.strictEqual(after.ledger.records.filter(function (item) {
+  assert.strictEqual(afterRecords.filter(function (item) {
     return item.type === 'out'
   }).length, 1)
 
@@ -272,7 +289,7 @@ async function rejects(promise, re) {
 
   const retryLedger = await call(dbRetry, retryIds, 'user-a', 'getLedger', shopId)
   assert.strictEqual(retryLedger.ledger.products[0].stock, 1)
-  assert.strictEqual(retryLedger.ledger.records.filter(function (item) {
+  assert.strictEqual((await allRecords(dbRetry, retryIds, 'user-a', shopId)).filter(function (item) {
     return item.type === 'out'
   }).length, 2)
 
@@ -313,7 +330,7 @@ async function rejects(promise, re) {
   await rejects(shortT1, /库存不足/)
   const shortLedger = await call(dbShort, shortIds, 'user-a', 'getLedger', shopShort.shop.id)
   assert.strictEqual(shortLedger.ledger.products[0].stock, 0)
-  assert.strictEqual(shortLedger.ledger.records.filter(function (item) {
+  assert.strictEqual((await allRecords(dbShort, shortIds, 'user-a', shopShort.shop.id)).filter(function (item) {
     return item.type === 'out'
   }).length, 1)
 
@@ -390,11 +407,10 @@ async function rejects(promise, re) {
   })
   assert.strictEqual(adjusted.stock, 6)
   assert.strictEqual(adjusted.costPrice, 8)
-  assert.ok(afterAdjust.ledger.records.some(function (item) {
+  assert.ok((await allRecords(db, ids, 'user-a', shopA)).some(function (item) {
     return item.type === 'adjust_in'
   }))
-  const ledgerBAfter = await call(db, ids, 'user-b', 'getLedger', shopB)
-  assert.strictEqual(ledgerBAfter.ledger.records.filter(function (item) {
+  assert.strictEqual((await allRecords(db, ids, 'user-b', shopB)).filter(function (item) {
     return item.type === 'adjust_in' || item.type === 'adjust_out'
   }).length, 0)
   await rejects(

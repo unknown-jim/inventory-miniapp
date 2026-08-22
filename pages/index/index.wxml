@@ -24,7 +24,7 @@
       </view>
       <view class="hero-profit">
         <view class="muted">今日毛利</view>
-        <view class="hero-profit-num">¥{{todayProfit}}</view>
+        <view class="hero-profit-num">{{todayAvailable ? '¥' + todayProfit : '—'}}</view>
       </view>
     </view>
     <view class="stat-grid">

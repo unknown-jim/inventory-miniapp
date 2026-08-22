@@ -662,8 +662,35 @@ assert.strictEqual(adjustView.qtyText, '2')
 // 欠款一律按当前流水重算，不能用写入时冻结的值
 // ---------------------------------------------------------------------------
 
+// 2b-2b 删掉了 util.withSlipViewFromRecord：生产上「截断到某张老单据时刻的
+// 欠款」唯一的算法在服务端 getSlip（当前欠款减去该单之后的后缀），客户端拿不到
+// 流水全集，也就没有任何现算钱的路径。
+//
+// 但 B1 那四个回归场景要验的是**口径本身**（改 / 删更早的记录之后，重印的
+// 送货单必须跟账面对得上），和它是在哪一端算的无关。所以那两行搬进测试本地，
+// 下面的断言一个都不改。服务端那条路的等价性由 tests/ledger-records.test.js
+// 的「getSlip 与 receivableAt 等价」钉住。
+function slipFromRecord(records, record, products, shopName) {
+  if (!record || record.type !== 'out') {
+    throw new Error('不是销售流水')
+  }
+  const list = records || []
+  const missing = record.customerId && !list.some(function (item) {
+    return item.id === record.id
+  })
+  if (missing) {
+    throw new Error('流水不完整，无法算欠款')
+  }
+  return util.withSlipView(
+    record,
+    inv.receivableAt(list, record.customerId, record.createdAt),
+    products,
+    shopName
+  )
+}
+
 function slipOf(records, products, id) {
-  return util.withSlipViewFromRecord(records, records.find(function (item) {
+  return slipFromRecord(records, records.find(function (item) {
     return item.id === id
   }), products, '店')
 }

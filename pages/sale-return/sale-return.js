@@ -13,7 +13,14 @@ Page({
 
   async onLoad(query) {
     if (!(await store.ready())) return
-    const record = store.getRecord(query.id)
+    // 分页之后缓存里不一定有这条销售单，一律按 id 去服务端取
+    let record = null
+    try {
+      record = await store.fetchRecord(query.id)
+    } catch (error) {
+      util.showError(error)
+      return
+    }
     if (!record || record.type !== 'out') {
       wx.showToast({ title: '销售流水不存在', icon: 'none' })
       return

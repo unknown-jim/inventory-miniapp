@@ -10,7 +10,7 @@ const inventory = require('./inventory')
 // 文档形状和 sortKey / _id 的定义在 ledger-apply.js（纯映射，小程序内存模式也要用）。
 //
 // 需要在云控制台建的索引（本文件的每一次查询都对得上其中一条，全部避开数组字段）：
-//   1  bookId ASC, sortKey DESC                                 -> page / readAll
+//   1  bookId ASC, sortKey DESC                                 -> page / recentAndToday
 //   2  bookId ASC, customerId ASC, sortKey DESC                 -> page(customerId) / suffixOfCustomer
 //   3  bookId ASC, type ASC, sortKey DESC                       -> page(type)
 //   4  bookId ASC, saleOrderId ASC                              -> 查一张销售单的退货（2b-2 用）
@@ -19,30 +19,21 @@ const inventory = require('./inventory')
 
 const COLLECTION = 'ledger_records'
 const PAGE_LIMIT = 100
-// 兼容期（2b-2 之前）把整本流水拼给客户端的上限。
-//
-// 上限按条数判，不按页数判：hasMore = docs.length >= limit 在总数正好是整页倍数
-// 时恒为真，按页数判会把「正好 N 条」也算成超限 —— 老实现名义 5000、实际 4999
-// 就到顶，就是这个 off-by-one。
-//
-// 2000 怎么来的（本机实测）：一单一条流水的 JSON 字节数：收款 232 / 进货 281 /
-// 单行销售 543 / 三行销售 955，混合按 500 B/条估 → 2000 条 ≈ 1 MB 返回包、
-// 20 次串行分页往返。再往上同时逼近三堵墙：云函数返回体大小 [需实测]、
-// 20 秒超时、微信单个 storage key 1 MB。
-// 超过 2000 条的店必须等 2b-2 的分页，**不要靠调大这个数硬撑**：
-// 这个常量同时是「哪些店可以在 2b-2 之前迁移」的判据。
-const COMPAT_MAX_RECORDS = 2000
-// getSlip 倒推上限，和返回包无关，语义不同：5000 条还倒推不出当时欠款就报错。
+// getSlip 倒推上限：5000 条还倒推不出当时欠款就报错。
 // 宁可报错，也不能在客户手上的单据上印一个错数。
+//
+// 上限按**条数**判，不按页数判：hasMore = docs.length >= limit 在总数正好是
+// 整页倍数时恒为真，按页数判会把「正好 N 条」也算成超限 —— 老实现名义 5000、
+// 实际 4999 就到顶，就是这个 off-by-one。**这是仓里唯一一份样板**（2b-2b 删掉
+// COMPAT_MAX_RECORDS 之后），下一个写有界循环的人照着这里写，不要再错一遍。
 const SUFFIX_MAX_RECORDS = 5000
-const TOO_MANY_RECORDS = '本店流水已超过 ' + COMPAT_MAX_RECORDS
-  + ' 条，账本要升级到分页版本才能打开，请联系开发者'
 // 「集合去掉一个元素之后的最大值」由原集合前 2 名一定能确定，所以取 2 条：
 // 改一条 in 不改 createdAt，删一条要把它从候选里去掉，两种都够。
 const LATEST_PURCHASE_KEEP = 2
 // recentAndToday 的无界循环兜底：跨 dayStart 之前一直翻不到头（比如 dayStart
 // 非法却没被拦住）就会一直往前翻。2000 条封顶，超过就报「算不出来」而不是
-// 一直翻下去 —— 和 COMPAT_MAX_RECORDS 的思路一样，但这是另一个量，互不影响。
+// 一直翻下去 —— 和 SUFFIX_MAX_RECORDS 一样是「有界循环」的兜底，但两者是不同
+// 的量（一个管今日聚合翻多远，一个管欠款倒推翻多远），互不影响。
 const TODAY_MAX_RECORDS = 2000
 
 function docsOf(res) {
@@ -91,7 +82,7 @@ function recordStore(ctx, bookId, shopId) {
 
   // 倒序一页。cursor 是上一页最后一条的 sortKey。
   // limit 钳制走 apply.clampPageLimit：不传时缺省 20（2b-2 之前是 100），
-  // 调用方核实过这条变化 —— readAll / suffixOfCustomer 都显式传自己的
+  // 调用方核实过这条变化 —— recentAndToday / suffixOfCustomer 都显式传自己的
   // limit（PAGE_LIMIT=100），不受影响，见 tests/ledger-records.test.js。
   async function page(options) {
     options = options || {}
@@ -116,23 +107,6 @@ function recordStore(ctx, bookId, shopId) {
     }
   }
 
-  // 兼容形态：把整本流水读出来拼给客户端（2b-2 之后就不用了）。
-  // **只准从只读 action 调**：这里可能失败、可能慢，记账路径调它就会变成
-  // 「账记上了却报失败」，店员照着提示再点一次就是再记一笔。
-  async function readAll(max) {
-    const cap = max == null ? COMPAT_MAX_RECORDS : max
-    let cursor = ''
-    let out = []
-    for (;;) {
-      const got = await page({ cursor: cursor, limit: PAGE_LIMIT })
-      out = out.concat(got.records)
-      // 判条数不判页数：正好 cap 条时 hasMore 仍为真，多读一页拿到 0 条才收工
-      if (out.length > cap) throw new Error(TOO_MANY_RECORDS)
-      if (!got.hasMore) return out
-      cursor = got.cursor
-    }
-  }
-
   async function countAll() {
     const res = await col.where({ bookId: book }).count()
     return (res && res.total) || 0
@@ -141,7 +115,7 @@ function recordStore(ctx, bookId, shopId) {
   // receivableAt 的口径是 createdAt <= at（含同毫秒的本单自己），
   // 所以后缀必须是 createdAt > at，即 sortKey >= pad13(at + 1)。
   // createdAt 是整数毫秒，两者严格互补，没有重叠也没有遗漏。
-  // 上限同样判条数不判页数，理由和 readAll 一样（同一个 off-by-one）。
+  // 上限判条数不判页数，理由见 SUFFIX_MAX_RECORDS 顶上那段（同一个 off-by-one）。
   async function suffixOfCustomer(customerId, fromSortKey, maxRecords) {
     const cap = maxRecords == null ? SUFFIX_MAX_RECORDS : maxRecords
     const cid = String(customerId || '')
@@ -183,7 +157,6 @@ function recordStore(ctx, bookId, shopId) {
     saleOrder: saleOrder,
     latestPurchases: latestPurchases,
     page: page,
-    readAll: readAll,
     countAll: countAll,
     suffixOfCustomer: suffixOfCustomer,
     set: set,
@@ -254,9 +227,7 @@ async function applyWrites(store, writes) {
 module.exports = {
   COLLECTION: COLLECTION,
   PAGE_LIMIT: PAGE_LIMIT,
-  COMPAT_MAX_RECORDS: COMPAT_MAX_RECORDS,
   SUFFIX_MAX_RECORDS: SUFFIX_MAX_RECORDS,
-  TOO_MANY_RECORDS: TOO_MANY_RECORDS,
   LATEST_PURCHASE_KEEP: LATEST_PURCHASE_KEEP,
   TODAY_MAX_RECORDS: TODAY_MAX_RECORDS,
   recordStore: recordStore,

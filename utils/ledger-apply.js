@@ -233,54 +233,6 @@ function diffRecords(before, after) {
   return { writes: writes, deltas: deltas }
 }
 
-// 客户端把「这次记账改了哪几条」合进自己那份流水缓存。
-// 吃的是服务端 applyWrites 写进集合的**同一个 recordWrites 数组** ——
-// 服务端往集合里写什么，客户端就往缓存里合什么，不存在第二套口径。
-// tests/ledger-records.test.js 的 3000 步随机序列每一步都断言两边逐条相等。
-//
-// complete 的判据是条数，不是「有没有报错」：换账套、服务端没给 delta、
-// 中间漏过一次响应，都会让条数对不上。对不上就说明这份缓存不能拿来算钱。
-function mergeRecordDelta(records, delta) {
-  if (!delta) return { records: (records || []).slice(), complete: false }
-  const base = delta.bookChanged ? [] : (records || []).slice()
-  const removed = {}
-  const replaced = {}
-  ;(delta.writes || []).forEach(function (write) {
-    if (write && write.op === 'remove') {
-      removed[String(write.id)] = true
-      return
-    }
-    const record = write && write.record
-    if (!record) return
-    replaced[String(record.id)] = record
-    delete removed[String(record.id)]
-  })
-  const out = []
-  base.forEach(function (record) {
-    const id = String((record && record.id) || '')
-    if (removed[id]) return
-    if (Object.prototype.hasOwnProperty.call(replaced, id)) {
-      out.push(replaced[id])
-      delete replaced[id]
-      return
-    }
-    out.push(record)
-  })
-  Object.keys(replaced).forEach(function (id) {
-    out.push(replaced[id])
-  })
-  // 顺序必须和 readAll 一致（sortKey 倒序），否则记录页在「刚记完」和
-  // 「重开小程序」两种情况下排出来不一样。sortKey 派生自不可改的
-  // createdAt + id，客户端算得出来。
-  out.sort(function (a, b) {
-    const ka = makeSortKey(a && a.createdAt, a && a.id)
-    const kb = makeSortKey(b && b.createdAt, b && b.id)
-    if (ka === kb) return 0
-    return ka > kb ? -1 : 1
-  })
-  return { records: out, complete: out.length === ((delta && delta.count) || 0) }
-}
-
 function mergeRecords(lists) {
   const seen = {}
   const out = []
@@ -893,7 +845,6 @@ module.exports = {
   emptyLedger: emptyLedger,
   listsOf: listsOf,
   withAggregates: withAggregates,
-  mergeRecordDelta: mergeRecordDelta,
   listsHaveData: listsHaveData,
   legacyRecordsOf: legacyRecordsOf,
   recordsPending: recordsPending,

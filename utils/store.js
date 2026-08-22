@@ -27,21 +27,37 @@ const MEMORY_AGGREGATE_KEY = 'inv_aggregate'
 const MIGRATED_KEY = 'inv_local_migrated'
 const SNAPSHOT_DONE_KEY = 'inv_local_snapshot_done'
 
+// 首页「最近流水」要几条。20 是 RECORD_PAGE_DEFAULT，服务端会钳到 [1,100]。
+const RECENT_LIMIT = 20
+
 const cache = {
   shopId: '',
   products: [],
   skus: [],
-  records: [],
   customers: [],
   categories: [],
   revision: 0,
   hasClearedBackup: false,
   totals: null,
-  // 「这份流水缓存的条数和服务端对得上」。算钱的地方（欠款、送货单）只认它为真
-  // 才敢用缓存，见 recordsForMoney。
-  recordsComplete: false,
+  // 2b-2b：客户端**没有流水全集**了。这里只有服务端给的一页 recent 和
+  // 一份今日三项投影，两个都只能拿来显示，绝不能拿来算钱。
+  recent: [],
+  today: null,
+  todayComplete: false,
+  // 当前账套号。换账套（清空 / 恢复 / 填示例数据）时用来把上一本账的
+  // recent / today 当场清掉，见 applyLedgerLists。
+  bookId: '',
+  // 上一次 getLedger 用的那个零点，和当时的 mutationSeq。refreshIfStale 靠它
+  // 判断「跨午夜了」和「记过账了」。
+  dayStart: 0,
+  fetchedSeq: 0,
   ready: false
 }
+
+// 「服务端那份数据被我改过几次」。页面用它当脏标记：翻到第 5 页点进详情再
+// 返回，列表不该被清回第 1 页；但只要改过账就**必须**重来 —— 删掉的那条不能
+// 还留在列表里。跨设备的实时性今天也没有（ready() 会短路），这不是回退。
+let mutationSeq = 0
 
 let readyState = {
   shopId: '',
@@ -122,14 +138,14 @@ function markMigrated() {
 // 落盘只是缓存。写失败（storage 满 / 超过单 key 1 MB）不能把已经记成的账变成
 // 「记账失败」。云模式下这份存储从来没人读回来：lists() 走内存，
 // loadCacheFromStorage 只在内存模式用，snapshotLocalIfNeeded 只在迁云前跑一次。
-// 所以云模式干脆不写流水 —— 2000 条 × 500 B 每次记账序列化一遍是白花的卡顿。
+// 流水一条都不落盘：内存模式的流水在 MEMORY_RECORDS_KEY 的文档里，云模式
+// 客户端根本没有流水全集。
 function persist() {
   try {
     writeList(KEYS.products, cache.products)
     writeList(KEYS.skus, cache.skus)
     writeList(KEYS.customers, cache.customers)
     writeList(KEYS.categories, cache.categories)
-    if (isMemoryMode()) writeList(KEYS.records, cache.records)
     wx.setStorageSync(REVISION_KEY, cache.revision)
     wx.setStorageSync(HAS_BACKUP_KEY, cache.hasClearedBackup)
   } catch (error) {
@@ -139,6 +155,18 @@ function persist() {
 
 function applyLedgerLists(ledger) {
   const lists = apply.listsOf(ledger || apply.emptyLedger())
+  // 换账套（清空数据 / 恢复 / 填示例数据）之后，手上这份 recent / today 属于
+  // 上一本账。它们只在 getLedger 时更新，而 refreshIfStale 是**不抛**的：
+  // 换账套那一次恰好网络抖动，首页就会一边显示已归零的欠款、一边显示清空前的
+  // 今日销售和最近流水。钱是对的，旁边那几个数是上一本账的 —— 比空着更误导。
+  // 账套变了就当场清掉，等下一次 getLedger 拿新的。
+  const nextBookId = String((lists && lists.bookId) || '')
+  if (nextBookId && cache.bookId && nextBookId !== cache.bookId) {
+    cache.recent = []
+    cache.today = null
+    cache.todayComplete = false
+  }
+  if (nextBookId) cache.bookId = nextBookId
   cache.products = lists.products
   cache.skus = lists.skus
   cache.customers = lists.customers
@@ -152,23 +180,14 @@ function applyLedgerLists(ledger) {
   }
 }
 
-// 三种形状都要认，顺序不能换：
-//  1) ledger.records 是数组  -> 整份替换（getLedger；也兼容还没升级的云函数）
-//  2) 有 recordDelta        -> 按 delta 合并（2b-1 起的记账返回）
-//  3) 两个都没有            -> 不猜，标记不完整，让上层重拉
-function applyRecords(res) {
-  if (res && res.ledger && Array.isArray(res.ledger.records)) {
-    cache.records = res.ledger.records
-    cache.recordsComplete = true
-    return
-  }
-  if (res && res.recordDelta) {
-    const merged = apply.mergeRecordDelta(cache.records, res.recordDelta)
-    cache.records = merged.records
-    cache.recordsComplete = merged.complete
-    return
-  }
-  cache.recordsComplete = false
+// getLedger 回传的 recent / today 是服务端按客户端给的 dayStart 现算的**读时
+// 投影**，不落库，直接收下。记账回传里没有这两个字段（事务提交后零 IO），
+// 所以它们只在这里更新，其余时候靠 mutationSeq 标脏、refreshIfStale 重取。
+function applyRecent(ledger) {
+  if (!ledger || !Array.isArray(ledger.recent)) return
+  cache.recent = ledger.recent
+  cache.today = ledger.today || null
+  cache.todayComplete = !!ledger.todayComplete
 }
 
 // 已经拿到成功响应 = 账已经记上了。从这里往后无论出什么问题都只能降级，
@@ -176,10 +195,12 @@ function applyRecords(res) {
 function settleResponse(res) {
   try {
     if (res && res.ledger) applyLedgerLists(res.ledger)
-    applyRecords(res)
+    applyRecent(res && res.ledger)
     persist()
   } catch (error) {
-    cache.recordsComplete = false
+    // 回写到一半就断了，这份缓存的四张表可能只补进去一部分。作废 ready，
+    // 下一次 store.ready() 会重新拉一遍；**那一次是纯读路径，报错是诚实的**。
+    invalidateReady()
     console.warn('[ledger] 回写本地缓存失败', error)
   }
 }
@@ -187,23 +208,20 @@ function settleResponse(res) {
 // 保留给 deleteShop / 内存模式重置：整份替换语义
 function applyLedger(ledger) {
   applyLedgerLists(ledger)
-  cache.records = (ledger && Array.isArray(ledger.records)) ? ledger.records : []
-  cache.recordsComplete = true
+  cache.recent = (ledger && Array.isArray(ledger.recent)) ? ledger.recent : []
+  cache.today = null
+  cache.todayComplete = false
+  cache.dayStart = 0
   persist()
 }
 
 function loadCacheFromStorage() {
   cache.products = readList(KEYS.products)
   cache.skus = readList(KEYS.skus)
-  cache.records = readList(KEYS.records)
   cache.customers = readList(KEYS.customers)
   cache.categories = readList(KEYS.categories)
   cache.revision = wx.getStorageSync(REVISION_KEY) || 0
   cache.hasClearedBackup = !!wx.getStorageSync(HAS_BACKUP_KEY)
-  cache.totals = inventory.computeTotals(cache.records)
-  // 只有内存模式走这条路，本机存储就是权威来源，读回来就是完整的
-  cache.recordsComplete = true
-  cache.ready = true
 }
 
 function getStatus() {
@@ -315,10 +333,9 @@ function writeArchive(list) {
 // 内存模式的流水仓：接口和 cloudfunctions/ledger/ledger-records.js 的 recordStore
 // 一致，存的也是同一份 toRecordDoc 文档（账套号 bookId 一样有效）。
 //
-// **这段代码本身没有自动化测试**：内存模式只有 tests/ui.test.js 走，而它要开发者
-// 工具才能跑。被测过的是同一套接口的另外两份实现（tests/memory-db.js 的
-// MemoryBook 和 MemoryDb），以及它们下面的 applyMutation / recordsNeeded。
-// 改这里之后请手动跑一次 npm run test:ui。
+// 2b-2b 起 tests/store.test.js 有一整节用 node 驱动**真实的这段代码**（内存模式
+// 那一节），所以它不再是「只有跑不了的 test:ui 才碰得到」的死角。分页走
+// apply.pageRecords —— 和云上的集合查询、未迁移老账本切片是同一份定义。
 // ---------------------------------------------------------------------------
 
 function readRecordDocs() {
@@ -378,6 +395,11 @@ function memoryRecordStore(bookId) {
     },
     all: function () {
       return descending(rows()).map(apply.fromRecordDoc)
+    },
+    // 一页流水**只有一份定义**：apply.pageRecords。云上的索引化查询、未迁移
+    // 老账本的内存切片、这里，三处必须给出逐条相同的结果（方案 §四）。
+    page: function (options) {
+      return apply.pageRecords(rows().map(apply.fromRecordDoc), options)
     },
     set: function (record) {
       const doc = apply.toRecordDoc(record, book, getShopId() || 'ui-test-shop')
@@ -443,20 +465,34 @@ function memoryPublicLists(ledger) {
   return lists
 }
 
-function memoryLists(ledger) {
+// getLedger 的内存版：四张表 + 聚合投影 + 最近一页 + 今日三项，**不带流水**，
+// 和云上的形状逐字段一致。
+//
+// dayStart 这里不做「远超今天 / 1970 年」的健全性检查：云上那道检查是因为
+// dayStart 来自另一台设备、服务端没有第二个时钟可以对照；内存模式里发请求的
+// 和处理请求的是同一个 Date.now()，没有第二个口径可以分岔。
+function memoryLedgerView(ledger, payload) {
+  const all = memoryRecordStore(ledger.bookId).all()
   const lists = memoryPublicLists(ledger)
-  lists.records = memoryRecordStore(ledger.bookId).all()
+  lists.recent = apply.pageRecords(all, { limit: payload && payload.recentLimit }).records
+  const dayStart = Number((payload && payload.dayStart) || 0)
+  if (dayStart > 0) {
+    lists.today = inventory.todayTotals(all, dayStart)
+    lists.todayComplete = true
+  } else {
+    lists.today = null
+    lists.todayComplete = false
+  }
   return lists
 }
 
 // 记账主体和 cloudfunctions/ledger/ledger-core.js 的事务体一样：
 // 先按 recordsNeeded 把牵连到的那几条捞出来，再 applyMutation，最后落盘写记录。
-// 返回值也和云上同形状（ledger 不带 records + recordDelta），这样内存模式和
-// 云模式走**同一条回写路径** settleResponse，不再各写一套。
+// 返回值也和云上同形状（ledger 不带 records、也不带 recordDelta），这样内存模式
+// 和云模式走**同一条回写路径** settleResponse，不再各写一套。
 async function memoryMutate(action, payload) {
   payload = payload || {}
   const ledger = memoryLedger()
-  const bookIdBefore = ledger.bookId
   if (action === 'restoreCleared') {
     const archive = readArchive()
     payload = Object.assign({}, payload, {
@@ -476,12 +512,6 @@ async function memoryMutate(action, payload) {
   wx.setStorageSync(MEMORY_AGGREGATE_KEY, applied.ledger.aggregate || inventory.emptyTerms())
   return {
     ledger: memoryPublicLists(applied.ledger),      // 不带 records，和云上一样
-    recordDelta: {
-      bookId: String(applied.ledger.bookId || ''),
-      bookChanged: applied.ledger.bookId !== bookIdBefore,
-      count: (applied.ledger.aggregate && applied.ledger.aggregate.count) || 0,
-      writes: applied.recordWrites || []
-    },
     result: applied.result
   }
 }
@@ -527,8 +557,43 @@ async function memoryCall(action, shopId, payload) {
   }
   if (action === 'getLedger') {
     loadCacheFromStorage()
-    const ledger = memoryLedger()
-    return { ledger: memoryLists(ledger) }
+    return { ledger: memoryLedgerView(memoryLedger(), payload) }
+  }
+  if (action === 'listRecords') {
+    const type = String((payload && payload.type) || '')
+    const customerId = String((payload && payload.customerId) || '')
+    // 和云上同一条边界：同时按类型和客户筛在云上是一条无索引查询，
+    // 内存模式跑得动不代表线上跑得动，所以这里也拒绝，别让它变成
+    // 「开发者工具里好好的，一上线就超时」。
+    if (type && type !== 'all' && customerId) {
+      throw new Error('不支持同时按类型和客户筛选')
+    }
+    return memoryRecordStore(memoryBookId()).page({
+      type: type,
+      customerId: customerId,
+      cursor: (payload && payload.cursor) || '',
+      limit: payload && payload.limit
+    })
+  }
+  if (action === 'getRecord') {
+    const record = memoryRecordStore(memoryBookId()).byId(String((payload && payload.recordId) || ''))
+    if (!record) throw new Error('流水不存在')
+    return { record: record }
+  }
+  if (action === 'getSlip') {
+    const all = memoryRecordStore(memoryBookId()).all()
+    const wanted = String((payload && payload.recordId) || '')
+    const record = all.find(function (item) { return item.id === wanted }) || null
+    if (!record) throw new Error('流水不存在')
+    const customerId = String(record.customerId || '')
+    if (!customerId) return { record: record, receivable: 0 }
+    // 这里**故意**用 receivableAt 全量现算，而不是照抄云上的「当前欠款 − 后缀」：
+    // 那两条正是 tests/ledger-records.test.js 钉住的等价性的两端，两边用同一份
+    // 实现反而失去交叉验证。内存模式流水都在手上，全量现算零成本。
+    return {
+      record: record,
+      receivable: inventory.receivableAt(all, customerId, record.createdAt)
+    }
   }
   if (action === 'migrateLocal') {
     throw new Error('本地测试账本不用迁云')
@@ -545,13 +610,40 @@ async function request(action, payload, options) {
   return callCloud(action, shopId, payload)
 }
 
+// getLedger 的入参只有两个，都是纯数据：
+//   dayStart —— 今天的零点由**客户端**给（跨午夜时客户端自己知道要重取）。
+//               服务端只做健全性检查，非法就回 today: null，绝不回退到服务端
+//               时区现算 —— 那正是「悄悄给一个错数」。
+//   recentLimit —— 首页要几条最近流水。
+function ledgerPayload() {
+  return {
+    dayStart: inventory.startOfDay(Date.now()),
+    recentLimit: RECENT_LIMIT
+  }
+}
+
+// 拉一次账本并回写缓存。dayStart / fetchedSeq 只在**确实拉到了**之后才记，
+// 否则 refreshIfStale 会把一次失败的刷新当成「已经是最新的」。
+async function fetchLedger(options) {
+  const payload = ledgerPayload()
+  const res = await request('getLedger', payload, options)
+  settleResponse(res)
+  if (cache.ready) {
+    cache.dayStart = payload.dayStart
+    cache.fetchedSeq = mutationSeq
+  }
+  return res
+}
+
 async function ensureReady() {
   snapshotLocalIfNeeded()
   if (isMemoryMode()) {
     if (!getShopId()) setShopMeta('ui-test-shop', '测试店')
-    loadCacheFromStorage()
-    cache.shopId = getShopId()
-    readyState = { shopId: cache.shopId, promise: null, ok: true }
+    const shopId = getShopId()
+    // 内存模式不短路：本机存储就是权威来源，每次都重新读一遍最便宜也最诚实。
+    await fetchLedger({ shopId: shopId })
+    cache.shopId = shopId
+    readyState = { shopId: shopId, promise: null, ok: true }
     return
   }
   const status = getStatus()
@@ -564,16 +656,36 @@ async function ensureReady() {
     await readyState.promise
     return
   }
-  const promise = request('getLedger', {}, { shopId: shopId }).then(function (res) {
-    settleResponse(res)
-    // ready 必须蕴含「流水是完整的」：所有页面的 onShow 都以 ready 为门，
-    // 有了这条，页面里拿到的流水要么完整要么根本没进门。
-    if (!cache.recordsComplete) throw new Error('账本流水没取全，请重试')
+  const promise = fetchLedger({ shopId: shopId }).then(function () {
+    // 2b-2b：ready 不再蕴含「流水缓存是完整的」—— 客户端根本没有流水全集了。
+    // 它蕴含的是「四张表 + 聚合投影已经到手」，而钱一律读 accounts / totals。
+    // settleResponse 中途出错会 invalidateReady()，cache.ready 就是那个信号。
+    if (!cache.ready) throw new Error('账本没取到，请重试')
     cache.shopId = shopId
     readyState.ok = true
   })
   readyState = { shopId: shopId, promise: promise, ok: false }
   await promise
+}
+
+// 首页的今日三项和最近流水是服务端按 dayStart 现算的读时投影：记过账就过期，
+// 跨了午夜也过期。**不抛** —— 首页显示旧数据好过白屏，下一次 ensureReady
+// 是纯读路径，那一次报错才是诚实的。
+async function refreshIfStale() {
+  if (!isReady()) return false
+  const dayStart = inventory.startOfDay(Date.now())
+  if (cache.fetchedSeq === mutationSeq && cache.dayStart === dayStart) return false
+  try {
+    await fetchLedger()
+    return true
+  } catch (error) {
+    console.warn('[ledger] 刷新今日看板失败', error)
+    return false
+  }
+}
+
+function dataVersion() {
+  return mutationSeq
 }
 
 async function ready() {
@@ -602,7 +714,6 @@ function lists() {
     return {
       products: readList(KEYS.products),
       skus: readList(KEYS.skus),
-      records: readList(KEYS.records),
       customers: readList(KEYS.customers),
       categories: readList(KEYS.categories)
     }
@@ -610,7 +721,6 @@ function lists() {
   return {
     products: cache.products,
     skus: cache.skus,
-    records: cache.records,
     customers: cache.customers,
     categories: cache.categories
   }
@@ -620,17 +730,14 @@ function getProducts() {
   return lists().products
 }
 
-function getRecords() {
-  return lists().records
-}
-
-// 只给「要算钱」的地方用：欠款、送货单。缓存不完整就报错，不给一个错数。
-// 2a-b1 那条原则的直接应用：宁可打不出单，也不能在客户手上的单据上印错数。
-function recordsForMoney() {
-  if (!cache.recordsComplete) {
-    throw new Error('流水不完整，无法算欠款，请退出重进小程序')
-  }
-  return getRecords()
+// 服务端给的**最近一页**流水，只够首页列个「最近流水」。
+//
+// **不许拿它算钱**：它只有一页，拿它折欠款 / 折汇总必然偏小，而偏小的欠款
+// 是会被印在客户手上单据上的错数。当前的钱一律读 getTotals() / customer.account。
+// **也不许拿它找单**：要按 id 打开某张单请用 fetchRecord —— 那条单很可能根本
+// 不在这一页里（客户往来记录、流水页翻到第 5 页）。
+function getRecentRecords() {
+  return cache.recent
 }
 
 function getCustomers() {
@@ -651,12 +758,6 @@ function getSkus() {
 
 function getProduct(id) {
   return getProducts().find(function (item) {
-    return item.id === id
-  }) || null
-}
-
-function getRecord(id) {
-  return getRecords().find(function (item) {
     return item.id === id
   }) || null
 }
@@ -693,21 +794,60 @@ async function mutate(action, payload) {
     hideBusy()
   }
   settleResponse(res)
-  if (!cache.recordsComplete) await refillRecords()
+  // 记账成功 = 服务端那份流水变了，客户端手上的 recent / today 立刻过期。
+  // **但不在这里重拉**：提交之后再发一次可能失败的请求，就又回到「账记上了
+  // 却报失败」。改成脏标记，页面 onShow 时按 dataVersion() 决定要不要重取。
+  mutationSeq += 1
   return res
 }
 
-// 缓存条数和服务端对不上（换账套、服务端没给 delta、合并出错）。重新拉一次全量。
-// **失败也不抛**：账已经记上了，报失败会诱发重复提交。作废 ready 状态，
-// 下一次 store.ready() 会自己再拉一次；那一次是纯读路径，报错是诚实的。
-async function refillRecords() {
-  try {
-    const res = await request('getLedger', {})
-    settleResponse(res)
-  } catch (error) {
-    console.warn('[ledger] 记账后刷新流水失败', error)
+// 分页取流水的唯一入口。返回 { records, cursor, hasMore }。
+//
+// **cursor 的空页语义要记牢**：本页为空时服务端回 ''，调用方直接赋值就会把
+// 游标冲回开头、从第一页重来（总数正好是 limit 整数倍时必然踩到）。
+// 正确写法是 `res.cursor || 手上那个`，见 pages/records/records.js。
+async function listRecords(options) {
+  await ensureReady()
+  options = options || {}
+  const res = await request('listRecords', {
+    type: options.type || '',
+    customerId: options.customerId || '',
+    cursor: options.cursor || '',
+    limit: options.limit
+  })
+  return {
+    records: (res && res.records) || [],
+    cursor: (res && res.cursor) || '',
+    hasMore: !!(res && res.hasMore)
   }
-  if (!cache.recordsComplete) invalidateReady()
+}
+
+// 按 id 取一条流水。分页之后缓存里**不一定**有这条（可能来自客户页的往来
+// 记录，或流水页翻到很后面的一页），所以一律去服务端取，不在本地找。
+async function fetchRecord(id) {
+  await ensureReady()
+  const res = await request('getRecord', { recordId: String(id || '') })
+  return (res && res.record) || null
+}
+
+// 送货单：「截断到某张老单据时刻的欠款」唯一的算法在服务端（当前欠款减去
+// 该单之后的后缀）。客户端拿不到流水全集，也就没有任何现算钱的路径。
+//
+// **算不出当时欠款就不开单**：宁可打不出单，也不能在客户手上的单据上印一个
+// 错数。所以这里对回包挑剔到底——少了 receivable 就报错，不默认成 0。
+async function getSlip(recordId) {
+  await ensureReady()
+  const res = await request('getSlip', { recordId: String(recordId || '') })
+  if (!res || !res.record) {
+    throw new Error('流水不存在')
+  }
+  // 挑剔到 typeof：null / undefined / '' 走 Number() 都会变成 0，而 0.00 的
+  // 前欠会被当成「这个客户不欠钱」印在单据上。**必须是服务端算出来的数字。**
+  const receivable = res.receivable
+  if (typeof receivable !== 'number' || !isFinite(receivable)) {
+    throw new Error('算不出这张单当时的欠款，暂时不能打单')
+  }
+  return { record: res.record, receivable: receivable }
 }
 
 async function saveProduct(input) {
@@ -803,9 +943,18 @@ function hasClearedBackup() {
   return !!cache.hasClearedBackup
 }
 
+// 今日三项来自服务端的读时投影；算不出来就传 null，页面显示「—」而不是 0
+// （0 是会被当真的错数）。最近流水是服务端给的一页，不是整本。
 function dashboard() {
   const data = lists()
-  return inventory.getDashboard(data.products, data.records, Date.now(), data.skus, getTotals())
+  return inventory.getDashboard(
+    data.products,
+    cache.recent,
+    Date.now(),
+    data.skus,
+    getTotals(),
+    cache.todayComplete ? cache.today : null
+  )
 }
 
 async function whoami() {
@@ -914,7 +1063,9 @@ async function migrateLocal() {
     const res = await request('migrateLocal', { ledger: pending })
     markMigrated()
     settleResponse(res)
-    if (!cache.recordsComplete) await refillRecords()
+    // 迁完之后流水在集合里，客户端要看就走 listRecords 分页取。
+    // 这里标脏即可，不在提交之后再发一次可能失败的请求。
+    mutationSeq += 1
     return res.ledger
   } finally {
     hideBusy()
@@ -947,11 +1098,12 @@ module.exports = {
   ensureReady: ensureReady,
   ready: ready,
   isReady: isReady,
+  refreshIfStale: refreshIfStale,
+  dataVersion: dataVersion,
   getShopId: getShopId,
   getShopName: getShopName,
   getProducts: getProducts,
-  getRecords: getRecords,
-  recordsForMoney: recordsForMoney,
+  getRecentRecords: getRecentRecords,
   getCustomers: getCustomers,
   getCategories: getCategories,
   getTotals: getTotals,
@@ -961,7 +1113,9 @@ module.exports = {
   getSkusByProduct: getSkusByProduct,
   getCustomer: getCustomer,
   getCategory: getCategory,
-  getRecord: getRecord,
+  listRecords: listRecords,
+  fetchRecord: fetchRecord,
+  getSlip: getSlip,
   saveProduct: saveProduct,
   deleteProduct: deleteProduct,
   saveCustomer: saveCustomer,
