@@ -17,7 +17,7 @@
 ### Git
 
 - 禁止在主工作树（`inventory-miniapp-main`）和 `main` 上改文件。也不要从历史分支 `master` 开新任务。
-- 每次任务：`git fetch origin`（有远程时）→ `git worktree add -b <前缀>/<短名> ../inventory-miniapp-<短名> origin/main`（无远程则基线用 `main`）→ **把工作区切到新目录** → 再改文件。
+- 每次任务：`git fetch origin`（有远程时）→ `git worktree add -b <前缀>/<短名> ../inventory-miniapp-worktrees/<短名> origin/main`（无远程则基线用 `main`）→ **把工作区切到新目录** → 再改文件。
 - 主工作树永远停在 `main`，不要在里面切换分支。
 - 不要复用上一任务的工作树做下一件无关的事。
 - 提交说明和 PR 描述遵守 [docs/commit-and-pr.md](docs/commit-and-pr.md)：祈使句首行、写清为什么改、一次 PR 只做一件自包含的事。

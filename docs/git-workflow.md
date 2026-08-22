@@ -13,7 +13,9 @@ GitHub 默认分支是 `main`（`origin/main`）。远程或本地可能还留�
 | 角色 | 路径 |
 |---|---|
 | 主工作树（只留 `main`，保持干净） | `inventory-miniapp-main`（本仓库主检出） |
-| 任务工作树 | 与主仓库同级：`../inventory-miniapp-<短名>` |
+| 任务工作树 | `../inventory-miniapp-worktrees/<短名>` |
+
+任务工作树全部收在 `../inventory-miniapp-worktrees/` 一个目录里，不再平铺在主仓库同级，避免和其他项目混杂。
 
 主工作树永远停在 `main`，不要在里面 `checkout` 到别的分支。若主工作树还停在历史分支 `master`，先一次性切到 `main` 对齐默认分支，再开新任务。
 
@@ -23,19 +25,19 @@ GitHub 默认分支是 `main`（`origin/main`）。远程或本地可能还留�
 
 ```bash
 git fetch origin
-git worktree add -b <前缀>/<短名> ../inventory-miniapp-<短名> origin/main
+git worktree add -b <前缀>/<短名> ../inventory-miniapp-worktrees/<短名> origin/main
 ```
 
 没有 `origin` 时，基线用本地 `main`：
 
 ```bash
-git worktree add -b <前缀>/<短名> ../inventory-miniapp-<短名> main
+git worktree add -b <前缀>/<短名> ../inventory-miniapp-worktrees/<短名> main
 ```
 
 然后进入新目录再改文件：
 
 ```bash
-cd ../inventory-miniapp-<短名>
+cd ../inventory-miniapp-worktrees/<短名>
 ```
 
 用 Cursor / Agent 时：建好工作树后，必须把工作区切到新目录，再开始改文件。
@@ -67,7 +69,7 @@ cd ../inventory-miniapp-<短名>
 合并进 `main` 且不再需要该目录后，在主工作树执行：
 
 ```bash
-git worktree remove ../inventory-miniapp-<短名>
+git worktree remove ../inventory-miniapp-worktrees/<短名>
 git branch -d <前缀>/<短名>
 ```
 
