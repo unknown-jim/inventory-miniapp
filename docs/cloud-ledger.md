@@ -15,6 +15,7 @@
 - 租户：每条账带 `shopId`。先查 `members`，不是该店成员直接拒绝。
 - 写：进货 / 销售 / 退货 / 改规格 / 库存调整 / 改档都走 `ledger` 的 `action`（库存调整是 `addAdjust`）。函数里用现有 [`utils/inventory.js`](../utils/inventory.js)，在**事务回调中重新读取** `ledgers` 文档再计算再写回。
 - 读：云函数按店返回整本账；小程序内存 + `wx.storage` 只做缓存，不是权威来源。
+- 聚合值：账本文档带 `totals`（全店销售额 / 进货额 / 毛利 / 欠款 / 流水数）和每个客户的 `customers[].account`（销售单数 / 销售额 / 赊账 / 已收 / 欠款）。**每次由 `records` 全量重算**，不做增量维护——见 [`ledger-apply.js`](../utils/ledger-apply.js) 的 `withAggregates`，`listsOf` 和 `applyMutation` 出口各调一次。因此聚合值不可能和流水漂移，老文档缺字段也会在首次读写时自愈，不需要迁移脚本。客户端读这两个字段，不要再自己遍历流水算欠款。
 - 扣账内核只有一份。云函数不能 `require('../../utils/inventory')`，用 `npm run sync:ledger-inventory` 复制到 `cloudfunctions/ledger/`。`npm test` 会在两份不一致时失败。
 - 环境 ID 写在 [`utils/cloud-config.js`](../utils/cloud-config.js) 的 `CLOUD_ENV_ID`，必须等于开发者工具「云开发 → 设置」里的那一串（微信侧）。腾讯云控制台里另一套环境填进来会报 Environment not found。空着不能记账，也不要用客户端 `DYNAMIC_CURRENT_ENV` 代替填写。
 - 集合：`shops`、`members`、`ledgers`、`ledger_clears`。前三张是当前店账；`ledger_clears` 保存每一次清空的完整快照，不回传给小程序。不要第一期就拆当前流水表。
