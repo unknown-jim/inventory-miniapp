@@ -52,6 +52,8 @@ npm run test:ui
 
 若 CLI 不在默认路径 `C:\Program Files (x86)\Tencent\微信web开发者工具\cli.bat`，先设环境变量 `WECHAT_CLI` 再跑。
 
+脚本不用 automator 自带的 `launch()`：Node 从 18.20.2 起不允许直接 spawn `.bat`，那条路在 Node 24 上必然失败。改成自己跑 `cli auto --project … --auto-port 9420` 再 `connect`。自动化端口上若已经有别的项目的会话，脚本会先 `cli quit` 把开发者工具整个退掉、再用本仓库重新打开——手动开着的工具窗口会因此被关掉；跑完也会关掉自己开的那个窗口。
+
 ## 使用说明
 
 - 库存只通过「进货」「销售」「退货」「改规格」「库存调整」变动；编辑商品不会改库存。库存调整入口在商品编辑页，不计入进货、不改进价；出库不计入销售和毛利
