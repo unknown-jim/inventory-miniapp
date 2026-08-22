@@ -595,4 +595,121 @@ apply.mergeRecordDelta(frozenBase, {
 })
 assert.strictEqual(frozenBase.length, 1, 'mergeRecordDelta 不许就地改传进来的缓存')
 
+// ---------------------------------------------------------------------------
+// T-A1（方案 D:\work\inventory-miniapp-handoffs\2b-2-pagination-design-2026-08-23.md
+// §五）：pageRecords 纯函数 —— 空数组 / 非法 limit / 七种 type / 游标翻页不重
+// 不漏 / 同毫秒全序 / 整页倍数 hasMore / 空页 cursor。
+// 集合查询与内存模式的等价性在 tests/ledger-records.test.js 的 T-A2 里核对，
+// 这里只测这一份定义本身。
+// ---------------------------------------------------------------------------
+
+function paRecord(id, type, createdAt, customerId) {
+  return {
+    id: id, type: type, amount: 1, profit: 0, remark: '',
+    customerId: customerId || '', createdAt: createdAt, lines: []
+  }
+}
+
+// 空数组
+assert.deepStrictEqual(apply.pageRecords([], {}), { records: [], cursor: '', hasMore: false })
+assert.deepStrictEqual(apply.pageRecords([], { type: 'out', customerId: 'x', limit: 5 }),
+  { records: [], cursor: '', hasMore: false })
+
+// 非法 limit：clampPageLimit 缺省 20，上限 100，非法一律给缺省值
+assert.strictEqual(apply.clampPageLimit(undefined), 20)
+assert.strictEqual(apply.clampPageLimit(null), 20)
+assert.strictEqual(apply.clampPageLimit(0), 20)
+assert.strictEqual(apply.clampPageLimit(-5), 20)
+assert.strictEqual(apply.clampPageLimit(NaN), 20)
+assert.strictEqual(apply.clampPageLimit('abc'), 20)
+assert.strictEqual(apply.clampPageLimit(1), 1)
+assert.strictEqual(apply.clampPageLimit(3.7), 3, '非整数向下取整')
+assert.strictEqual(apply.clampPageLimit(100), 100)
+assert.strictEqual(apply.clampPageLimit(101), 100, '超过上限钳到 100')
+assert.strictEqual(apply.clampPageLimit(100000), 100)
+
+const paCorpus = [
+  paRecord('pa-out-1', 'out', 1000, 'cust-a'),
+  paRecord('pa-out-2', 'out', 1000, 'cust-b'),   // 和 pa-out-1 同毫秒，靠 id 排先后
+  paRecord('pa-out-3', 'out', 3000, 'cust-a'),
+  paRecord('pa-in-1', 'in', 1500, ''),
+  paRecord('pa-in-2', 'in', 4000, ''),
+  paRecord('pa-return-1', 'return', 2000, 'cust-a'),
+  paRecord('pa-return-2', 'return', 4500, 'cust-b'),
+  paRecord('pa-pay-1', 'pay', 2500, 'cust-a'),
+  paRecord('pa-pay-2', 'pay', 5000, 'cust-b'),
+  paRecord('pa-opening-1', 'opening', 100, 'cust-a'),   // 不在「七种」之内，混进来验证不会被误算进别的桶
+  paRecord('pa-convert-1', 'convert', 2200, ''),
+  paRecord('pa-convert-2', 'convert', 4200, ''),
+  paRecord('pa-adjin-1', 'adjust_in', 2700, ''),
+  paRecord('pa-adjin-2', 'adjust_in', 4700, ''),
+  paRecord('pa-adjout-1', 'adjust_out', 2900, ''),
+  paRecord('pa-adjout-2', 'adjust_out', 4900, '')
+]
+
+function paIds(list) {
+  return list.map(function (r) { return r.id }).sort()
+}
+
+// 七种 type：all / in / out / pay / return / convert / adjust（和 pages/records/records.js
+// onLoad 里认识的 type 一一对应，adjust 合并 adjust_in / adjust_out 两种）
+const paExpectedByType = {
+  all: paCorpus,
+  in: paCorpus.filter(function (r) { return r.type === 'in' }),
+  out: paCorpus.filter(function (r) { return r.type === 'out' }),
+  pay: paCorpus.filter(function (r) { return r.type === 'pay' }),
+  return: paCorpus.filter(function (r) { return r.type === 'return' }),
+  convert: paCorpus.filter(function (r) { return r.type === 'convert' }),
+  adjust: paCorpus.filter(function (r) { return r.type === 'adjust_in' || r.type === 'adjust_out' })
+}
+Object.keys(paExpectedByType).forEach(function (type) {
+  const got = apply.pageRecords(paCorpus, { type: type, limit: 100 })
+  assert.deepStrictEqual(paIds(got.records), paIds(paExpectedByType[type]),
+    'pageRecords type=' + type + ' 结果不对')
+})
+
+// 边界：customerId 传 ''（散客）不过滤 —— 防止有人以为能用它单独查出散客单
+assert.strictEqual(apply.pageRecords(paCorpus, { customerId: '', limit: 100 }).records.length,
+  paCorpus.length, "customerId 传空字符串不应该过滤任何记录")
+assert.strictEqual(apply.pageRecords(paCorpus, { customerId: 'cust-a', limit: 100 }).records.length,
+  paCorpus.filter(function (r) { return r.customerId === 'cust-a' }).length)
+
+// 全量倒序参照（sortKey 倒序，同毫秒靠 id 拿到全序）
+const paFullDesc = paCorpus.slice().sort(function (a, b) {
+  const ka = apply.makeSortKey(a.createdAt, a.id)
+  const kb = apply.makeSortKey(b.createdAt, b.id)
+  if (ka === kb) return 0
+  return ka > kb ? -1 : 1
+}).map(function (r) { return r.id })
+
+// 同毫秒全序：pa-out-1 / pa-out-2 必须相邻且顺序由 id 决定，不能并列
+const msIndexA = paFullDesc.indexOf('pa-out-1')
+const msIndexB = paFullDesc.indexOf('pa-out-2')
+assert.notStrictEqual(msIndexA, msIndexB)
+assert.strictEqual(Math.abs(msIndexA - msIndexB), 1, '同毫秒的两条必须相邻且有全序')
+
+// 游标翻页不重不漏：小 limit 逐页翻完，必须逐条等于整份倒序
+let paCursor = ''
+const paPaged = []
+for (let i = 0; i < 50; i++) {
+  const got = apply.pageRecords(paCorpus, { cursor: paCursor, limit: 3 })
+  got.records.forEach(function (r) { paPaged.push(r.id) })
+  if (!got.hasMore) break
+  paCursor = got.cursor
+}
+assert.deepStrictEqual(paPaged, paFullDesc, 'pageRecords 分页翻完必须和整份倒序逐条相同')
+
+// 整页倍数 hasMore + 空页 cursor：6 条、limit=3，翻到第 3 页应该是 0 条 + hasMore:false + cursor:''
+const paEven = paCorpus.slice(0, 6)
+const paPage1 = apply.pageRecords(paEven, { limit: 3 })
+assert.strictEqual(paPage1.records.length, 3)
+assert.strictEqual(paPage1.hasMore, true)
+const paPage2 = apply.pageRecords(paEven, { limit: 3, cursor: paPage1.cursor })
+assert.strictEqual(paPage2.records.length, 3)
+assert.strictEqual(paPage2.hasMore, true, '正好整页倍数时，翻完之前那页 hasMore 仍为 true')
+const paPage3 = apply.pageRecords(paEven, { limit: 3, cursor: paPage2.cursor })
+assert.strictEqual(paPage3.records.length, 0, '正好整页倍数，翻完之后再翻一页应为 0 条')
+assert.strictEqual(paPage3.hasMore, false)
+assert.strictEqual(paPage3.cursor, '', '空页 cursor 必须是空字符串')
+
 console.log('ledger terms tests passed')

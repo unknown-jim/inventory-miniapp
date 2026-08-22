@@ -1,4 +1,5 @@
 const apply = require('./ledger-apply')
+const inventory = require('./inventory')
 
 // 流水集合 ledger_records 的访问层。
 //
@@ -39,6 +40,10 @@ const TOO_MANY_RECORDS = '本店流水已超过 ' + COMPAT_MAX_RECORDS
 // 「集合去掉一个元素之后的最大值」由原集合前 2 名一定能确定，所以取 2 条：
 // 改一条 in 不改 createdAt，删一条要把它从候选里去掉，两种都够。
 const LATEST_PURCHASE_KEEP = 2
+// recentAndToday 的无界循环兜底：跨 dayStart 之前一直翻不到头（比如 dayStart
+// 非法却没被拦住）就会一直往前翻。2000 条封顶，超过就报「算不出来」而不是
+// 一直翻下去 —— 和 COMPAT_MAX_RECORDS 的思路一样，但这是另一个量，互不影响。
+const TODAY_MAX_RECORDS = 2000
 
 function docsOf(res) {
   return (res && res.data) || []
@@ -85,9 +90,12 @@ function recordStore(ctx, bookId, shopId) {
   }
 
   // 倒序一页。cursor 是上一页最后一条的 sortKey。
+  // limit 钳制走 apply.clampPageLimit：不传时缺省 20（2b-2 之前是 100），
+  // 调用方核实过这条变化 —— readAll / suffixOfCustomer 都显式传自己的
+  // limit（PAGE_LIMIT=100），不受影响，见 tests/ledger-records.test.js。
   async function page(options) {
     options = options || {}
-    const limit = options.limit || PAGE_LIMIT
+    const limit = apply.clampPageLimit(options.limit)
     const where = { bookId: book }
     const type = String(options.type || '')
     if (type && type !== 'all') {
@@ -183,6 +191,53 @@ function recordStore(ctx, bookId, shopId) {
   }
 }
 
+// 「最近一页」+「今日三项」合成一次查询。
+//
+// 依据是一条可证的性质：sortKey = pad13(createdAt) + '_' + id，按 sortKey 倒序
+// = 按 (createdAt 倒序, id 倒序)，所以「今天」的流水一定是这个序列的一个前缀 ——
+// 翻到一条 createdAt < dayStart 后面就不可能再有今天的。于是「今天有没有取全」
+// 是可判定的，不是猜的：翻到边界（crossed）或者翻到整本流水的头（!hasMore）
+// 都叫「取全了」；命中 TODAY_MAX_RECORDS 还没翻到边界，才是「算不出来」。
+//
+// dayStart 为 null（调用方校验过的非法值）时不算 today，只取 recent 那一页，
+// 一次查询就完事 —— 不因为一个乱来的 dayStart 去烧多次往返。
+async function recentAndToday(store, dayStart, recentLimit) {
+  const limit = apply.clampPageLimit(recentLimit)
+  const day = Number(dayStart)
+  const wantToday = dayStart != null && Number.isFinite(day) && day > 0
+
+  if (!wantToday) {
+    const got = await store.page({ cursor: '', limit: limit })
+    return { recent: got.records, today: null, todayComplete: false }
+  }
+
+  let cursor = ''
+  let all = []
+  let hasMore = true
+  let crossed = false
+  for (;;) {
+    const got = await store.page({ cursor: cursor, limit: PAGE_LIMIT })
+    all = all.concat(got.records)
+    hasMore = got.hasMore
+    cursor = got.cursor
+    if (!crossed) {
+      crossed = got.records.some(function (item) {
+        return inventory.toNumber(item && item.createdAt) < day
+      })
+    }
+    if (all.length >= TODAY_MAX_RECORDS) break
+    if (all.length >= limit && (crossed || !hasMore)) break
+    if (!hasMore) break
+  }
+
+  const complete = crossed || !hasMore
+  return {
+    recent: all.slice(0, limit),
+    today: complete ? inventory.todayTotals(all, day) : null,
+    todayComplete: complete
+  }
+}
+
 async function applyWrites(store, writes) {
   const list = writes || []
   for (let i = 0; i < list.length; i++) {
@@ -203,6 +258,8 @@ module.exports = {
   SUFFIX_MAX_RECORDS: SUFFIX_MAX_RECORDS,
   TOO_MANY_RECORDS: TOO_MANY_RECORDS,
   LATEST_PURCHASE_KEEP: LATEST_PURCHASE_KEEP,
+  TODAY_MAX_RECORDS: TODAY_MAX_RECORDS,
   recordStore: recordStore,
+  recentAndToday: recentAndToday,
   applyWrites: applyWrites
 }

@@ -134,6 +134,66 @@ function fromRecordDoc(doc) {
   return record
 }
 
+// ---------------------------------------------------------------------------
+// 一页流水的定义（2b-2）。三处实现必须给出逐条相同的结果：集合查询
+// （cloudfunctions/ledger/ledger-records.js 的 recordStore.page）、未迁移老
+// 账本的内存切片、小程序内存模式的 memoryRecordStore.page —— 所以只写这一份，
+// 索引化实现和内存模式都调它或对它做等价性校验（tests/ledger-records.test.js
+// 的 T-A2）。
+// ---------------------------------------------------------------------------
+
+const RECORD_PAGE_DEFAULT = 20
+const RECORD_PAGE_LIMIT = 100
+
+// 不传 / 非法（NaN、<=0）一律给缺省值 20；超过上限钳到 100。
+function clampPageLimit(limit) {
+  const n = Math.floor(inventory.toNumber(limit))
+  if (!n || n < 1) return RECORD_PAGE_DEFAULT
+  return Math.min(n, RECORD_PAGE_LIMIT)
+}
+
+// records 是调用方已经在内存里的**全部**候选流水（未迁移老账本的数组，或小
+// 程序内存模式的整份流水）。倒序分页，语义必须和 recordStore.page 逐条对齐：
+// hasMore = 本页条数 >= limit（正好整页倍数时最后一页 0 条 + hasMore:false），
+// 本页为空时 cursor 为 ''。cursor 传一个不存在的 sortKey 也按 < 比较，和集合
+// 查询的 _.lt 语义一致。customerId 传 ''（散客）不过滤 —— 散客单没有独立的
+// 查询口径，不能靠这个参数单独查出来，和 recordStore.page 一致。
+function pageRecords(records, options) {
+  options = options || {}
+  const limit = clampPageLimit(options.limit)
+  const type = String(options.type || '')
+  const customerId = String(options.customerId || '')
+  const cursorKey = String(options.cursor || '')
+  const filtered = (records || []).filter(function (record) {
+    if (type && type !== 'all') {
+      if (type === 'adjust') {
+        if (!inventory.isAdjust(record)) return false
+      } else if ((record && record.type) !== type) {
+        return false
+      }
+    }
+    if (customerId && (record && record.customerId) !== customerId) return false
+    return true
+  })
+  const sorted = filtered.slice().sort(function (a, b) {
+    const ka = makeSortKey(a && a.createdAt, a && a.id)
+    const kb = makeSortKey(b && b.createdAt, b && b.id)
+    if (ka === kb) return 0
+    return ka > kb ? -1 : 1
+  })
+  const afterCursor = cursorKey
+    ? sorted.filter(function (record) {
+      return makeSortKey(record && record.createdAt, record && record.id) < cursorKey
+    })
+    : sorted
+  const page = afterCursor.slice(0, limit)
+  return {
+    records: page,
+    cursor: page.length ? makeSortKey(page[page.length - 1].createdAt, page[page.length - 1].id) : '',
+    hasMore: page.length >= limit
+  }
+}
+
 function sameRecord(a, b) {
   if (a === b) return true
   if (!a || !b) return false
@@ -826,6 +886,10 @@ function applyMutation(ledger, action, payload, now, nextId, loaded) {
 
 module.exports = {
   MUTATIONS: MUTATIONS,
+  RECORD_PAGE_DEFAULT: RECORD_PAGE_DEFAULT,
+  RECORD_PAGE_LIMIT: RECORD_PAGE_LIMIT,
+  clampPageLimit: clampPageLimit,
+  pageRecords: pageRecords,
   emptyLedger: emptyLedger,
   listsOf: listsOf,
   withAggregates: withAggregates,

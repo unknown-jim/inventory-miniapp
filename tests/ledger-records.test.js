@@ -1538,6 +1538,295 @@ function totalStock(skus, productId) {
   assert.strictEqual(holeSaleAfter.lines[0].returnedQty, 1)
   assert.deepStrictEqual(holeAfter.accounts, inv.foldAccountTerms(holeAfter.records))
 
+  // -------------------------------------------------------------------------
+  // 2b-2a：分页 API（客户端一行不改）。方案 D:\work\inventory-miniapp-handoffs\
+  // 2b-2-pagination-design-2026-08-23.md §五 的 T-A1..T-A8。
+  // -------------------------------------------------------------------------
+
+  // T-A3：分页翻完 == readAll == getLedger 回的 records —— 2b-2a 是唯一能同时
+  // 拿到「整本的答案」和「分页的答案」的时刻，2b-2b 停发整本之后这个 oracle 就没了。
+  const a3Ledger = await shop.ledger()
+  const a3Store = recordsModule.recordStore(shop.db.recordsCtx(), a3Ledger.bookId, shop.shopId)
+  const a3ReadAll = await a3Store.readAll()
+  assert.deepStrictEqual(a3ReadAll, a3Ledger.records,
+    'T-A3：readAll 必须逐条等于 getLedger 回的整本 records')
+  const a3StorePaged = []
+  let a3StoreCursor = ''
+  for (;;) {
+    const got = await a3Store.page({ cursor: a3StoreCursor, limit: 17 }) // 故意选不整除的 limit
+    got.records.forEach(function (item) { a3StorePaged.push(item) })
+    if (!got.hasMore) break
+    a3StoreCursor = got.cursor
+  }
+  assert.deepStrictEqual(a3StorePaged, a3Ledger.records,
+    'T-A3：recordStore.page 分页翻完必须逐条等于整本 records')
+  const a3ListPaged = []
+  let a3ListCursor = ''
+  for (;;) {
+    const listRes = await shop.call('listRecords', { cursor: a3ListCursor, limit: 13 })
+    listRes.records.forEach(function (item) { a3ListPaged.push(item) })
+    if (!listRes.hasMore) break
+    a3ListCursor = listRes.cursor
+  }
+  assert.deepStrictEqual(a3ListPaged, a3Ledger.records,
+    'T-A3：listRecords 分页（走完整云函数栈）翻完也必须逐条等于整本 records')
+  console.log('T-A3：分页翻完 / readAll / getLedger 整本，' + a3Ledger.records.length + ' 条三方一致')
+
+  // T-A2：pageRecords（纯函数）== recordStore.page（集合查询），本步骤的核心
+  // 交付物。{type}×7 × {customerId}×3 × {limit}×4 的笛卡尔积逐页翻完，逐字段
+  // deepStrictEqual。数据直接合成写入集合（绕开 applyMutation 的业务规则），
+  // 图的是能自由控制 type / customerId / 同毫秒分布，覆盖面比走业务动作更全。
+  async function comparePagedEquivalence(fullRecords, store, options) {
+    let cursor = ''
+    for (let round = 0; round < 1000; round++) {
+      const withCursor = Object.assign({}, options, { cursor: cursor })
+      const pure = apply.pageRecords(fullRecords, withCursor)
+      const coll = await store.page(withCursor)
+      assert.deepStrictEqual(pure, coll,
+        'T-A2：pageRecords 与 recordStore.page 不等，options=' + JSON.stringify(withCursor))
+      if (!pure.hasMore) return
+      cursor = pure.cursor
+    }
+    assert.fail('T-A2：翻页 1000 轮还没翻完，可能死循环：' + JSON.stringify(options))
+  }
+
+  const pgShop = await new Shop({ ids: idFactory('pg') }).open('分页对拍店')
+  const pgBookId = (await pgShop.db.getLedger(pgShop.shopId)).bookId
+  const pgCustomers = ['pg-cust-a', 'pg-cust-b']
+  const pgTypesPool = ['out', 'in', 'return', 'pay', 'opening', 'convert', 'adjust_in', 'adjust_out']
+  const pgRaw = []
+  for (let i = 0; i < 320; i++) {
+    const type = pgTypesPool[i % pgTypesPool.length]
+    // 每 3 条撞一次同毫秒，钉住「同毫秒也要有全序」
+    const createdAt = 1000 + Math.floor(i / 3) * 10
+    const hasCustomer = type === 'out' || type === 'pay' || type === 'return' || type === 'opening'
+    const customerId = hasCustomer ? pgCustomers[i % 2] : ''
+    pgRaw.push({
+      id: 'pg-' + i,
+      type: type,
+      amount: 1,
+      profit: 0,
+      remark: '',
+      customerId: customerId,
+      customerName: customerId ? '客户' : '',
+      customerPhone: '',
+      customerAddress: '',
+      payType: hasCustomer ? 'credit' : 'cash',
+      createdAt: createdAt,
+      lines: []
+    })
+  }
+  pgRaw.forEach(function (record) {
+    const doc = apply.toRecordDoc(record, pgBookId, pgShop.shopId)
+    pgShop.db.records[doc._id] = doc
+  })
+  const pgFull = pgRaw.slice()
+  const pgQStore = recordsModule.recordStore(pgShop.db.recordsCtx(), pgBookId, pgShop.shopId)
+
+  // 边界：customerId 传 ''（散客）不过滤 —— 结果必须和不传 customerId 完全一样，
+  // 防止有人以为能用它单独查出散客单。limit 用 100（clampPageLimit 的上限），
+  // 不用一个会被钳掉的超大值，否则「一页装不下 320 条」会被误当成过滤生效。
+  assert.deepStrictEqual(
+    apply.pageRecords(pgFull, { customerId: '', limit: 100 }),
+    apply.pageRecords(pgFull, { limit: 100 }),
+    'T-A2 边界：customerId 传空字符串和不传必须结果一致（纯函数，不过滤）'
+  )
+  assert.deepStrictEqual(
+    await pgQStore.page({ customerId: '', limit: 100 }),
+    await pgQStore.page({ limit: 100 }),
+    'T-A2 边界：customerId 传空字符串和不传必须结果一致（集合查询，不过滤）'
+  )
+  // 边界：cursor 传一个不存在的 sortKey，两边都按 < 比较，必须一致
+  const ghostCursor = '0000000001005_ghost'
+  assert.deepStrictEqual(
+    apply.pageRecords(pgFull, { cursor: ghostCursor, limit: 100 }),
+    await pgQStore.page({ cursor: ghostCursor, limit: 100 }),
+    'T-A2 边界：cursor 传不存在的 sortKey 两边必须一致（都用 <）'
+  )
+
+  const a2Types = ['all', 'in', 'out', 'pay', 'return', 'convert', 'adjust']
+  const a2Customers = ['', pgCustomers[0], pgCustomers[1]]
+  const a2Limits = [1, 3, 20, 100]
+  let a2Combos = 0
+  for (let ti = 0; ti < a2Types.length; ti++) {
+    for (let ci = 0; ci < a2Customers.length; ci++) {
+      for (let li = 0; li < a2Limits.length; li++) {
+        await comparePagedEquivalence(pgFull, pgQStore, {
+          type: a2Types[ti], customerId: a2Customers[ci], limit: a2Limits[li]
+        })
+        a2Combos += 1
+      }
+    }
+  }
+  assert.strictEqual(a2Combos, a2Types.length * a2Customers.length * a2Limits.length)
+  console.log('T-A2：pageRecords 与 recordStore.page 笛卡尔积等价性通过，' + a2Combos + ' 组合全部逐页核对')
+
+  // T-A4：listRecords({customerId}) 翻完 == summarizeCustomerAccount(all, cid).ledger
+  // 把 F18（只有 out/pay/return/opening 带 customerId）的推导钉成可执行断言。
+  const a4Expected = inv.summarizeCustomerAccount(allDesc, slipA.id).ledger
+  const a4Paged = []
+  let a4Cursor = ''
+  for (;;) {
+    const listRes = await slipShop.call('listRecords', { customerId: slipA.id, cursor: a4Cursor, limit: 2 })
+    listRes.records.forEach(function (item) { a4Paged.push(item) })
+    if (!listRes.hasMore) break
+    a4Cursor = listRes.cursor
+  }
+  assert.ok(a4Paged.length > 0, 'T-A4：语料必须包含客户甲的往来记录，否则测试没有意义')
+  assert.deepStrictEqual(a4Paged, a4Expected,
+    'T-A4：listRecords({customerId}) 翻完必须等于 summarizeCustomerAccount(...).ledger')
+
+  // T-A6：getRecord 两条路（已迁移 store.byId / 未迁移 legacy find）+ 跨账套取不到
+  const a6MigratedExpected = allDesc[0]
+  const a6MigratedRes = await slipShop.call('getRecord', { recordId: a6MigratedExpected.id })
+  assert.deepStrictEqual(a6MigratedRes.record, a6MigratedExpected,
+    'T-A6：已迁移账本 getRecord 必须等于 store.byId 那条')
+  await rejects(function () {
+    return slipShop.call('getRecord', { recordId: nrPurchase.id }) // 属于 noReadShop 的记录 id
+  }, /流水不存在/)
+  await rejects(function () {
+    return slipShop.call('getRecord', { recordId: 'definitely-not-exist' })
+  }, /流水不存在/)
+
+  // T-A7：listRecords 的 type 和 customerId 不能同时非默认（无索引查询，方案 §3.1）
+  await rejects(function () {
+    return slipShop.call('listRecords', { type: 'out', customerId: slipA.id })
+  }, /不支持同时按类型和客户筛选/)
+  // type='all' 不算「非默认」，可以和 customerId 同时给
+  const a7Ok = await slipShop.call('listRecords', { type: 'all', customerId: slipA.id, limit: 100 })
+  assert.ok(Array.isArray(a7Ok.records))
+
+  // T-A5：today / recent 与全量折叠相等；跨日语料；单页装不下当天（130 条同日
+  // 逼出翻页，PAGE_LIMIT=100）仍 todayComplete；dayStart 非法只发一次查询。
+  function taRec(id, type, createdAt, amount, profit) {
+    return {
+      id: id, type: type, amount: amount, profit: profit, remark: '',
+      customerId: '', customerName: '', customerPhone: '', customerAddress: '',
+      payType: 'cash', createdAt: createdAt, lines: []
+    }
+  }
+  const taShop = await new Shop({ ids: idFactory('ta') }).open('今日聚合店')
+  const taBookId = (await taShop.db.getLedger(taShop.shopId)).bookId
+  const taDayStart = 500000
+  const taOlder = []
+  for (let i = 0; i < 25; i++) {
+    taOlder.push(taRec('ta-old-' + i, 'out', taDayStart - 1000 + i, 10, 4))
+  }
+  const taToday = []
+  for (let i = 0; i < 80; i++) {
+    taToday.push(taRec('ta-out-' + i, 'out', taDayStart + i, 10, 4))
+  }
+  for (let i = 0; i < 20; i++) {
+    taToday.push(taRec('ta-ret-' + i, 'return', taDayStart + 80 + i, 5, -2))
+  }
+  for (let i = 0; i < 30; i++) {
+    taToday.push(taRec('ta-in-' + i, 'in', taDayStart + 100 + i, 8, 0))
+  }
+  assert.strictEqual(taToday.length, 130, 'T-A5 语料准备：today 桶要够 130 条（>PAGE_LIMIT）才能逼出多页')
+  const taAll = taOlder.concat(taToday)
+  taAll.forEach(function (record) {
+    const doc = apply.toRecordDoc(record, taBookId, taShop.shopId)
+    taShop.db.records[doc._id] = doc
+  })
+  taShop.db.ledgers[taShop.shopId] = Object.assign({}, taShop.db.ledgers[taShop.shopId], {
+    aggregate: inv.foldTotalTerms(taAll),
+    accounts: inv.foldAccountTerms(taAll)
+  })
+
+  const taProbeQuery = taShop.db.recordsCtx().collection.where({})
+  const taQueryProto = Object.getPrototypeOf(taProbeQuery)
+  const taOriginalGet = taQueryProto.get
+
+  const taStore = recordsModule.recordStore(taShop.db.recordsCtx(), taBookId, taShop.shopId)
+  const taRecentLimit = 10
+
+  // dayStart 非法（null）：只取 recent 那一页，一次查询就完事
+  let a5InvalidCalls = 0
+  taQueryProto.get = function () {
+    a5InvalidCalls += 1
+    return taOriginalGet.apply(this, arguments)
+  }
+  const a5Invalid = await recordsModule.recentAndToday(taStore, null, taRecentLimit)
+  taQueryProto.get = taOriginalGet
+  assert.strictEqual(a5InvalidCalls, 1, 'T-A5：dayStart 非法时 recentAndToday 只应该发一次查询')
+  assert.strictEqual(a5Invalid.today, null)
+  assert.strictEqual(a5Invalid.todayComplete, false)
+  assert.strictEqual(a5Invalid.recent.length, taRecentLimit)
+
+  // 跨日语料 + 130 条当日记录逼出多页：today 仍要 complete，且和全量折叠相等
+  let a5ValidCalls = 0
+  taQueryProto.get = function () {
+    a5ValidCalls += 1
+    return taOriginalGet.apply(this, arguments)
+  }
+  const a5Valid = await recordsModule.recentAndToday(taStore, taDayStart, taRecentLimit)
+  taQueryProto.get = taOriginalGet
+  assert.ok(a5ValidCalls >= 2,
+    'T-A5：today 桶超过 PAGE_LIMIT 时必须翻多页才能跨过 dayStart，实际查询 ' + a5ValidCalls + ' 次')
+  assert.strictEqual(a5Valid.todayComplete, true,
+    'T-A5：today 桶 130 条（>PAGE_LIMIT）逼出多页翻页，仍要 todayComplete')
+  assert.deepStrictEqual(a5Valid.today, inv.todayTotals(taAll, taDayStart),
+    'T-A5：today 必须等于对全量语料的折叠，且不能被跨日的 taOlder 污染')
+  assert.deepStrictEqual(a5Valid.recent, apply.pageRecords(taAll, { limit: taRecentLimit }).records,
+    'T-A5：recent 必须等于 pageRecords 纯函数切出来的同一页')
+  console.log('T-A5：today 桶 130 条逼出 ' + a5ValidCalls + ' 次查询，todayComplete 仍为 true')
+
+  // 端到端：走 getLedger（2b-2a 仍然回整本 + 新增 recent/today），三个口径互相印证
+  const taGetLedgerRes = await taShop.call('getLedger', { dayStart: taDayStart, recentLimit: taRecentLimit })
+  assert.strictEqual(taGetLedgerRes.ledger.todayComplete, true)
+  assert.deepStrictEqual(taGetLedgerRes.ledger.today, inv.todayTotals(taAll, taDayStart))
+  assert.deepStrictEqual(taGetLedgerRes.ledger.recent, apply.pageRecords(taAll, { limit: taRecentLimit }).records)
+
+  // dayStart 非法（0 / 远超 now）：getLedger 必须显示 today:null，不能回退现算
+  const taZeroDay = await taShop.call('getLedger', { dayStart: 0, recentLimit: 5 })
+  assert.strictEqual(taZeroDay.ledger.today, null, 'T-A5：dayStart=0 必须给 today:null，不能悄悄现算')
+  assert.strictEqual(taZeroDay.ledger.todayComplete, false)
+  const taFarFuture = await taShop.call('getLedger', {
+    dayStart: Date.now() + 30 * 24 * 60 * 60 * 1000, recentLimit: 5
+  })
+  assert.strictEqual(taFarFuture.ledger.today, null, 'T-A5：远超今天的 dayStart 必须给 today:null')
+  assert.strictEqual(taFarFuture.ledger.todayComplete, false)
+
+  // dayStart 的下界比上界更要紧：设备时钟停在 1970 时它是个很小的正数，
+  // 没有下界就会一路翻到没有更多流水，把**整本账当成「今天」**返回，
+  // 而且标着 todayComplete: true —— 一个标着「完整」的错数，比 null 危险得多。
+  // 这两条必须显式传一个真实的 now：夹具默认用从 1000 起步的合成时钟，
+  // 那种 now 下「1970 年」和「一周前」都落在合法区间里，下界根本演示不出来。
+  const taRealNow = Date.now()
+  const taStaleClock = await taShop.call('getLedger', { dayStart: 1, recentLimit: 5 }, taRealNow)
+  assert.strictEqual(taStaleClock.ledger.today, null,
+    'T-A5：1970 年的 dayStart 必须给 today:null，绝不能把整本账当成今天')
+  assert.strictEqual(taStaleClock.ledger.todayComplete, false,
+    'T-A5：算不出来就不能标 complete')
+  const taWeekAgo = await taShop.call('getLedger', {
+    dayStart: taRealNow - 7 * 24 * 60 * 60 * 1000, recentLimit: 5
+  }, taRealNow)
+  assert.strictEqual(taWeekAgo.ledger.today, null, 'T-A5：一周前的 dayStart 同样要拒绝')
+  // 正常情况下（dayStart 就是当天零点）仍然要算得出来，别把下界写成了一刀切
+  const taTodayOk = await taShop.call('getLedger', {
+    dayStart: inv.startOfDay(taRealNow), recentLimit: 5
+  }, taRealNow)
+  assert.ok(taTodayOk.ledger.today, 'T-A5：合法的当天零点必须算得出来')
+  assert.strictEqual(taTodayOk.ledger.todayComplete, true)
+
+  // T-A8：未迁移店的分页 —— recordsPendingMigration + 翻完 == legacy 倒序 +
+  // 写路径仍被挡（复用 18) 的 winShop / winLegacy 迁移窗口夹具）
+  const a8Expected = apply.pageRecords(winLegacy, { limit: 100 }).records
+  const a8Paged = []
+  let a8Cursor = ''
+  for (;;) {
+    const listRes = await winCall('listRecords', { cursor: a8Cursor, limit: 2 })
+    assert.strictEqual(listRes.recordsPendingMigration, true,
+      'T-A8：未迁移店 listRecords 必须标 recordsPendingMigration')
+    listRes.records.forEach(function (item) { a8Paged.push(item) })
+    if (!listRes.hasMore) break
+    a8Cursor = listRes.cursor
+  }
+  assert.deepStrictEqual(a8Paged, a8Expected, 'T-A8：未迁移店翻页完整结果必须等于 legacy 数组的倒序')
+  await rejects(function () {
+    return winCall('addPayment', { customerId: 'c1', amount: 1 })
+  }, /本店账本还没完成流水升级/)
+
   console.log('ledger records tests passed')
 })().catch(function (error) {
   console.error(error && error.stack ? error.stack : error)

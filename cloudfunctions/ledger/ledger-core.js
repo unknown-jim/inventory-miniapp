@@ -23,8 +23,10 @@ function withBookId(ledger, shopId) {
 
 // 纯内存：只吃账本文档，出四张表 + 聚合投影。
 // **签名里没有 db —— 记账路径拿不到数据库句柄，所以「提交之后又去读库」
-// 在那条路上写不出来。**
-function publicListsOf(shopId, doc) {
+// 在那条路上写不出来。** opts 是纯数据（{dayStart, recentLimit}），2b-2a 新增，
+// 不破坏这条签名保证。
+function publicListsOf(shopId, doc, opts) {
+  opts = opts || {}
   const source = doc || apply.emptyLedger()
   const lists = apply.listsOf(withBookId(source, shopId))
   lists.hasClearedBackup = apply.hasClearedBackup(source)
@@ -42,6 +44,16 @@ function publicListsOf(shopId, doc) {
     lists.aggregate = inventory.foldTotalTerms(legacy)
     apply.withAggregates(lists)
     lists.recordsPendingMigration = true
+    // 2b-2a：recent / today 同样从这份已经在内存里的老数组现切，零额外 IO ——
+    // 和 listRecords 走的是同一个 apply.pageRecords，一份定义、两处调用（方案 Q1）。
+    lists.recent = apply.pageRecords(legacy, { limit: opts.recentLimit }).records
+    if (opts.dayStart != null) {
+      lists.today = inventory.todayTotals(legacy, opts.dayStart)
+      lists.todayComplete = true
+    } else {
+      lists.today = null
+      lists.todayComplete = false
+    }
   }
   return lists
 }
@@ -62,6 +74,28 @@ async function attachRecords(db, shopId, lists) {
   if (total !== claimed) {
     lists.aggregatesStale = true
     console.warn('[ledger] aggregate drift shop=' + shopId + ' book=' + lists.bookId
+      + ' count=' + total + ' aggregate=' + claimed)
+  }
+  return lists
+}
+
+// getLedger 专用：给已迁移的账套补 recent / today（2b-2a 新增，纯加法）。
+// 和 attachRecords 一样**只准从只读 action 调**：分页查询有界，但仍然是 IO，
+// 记账路径不能碰。
+// 这里把 attachRecords 的 countAll() 漂移哨兵搬了一份过来：2b-2a 两个哨兵都在
+// 跑（attachRecords 没被动，仍然自己查一次），2b-2b 删掉 attachRecords 之后
+// 这里就是唯一的防线，不能等到那时候才补。
+async function attachRecent(db, shopId, lists, dayStart, recentLimit) {
+  const store = records.recordStore(db.recordsCtx(), lists.bookId, shopId)
+  const got = await records.recentAndToday(store, dayStart, recentLimit)
+  lists.recent = got.recent
+  lists.today = got.today
+  lists.todayComplete = got.todayComplete
+  const claimed = (lists.aggregate && lists.aggregate.count) || 0
+  const total = await store.countAll()
+  if (total !== claimed) {
+    lists.aggregatesStale = true
+    console.warn('[ledger] aggregate drift (recent) shop=' + shopId + ' book=' + lists.bookId
       + ' count=' + total + ' aggregate=' + claimed)
   }
   return lists
@@ -200,6 +234,40 @@ function memberDocId(shopId, openid) {
   return String(shopId) + '_' + String(openid)
 }
 
+// dayStart 由客户端传（跨午夜时客户端自己知道要重取），服务端只做健全性检查，
+// **不回退到服务端时区现算** —— 那正是「悄悄给一个错数」。非法（非数字 / NaN /
+// <=0 / 远超 now）一律拒绝，调用方把 today 显示成 —— 而不是 0（0 是会被当真
+// 的错数）。「远超」的宽限量选一天：够盖过时区差和一点点时钟误差，不是精确刻度。
+const DAY_START_FUTURE_SLACK_MS = 24 * 60 * 60 * 1000
+// 下界同样必要，而且比上界更要紧：设备时钟停在 1970 时 dayStart 会是个很小的
+// 正数，一路翻到没有更多流水才收工，于是**整本账被当成「今天」返回，还标着
+// todayComplete: true**。一个标着「完整」的错数比 null 更危险 —— null 会让
+// 首页显示「—」，而这个会让店主把三年的销售额当成今天的。
+// 宽限量取两天：够盖过时区差和跨午夜的请求，不是精确刻度。
+const DAY_START_PAST_SLACK_MS = 2 * 24 * 60 * 60 * 1000
+function isValidDayStart(value, now) {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return false
+  if (n <= 0) return false
+  if (n < now - DAY_START_PAST_SLACK_MS) return false
+  if (n > now + DAY_START_FUTURE_SLACK_MS) return false
+  return true
+}
+
+// getSlip 和 getRecord 共用同一条「按 id 找一条流水」的口径：迁移窗口内从内存
+// 里的老数组 find，迁完之后走 store.byId。两处各写一遍就会有一天口径分叉，
+// 所以只准从这里过。
+async function loadRecordById(ledger, store, id) {
+  const wantedId = String(id || '')
+  if (apply.recordsPending(ledger)) {
+    const legacy = apply.legacyRecordsOf(ledger)
+    const record = legacy.find(function (item) { return item.id === wantedId }) || null
+    return { record: record, legacy: legacy }
+  }
+  const record = await store.byId(wantedId)
+  return { record: record, legacy: null }
+}
+
 // 流水搬走之后不能再看 ledger.records.length，改看聚合里的条数。
 // 仍然带上 records.length，是为了让迁移前的老文档也算「有数据」。
 function ledgerHasData(ledger) {
@@ -244,7 +312,7 @@ function isMutation(action) {
 // 2b-1 起小程序必须带 apiVersion。老客户端（已发布那一版）拿到不带 records
 // 的回传会把本地流水缓存清成空数组，下一张送货单就会印一个 0.00 的前欠。
 const API_VERSION = 2
-const VERSIONED_READS = ['getLedger', 'getSlip', 'migrateLocal']
+const VERSIONED_READS = ['getLedger', 'getSlip', 'migrateLocal', 'listRecords', 'getRecord']
 function needsApiVersion(action) {
   return VERSIONED_READS.indexOf(action) >= 0 || isMutation(action)
 }
@@ -489,8 +557,13 @@ async function dispatch(input) {
     if (!ledger) {
       throw new Error('店铺账本不存在')
     }
-    const lists = publicListsOf(shopId, ledger)
-    if (!lists.recordsPendingMigration) await attachRecords(db, shopId, lists)
+    const dayStart = isValidDayStart(payload.dayStart, now) ? Number(payload.dayStart) : null
+    const recentLimit = payload.recentLimit
+    const lists = publicListsOf(shopId, ledger, { dayStart: dayStart, recentLimit: recentLimit })
+    if (!lists.recordsPendingMigration) {
+      await attachRecords(db, shopId, lists)
+      await attachRecent(db, shopId, lists, dayStart, recentLimit)
+    }
     return { ledger: lists }
   }
 
@@ -506,11 +579,8 @@ async function dispatch(input) {
     }
     const ledger = withBookId(raw, shopId)
     const store = records.recordStore(db.recordsCtx(), ledger.bookId, shopId)
-    const wantedId = String(payload.recordId || '')
-    const legacy = apply.recordsPending(ledger) ? apply.legacyRecordsOf(ledger) : null
-    const record = legacy
-      ? legacy.find(function (item) { return item.id === wantedId }) || null
-      : await store.byId(wantedId)
+    const loaded = await loadRecordById(ledger, store, payload.recordId)
+    const record = loaded.record
     if (!record) {
       throw new Error('流水不存在')
     }
@@ -520,10 +590,10 @@ async function dispatch(input) {
     if (!customerId) {
       return { record: record, receivable: 0 }
     }
-    if (legacy) {
+    if (loaded.legacy) {
       return {
         record: record,
-        receivable: inventory.receivableAt(legacy, customerId, record.createdAt)
+        receivable: inventory.receivableAt(loaded.legacy, customerId, record.createdAt)
       }
     }
     const from = apply.makeSortKey(inventory.toNumber(record.createdAt) + 1, '')
@@ -533,6 +603,56 @@ async function dispatch(input) {
       record: record,
       receivable: inventory.round2(current - inventory.receivableDelta(suffix, customerId))
     }
+  }
+
+  // 2b-2：分页之后 store 缓存里不一定有这条流水（可能来自 customer-edit 的
+  // 往来记录，或 records.js 翻到很后面的页），所以需要单独按 id 取一条。
+  // 和 getSlip 共用 loadRecordById，两处口径不能各写一遍。
+  if (action === 'getRecord') {
+    const members = await db.listMembersByShop(shopId)
+    requireMember(members, shopId, openid)
+    const raw = await db.getLedger(shopId)
+    if (!raw) {
+      throw new Error('店铺账本不存在')
+    }
+    const ledger = withBookId(raw, shopId)
+    const store = records.recordStore(db.recordsCtx(), ledger.bookId, shopId)
+    const loaded = await loadRecordById(ledger, store, payload.recordId)
+    if (!loaded.record) {
+      throw new Error('流水不存在')
+    }
+    return { record: loaded.record }
+  }
+
+  // 分页取流水的唯一入口。type 和 customerId 不能同时非默认：不是没有调用点
+  // 需要，而是这会变成一条无索引查询 —— 10 条数据上飞快，10000 条上超时，
+  // 宁可在边界报一条明确的错，也不要发一条会随数据量退化的查询（方案 §3.1）。
+  if (action === 'listRecords') {
+    const members = await db.listMembersByShop(shopId)
+    requireMember(members, shopId, openid)
+    const type = String(payload.type || '')
+    const customerId = String(payload.customerId || '')
+    if (type && type !== 'all' && customerId) {
+      throw new Error('不支持同时按类型和客户筛选')
+    }
+    const raw = await db.getLedger(shopId)
+    if (!raw) {
+      throw new Error('店铺账本不存在')
+    }
+    const ledger = withBookId(raw, shopId)
+    const pageOptions = {
+      type: type, customerId: customerId, cursor: payload.cursor, limit: payload.limit
+    }
+    if (apply.recordsPending(ledger)) {
+      // 未迁移的店也只回一页，从账本文档里那份老数组切，走同一个 apply.pageRecords —
+      // 线上只存在一种线协议形态（方案 Q1）。写路径仍被 assertRecordsReady 挡住。
+      const legacy = apply.legacyRecordsOf(ledger)
+      const page = apply.pageRecords(legacy, pageOptions)
+      page.recordsPendingMigration = true
+      return page
+    }
+    const store = records.recordStore(db.recordsCtx(), ledger.bookId, shopId)
+    return store.page(pageOptions)
   }
 
   if (action === 'migrateLocal') {
@@ -767,6 +887,7 @@ module.exports = {
   dispatch: dispatch,
   publicListsOf: publicListsOf,
   attachRecords: attachRecords,
+  attachRecent: attachRecent,
   withBookId: withBookId,
   requireMember: requireMember
 }

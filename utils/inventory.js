@@ -2470,6 +2470,37 @@ function getDashboard(products, records, now, skus, totals) {
   }
 }
 
+// 「今日三项」的定义：销售额（扣退货）/毛利/进货额，截至 dayStart 及之后的记录。
+// 用 cents/yuan 累加（recordTerms 那一套整数分算法），不用 round2 反复叠加浮点 ——
+// 理由和 recordTerms 顶部注释一致：金额都是 round2() 的输出，先转分再累加与先
+// 累加再 round2 在这类输入上必然同解；不这样做就会重演那条已钉住的浮点分歧。
+// 2b-2a 只新增这个纯函数，不接进 getDashboard（那是 2b-2b 的事，见方案 §3.4）。
+function todayTotals(records, dayStart) {
+  const start = toNumber(dayStart)
+  let salesCents = 0
+  let returnsCents = 0
+  let profitCents = 0
+  let inCents = 0
+  ;(records || []).forEach(function (record) {
+    if (toNumber(record && record.createdAt) < start) return
+    const type = record && record.type
+    if (type === 'out') {
+      salesCents += cents(record.amount)
+      profitCents += cents(record.profit)
+    } else if (type === 'return') {
+      returnsCents += cents(record.amount)
+      profitCents += cents(record.profit)
+    } else if (type === 'in') {
+      inCents += cents(record.amount)
+    }
+  })
+  return {
+    salesAmount: yuan(salesCents - returnsCents),
+    profit: yuan(profitCents),
+    inAmount: yuan(inCents)
+  }
+}
+
 function filterProducts(products, keyword, skus) {
   const query = String(keyword || '').trim().toLowerCase()
   if (!query) {
@@ -2760,6 +2791,7 @@ module.exports = {
   updateRecord: updateRecord,
   deleteRecord: deleteRecord,
   getDashboard: getDashboard,
+  todayTotals: todayTotals,
   filterProducts: filterProducts,
   filterRecords: filterRecords,
   summarizeRecords: summarizeRecords,
