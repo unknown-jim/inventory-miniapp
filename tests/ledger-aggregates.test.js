@@ -1,6 +1,7 @@
 const assert = require('assert')
 const inv = require('../utils/inventory')
 const apply = require('../utils/ledger-apply')
+const MemoryBook = require('./memory-db').MemoryBook
 
 function idFactory() {
   let n = 0
@@ -154,13 +155,13 @@ assert.deepStrictEqual(inv.computeTotals([]), inv.summarizeRecords([]))
 
 const nextId = idFactory()
 let now = 1000
-let ledger = apply.emptyLedger()
+// 2b-1 起流水不在账本文档里：记账要先把牵连到的那几条从流水仓捞出来。
+// MemoryBook 的记账主体和 ledger-core.js 的事务体一样，只是同步、不鉴权。
+const book = new MemoryBook({ shopId: 'agg-shop', nextId: nextId })
 
 function mut(action, payload) {
   now += 10
-  const res = apply.applyMutation(ledger, action, payload, now, nextId)
-  ledger = res.ledger
-  return res.result
+  return book.mutate(action, payload, now)
 }
 
 const product = mut('saveProduct', {
@@ -196,8 +197,9 @@ mut('addReturn', {
   items: [{ saleOrderId: orderA.id, saleLineId: saleLineIdA, qty: 1 }]
 })
 
-ledger.customers.forEach(function (customer) {
-  const expected = inv.summarizeCustomerAccount(ledger.records, customer.id)
+const bookRecords = book.records()
+book.ledger.customers.forEach(function (customer) {
+  const expected = inv.summarizeCustomerAccount(bookRecords, customer.id)
   assert.strictEqual(customer.account.receivable, expected.receivable,
     '客户 ' + customer.name + ' 的落库 receivable 应与现算一致')
   assert.deepStrictEqual(customer.account, {
@@ -208,7 +210,7 @@ ledger.customers.forEach(function (customer) {
     receivable: expected.receivable
   })
 })
-assert.strictEqual(ledger.totals.receivable, inv.getTotalReceivable(ledger.records))
+assert.strictEqual(book.ledger.totals.receivable, inv.getTotalReceivable(bookRecords))
 
 // ---------------------------------------------------------------------------
 // 4) 边界：空账本 totals/账户全 0；全额收款后 receivable 为 0 而非负数或 NaN
@@ -237,7 +239,7 @@ assert.deepStrictEqual(blankCustomer.account, {
 
 // custB 目前欠 40（赊账 2 件 x 20），补齐全款后应精确归零
 mut('addPayment', { customerId: custB.id, amount: 40 })
-const custBAfterPayoff = ledger.customers.find(function (item) {
+const custBAfterPayoff = book.ledger.customers.find(function (item) {
   return item.id === custB.id
 })
 assert.strictEqual(custBAfterPayoff.account.receivable, 0)

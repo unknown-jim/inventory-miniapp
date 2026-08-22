@@ -19,6 +19,11 @@ const ARCHIVE_KEY = 'inv_clear_archive'
 const LAST_RESTORED_KEY = 'inv_last_restored_clear_at'
 const MEMORY_FLAG = 'inv_test_memory_ledger'
 const PENDING_MIGRATE_KEY = 'inv_pending_migrate'
+// 内存模式的 ledger_records 替身：文档形状和云上一样，带 bookId / sortKey
+const MEMORY_RECORDS_KEY = 'inv_record_docs'
+const MEMORY_BOOK_KEY = 'inv_book_id'
+const MEMORY_ACCOUNTS_KEY = 'inv_accounts'
+const MEMORY_AGGREGATE_KEY = 'inv_aggregate'
 const MIGRATED_KEY = 'inv_local_migrated'
 const SNAPSHOT_DONE_KEY = 'inv_local_snapshot_done'
 
@@ -32,6 +37,9 @@ const cache = {
   revision: 0,
   hasClearedBackup: false,
   totals: null,
+  // 「这份流水缓存的条数和服务端对得上」。算钱的地方（欠款、送货单）只认它为真
+  // 才敢用缓存，见 recordsForMoney。
+  recordsComplete: false,
   ready: false
 }
 
@@ -111,27 +119,77 @@ function markMigrated() {
   wx.setStorageSync(MIGRATED_KEY, true)
 }
 
-function applyLedger(ledger) {
+// 落盘只是缓存。写失败（storage 满 / 超过单 key 1 MB）不能把已经记成的账变成
+// 「记账失败」。云模式下这份存储从来没人读回来：lists() 走内存，
+// loadCacheFromStorage 只在内存模式用，snapshotLocalIfNeeded 只在迁云前跑一次。
+// 所以云模式干脆不写流水 —— 2000 条 × 500 B 每次记账序列化一遍是白花的卡顿。
+function persist() {
+  try {
+    writeList(KEYS.products, cache.products)
+    writeList(KEYS.skus, cache.skus)
+    writeList(KEYS.customers, cache.customers)
+    writeList(KEYS.categories, cache.categories)
+    if (isMemoryMode()) writeList(KEYS.records, cache.records)
+    wx.setStorageSync(REVISION_KEY, cache.revision)
+    wx.setStorageSync(HAS_BACKUP_KEY, cache.hasClearedBackup)
+  } catch (error) {
+    console.warn('[ledger] 本地缓存落盘失败', error)
+  }
+}
+
+function applyLedgerLists(ledger) {
   const lists = apply.listsOf(ledger || apply.emptyLedger())
   cache.products = lists.products
   cache.skus = lists.skus
-  cache.records = lists.records
   cache.customers = lists.customers
   cache.categories = lists.categories
   cache.revision = lists.revision
   cache.totals = lists.totals || null
   cache.ready = true
-  writeList(KEYS.products, cache.products)
-  writeList(KEYS.skus, cache.skus)
-  writeList(KEYS.records, cache.records)
-  writeList(KEYS.customers, cache.customers)
-  writeList(KEYS.categories, cache.categories)
-  wx.setStorageSync(REVISION_KEY, cache.revision)
   cache.hasClearedBackup = apply.hasClearedBackup(ledger) || !!(ledger && ledger.hasClearedBackup)
-  wx.setStorageSync(HAS_BACKUP_KEY, cache.hasClearedBackup)
   if (ledger && ledger.lastRestoredClearAt != null) {
-    wx.setStorageSync(LAST_RESTORED_KEY, ledger.lastRestoredClearAt)
+    try { wx.setStorageSync(LAST_RESTORED_KEY, ledger.lastRestoredClearAt) } catch (e) {}
   }
+}
+
+// 三种形状都要认，顺序不能换：
+//  1) ledger.records 是数组  -> 整份替换（getLedger；也兼容还没升级的云函数）
+//  2) 有 recordDelta        -> 按 delta 合并（2b-1 起的记账返回）
+//  3) 两个都没有            -> 不猜，标记不完整，让上层重拉
+function applyRecords(res) {
+  if (res && res.ledger && Array.isArray(res.ledger.records)) {
+    cache.records = res.ledger.records
+    cache.recordsComplete = true
+    return
+  }
+  if (res && res.recordDelta) {
+    const merged = apply.mergeRecordDelta(cache.records, res.recordDelta)
+    cache.records = merged.records
+    cache.recordsComplete = merged.complete
+    return
+  }
+  cache.recordsComplete = false
+}
+
+// 已经拿到成功响应 = 账已经记上了。从这里往后无论出什么问题都只能降级，
+// 绝不能抛 —— 抛出去就是「记账失败」，店员照着提示再点一次，账就记两遍。
+function settleResponse(res) {
+  try {
+    if (res && res.ledger) applyLedgerLists(res.ledger)
+    applyRecords(res)
+    persist()
+  } catch (error) {
+    cache.recordsComplete = false
+    console.warn('[ledger] 回写本地缓存失败', error)
+  }
+}
+
+// 保留给 deleteShop / 内存模式重置：整份替换语义
+function applyLedger(ledger) {
+  applyLedgerLists(ledger)
+  cache.records = (ledger && Array.isArray(ledger.records)) ? ledger.records : []
+  cache.recordsComplete = true
+  persist()
 }
 
 function loadCacheFromStorage() {
@@ -143,6 +201,8 @@ function loadCacheFromStorage() {
   cache.revision = wx.getStorageSync(REVISION_KEY) || 0
   cache.hasClearedBackup = !!wx.getStorageSync(HAS_BACKUP_KEY)
   cache.totals = inventory.computeTotals(cache.records)
+  // 只有内存模式走这条路，本机存储就是权威来源，读回来就是完整的
+  cache.recordsComplete = true
   cache.ready = true
 }
 
@@ -215,6 +275,10 @@ function callCloud(action, shopId, payload) {
     data: {
       action: action,
       shopId: shopId || '',
+      // 服务端对会回传账本的 action 设了版本门。新客户端对**新旧两版云函数都能用**：
+      // 老云函数忽略 apiVersion、照旧回传整本 ledger.records，走整份替换分支。
+      // 这是「先发小程序、再部署云函数」这个上线顺序的依据。
+      apiVersion: 2,
       payload: payload || {}
     }
   }).then(function (res) {
@@ -247,15 +311,120 @@ function writeArchive(list) {
   wx.setStorageSync(ARCHIVE_KEY, list)
 }
 
+// ---------------------------------------------------------------------------
+// 内存模式的流水仓：接口和 cloudfunctions/ledger/ledger-records.js 的 recordStore
+// 一致，存的也是同一份 toRecordDoc 文档（账套号 bookId 一样有效）。
+//
+// **这段代码本身没有自动化测试**：内存模式只有 tests/ui.test.js 走，而它要开发者
+// 工具才能跑。被测过的是同一套接口的另外两份实现（tests/memory-db.js 的
+// MemoryBook 和 MemoryDb），以及它们下面的 applyMutation / recordsNeeded。
+// 改这里之后请手动跑一次 npm run test:ui。
+// ---------------------------------------------------------------------------
+
+function readRecordDocs() {
+  const value = wx.getStorageSync(MEMORY_RECORDS_KEY)
+  return Array.isArray(value) ? value : []
+}
+
+function writeRecordDocs(list) {
+  wx.setStorageSync(MEMORY_RECORDS_KEY, list)
+}
+
+function memoryBookId() {
+  return String(wx.getStorageSync(MEMORY_BOOK_KEY) || '') || (getShopId() || 'ui-test-shop')
+}
+
+function memoryRecordStore(bookId) {
+  const book = String(bookId || '')
+
+  function rows() {
+    return readRecordDocs().filter(function (doc) {
+      return String(doc.bookId || '') === book
+    })
+  }
+
+  function descending(list) {
+    return list.slice().sort(function (a, b) {
+      if (a.sortKey === b.sortKey) return 0
+      return a.sortKey > b.sortKey ? -1 : 1
+    })
+  }
+
+  function byId(id) {
+    const key = apply.recordDocId(book, id)
+    const doc = readRecordDocs().find(function (item) {
+      return item._id === key
+    })
+    return doc ? apply.fromRecordDoc(doc) : null
+  }
+
+  return {
+    byId: function (id) {
+      return byId(id)
+    },
+    saleOrder: function (id) {
+      const record = byId(id)
+      return record && record.type === 'out' ? record : null
+    },
+    latestPurchases: function (productId, skuId) {
+      return descending(rows().filter(function (doc) {
+        return doc.type === 'in'
+          && doc.productId === String(productId || '')
+          && doc.skuId === String(skuId || '')
+      })).slice(0, 2).map(apply.fromRecordDoc)
+    },
+    countAll: function () {
+      return rows().length
+    },
+    all: function () {
+      return descending(rows()).map(apply.fromRecordDoc)
+    },
+    set: function (record) {
+      const doc = apply.toRecordDoc(record, book, getShopId() || 'ui-test-shop')
+      const list = readRecordDocs().filter(function (item) {
+        return item._id !== doc._id
+      })
+      list.push(doc)
+      writeRecordDocs(list)
+    },
+    remove: function (id) {
+      const key = apply.recordDocId(book, id)
+      writeRecordDocs(readRecordDocs().filter(function (item) {
+        return item._id !== key
+      }))
+    }
+  }
+}
+
+function applyRecordWrites(store, writes) {
+  ;(writes || []).forEach(function (write) {
+    if (write.op === 'remove') {
+      store.remove(write.id)
+      return
+    }
+    store.set(write.record)
+  })
+}
+
+function resetMemoryBook(bookId) {
+  writeRecordDocs([])
+  wx.setStorageSync(MEMORY_BOOK_KEY, bookId || '')
+  wx.setStorageSync(MEMORY_ACCOUNTS_KEY, {})
+  wx.setStorageSync(MEMORY_AGGREGATE_KEY, inventory.emptyTerms())
+}
+
 function memoryLedger() {
   const archive = readArchive()
   return {
     products: readList(KEYS.products),
     skus: readList(KEYS.skus),
-    records: readList(KEYS.records),
     customers: readList(KEYS.customers),
     categories: readList(KEYS.categories),
     revision: wx.getStorageSync(REVISION_KEY) || 0,
+    bookId: memoryBookId(),
+    recordsMigratedAt: 1,
+    accounts: wx.getStorageSync(MEMORY_ACCOUNTS_KEY) || {},
+    aggregate: wx.getStorageSync(MEMORY_AGGREGATE_KEY) || inventory.emptyTerms(),
     clearSnapshots: archive.map(function (item) {
       return { id: item.id, savedAt: item.savedAt }
     }),
@@ -263,22 +432,58 @@ function memoryLedger() {
   }
 }
 
-function memoryMutate(action, payload) {
+// 和云上的 publicListsOf 同形状：四张表 + 聚合投影 + 备份元信息，**不带流水**。
+// lastRestoredClearAt 是内存模式专有的：memoryLedger() 要从 storage 读回它，
+// 云模式没人读（服务端自己存着）。
+function memoryPublicLists(ledger) {
+  const lists = apply.listsOf(ledger)
+  lists.hasClearedBackup = apply.hasClearedBackup(ledger)
+  lists.archivedClearCount = ((ledger && ledger.clearSnapshots) || []).length
+  lists.lastRestoredClearAt = (ledger && ledger.lastRestoredClearAt) || 0
+  return lists
+}
+
+function memoryLists(ledger) {
+  const lists = memoryPublicLists(ledger)
+  lists.records = memoryRecordStore(ledger.bookId).all()
+  return lists
+}
+
+// 记账主体和 cloudfunctions/ledger/ledger-core.js 的事务体一样：
+// 先按 recordsNeeded 把牵连到的那几条捞出来，再 applyMutation，最后落盘写记录。
+// 返回值也和云上同形状（ledger 不带 records + recordDelta），这样内存模式和
+// 云模式走**同一条回写路径** settleResponse，不再各写一套。
+async function memoryMutate(action, payload) {
   payload = payload || {}
   const ledger = memoryLedger()
+  const bookIdBefore = ledger.bookId
   if (action === 'restoreCleared') {
     const archive = readArchive()
     payload = Object.assign({}, payload, {
       snapshot: archive.length ? archive[archive.length - 1] : null
     })
   }
-  const applied = apply.applyMutation(ledger, action, payload, Date.now(), uid)
+  const loaded = await apply.prepareMutation(memoryRecordStore(ledger.bookId), action, payload)
+  const applied = apply.applyMutation(ledger, action, payload, Date.now(), uid, loaded)
   if (applied.result && applied.result.clearSnapshot) {
     writeArchive(readArchive().concat([applied.result.clearSnapshot]))
     delete applied.result.clearSnapshot
   }
-  applyLedger(applied.ledger)
-  return applied
+  // loadSeed / clearAll 会换账套，写进去的必须是「改后」的那一本
+  applyRecordWrites(memoryRecordStore(applied.ledger.bookId), applied.recordWrites)
+  wx.setStorageSync(MEMORY_BOOK_KEY, applied.ledger.bookId || '')
+  wx.setStorageSync(MEMORY_ACCOUNTS_KEY, applied.ledger.accounts || {})
+  wx.setStorageSync(MEMORY_AGGREGATE_KEY, applied.ledger.aggregate || inventory.emptyTerms())
+  return {
+    ledger: memoryPublicLists(applied.ledger),      // 不带 records，和云上一样
+    recordDelta: {
+      bookId: String(applied.ledger.bookId || ''),
+      bookChanged: applied.ledger.bookId !== bookIdBefore,
+      count: (applied.ledger.aggregate && applied.ledger.aggregate.count) || 0,
+      writes: applied.recordWrites || []
+    },
+    result: applied.result
+  }
 }
 
 async function memoryCall(action, shopId, payload) {
@@ -296,6 +501,7 @@ async function memoryCall(action, shopId, payload) {
     setShopMeta(id, name)
     wx.removeStorageSync(ARCHIVE_KEY)
     wx.removeStorageSync(LAST_RESTORED_KEY)
+    resetMemoryBook(id)
     applyLedger(apply.emptyLedger())
     readyState = { shopId: id, promise: null, ok: true }
     return { shop: { id: id, name: name, role: 'owner', createdAt: Date.now() } }
@@ -322,10 +528,7 @@ async function memoryCall(action, shopId, payload) {
   if (action === 'getLedger') {
     loadCacheFromStorage()
     const ledger = memoryLedger()
-    const lists = apply.listsOf(ledger)
-    lists.hasClearedBackup = apply.hasClearedBackup(ledger)
-    lists.archivedClearCount = ((ledger.clearSnapshots) || []).length
-    return { ledger: lists }
+    return { ledger: memoryLists(ledger) }
   }
   if (action === 'migrateLocal') {
     throw new Error('本地测试账本不用迁云')
@@ -362,7 +565,10 @@ async function ensureReady() {
     return
   }
   const promise = request('getLedger', {}, { shopId: shopId }).then(function (res) {
-    applyLedger(res.ledger)
+    settleResponse(res)
+    // ready 必须蕴含「流水是完整的」：所有页面的 onShow 都以 ready 为门，
+    // 有了这条，页面里拿到的流水要么完整要么根本没进门。
+    if (!cache.recordsComplete) throw new Error('账本流水没取全，请重试')
     cache.shopId = shopId
     readyState.ok = true
   })
@@ -418,6 +624,15 @@ function getRecords() {
   return lists().records
 }
 
+// 只给「要算钱」的地方用：欠款、送货单。缓存不完整就报错，不给一个错数。
+// 2a-b1 那条原则的直接应用：宁可打不出单，也不能在客户手上的单据上印错数。
+function recordsForMoney() {
+  if (!cache.recordsComplete) {
+    throw new Error('流水不完整，无法算欠款，请退出重进小程序')
+  }
+  return getRecords()
+}
+
 function getCustomers() {
   return lists().customers
 }
@@ -471,13 +686,28 @@ function getCategory(id) {
 async function mutate(action, payload) {
   await ensureReady()
   showBusy()
+  let res
   try {
-    const res = await request(action, payload)
-    if (res && res.ledger) applyLedger(res.ledger)
-    return res
+    res = await request(action, payload)   // 只有这一句失败等于「没记上」
   } finally {
     hideBusy()
   }
+  settleResponse(res)
+  if (!cache.recordsComplete) await refillRecords()
+  return res
+}
+
+// 缓存条数和服务端对不上（换账套、服务端没给 delta、合并出错）。重新拉一次全量。
+// **失败也不抛**：账已经记上了，报失败会诱发重复提交。作废 ready 状态，
+// 下一次 store.ready() 会自己再拉一次；那一次是纯读路径，报错是诚实的。
+async function refillRecords() {
+  try {
+    const res = await request('getLedger', {})
+    settleResponse(res)
+  } catch (error) {
+    console.warn('[ledger] 记账后刷新流水失败', error)
+  }
+  if (!cache.recordsComplete) invalidateReady()
 }
 
 async function saveProduct(input) {
@@ -660,6 +890,20 @@ async function removeMember(openid) {
   }
 }
 
+// 本机账本上传到云端。
+//
+// **顺序不可换（R-4）**：`markMigrated()` 会删掉 PENDING_MIGRATE_KEY，那是本机
+// 唯一一份原始数据。所以它必须排在「**服务端确认整份账本收下了**」之后 —— 现在是
+// 一次调用就传完，最后一片就是唯一一片，所以请求成功返回就算收下。
+//
+// 但它同样必须排在**回写本地缓存之前**：回写失败就跳过 markMigrated 的话，
+// 云上已有账本、本机 pending 还在，重传永远撞「云上已有账本，不能再上传本机
+// 数据」，上传按钮永久失效。
+//
+// 2b-2 把这里改成分片上传时（服务端的接收端已经在 ledger-core.js 的
+// migrateLocalShard 里了），必须是**全部片都成功**之后才 markMigrated()。
+// 中途任何一片失败都不能删本机数据：服务端那边没切账套指针，半成品账套不可达，
+// 换个 token 重来就行；而本机数据删掉就没了。
 async function migrateLocal() {
   const pending = getPendingMigrate()
   if (!pending) {
@@ -668,8 +912,9 @@ async function migrateLocal() {
   showBusy()
   try {
     const res = await request('migrateLocal', { ledger: pending })
-    if (res && res.ledger) applyLedger(res.ledger)
     markMigrated()
+    settleResponse(res)
+    if (!cache.recordsComplete) await refillRecords()
     return res.ledger
   } finally {
     hideBusy()
@@ -706,6 +951,7 @@ module.exports = {
   getShopName: getShopName,
   getProducts: getProducts,
   getRecords: getRecords,
+  recordsForMoney: recordsForMoney,
   getCustomers: getCustomers,
   getCategories: getCategories,
   getTotals: getTotals,

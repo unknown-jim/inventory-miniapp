@@ -351,7 +351,9 @@ Page({
       this.clearCustomer()
       return
     }
-    const account = inventory.summarizeCustomerAccount(store.getRecords(), id)
+    // 服务端 customers[].account 就是这个客户的当前欠款，和现算逐字段相等
+    // （tests/ledger-terms.test.js 有等价断言）。不再自己遍历流水缓存算。
+    const account = customer.account || { receivable: 0 }
     this.setData({
       customerId: customer.id,
       customerName: customer.name,
@@ -536,8 +538,10 @@ Page({
           }
         })
       })
+      // 记账刚成功，服务端回传的 customers[].account.receivable 就是这笔销售之后
+      // 该客户的欠款。改完这条打单路径**不再依赖流水缓存**。
       const receivable = order.customerId
-        ? inventory.summarizeCustomerAccount(store.getRecords(), order.customerId).receivable
+        ? ((store.getCustomer(order.customerId) || {}).account || {}).receivable || 0
         : 0
       const skus = store.getSkus()
       this.data.skus = skus

@@ -1098,9 +1098,11 @@ assert.throws(function () {
     qty: 99
   }, 20125, 'r-adj-lack')
 }, /库存不足/)
+// 2b-1 起 saleOrderId 必填：流水搬进 ledger_records 之后，只给行号全表找一条
+// 销售行需要多键索引。缺了直接报错，不再退化成全表扫描。
 assert.throws(function () {
   inv.applyReturn([adjPlain], [], { qty: 1 }, 20126, 'r-adj-free-return')
-}, /销售流水不存在/)
+}, /退货请指明销售单/)
 
 const lockP = inv.createProduct({
   name: '对照进价',

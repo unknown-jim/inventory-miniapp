@@ -137,7 +137,10 @@ Page({
   async seedDemo() {
     try {
       await store.loadSeed()
-      this.refresh()
+      // 走 onShow 而不是直接 refresh：换账套后若回写异常导致缓存残缺，
+      // refresh 会拿老账套的流水算出偏小的今日三项，并在「最近记录」里
+      // 列出已经不存在的幽灵流水。onShow 有 ready 门，残缺时会重拉。
+      await this.onShow()
       wx.showToast({ title: '已填入示例数据', icon: 'success' })
     } catch (error) {
       util.showError(error)

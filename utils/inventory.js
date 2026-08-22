@@ -1233,7 +1233,35 @@ function getTotalReceivable(records) {
   return totalsOf(foldTotalTerms(records)).receivable
 }
 
-function applyPayment(records, payload, now, id) {
+// ctx（可选）= { accounts: {customerId: terms} }。给了就用账本里的累加器算欠款上限，
+// records 只当「调用方已加载的相关流水」用（这个动作一条都不需要，生产路径传 []）。
+// 不给就退回老口径：从整份 records 现算。两条路口径完全一致，见 accountOf。
+function receivableOf(ctx, records, customerId) {
+  if (ctx && ctx.accounts) {
+    return accountOf(ctx.accounts[customerId]).receivable
+  }
+  return summarizeCustomerAccount(records, customerId).receivable
+}
+
+// 收款不能超过欠款这条线，改完之后要重新检查一遍。
+// 有 ctx 就按「老聚合 ± 本条记录的贡献」查，没有就按老口径全量重折叠。
+function assertAccountsValid(accounts) {
+  Object.keys(accounts || {}).forEach(function (customerId) {
+    if (accountOf(accounts[customerId]).receivable < 0) {
+      throw new Error('改完后收款会超过赊账，请先改收款记录')
+    }
+  })
+}
+
+function assertAccountsAfter(ctx, records, before, after) {
+  if (ctx && ctx.accounts) {
+    assertAccountsValid(applyTermsDelta({ accounts: ctx.accounts }, before, after).accounts)
+    return
+  }
+  assertReceivableValid(records)
+}
+
+function applyPayment(records, payload, now, id, ctx) {
   const customerId = String(payload.customerId || '')
   if (!customerId) {
     throw new Error('请选择客户')
@@ -1242,7 +1270,7 @@ function applyPayment(records, payload, now, id) {
   if (amount <= 0) {
     throw new Error('收款金额必须大于 0')
   }
-  const receivable = summarizeCustomerAccount(records, customerId).receivable
+  const receivable = receivableOf(ctx, records, customerId)
   if (amount > receivable) {
     throw new Error('收款不能超过当前欠款 ' + receivable)
   }
@@ -1573,9 +1601,15 @@ function restockLine(products, skus, line, qty, now, costPrice) {
   return { products: nextProducts, skus: skuList }
 }
 
+// records 是「调用方已加载好的销售单」，不是全量流水：2b-1 起流水在 ledger_records
+// 集合里，按 lines[] 里的字段全表找一条销售行需要多键索引。所以 saleOrderId 必填，
+// 缺了直接报错，不再退化成全表扫描。
 function findSaleLine(records, saleOrderId, saleLineId) {
   const orderId = String(saleOrderId || '')
   const lineId = String(saleLineId || '')
+  if (!orderId) {
+    throw new Error('退货请指明销售单')
+  }
   let found = null
   ;(records || []).forEach(function (item) {
     if (found || item.type !== 'out') return
@@ -1615,7 +1649,9 @@ function patchSaleLineReturned(records, saleOrderId, saleLineId, delta) {
   })
 }
 
-function applyReturnOrder(products, records, payload, now, nextId, skus) {
+// records = 调用方已加载的被退销售单（生产路径最多 1 张，因为一次退货不跨单）。
+// ctx（可选）= { accounts }，见 assertAccountsAfter。
+function applyReturnOrder(products, records, payload, now, nextId, skus, ctx) {
   const items = (payload.items || []).filter(function (item) {
     return round2(item.qty) > 0
   })
@@ -1682,7 +1718,7 @@ function applyReturnOrder(products, records, payload, now, nextId, skus) {
     lines: lines
   }
   nextRecords = [record].concat(nextRecords)
-  assertReceivableValid(nextRecords)
+  assertAccountsAfter(ctx, nextRecords, null, record)
   return {
     products: workingProducts,
     skus: workingSkus,
@@ -1972,12 +2008,7 @@ function applyLatestPurchaseCost(products, skus, records, productId, skuId, now)
 }
 
 function assertReceivableValid(records) {
-  const accounts = summarizeAllCustomerAccounts(records)
-  Object.keys(accounts).forEach(function (customerId) {
-    if (accounts[customerId].receivable < 0) {
-      throw new Error('改完后收款会超过赊账，请先改收款记录')
-    }
-  })
+  assertAccountsValid(foldAccountTerms(records))
 }
 
 function syncProductStock(products, skus, productId, now) {
@@ -2036,7 +2067,9 @@ function collectLineUpdates(existing, payload, missingMessage) {
   return updates
 }
 
-function updateRecord(products, records, payload, now, skus) {
+// records = 调用方已加载的相关流水（目标 1 条 + 被退销售单 ≤1 张 + 进货候选 ≤2 条），
+// 不再是全量流水。ctx（可选）= { accounts }，见 assertAccountsAfter。
+function updateRecord(products, records, payload, now, skus, ctx) {
   const id = String(payload.id || '')
   const index = records.findIndex(function (item) {
     return item.id === id
@@ -2058,10 +2091,12 @@ function updateRecord(products, records, payload, now, skus) {
     if (amount <= 0) {
       throw new Error('收款金额必须大于 0')
     }
-    const others = records.filter(function (item) {
-      return item.id !== existing.id
-    })
-    const cap = summarizeCustomerAccount(others, existing.customerId).receivable
+    // 「除本条之外的欠款」= 当前欠款 + 本条收款额（本条 pay 已经算进 accounts 了）
+    const cap = ctx && ctx.accounts
+      ? round2(accountOf(ctx.accounts[existing.customerId]).receivable + toNumber(existing.amount))
+      : summarizeCustomerAccount(records.filter(function (item) {
+        return item.id !== existing.id
+      }), existing.customerId).receivable
     if (amount > cap) {
       throw new Error('收款不能超过当前欠款 ' + cap)
     }
@@ -2172,33 +2207,29 @@ function updateRecord(products, records, payload, now, skus) {
       if (qty <= 0) {
         throw new Error('退货数量必须大于 0')
       }
-      let sale = null
-      try {
-        sale = findSaleLine(nextRecords, line.saleOrderId, line.saleLineId)
-      } catch (error) {
-        sale = null
-      }
-      if (sale) {
-        // 本条退货已经算进销售行的 returnedQty 里，加回来才是「除本条外」的可退数量
-        const remain = round2(returnableQty(sale.line) + toNumber(line.qty))
-        if (qty > remain) {
-          throw new Error('退货不能超过可退数量 ' + remain)
-        }
+      // 找不到被退销售行就必须停下来，**不能吞成 sale = null 放行**：
+      // 吞掉的话可退上限检查和 patchSaleLineReturned 双双被跳过，改一下数量就能
+      // 凭空入库、把退货单金额抬到任意值，而被退销售行的 returnedQty 原样不动
+      // （见 2b-1a 审计阻塞 2）。老退货行 saleOrderId 为空时宁可改不了，
+      // 也不能算错一笔钱和一批货。
+      const sale = findSaleLine(nextRecords, line.saleOrderId, line.saleLineId)
+      // 本条退货已经算进销售行的 returnedQty 里，加回来才是「除本条外」的可退数量
+      const remain = round2(returnableQty(sale.line) + toNumber(line.qty))
+      if (qty > remain) {
+        throw new Error('退货不能超过可退数量 ' + remain)
       }
       const delta = round2(qty - toNumber(line.qty))
       const restocked = restockLine(nextProducts, nextSkus, line, delta, now, line.costPrice)
       nextProducts = restocked.products
       nextSkus = restocked.skus
-      if (sale) {
-        nextRecords = patchSaleLineReturned(nextRecords, sale.record.id, sale.line.lineId, delta)
-      }
+      nextRecords = patchSaleLineReturned(nextRecords, sale.record.id, sale.line.lineId, delta)
       const unitPrice = toNumber(line.unitPrice)
       const costPrice = toNumber(line.costPrice)
       return Object.assign({}, line, {
         qty: qty,
         amount: round2(qty * unitPrice),
         profit: round2((unitPrice - costPrice) * qty * -1),
-        saleOrderId: sale ? sale.record.id : (line.saleOrderId || '')
+        saleOrderId: sale.record.id
       })
     })
     next.lines = nextLines
@@ -2287,7 +2318,7 @@ function updateRecord(products, records, payload, now, skus) {
     nextSkus = costed.skus
   }
 
-  assertReceivableValid(nextRecords)
+  assertAccountsAfter(ctx, nextRecords, existing, next)
 
   return {
     products: nextProducts,
@@ -2344,7 +2375,8 @@ function restoreRecordStock(products, skus, existing, now) {
   }
 }
 
-function deleteRecord(products, records, id, now, skus) {
+// records 口径同 updateRecord：调用方已加载的相关流水，不是全量。
+function deleteRecord(products, records, id, now, skus, ctx) {
   const existing = records.find(function (item) {
     return item.id === id
   })
@@ -2383,7 +2415,7 @@ function deleteRecord(products, records, id, now, skus) {
     nextSkus = costed.skus
   }
 
-  assertReceivableValid(nextRecords)
+  assertAccountsAfter(ctx, nextRecords, existing, null)
 
   return {
     products: nextProducts,
@@ -2703,6 +2735,8 @@ module.exports = {
   foldTotalTerms: foldTotalTerms,
   applyTermsDelta: applyTermsDelta,
   receivableDelta: receivableDelta,
+  assertAccountsValid: assertAccountsValid,
+  assertReceivableValid: assertReceivableValid,
   isCreditSale: isCreditSale,
   isOpening: isOpening,
   isAdjust: isAdjust,

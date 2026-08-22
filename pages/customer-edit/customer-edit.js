@@ -17,6 +17,7 @@ Page({
     receivableText: '0.00',
     hasDebt: false,
     ledger: [],
+    ledgerUnavailable: false,
     showPay: false,
     payAmount: '',
     payRemark: '',
@@ -47,8 +48,22 @@ Page({
       wx.showToast({ title: '客户不存在', icon: 'none' })
       return
     }
-    const summary = inventory.summarizeCustomerAccount(store.getRecords(), id)
-    const hasDebt = summary.receivable > 0
+    // 金额三项（累计销售笔数 / 累计销售额 / 当前欠款）一律用服务端权威的
+    // customers[].account，不要拿流水缓存现算：submitPay / submitOpening 直接调
+    // 这里，**不经过 store.ready() 的门**，缓存这时可能还没补齐（delta 条数对不上
+    // 且重拉又失败），现算出来会是一个偏小的欠款。account 的字段口径与
+    // summarizeCustomerAccount 逐字段相等，见 tests/ledger-terms.test.js。
+    const account = customer.account || inventory.accountOf(null)
+    const hasDebt = account.receivable > 0
+    // 往来明细只能来自流水。缓存不完整就不列，明确标成不可用 ——
+    // 直接给空数组会被界面说成「还没有往来记录」，那是在撒谎。
+    let ledger = []
+    let ledgerUnavailable = false
+    try {
+      ledger = inventory.summarizeCustomerAccount(store.recordsForMoney(), id).ledger
+    } catch (error) {
+      ledgerUnavailable = true
+    }
     this.setData({
       id: customer.id,
       isEdit: true,
@@ -56,12 +71,13 @@ Page({
       phone: customer.phone,
       address: customer.address,
       remark: customer.remark,
-      saleCount: summary.count,
-      saleAmountText: util.money(summary.amount),
-      receivable: summary.receivable,
-      receivableText: util.money(summary.receivable),
+      saleCount: account.count,
+      saleAmountText: util.money(account.amount),
+      receivable: account.receivable,
+      receivableText: util.money(account.receivable),
       hasDebt: hasDebt,
-      ledger: summary.ledger.slice(0, 20).map(util.withRecordView)
+      ledger: ledger.slice(0, 20).map(util.withRecordView),
+      ledgerUnavailable: ledgerUnavailable
     }, () => {
       if (this.openPayAfter) {
         this.openPayAfter = false

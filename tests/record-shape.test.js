@@ -4,6 +4,7 @@ const assert = require('assert')
 const inv = require('../utils/inventory')
 const util = require('../utils/util')
 const apply = require('../utils/ledger-apply')
+const MemoryBook = require('./memory-db').MemoryBook
 
 function idFactory(prefix) {
   let n = 0
@@ -497,14 +498,14 @@ function toLegacyShape(records) {
 }
 
 const replayIds = idFactory('replay')
-let ledger = apply.emptyLedger()
+// 2b-1 起流水不在账本文档里，记账要先把牵连到的那几条从流水仓捞出来。
+// MemoryBook 的记账主体和 ledger-core.js 的事务体一样，只是同步、不鉴权。
+const book = new MemoryBook({ shopId: 'replay-shop', nextId: replayIds })
 let clock = 1000
 
 function mut(action, payload) {
   clock += 10
-  const res = apply.applyMutation(ledger, action, payload, clock, replayIds)
-  ledger = res.ledger
-  return res.result
+  return book.mutate(action, payload, clock)
 }
 
 const milk = mut('saveProduct', { name: '牛奶', costPrice: 2, salePrice: 5, stock: 100, alertQty: 5 }).product
@@ -531,17 +532,23 @@ mut('addReturn', { items: [{ saleOrderId: orderA.id, saleLineId: orderA.lines[0]
 mut('addOpening', { customerId: custB.id, amount: 30 })
 mut('addAdjust', { productId: milk.id, direction: 'in', reason: 'surplus', qty: 2 })
 
-const newLists = apply.listsOf(ledger)
-const legacyLists = apply.listsOf(Object.assign({}, ledger, {
-  records: toLegacyShape(ledger.records)
-}))
+const newLists = book.lists()
+// 老形状的同一批流水，归并回来之后聚合必须逐字段相等。
+// 2b-1 起账本文档里的 accounts / aggregate 是增量维护出来的，所以这里比的是
+// 「增量维护的结果」和「老形状全量重折叠的结果」—— 比 2a 更强的一条断言。
+const legacyRecords = apply.legacyRecordsOf({ records: toLegacyShape(newLists.records) })
+const legacyTotals = inv.summarizeRecords(legacyRecords)
+const legacyAccountsReplay = inv.summarizeAllCustomerAccounts(legacyRecords)
 
-assert.strictEqual(inv.needsRecordMigration(ledger.records), false)
-assert.strictEqual(legacyLists.records.length, newLists.records.length)
-assert.deepStrictEqual(pickTotals(legacyLists.totals), pickTotals(newLists.totals))
-assert.strictEqual(legacyLists.totals.count, newLists.totals.count)
-newLists.customers.forEach(function (customer, at) {
-  assert.deepStrictEqual(legacyLists.customers[at].account, customer.account,
+assert.strictEqual(inv.needsRecordMigration(newLists.records), false)
+assert.strictEqual(legacyRecords.length, newLists.records.length)
+assert.deepStrictEqual(pickTotals(legacyTotals), pickTotals(newLists.totals))
+assert.strictEqual(legacyTotals.count, newLists.totals.count)
+newLists.customers.forEach(function (customer) {
+  const legacyAccount = legacyAccountsReplay[customer.id] || {
+    count: 0, amount: 0, creditAmount: 0, paidAmount: 0, receivable: 0
+  }
+  assert.deepStrictEqual(legacyAccount, customer.account,
     '客户 ' + customer.name + ' 迁移前后账目必须一致')
 })
 assert.ok(newLists.totals.receivable > 0)
@@ -555,13 +562,13 @@ function normalizeIds(records) {
     return Object.assign({}, record, { id: '<return>' })
   })
 }
-assert.deepStrictEqual(normalizeIds(legacyLists.records), normalizeIds(newLists.records))
+assert.deepStrictEqual(normalizeIds(legacyRecords), normalizeIds(newLists.records))
 newLists.records.forEach(function (record, at) {
   if (record.type === 'return') {
-    assert.strictEqual(legacyLists.records[at].id, record.lines[0].lineId)
+    assert.strictEqual(legacyRecords[at].id, record.lines[0].lineId)
     return
   }
-  assert.strictEqual(legacyLists.records[at].id, record.id)
+  assert.strictEqual(legacyRecords[at].id, record.id)
 })
 
 // ---------------------------------------------------------------------------
@@ -581,29 +588,41 @@ const oldDoc = {
   ]
 }
 
-const oldRead = apply.listsOf(oldDoc)
-assert.strictEqual(oldRead.records.length, 2)
-assert.strictEqual(inv.needsRecordMigration(oldRead.records), false)
-assert.strictEqual(oldRead.customers[0].account.receivable, 15)
-assert.strictEqual(oldRead.customers[0].account.count, 1)
+const oldRead = apply.legacyRecordsOf(oldDoc)
+assert.strictEqual(oldRead.length, 2)
+assert.strictEqual(inv.needsRecordMigration(oldRead), false)
+const oldAccounts = inv.summarizeAllCustomerAccounts(oldRead)
+assert.strictEqual(oldAccounts.c1.receivable, 15)
+assert.strictEqual(oldAccounts.c1.count, 1)
 
-// 老单在新代码下继续做业务：退 1 件，已退数量落到对应的行上
+// 2b-1 起「读时自愈」只管读：写路径见到没搬完的账本要停下来报错，
+// 不能新账进集合、老账留数组。归并仍然是同一份 migrateRecordShape。
+assert.strictEqual(apply.recordsPending(oldDoc), true)
+
+// 老单归并进流水仓之后继续做业务：退 1 件，已退数量落到对应的行上
 const healIds = idFactory('heal')
-const healed = apply.applyMutation(oldDoc, 'addReturn', {
+const healBook = new MemoryBook({ shopId: 'heal-shop', nextId: healIds }).seed(oldRead, {
+  products: oldDoc.products,
+  skus: oldDoc.skus,
+  customers: oldDoc.customers,
+  categories: oldDoc.categories
+})
+healBook.mutate('addReturn', {
   items: [{ saleOrderId: 'ord1', saleLineId: 'l1', qty: 1 }]
-}, 5000, healIds)
-const healedOrder = healed.ledger.records.find(function (item) {
+}, 5000)
+const healedLists = healBook.lists()
+const healedOrder = healedLists.records.find(function (item) {
   return item.id === 'ord1'
 })
-assert.strictEqual(inv.needsRecordMigration(healed.ledger.records), false)
+assert.strictEqual(inv.needsRecordMigration(healedLists.records), false)
 assert.strictEqual(healedOrder.lines[0].returnedQty, 1)
 assert.strictEqual(healedOrder.lines[1].returnedQty, 0)
-assert.strictEqual(healed.ledger.products[0].stock, 11)
-assert.strictEqual(healed.ledger.customers[0].account.receivable, 10)
+assert.strictEqual(healedLists.products[0].stock, 11)
+assert.strictEqual(healedLists.customers[0].account.receivable, 10)
 assert.throws(function () {
-  apply.applyMutation(healed.ledger, 'addReturn', {
+  healBook.mutate('addReturn', {
     items: [{ saleOrderId: 'ord1', saleLineId: 'l1', qty: 2 }]
-  }, 6000, healIds)
+  }, 6000)
 }, /可退数量 1/)
 
 // ---------------------------------------------------------------------------

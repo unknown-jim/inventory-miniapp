@@ -46,7 +46,7 @@
 
 ### 云开发
 
-- 业务库只允许云函数 `ledger` 读写。小程序禁止 `wx.cloud.database()` 访问 `shops` / `members` / `ledgers` / `ledger_clears`。
+- 业务库只允许云函数 `ledger` 读写。小程序禁止 `wx.cloud.database()` 访问 `shops` / `members` / `ledgers` / `ledger_records` / `ledger_clears`。
 - `utils/cloud-config.js` 必须有明确的环境 ID 才记账；填开发者工具「云开发」里的 ID，不要填腾讯云控制台另一套环境，也不要依赖「第一个云环境」。
 - 部署 `ledger` 用微信云托管 CLI；密钥只放环境变量 `WXCLOUD_PRIVATE_KEY`，步骤见 [`.cursor/skills/wxcloud-cli/SKILL.md`](.cursor/skills/wxcloud-cli/SKILL.md)。不要用腾讯云账号的 `tcb` 管微信侧环境。
 - 改 `utils/inventory.js` 或 `utils/ledger-apply.js` 后运行 `npm run sync:ledger-inventory`，保持云函数副本一致。

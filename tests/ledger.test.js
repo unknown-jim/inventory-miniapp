@@ -2,6 +2,8 @@ const assert = require('assert')
 const fs = require('fs')
 const path = require('path')
 const core = require('../cloudfunctions/ledger/ledger-core')
+const memory = require('./memory-db')
+const MemoryDb = memory.MemoryDb
 
 const root = path.join(__dirname, '..')
 
@@ -20,10 +22,6 @@ assert.strictEqual(
   'cloudfunctions/ledger/ledger-apply.js 与 utils/ledger-apply.js 不一致，请运行 npm run sync:ledger-inventory'
 )
 
-function clone(value) {
-  return JSON.parse(JSON.stringify(value))
-}
-
 function idFactory() {
   let n = 0
   return function () {
@@ -32,123 +30,9 @@ function idFactory() {
   }
 }
 
-function MemoryDb(options) {
-  this.shops = {}
-  this.members = {}
-  this.ledgers = {}
-  this.clears = {}
-  this._rev = 0
-  this.hooks = (options && options.hooks) || {}
-}
 
-MemoryDb.prototype.snapshot = function () {
-  return {
-    shops: clone(this.shops),
-    members: clone(this.members),
-    ledgers: clone(this.ledgers),
-    clears: clone(this.clears)
-  }
-}
-
-MemoryDb.prototype.listMembersByOpenid = async function (openid) {
-  const self = this
-  return Object.keys(this.members).map(function (key) {
-    return self.members[key]
-  }).filter(function (item) {
-    return item.openid === openid
-  })
-}
-
-MemoryDb.prototype.listShopsByIds = async function (ids) {
-  const self = this
-  return (ids || []).map(function (id) {
-    return self.shops[id]
-  }).filter(Boolean)
-}
-
-MemoryDb.prototype.listMembersByShop = async function (shopId) {
-  const self = this
-  return Object.keys(this.members).map(function (key) {
-    return self.members[key]
-  }).filter(function (item) {
-    return item.shopId === shopId
-  })
-}
-
-MemoryDb.prototype.getLedger = async function (shopId) {
-  return this.ledgers[shopId] ? clone(this.ledgers[shopId]) : null
-}
-
-MemoryDb.prototype.runTransaction = async function (fn) {
-  const max = 8
-  for (let attempt = 0; attempt < max; attempt++) {
-    const baseRev = this._rev
-    const snap = this.snapshot()
-    const self = this
-    const tx = {
-      async getLedger(shopId) {
-        if (self.hooks.afterGetLedger) {
-          await self.hooks.afterGetLedger(shopId, snap)
-        }
-        return snap.ledgers[shopId] ? clone(snap.ledgers[shopId]) : null
-      },
-      async putLedger(shopId, ledger) {
-        snap.ledgers[shopId] = clone(ledger)
-      },
-      async getClearSnapshot(id) {
-        return snap.clears[id] ? clone(snap.clears[id]) : null
-      },
-      async putClearSnapshot(id, snapshot) {
-        snap.clears[id] = clone(snapshot)
-      },
-      async listMembersByShop(shopId) {
-        return Object.keys(snap.members).map(function (key) {
-          return snap.members[key]
-        }).filter(function (item) {
-          return item.shopId === shopId
-        })
-      },
-      async getShop(shopId) {
-        return snap.shops[shopId] ? clone(snap.shops[shopId]) : null
-      },
-      async setShop(shop) {
-        snap.shops[shop._id] = clone(shop)
-      },
-      async removeShop(shopId) {
-        delete snap.shops[shopId]
-      },
-      async setMember(member) {
-        snap.members[member._id] = clone(member)
-      },
-      async removeMember(memberId) {
-        delete snap.members[memberId]
-      },
-      async removeLedger(shopId) {
-        delete snap.ledgers[shopId]
-      },
-      async listClearSnapshotsByShop(shopId) {
-        return Object.keys(snap.clears).map(function (key) {
-          return snap.clears[key]
-        }).filter(function (item) {
-          return item.shopId === shopId
-        })
-      },
-      async removeClearSnapshot(id) {
-        delete snap.clears[id]
-      }
-    }
-    const result = await fn(tx)
-    if (this._rev !== baseRev) continue
-    this.shops = snap.shops
-    this.members = snap.members
-    this.ledgers = snap.ledgers
-    this.clears = snap.clears
-    this._rev += 1
-    return result
-  }
-  throw new Error('库存刚被别人改过，请再提交')
-}
-
+// 小程序从 2b-1 起必须带 apiVersion，服务端对会回传账本的 action 设了版本门。
+// 版本门本身在 tests/ledger-records.test.js 里单独测。
 async function call(db, makeId, openid, action, shopId, payload, now) {
   return core.dispatch({
     db: db,
@@ -156,6 +40,7 @@ async function call(db, makeId, openid, action, shopId, payload, now) {
     openid: openid,
     action: action,
     shopId: shopId,
+    apiVersion: core.API_VERSION,
     payload: payload || {},
     now: now || 1000
   })

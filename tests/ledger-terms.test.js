@@ -4,6 +4,7 @@
 // 以及「增量维护」和「全量重折叠」永远相等。存储没有变，这文件只测算术。
 const assert = require('assert')
 const inv = require('../utils/inventory')
+const apply = require('../utils/ledger-apply')
 
 // ---------------------------------------------------------------------------
 // 0) 参照实现：2b-0 重构前 utils/inventory.js 里的老算法，原样誊抄在这里当
@@ -481,5 +482,117 @@ for (let trial = 0; trial < 500; trial++) {
     + ' current=' + current + ' delta=' + delta + ' expected=' + expected
   )
 }
+
+// ---------------------------------------------------------------------------
+// mergeRecordDelta：客户端把「这次记账改了哪几条」合进流水缓存。
+// 会算错的部分必须在被测的纯函数里 —— 记账回传不再带整本流水，客户端拿它算欠款。
+// ---------------------------------------------------------------------------
+
+function mrec(id, createdAt, mark) {
+  return { id: id, type: 'opening', amount: 1, profit: 0, createdAt: createdAt, remark: mark || '', lines: [] }
+}
+function mids(list) {
+  return list.map(function (item) { return item.id })
+}
+
+const mBase = [mrec('b', 300), mrec('a', 200), mrec('c', 100)]   // sortKey 倒序
+
+// 新增
+let m = apply.mergeRecordDelta(mBase, {
+  bookChanged: false, count: 4, writes: [{ op: 'set', record: mrec('d', 250) }]
+})
+assert.deepStrictEqual(mids(m.records), ['b', 'd', 'a', 'c'], '新增要按 sortKey 倒序插进去')
+assert.strictEqual(m.complete, true)
+
+// 就地改：同一个 id 换成新对象，位置由 sortKey 决定，不新增一条
+m = apply.mergeRecordDelta(mBase, {
+  bookChanged: false, count: 3, writes: [{ op: 'set', record: mrec('a', 200, '改过') }]
+})
+assert.deepStrictEqual(mids(m.records), ['b', 'a', 'c'])
+assert.strictEqual(m.records[1].remark, '改过')
+assert.strictEqual(m.complete, true)
+
+// 删
+m = apply.mergeRecordDelta(mBase, {
+  bookChanged: false, count: 2, writes: [{ op: 'remove', id: 'a' }]
+})
+assert.deepStrictEqual(mids(m.records), ['b', 'c'])
+assert.strictEqual(m.complete, true)
+
+// 同一批里既 set 又 remove 同一个 id：set 赢（退货那种「先删后写」的顺序不该丢数据）
+m = apply.mergeRecordDelta(mBase, {
+  bookChanged: false,
+  count: 3,
+  writes: [{ op: 'remove', id: 'a' }, { op: 'set', record: mrec('a', 200, '又写回来') }]
+})
+assert.deepStrictEqual(mids(m.records), ['b', 'a', 'c'])
+assert.strictEqual(m.records[1].remark, '又写回来')
+
+// remove 一个不存在的 id：无声跳过，不影响其余
+m = apply.mergeRecordDelta(mBase, {
+  bookChanged: false, count: 3, writes: [{ op: 'remove', id: 'zzz' }]
+})
+assert.deepStrictEqual(mids(m.records), ['b', 'a', 'c'])
+assert.strictEqual(m.complete, true)
+
+// 换账套：老缓存整份丢掉，只留 delta 里的
+m = apply.mergeRecordDelta(mBase, {
+  bookChanged: true, count: 1, writes: [{ op: 'set', record: mrec('n1', 900) }]
+})
+assert.deepStrictEqual(mids(m.records), ['n1'])
+assert.strictEqual(m.complete, true)
+
+// 换账套 + 空 writes（clearAll）
+m = apply.mergeRecordDelta(mBase, { bookChanged: true, count: 0, writes: [] })
+assert.deepStrictEqual(m.records, [])
+assert.strictEqual(m.complete, true)
+
+// 换账套 + 空 writes 但 count > 0（restoreCleared）-> 不完整，上层必须重拉
+m = apply.mergeRecordDelta(mBase, { bookChanged: true, count: 5, writes: [] })
+assert.deepStrictEqual(m.records, [])
+assert.strictEqual(m.complete, false, '恢复出来的流水不在 delta 里，条数对不上就是不完整')
+
+// delta 为 null：不猜，标记不完整，原样保留缓存
+m = apply.mergeRecordDelta(mBase, null)
+assert.deepStrictEqual(mids(m.records), ['b', 'a', 'c'])
+assert.strictEqual(m.complete, false)
+m = apply.mergeRecordDelta(null, null)
+assert.deepStrictEqual(m.records, [])
+assert.strictEqual(m.complete, false)
+
+// writes 为空且条数对得上（saveProduct 之类不碰流水的记账）
+m = apply.mergeRecordDelta(mBase, { bookChanged: false, count: 3, writes: [] })
+assert.deepStrictEqual(mids(m.records), ['b', 'a', 'c'])
+assert.strictEqual(m.complete, true)
+
+// 排序必须和 makeSortKey 倒序一致，含**同毫秒不同 id**
+const sameMsBase = [mrec('m2', 500), mrec('m1', 500)]
+m = apply.mergeRecordDelta(sameMsBase, {
+  bookChanged: false, count: 3, writes: [{ op: 'set', record: mrec('m0', 500) }]
+})
+assert.deepStrictEqual(mids(m.records), ['m2', 'm1', 'm0'], '同毫秒靠 id 拿到全序')
+const sorted = m.records.slice()
+for (let i = 1; i < sorted.length; i++) {
+  assert.ok(
+    apply.makeSortKey(sorted[i - 1].createdAt, sorted[i - 1].id)
+      > apply.makeSortKey(sorted[i].createdAt, sorted[i].id),
+    'mergeRecordDelta 的顺序必须严格等于 readAll 的 sortKey 倒序'
+  )
+}
+
+// complete 严格按条数判：多一条少一条都不算完整
+assert.strictEqual(apply.mergeRecordDelta(mBase, {
+  bookChanged: false, count: 4, writes: []
+}).complete, false)
+assert.strictEqual(apply.mergeRecordDelta(mBase, {
+  bookChanged: false, count: 2, writes: []
+}).complete, false)
+
+// 不就地改调用方的数组
+const frozenBase = [mrec('x', 100)]
+apply.mergeRecordDelta(frozenBase, {
+  bookChanged: false, count: 2, writes: [{ op: 'set', record: mrec('y', 200) }]
+})
+assert.strictEqual(frozenBase.length, 1, 'mergeRecordDelta 不许就地改传进来的缓存')
 
 console.log('ledger terms tests passed')

@@ -377,7 +377,8 @@ Page({
   openSlip() {
     try {
       const record = store.getRecord(this.data.id)
-      const slipView = util.withSlipViewFromRecord(store.getRecords(), record, store.getProducts(), store.getShopName())
+      // 重印老单要按当时的欠款算，只能用流水。缓存不完整就报错，不印错数。
+      const slipView = util.withSlipViewFromRecord(store.recordsForMoney(), record, store.getProducts(), store.getShopName())
       this.slipImagePath = ''
       this.setData({
         showSlip: true,
