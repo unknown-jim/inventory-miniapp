@@ -148,8 +148,8 @@ const fromOrder = util.withSlipView({
   customerName: '李记便利',
   customerPhone: '13900139000',
   customerAddress: '中山街88号',
-  records: [{
-    id: 'r1',
+  lines: [{
+    lineId: 'r1',
     productName: '纯牛奶 250ml',
     sku: 'MK-001',
     qty: 2,
@@ -221,8 +221,8 @@ const named = util.withSlipView({
   amount: 118,
   payType: 'credit',
   customerName: '李记便利',
-  records: [{
-    id: 'r-tee',
+  lines: [{
+    lineId: 'r-tee',
     productId: 'p-tee',
     productName: '短袖 T恤',
     color: '黑色',
@@ -243,8 +243,8 @@ const blankSku = util.withSlipView({
   createdAt: new Date('2026-08-15T12:00:00').getTime(),
   amount: 9,
   payType: 'cash',
-  records: [{
-    id: 'r-blank',
+  lines: [{
+    lineId: 'r-blank',
     productName: '纯牛奶 250ml',
     qty: 2,
     unitPrice: 4.5,
@@ -255,39 +255,28 @@ const blankSku = util.withSlipView({
 assert.strictEqual(blankSku.lines[0].sku, '')
 assert.ok(textsOf(slipImage.layoutSlip(blankSku)).indexOf('未填') < 0)
 
+// 补打送货单：欠款一律按当前流水、按单据时间截断重算（不存冻结快照，见 2a 审计 B1）
 const reprintRecords = [
   {
     id: 'pay-1',
     type: 'pay',
     customerId: 'c1',
     amount: 18.9,
-    createdAt: 2000
+    createdAt: 2000,
+    lines: []
   },
   {
-    id: 'r-b',
+    id: 'order-1',
     type: 'out',
-    orderId: 'order-1',
-    productName: '全麦面包',
-    qty: 1,
-    unitPrice: 9.9,
-    amount: 9.9,
+    amount: 18.9,
     payType: 'credit',
     customerId: 'c1',
     customerName: '李记便利',
-    createdAt: 1000
-  },
-  {
-    id: 'r-a',
-    type: 'out',
-    orderId: 'order-1',
-    productName: '纯牛奶 250ml',
-    qty: 2,
-    unitPrice: 4.5,
-    amount: 9,
-    payType: 'credit',
-    customerId: 'c1',
-    customerName: '李记便利',
-    createdAt: 1000
+    createdAt: 1000,
+    lines: [
+      { lineId: 'r-a', productName: '纯牛奶 250ml', qty: 2, unitPrice: 4.5, amount: 9 },
+      { lineId: 'r-b', productName: '全麦面包', qty: 1, unitPrice: 9.9, amount: 9.9 }
+    ]
   }
 ]
 const reprint = util.withSlipViewFromRecord(reprintRecords, reprintRecords[1])
@@ -298,25 +287,35 @@ assert.strictEqual(reprint.thisDebtText, '18.90')
 assert.strictEqual(reprint.prevDebtText, '0.00')
 assert.strictEqual(reprint.receivableText, '18.90')
 
+// 流水不完整就报错，不能拿残缺数据算欠款印在单据上
+assert.throws(function () {
+  util.withSlipViewFromRecord([], reprintRecords[1])
+}, /不完整/)
+
+assert.throws(function () {
+  util.withSlipViewFromRecord(reprintRecords, reprintRecords[0])
+}, /销售/)
+
 const openingThenSale = [
   {
     id: 'open-1',
     type: 'opening',
     customerId: 'c1',
     amount: 50,
-    createdAt: 500
+    createdAt: 500,
+    lines: []
   },
   {
     id: 'r-open-sale',
     type: 'out',
-    productName: '纯牛奶 250ml',
-    qty: 2,
-    unitPrice: 4.5,
     amount: 9,
     payType: 'credit',
     customerId: 'c1',
     customerName: '李记便利',
-    createdAt: 1000
+    createdAt: 1000,
+    lines: [
+      { lineId: 'r-open-sale-l1', productName: '纯牛奶 250ml', qty: 2, unitPrice: 4.5, amount: 9 }
+    ]
   }
 ]
 const openingSlip = util.withSlipViewFromRecord(openingThenSale, openingThenSale[1])
@@ -331,8 +330,8 @@ const namedShop = util.withSlipView({
   payType: 'cash',
   operatorOpenid: 'oxxxxxxxxxxxxxxxxxx',
   operatorName: '小李',
-  records: [{
-    id: 'r-shop',
+  lines: [{
+    lineId: 'r-shop',
     productName: '纯牛奶 250ml',
     qty: 2,
     unitPrice: 4.5,
@@ -371,8 +370,8 @@ const emptyOperator = util.withSlipView({
   createdAt: new Date('2026-08-15T12:00:00').getTime(),
   amount: 9,
   payType: 'cash',
-  records: [{
-    id: 'r-empty-op',
+  lines: [{
+    lineId: 'r-empty-op',
     productName: '纯牛奶 250ml',
     qty: 2,
     unitPrice: 4.5,

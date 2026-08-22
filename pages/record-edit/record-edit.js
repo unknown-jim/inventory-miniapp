@@ -52,7 +52,6 @@ Page({
     showPicker: false,
     customerKeyword: '',
     filteredCustomers: [],
-    hasOrder: false,
     isMulti: false,
     directionText: '',
     reason: '',
@@ -76,37 +75,38 @@ Page({
       return
     }
     const view = util.withRecordView(record)
-    const all = store.getRecords()
+    const recordLines = inventory.recordLines(record)
+    const firstLine = inventory.firstLine(record)
     wx.setNavigationBarTitle({ title: navTitle(view, false) })
-    this.costPrice = record.costPrice
+    this.costPrice = firstLine.costPrice
     let lines = []
-    let canReturn = view.isOut && inventory.returnableQty(all, record) > 0
-    let amountText = util.money(record.amount)
-    let profitText = view.isOut || view.isReturn ? util.money(record.profit) : '0.00'
-    let productName = record.productName
+    let canReturn = false
+    const amountText = util.money(record.amount)
+    const profitText = view.isOut || view.isReturn ? util.money(record.profit) : '0.00'
+    let productName = view.productName
     let specText = view.specText
-    if (view.isOut) {
-      const order = inventory.buildSaleOrder(all, record)
-      lines = order.records.map(function (item) {
+    if (view.isOut || view.isReturn) {
+      lines = recordLines.map(function (item) {
         const spec = inventory.specText(item.color, item.size)
         return {
-          id: item.id,
+          id: item.lineId,
           productName: item.productName,
           specText: spec,
           hasSpec: !!spec,
           qty: String(item.qty),
           unitPrice: String(item.unitPrice),
+          priceText: util.money(item.unitPrice),
           amountText: util.money(item.amount),
           profitText: util.money(item.profit),
           costText: util.money(item.costPrice),
           costPrice: item.costPrice
         }
       })
-      canReturn = order.records.some(function (item) {
-        return inventory.returnableQty(all, item) > 0
+    }
+    if (view.isOut) {
+      canReturn = recordLines.some(function (item) {
+        return inventory.returnableQty(item) > 0
       })
-      amountText = util.money(order.amount)
-      profitText = util.money(order.profit)
       productName = lines.length === 1 ? lines[0].productName : '本单 ' + lines.length + ' 种商品'
       specText = lines.length === 1 ? lines[0].specText : ''
     }
@@ -140,8 +140,8 @@ Page({
       productName: productName,
       specText: specText,
       timeText: util.formatDateTime(record.createdAt),
-      qty: view.isPay || view.isOpening ? '' : String(record.qty),
-      unitPrice: view.isPay || view.isOpening || view.isConvert || view.isAdjust ? '' : String(record.unitPrice),
+      qty: view.isPay || view.isOpening ? '' : String(view.qty),
+      unitPrice: view.isPay || view.isOpening || view.isConvert || view.isAdjust ? '' : String(view.unitPrice),
       amount: view.isPay || view.isOpening ? String(record.amount) : '',
       amountText: amountText,
       profitText: profitText,
@@ -156,13 +156,12 @@ Page({
       operatorName: record.operatorName || '',
       members: members,
       myOpenid: myOpenid,
-      costText: view.isOut || view.isReturn ? util.money(record.costPrice) : '',
-      hasOrder: !!(record.orderId),
+      costText: view.isOut || view.isReturn ? util.money(firstLine.costPrice) : '',
       directionText: view.isAdjust ? (record.type === 'adjust_out' ? '出库' : '入库') : '',
-      reason: record.reason || '',
+      reason: view.reason,
       reasonOptions: view.isAdjust
         ? inventory.adjustReasons(record.type).map(function (item) {
-          return Object.assign({}, item, { on: item.value === record.reason })
+          return Object.assign({}, item, { on: item.value === view.reason })
         })
         : [],
       adjustHint: record.type === 'adjust_out'
@@ -190,12 +189,13 @@ Page({
       this.setData({ amountText: util.money(amount), profitText: '0.00' })
       return
     }
-    if (this.data.isOut) {
+    if (this.data.isOut || (this.data.isReturn && this.data.isMulti)) {
+      const sign = this.data.isReturn ? -1 : 1
       const amount = this.data.lines.reduce(function (sum, item) {
         return sum + inventory.toNumber(item.qty) * inventory.toNumber(item.unitPrice)
       }, 0)
       const profit = this.data.lines.reduce(function (sum, item) {
-        return sum + (inventory.toNumber(item.unitPrice) - inventory.toNumber(item.costPrice)) * inventory.toNumber(item.qty)
+        return sum + (inventory.toNumber(item.unitPrice) - inventory.toNumber(item.costPrice)) * inventory.toNumber(item.qty) * sign
       }, 0)
       this.setData({
         amountText: util.money(amount),
@@ -261,6 +261,7 @@ Page({
     const id = e.currentTarget.dataset.id
     const field = e.currentTarget.dataset.field
     const value = e.detail.value
+    const sign = this.data.isReturn ? -1 : 1
     const lines = this.data.lines.map(function (item) {
       if (item.id !== id) return item
       const next = Object.assign({}, item)
@@ -268,14 +269,14 @@ Page({
       const qty = inventory.toNumber(next.qty)
       const price = inventory.toNumber(next.unitPrice)
       next.amountText = util.money(qty * price)
-      next.profitText = util.money((price - inventory.toNumber(item.costPrice)) * qty)
+      next.profitText = util.money((price - inventory.toNumber(item.costPrice)) * qty * sign)
       return next
     })
     const amount = lines.reduce(function (sum, item) {
       return sum + inventory.toNumber(item.qty) * inventory.toNumber(item.unitPrice)
     }, 0)
     const profit = lines.reduce(function (sum, item) {
-      return sum + (inventory.toNumber(item.unitPrice) - inventory.toNumber(item.costPrice)) * inventory.toNumber(item.qty)
+      return sum + (inventory.toNumber(item.unitPrice) - inventory.toNumber(item.costPrice)) * inventory.toNumber(item.qty) * sign
     }, 0)
     this.setData({
       lines: lines,
@@ -425,6 +426,13 @@ Page({
           qty: this.data.qty,
           remark: this.data.remark,
           reason: this.data.reason
+        })
+      } else if (this.data.isReturn && this.data.isMulti) {
+        await store.updateRecord(this.data.id, {
+          remark: this.data.remark,
+          items: this.data.lines.map(function (item) {
+            return { id: item.id, qty: item.qty }
+          })
         })
       } else if (this.data.isReturn || this.data.isConvert) {
         await store.updateRecord(this.data.id, {

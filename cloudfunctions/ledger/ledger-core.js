@@ -441,7 +441,9 @@ async function dispatch(input) {
         defaultToActor: true
       }))
     } else if (action === 'updateRecord') {
-      const existing = (current.records || []).find(function (item) {
+      // 客户端拿到的是归并后的单据，老文档里的 records 还是按行的，
+      // 所以要按 listsOf 迁移后的形状找这条单，否则老单会认不出来
+      const existing = apply.listsOf(current).records.find(function (item) {
         return item.id === payload.id
       })
       const hasOperator = Object.prototype.hasOwnProperty.call(payload, 'operatorName')

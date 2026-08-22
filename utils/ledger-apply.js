@@ -58,10 +58,15 @@ function withAggregates(lists) {
 }
 
 function listsOf(ledger) {
+  // 先把老的「一行一条」流水归并成「一单一条」，再算聚合值：
+  // 聚合值读的是单头字段，形状不对会算错。老文档首次读写即自愈，不需要迁移脚本。
+  const records = cloneList(ledger && ledger.records)
   return withAggregates({
     products: cloneList(ledger && ledger.products),
     skus: cloneList(ledger && ledger.skus),
-    records: cloneList(ledger && ledger.records),
+    records: inventory.needsRecordMigration(records)
+      ? inventory.migrateRecordShape(records)
+      : records,
     customers: cloneList(ledger && ledger.customers),
     categories: cloneList(ledger && ledger.categories),
     revision: (ledger && ledger.revision) || 0

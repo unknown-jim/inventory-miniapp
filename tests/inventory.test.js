@@ -9,6 +9,28 @@ function idFactory() {
   }
 }
 
+// 单行销售的写法糖：一张单一条记录，行号从单号派生，方便断言
+function sale(products, records, payload, now, id, skus) {
+  let n = 0
+  return inv.applySaleOrder(products, records, Object.assign({}, payload, {
+    items: [{
+      productId: payload.productId,
+      skuId: payload.skuId,
+      color: payload.color,
+      size: payload.size,
+      qty: payload.qty,
+      unitPrice: payload.unitPrice
+    }]
+  }), now, id, function () {
+    n += 1
+    return id + '-l' + n
+  }, skus)
+}
+
+function line0(record) {
+  return inv.firstLine(record)
+}
+
 function sampleProduct(overrides) {
   return inv.createProduct(Object.assign({
     name: '纯牛奶',
@@ -71,10 +93,10 @@ assert.strictEqual(purchased.record.amount, 13)
 assert.strictEqual(purchased.record.profit, 0)
 
 assert.throws(function () {
-  inv.applySale([created], [], { productId: 'p1', qty: 11, unitPrice: 4.5 }, 4000, 'r2')
+  sale([created], [], { productId: 'p1', qty: 11, unitPrice: 4.5 }, 4000, 'r2')
 }, /库存不足/)
 
-const sold = inv.applySale(purchased.products, purchased.records, {
+const sold = sale(purchased.products, purchased.records, {
   productId: 'p1',
   qty: 4,
   unitPrice: 4.5
@@ -96,7 +118,7 @@ const sameDayPurchase = inv.applyPurchase([created], [], {
   qty: 5,
   unitPrice: 2.6
 }, now - 3600000, 'r-day-in')
-const sameDaySale = inv.applySale(sameDayPurchase.products, sameDayPurchase.records, {
+const sameDaySale = sale(sameDayPurchase.products, sameDayPurchase.records, {
   productId: 'p1',
   qty: 4,
   unitPrice: 4.5
@@ -170,7 +192,7 @@ assert.strictEqual(updatedCustomer.name, '张三超市（总店）')
 assert.strictEqual(updatedCustomer.lastSaleAt, 0)
 assert.strictEqual(updatedCustomer.createdAt, 6000)
 
-const soldToCustomer = inv.applySale(purchased.products, purchased.records, {
+const soldToCustomer = sale(purchased.products, purchased.records, {
   productId: 'p1',
   qty: 1,
   unitPrice: 4.5,
@@ -183,7 +205,7 @@ assert.strictEqual(soldToCustomer.record.customerName, '张三超市')
 assert.strictEqual(sold.record.customerName, '')
 
 assert.throws(function () {
-  inv.applySale(purchased.products, purchased.records, {
+  sale(purchased.products, purchased.records, {
     productId: 'p1',
     qty: 1,
     unitPrice: 4.5,
@@ -191,7 +213,7 @@ assert.throws(function () {
   }, 8100, 'r-credit-no-customer')
 }, /客户/)
 
-const creditSale = inv.applySale(purchased.products, purchased.records, {
+const creditSale = sale(purchased.products, purchased.records, {
   productId: 'p1',
   qty: 2,
   unitPrice: 4.5,
@@ -327,36 +349,26 @@ const multi = inv.applySaleOrder(
   'order-1',
   idFactory()
 )
-assert.strictEqual(multi.order.records.length, 2)
+// 一张单一条记录：两行商品在同一条 records 里
+assert.strictEqual(multi.order.id, 'order-1')
+assert.strictEqual(multi.order.lines.length, 2)
 assert.strictEqual(multi.order.amount, 18.9)
-assert.strictEqual(multi.order.records[0].orderId, 'order-1')
-assert.strictEqual(multi.order.records[1].orderId, 'order-1')
+assert.strictEqual(multi.order, multi.records[0])
+assert.strictEqual(multi.records.filter(function (item) {
+  return item.type === 'out'
+}).length, 1)
+assert.strictEqual(multi.order.lines[0].productId, 'p1')
+assert.strictEqual(multi.order.lines[1].productId, 'p2')
+assert.strictEqual(multi.order.lines[0].returnedQty, 0)
 assert.strictEqual(multi.products.find(function (item) { return item.id === 'p1' }).stock, 13)
 assert.strictEqual(multi.products.find(function (item) { return item.id === 'p2' }).stock, 7)
 assert.strictEqual(inv.summarizeCustomerAccount(multi.records, 'c1').receivable, 18.9)
+assert.ok(!Object.prototype.hasOwnProperty.call(multi.order, 'receivableSnapshot'))
+assert.strictEqual(inv.receivableAt(multi.records, 'c1', multi.order.createdAt), 18.9)
 
-const rebuiltOrder = inv.buildSaleOrder(multi.records, multi.order.records[1])
-assert.strictEqual(rebuiltOrder.id, 'order-1')
-assert.strictEqual(rebuiltOrder.records.length, 2)
-assert.strictEqual(rebuiltOrder.records[0].id, multi.order.records[0].id)
-assert.strictEqual(rebuiltOrder.records[1].id, multi.order.records[1].id)
-assert.strictEqual(rebuiltOrder.amount, 18.9)
-assert.throws(function () {
-  inv.buildSaleOrder(multi.records, { type: 'pay', id: 'x' })
-}, /销售/)
-
-const grouped = inv.groupRecords(multi.records)
-assert.strictEqual(grouped.length, 2)
-assert.strictEqual(grouped[0].type, 'out')
-assert.strictEqual(grouped[0].lineCount, 2)
-assert.strictEqual(grouped[0].amount, 18.9)
-assert.strictEqual(grouped[0].qty, 3)
-assert.strictEqual(grouped[0].productName, '纯牛奶、全麦面包')
-assert.strictEqual(grouped.filter(function (item) {
-  return item.type === 'out'
-}).length, 1)
+assert.strictEqual(inv.orderProductTitle(multi.order.lines), '纯牛奶、全麦面包')
 assert.strictEqual(inv.summarizeCustomerAccount(multi.records, 'c1').count, 1)
-assert.strictEqual(inv.getDashboard(multi.products, multi.records, 9100).recent[0].lineCount, 2)
+assert.strictEqual(inv.getDashboard(multi.products, multi.records, 9100).recent[0].lines.length, 2)
 
 const cookie = inv.createProduct({
   name: '苏打饼干',
@@ -393,15 +405,14 @@ const titleOrder = inv.applySaleOrder(
   idFactory(),
   juiceSkus.skus
 )
-const titleGrouped = inv.groupRecords(titleOrder.records)
-assert.strictEqual(titleGrouped[0].lineCount, 5)
-assert.strictEqual(titleGrouped[0].productName, '纯牛奶、全麦面包 等5种')
+assert.strictEqual(titleOrder.order.lines.length, 5)
+assert.strictEqual(inv.orderProductTitle(titleOrder.order.lines), '纯牛奶、全麦面包 等5种')
 
 const orderItemsEdit = inv.updateRecord(multi.products, multi.records, {
-  id: multi.order.records[0].id,
+  id: 'order-1',
   items: [
-    { id: multi.order.records[0].id, qty: 3, unitPrice: 4.5 },
-    { id: multi.order.records[1].id, qty: 1, unitPrice: 9.9 }
+    { id: multi.order.lines[0].lineId, qty: 3, unitPrice: 4.5 },
+    { id: multi.order.lines[1].lineId, qty: 1, unitPrice: 9.9 }
   ],
   payType: 'credit',
   customerId: 'c1',
@@ -409,15 +420,21 @@ const orderItemsEdit = inv.updateRecord(multi.products, multi.records, {
   remark: '整单备注'
 }, 9110, [])
 assert.strictEqual(orderItemsEdit.products.find(function (item) { return item.id === 'p1' }).stock, 12)
-assert.ok(orderItemsEdit.records.filter(function (item) {
-  return item.orderId === 'order-1'
-}).every(function (item) {
-  return item.remark === '整单备注'
-}))
+assert.strictEqual(orderItemsEdit.record.remark, '整单备注')
+assert.strictEqual(orderItemsEdit.record.amount, 23.4)
+assert.strictEqual(orderItemsEdit.record.lines.length, 2)
+assert.throws(function () {
+  inv.updateRecord(multi.products, multi.records, {
+    id: 'order-1',
+    items: [{ id: 'not-a-line', qty: 1, unitPrice: 1 }],
+    payType: 'cash',
+    customerId: 'c1'
+  }, 9111, [])
+}, /流水不存在/)
 
-const deletedOrder = inv.deleteRecord(multi.products, multi.records, multi.order.records[1].id, 9120, [])
+const deletedOrder = inv.deleteRecord(multi.products, multi.records, 'order-1', 9120, [])
 assert.strictEqual(deletedOrder.records.filter(function (item) {
-  return item.orderId === 'order-1'
+  return item.id === 'order-1'
 }).length, 0)
 assert.strictEqual(deletedOrder.products.find(function (item) { return item.id === 'p1' }).stock, 15)
 assert.strictEqual(deletedOrder.products.find(function (item) { return item.id === 'p2' }).stock, 8)
@@ -523,7 +540,7 @@ assert.throws(function () {
 }, /还有库存/)
 
 assert.throws(function () {
-  inv.applySale([teeSkus.product], [], {
+  sale([teeSkus.product], [], {
     productId: 'p-tee',
     qty: 1,
     unitPrice: 59
@@ -533,14 +550,14 @@ assert.throws(function () {
 const blackM = teeSkus.skus.find(function (item) {
   return item.color === '黑色' && item.size === 'M'
 })
-const soldTee = inv.applySale([teeSkus.product], [], {
+const soldTee = sale([teeSkus.product], [], {
   productId: 'p-tee',
   skuId: blackM.id,
   qty: 2,
   unitPrice: 59
 }, 1600, 'r-tee', teeSkus.skus)
-assert.strictEqual(soldTee.record.color, '黑色')
-assert.strictEqual(soldTee.record.size, 'M')
+assert.strictEqual(line0(soldTee.record).color, '黑色')
+assert.strictEqual(line0(soldTee.record).size, 'M')
 assert.strictEqual(soldTee.record.profit, 62)
 assert.strictEqual(soldTee.skus.find(function (item) { return item.id === blackM.id }).stock, 4)
 assert.strictEqual(soldTee.products[0].stock, 19)
@@ -582,8 +599,8 @@ const specOrder = inv.applySaleOrder(
   idFactory(),
   soldTee.skus
 )
-assert.strictEqual(specOrder.order.records.length, 2)
-assert.strictEqual(specOrder.order.records[0].size, 'M')
+assert.strictEqual(specOrder.order.lines.length, 2)
+assert.strictEqual(specOrder.order.lines[0].size, 'M')
 assert.strictEqual(specOrder.skus.find(function (item) { return item.id === blackM.id }).stock, 3)
 
 const colorOnly = inv.filterProducts([teeSkus.product], '黑色', teeSkus.skus)
@@ -599,7 +616,7 @@ const editedSale = inv.updateRecord(sold.products, sold.records, {
   unitPrice: 4.5
 }, 2100, [])
 assert.strictEqual(editedSale.products[0].stock, 13)
-assert.strictEqual(editedSale.record.qty, 2)
+assert.strictEqual(line0(editedSale.record).qty, 2)
 assert.strictEqual(editedSale.record.amount, 9)
 assert.strictEqual(editedSale.record.profit, 3.8)
 
@@ -624,7 +641,7 @@ const deletedSale = inv.deleteRecord(sold.products, sold.records, 'r3', 2400, []
 assert.strictEqual(deletedSale.products[0].stock, 15)
 assert.strictEqual(deletedSale.records.some(function (item) { return item.id === 'r3' }), false)
 
-const heavySale = inv.applySale(purchased.products, purchased.records, {
+const heavySale = sale(purchased.products, purchased.records, {
   productId: 'p1',
   qty: 12,
   unitPrice: 4.5
@@ -651,20 +668,29 @@ assert.throws(function () {
   inv.deleteRecord(creditSale.products, paid.records, 'r-credit', 2800, [])
 }, /超过赊账/)
 
+// 多行单不给 items 就没法定位改哪一行
+assert.throws(function () {
+  inv.updateRecord(multi.products, multi.records, {
+    id: 'order-1',
+    qty: 2,
+    unitPrice: 4.5,
+    payType: 'cash',
+    customerId: 'c1'
+  }, 2890, [])
+}, /请逐行填写/)
+
 const orderEdit = inv.updateRecord(multi.products, multi.records, {
-  id: multi.order.records[0].id,
-  qty: 2,
-  unitPrice: 4.5,
+  id: 'order-1',
+  items: [
+    { id: multi.order.lines[0].lineId, qty: 2, unitPrice: 4.5 },
+    { id: multi.order.lines[1].lineId, qty: 1, unitPrice: 9.9 }
+  ],
   payType: 'cash',
   customerId: 'c1',
   customerName: '张三超市'
 }, 2900, [])
 assert.strictEqual(orderEdit.record.payType, 'cash')
-assert.ok(orderEdit.records.filter(function (item) {
-  return item.orderId === 'order-1'
-}).every(function (item) {
-  return item.payType === 'cash'
-}))
+assert.strictEqual(orderEdit.record.amount, 18.9)
 
 const specEdited = inv.updateRecord(soldTee.products, soldTee.records, {
   id: 'r-tee',
@@ -721,7 +747,7 @@ const boughtBlank = inv.applyPurchase([hoodieMade.product], [], {
 assert.strictEqual(inv.findBlankSku(boughtBlank.skus, 'p-hoodie').stock, 25)
 assert.strictEqual(boughtBlank.products[0].stock, 25)
 
-const soldWhite = inv.applySale(boughtBlank.products, boughtBlank.records, {
+const soldWhite = sale(boughtBlank.products, boughtBlank.records, {
   productId: 'p-hoodie',
   skuId: whiteM.id,
   qty: 3,
@@ -729,9 +755,9 @@ const soldWhite = inv.applySale(boughtBlank.products, boughtBlank.records, {
 }, 1300, 'r-hoodie-out', boughtBlank.skus)
 assert.strictEqual(inv.findBlankSku(soldWhite.skus, 'p-hoodie').stock, 22)
 assert.strictEqual(inv.findSkuBySpec(soldWhite.skus, 'p-hoodie', '白色', 'M').stock, 0)
-assert.strictEqual(soldWhite.record.color, '白色')
-assert.strictEqual(soldWhite.record.size, 'M')
-assert.strictEqual(soldWhite.record.allocations[0].source, 'blank')
+assert.strictEqual(line0(soldWhite.record).color, '白色')
+assert.strictEqual(line0(soldWhite.record).size, 'M')
+assert.strictEqual(line0(soldWhite.record).allocations[0].source, 'blank')
 assert.strictEqual(soldWhite.products[0].stock, 22)
 
 assert.throws(function () {
@@ -752,15 +778,22 @@ const sharedOrder = inv.applySaleOrder(soldWhite.products, soldWhite.records, {
 assert.strictEqual(inv.findBlankSku(sharedOrder.skus, 'p-hoodie').stock, 2)
 
 const returned = inv.applyReturn(sharedOrder.products, sharedOrder.records, {
-  saleRecordId: sharedOrder.order.records[0].id,
+  saleOrderId: 'order-blank-ok',
+  saleLineId: sharedOrder.order.lines[0].lineId,
   qty: 2
 }, 1600, 'r-hoodie-return', sharedOrder.skus)
+// 退货行记回被退的销售行，销售行的已退数量同步涨
+assert.strictEqual(line0(returned.record).saleOrderId, 'order-blank-ok')
+assert.strictEqual(returned.records.find(function (item) {
+  return item.id === 'order-blank-ok'
+}).lines[0].returnedQty, 2)
 assert.strictEqual(inv.findSkuBySpec(returned.skus, 'p-hoodie', '白色', 'M').stock, 2)
 assert.strictEqual(inv.findBlankSku(returned.skus, 'p-hoodie').stock, 2)
 assert.strictEqual(returned.products[0].stock, 4)
 assert.throws(function () {
   inv.applyReturn(returned.products, returned.records, {
-    saleRecordId: sharedOrder.order.records[0].id,
+    saleOrderId: 'order-blank-ok',
+    saleLineId: sharedOrder.order.lines[0].lineId,
     qty: 9
   }, 1610, 'r-too-much', returned.skus)
 }, /可退/)
@@ -785,23 +818,23 @@ assert.throws(function () {
 }, /待加工库存不能改规格/)
 
 const blackMHoodie = inv.findSkuBySpec(converted.skus, 'p-hoodie', '黑色', 'M')
-const soldBlackFromBlank = inv.applySale(converted.products, converted.records, {
+const soldBlackFromBlank = sale(converted.products, converted.records, {
   productId: 'p-hoodie',
   skuId: blackMHoodie.id,
   qty: 1,
   unitPrice: 99
 }, 1750, 'r-no-auto-recolor', converted.skus)
-assert.strictEqual(soldBlackFromBlank.record.allocations[0].source, 'blank')
+assert.strictEqual(line0(soldBlackFromBlank.record).allocations[0].source, 'blank')
 assert.strictEqual(inv.findSkuBySpec(soldBlackFromBlank.skus, 'p-hoodie', '红色', 'M').stock, 1)
 assert.strictEqual(inv.findBlankSku(soldBlackFromBlank.skus, 'p-hoodie').stock, 1)
 
-const soldReadyFirst = inv.applySale(soldBlackFromBlank.products, soldBlackFromBlank.records, {
+const soldReadyFirst = sale(soldBlackFromBlank.products, soldBlackFromBlank.records, {
   productId: 'p-hoodie',
   skuId: redM.id,
   qty: 1,
   unitPrice: 99
 }, 1800, 'r-ready-first', soldBlackFromBlank.skus)
-assert.strictEqual(soldReadyFirst.record.allocations[0].source, 'ready')
+assert.strictEqual(line0(soldReadyFirst.record).allocations[0].source, 'ready')
 assert.strictEqual(inv.findSkuBySpec(soldReadyFirst.skus, 'p-hoodie', '红色', 'M').stock, 0)
 assert.strictEqual(inv.findBlankSku(soldReadyFirst.skus, 'p-hoodie').stock, 1)
 
@@ -809,10 +842,10 @@ const undoneReady = inv.deleteRecord(soldReadyFirst.products, soldReadyFirst.rec
 assert.strictEqual(inv.findSkuBySpec(undoneReady.skus, 'p-hoodie', '红色', 'M').stock, 1)
 
 assert.throws(function () {
-  inv.deleteRecord(returned.products, returned.records, sharedOrder.order.records[0].id, 2000, returned.skus)
+  inv.deleteRecord(returned.products, returned.records, 'order-blank-ok', 2000, returned.skus)
 }, /退货/)
 
-const creditBlank = inv.applySale([hoodieMade.product], [], {
+const creditBlank = sale([hoodieMade.product], [], {
   productId: 'p-hoodie',
   skuId: whiteM.id,
   qty: 1,
@@ -823,7 +856,8 @@ const creditBlank = inv.applySale([hoodieMade.product], [], {
 }, 2100, 'r-credit-blank', hoodieMade.skus)
 assert.strictEqual(inv.summarizeCustomerAccount(creditBlank.records, 'c-blank').receivable, 99)
 const creditReturn = inv.applyReturn(creditBlank.products, creditBlank.records, {
-  saleRecordId: 'r-credit-blank',
+  saleOrderId: 'r-credit-blank',
+  saleLineId: line0(creditBlank.record).lineId,
   qty: 1
 }, 2200, 'r-credit-return', creditBlank.skus)
 assert.strictEqual(inv.summarizeCustomerAccount(creditReturn.records, 'c-blank').receivable, 0)
@@ -918,13 +952,13 @@ const adjIn = inv.applyAdjust([adjPlain], [], {
 assert.strictEqual(adjIn.products[0].stock, 7)
 assert.strictEqual(adjIn.products[0].costPrice, 10)
 assert.strictEqual(adjIn.record.type, 'adjust_in')
-assert.strictEqual(adjIn.record.reason, 'surplus')
-assert.strictEqual(adjIn.record.unitPrice, 0)
-assert.strictEqual(adjIn.record.costPrice, 0)
+assert.strictEqual(line0(adjIn.record).reason, 'surplus')
+assert.strictEqual(line0(adjIn.record).unitPrice, 0)
+assert.strictEqual(line0(adjIn.record).costPrice, 0)
 assert.strictEqual(adjIn.record.amount, 0)
 assert.strictEqual(adjIn.record.profit, 0)
 assert.ok(!adjIn.record.customerId)
-assert.ok(!adjIn.record.skuId)
+assert.ok(!line0(adjIn.record).skuId)
 const afterAdjSummary = inv.summarizeRecords(adjIn.records)
 assert.strictEqual(afterAdjSummary.purchaseAmount, beforeAdjSummary.purchaseAmount)
 assert.strictEqual(afterAdjSummary.salesAmount, beforeAdjSummary.salesAmount)
@@ -977,7 +1011,7 @@ const editedIn = inv.updateRecord(giftOut.products, giftOut.records, {
 }, 20050, giftOut.skus)
 assert.strictEqual(editedIn.products[0].stock, 8)
 assert.strictEqual(editedIn.products[0].costPrice, 10)
-assert.strictEqual(editedIn.record.qty, 4)
+assert.strictEqual(line0(editedIn.record).qty, 4)
 
 const editedReason = inv.updateRecord(editedIn.products, editedIn.records, {
   id: 'r-adj-in',
@@ -985,7 +1019,7 @@ const editedReason = inv.updateRecord(editedIn.products, editedIn.records, {
   reason: 'gift'
 }, 20060, editedIn.skus)
 assert.strictEqual(editedReason.products[0].stock, 8)
-assert.strictEqual(editedReason.record.reason, 'gift')
+assert.strictEqual(line0(editedReason.record).reason, 'gift')
 
 assert.throws(function () {
   inv.updateRecord(editedReason.products, editedReason.records, {
@@ -1090,7 +1124,7 @@ const adjLock = inv.applyAdjust(boughtLock.products, boughtLock.records, {
 assert.strictEqual(adjLock.products[0].costPrice, 3)
 assert.strictEqual(adjLock.products[0].stock, 6)
 assert.strictEqual(inv.summarizeRecords(adjLock.records).purchaseAmount, 6)
-const soldLock = inv.applySale(adjLock.products, adjLock.records, {
+const soldLock = sale(adjLock.products, adjLock.records, {
   productId: 'p-lock',
   qty: 1,
   unitPrice: 10
@@ -1109,7 +1143,7 @@ const soldAdjIn = inv.applyAdjust([inv.createProduct({
   reason: 'surplus',
   qty: 5
 }, 22010, 'r-adj-sold-in')
-const soldAfterAdj = inv.applySale(soldAdjIn.products, soldAdjIn.records, {
+const soldAfterAdj = sale(soldAdjIn.products, soldAdjIn.records, {
   productId: 'p-adj-sold',
   qty: 5,
   unitPrice: 16
@@ -1152,9 +1186,9 @@ assert.strictEqual(inv.findBlankSku(blankIn.skus, 'p-adj-blank').stock, 13)
 assert.strictEqual(inv.findSkuBySpec(blankIn.skus, 'p-adj-blank', '白', 'M').stock, 0)
 assert.strictEqual(blankIn.products[0].costPrice, 40)
 assert.strictEqual(inv.findBlankSku(blankIn.skus, 'p-adj-blank').costPrice, blankAdjSku.costPrice)
-assert.strictEqual(blankIn.record.skuId, blankAdjSku.id)
-assert.ok(!blankIn.record.color)
-assert.ok(!blankIn.record.size)
+assert.strictEqual(line0(blankIn.record).skuId, blankAdjSku.id)
+assert.ok(!line0(blankIn.record).color)
+assert.ok(!line0(blankIn.record).size)
 const readyIn = inv.applyAdjust(blankIn.products, blankIn.records, {
   productId: 'p-adj-blank',
   skuId: whiteAdjSku.id,
@@ -1222,7 +1256,7 @@ const opProduct = inv.createProduct({
 }, 30000, 'p-op')
 const longOperator = '一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十甲乙丙'
 assert.strictEqual(longOperator.length > 32, true)
-const opSale = inv.applySale([opProduct], [], {
+const opSale = sale([opProduct], [], {
   productId: 'p-op',
   qty: 1,
   unitPrice: 2,
@@ -1231,7 +1265,7 @@ const opSale = inv.applySale([opProduct], [], {
 }, 30010, 'r-op')
 assert.strictEqual(opSale.record.operatorOpenid, 'staff-1')
 assert.strictEqual(opSale.record.operatorName, '小李')
-const opLong = inv.applySale(opSale.products, opSale.records, {
+const opLong = sale(opSale.products, opSale.records, {
   productId: 'p-op',
   qty: 1,
   unitPrice: 2,
@@ -1251,16 +1285,12 @@ const opOrder = inv.applySaleOrder(opLong.products, opLong.records, {
 }, 30030, 'order-op', idFactory())
 assert.strictEqual(opOrder.order.operatorOpenid, 'staff-1')
 assert.strictEqual(opOrder.order.operatorName, '小李')
-assert.ok(opOrder.order.records.every(function (item) {
-  return item.operatorOpenid === 'staff-1' && item.operatorName === '小李'
+// 经手人是整单共享字段，只在单头一份，不重复进每一行
+assert.strictEqual(opOrder.order.lines.length, 2)
+assert.ok(opOrder.order.lines.every(function (item) {
+  return !Object.prototype.hasOwnProperty.call(item, 'operatorOpenid')
+    && !Object.prototype.hasOwnProperty.call(item, 'operatorName')
 }))
-const groupedOp = inv.groupRecords(opOrder.records)
-const groupedSale = groupedOp.find(function (item) {
-  return item.orderId === 'order-op'
-})
-assert.ok(groupedSale)
-assert.ok(!Object.prototype.hasOwnProperty.call(groupedSale, 'operatorOpenid'))
-assert.ok(!Object.prototype.hasOwnProperty.call(groupedSale, 'operatorName'))
 
 const opKept = inv.updateRecord(opSale.products, opSale.records, {
   id: 'r-op',
@@ -1280,19 +1310,18 @@ assert.strictEqual(opRenamed.record.operatorOpenid, 'staff-1')
 assert.strictEqual(opRenamed.record.operatorName, '只改称呼')
 
 const opItemsEdit = inv.updateRecord(opOrder.products, opOrder.records, {
-  id: opOrder.order.records[0].id,
+  id: 'order-op',
   items: [
-    { id: opOrder.order.records[0].id, qty: 1, unitPrice: 2 },
-    { id: opOrder.order.records[1].id, qty: 1, unitPrice: 2 }
+    { id: opOrder.order.lines[0].lineId, qty: 1, unitPrice: 2 },
+    { id: opOrder.order.lines[1].lineId, qty: 1, unitPrice: 2 }
   ],
   operatorOpenid: 'boss',
   operatorName: '老板'
 }, 30060, [])
-assert.ok(opItemsEdit.records.filter(function (item) {
-  return item.orderId === 'order-op'
-}).every(function (item) {
-  return item.operatorOpenid === 'boss' && item.operatorName === '老板'
-}))
-assert.strictEqual(inv.buildSaleOrder(opItemsEdit.records, opItemsEdit.record).operatorName, '老板')
+assert.strictEqual(opItemsEdit.record.operatorOpenid, 'boss')
+assert.strictEqual(opItemsEdit.record.operatorName, '老板')
+assert.strictEqual(opItemsEdit.records.find(function (item) {
+  return item.id === 'order-op'
+}).operatorName, '老板')
 
 console.log('inventory tests passed')

@@ -101,6 +101,30 @@
     </view>
   </view>
 
+  <view class="card form-card" wx:elif="{{isReturn && isMulti}}">
+    <view class="order-lines">
+      <view class="line-block" wx:for="{{lines}}" wx:key="id">
+        <view class="item-name">{{item.productName}}</view>
+        <view class="muted" wx:if="{{item.hasSpec}}">{{item.specText}}</view>
+        <view class="field">
+          <view class="field-label">退货数量</view>
+          <input wx:if="{{editing}}" class="field-input" type="digit" data-id="{{item.id}}" data-field="qty" value="{{item.qty}}" bindinput="onLineField" placeholder="0" hidden="{{showCustomerPicker}}" />
+          <view wx:else class="field-input readonly">{{item.qty}}</view>
+        </view>
+        <view class="meta">退货单价 ¥{{item.priceText}} · 进价快照 ¥{{item.costText}} · 本行冲减毛利 ¥{{item.profitText}}</view>
+      </view>
+    </view>
+    <view class="total">
+      <text>本单金额</text>
+      <text class="total-num">¥{{amountText}}</text>
+    </view>
+    <view class="field last">
+      <view class="field-label">备注</view>
+      <input wx:if="{{editing}}" class="field-input" data-field="remark" value="{{remark}}" bindinput="onField" placeholder="可选" hidden="{{showCustomerPicker}}" />
+      <view wx:else class="field-input readonly">{{remark}}</view>
+    </view>
+  </view>
+
   <view class="card form-card" wx:elif="{{isAdjust}}">
     <view class="field">
       <view class="field-label">原因</view>

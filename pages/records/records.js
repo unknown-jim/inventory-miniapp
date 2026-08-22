@@ -27,9 +27,8 @@ Page({
 
   refresh() {
     const all = store.getRecords()
-    const records = inventory.filterRecords(all, this.data.type)
+    const list = inventory.filterRecords(all, this.data.type)
     const summary = store.getTotals() || inventory.summarizeRecords(all)
-    const list = inventory.groupRecords(records)
     this.setData({
       list: list.map(util.withRecordView),
       salesAmount: util.money(summary.salesAmount),

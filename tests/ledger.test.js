@@ -326,7 +326,8 @@ async function rejects(promise, re) {
   })
   assert.strictEqual(leftSale.result.order.operatorOpenid, 'gone-user')
   assert.strictEqual(leftSale.result.order.operatorName, '老王')
-  const stampId = stamped.result.order.records[0].id
+  const stampId = stamped.result.order.id
+  assert.strictEqual(stamped.result.order.lines.length, 1)
   await call(db, ids, 'user-a', 'updateMember', shopA, { displayName: '新老板' })
   const kept = await call(db, ids, 'user-a', 'updateRecord', shopA, {
     id: stampId,

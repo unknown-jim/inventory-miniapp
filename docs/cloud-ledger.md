@@ -15,6 +15,12 @@
 - 租户：每条账带 `shopId`。先查 `members`，不是该店成员直接拒绝。
 - 写：进货 / 销售 / 退货 / 改规格 / 库存调整 / 改档都走 `ledger` 的 `action`（库存调整是 `addAdjust`）。函数里用现有 [`utils/inventory.js`](../utils/inventory.js)，在**事务回调中重新读取** `ledgers` 文档再计算再写回。
 - 读：云函数按店返回整本账；小程序内存 + `wx.storage` 只做缓存，不是权威来源。
+- 流水形状：`records[]` **一张单一条记录**，明细在 `lines[]`。单头只放跨行共享的东西（客户、结算方式、备注、经手人、时间、单级汇总 `amount`/`profit`），其余一律进 `lines`。收款和期初没有明细，`lines` 为空、金额在单头。进货 / 改规格 / 库存调整是单行单，用 `lines[0]`。
+  - `lines[].allocations` 必须**逐行保留**（这一行是从哪个规格格、还是从待加工扣的货）。「退货原样入库」完全依赖它，不要拍平或丢弃。
+  - 已退数量记在销售行的 `lines[].returnedQty` 上，不要扫全表数退货记录。新增退货要加、删退货要减、改退货数量要同步改，三条路径都要双向一致。
+  - 一张退货单只能退同一张销售单。退货单头的客户和结算方式继承自被退销售单，跨单无法定义单头。
+  - 老的按行流水由 `migrateRecordShape` 在 `listsOf` 里**读时自愈**，不需要迁移脚本。**只有 `out` 按 `orderId || id` 归并，其余每条各自成单**——老退货记录和被退销售单共享同一个 `orderId`，一起归并会把退货并进销售单。
+- 送货单欠款：一律用 `receivableAt` 按**当前流水**、按单据时间截断现算。**不要加冻结欠款的字段。** 同一客户的送货单按时间排开，「合计欠款」必须构成一条连续余额线、末端等于该客户当前欠款；写入时冻结的值在改 / 删更早的记录后会制造一个不出现在任何单据上的断点，客户拿单据对账时对不上。
 - 聚合值：账本文档带 `totals`（全店销售额 / 进货额 / 毛利 / 欠款 / 流水数）和每个客户的 `customers[].account`（销售单数 / 销售额 / 赊账 / 已收 / 欠款）。**每次由 `records` 全量重算**，不做增量维护——见 [`ledger-apply.js`](../utils/ledger-apply.js) 的 `withAggregates`，`listsOf` 和 `applyMutation` 出口各调一次。因此聚合值不可能和流水漂移，老文档缺字段也会在首次读写时自愈，不需要迁移脚本。客户端读这两个字段，不要再自己遍历流水算欠款。
 - 扣账内核只有一份。云函数不能 `require('../../utils/inventory')`，用 `npm run sync:ledger-inventory` 复制到 `cloudfunctions/ledger/`。`npm test` 会在两份不一致时失败。
 - 环境 ID 写在 [`utils/cloud-config.js`](../utils/cloud-config.js) 的 `CLOUD_ENV_ID`，必须等于开发者工具「云开发 → 设置」里的那一串（微信侧）。腾讯云控制台里另一套环境填进来会报 Environment not found。空着不能记账，也不要用客户端 `DYNAMIC_CURRENT_ENV` 代替填写。
@@ -55,3 +61,5 @@
 - 把 `CLOUD_ENV_ID` 留空却指望开发者工具自动选环境，或把腾讯云控制台里另一套环境 ID 填进小程序。
 - 把微信云托管 CLI 密钥写进仓库、skill 或提交说明。只放 `WXCLOUD_PRIVATE_KEY` 或 `.env`。
 - 改了 `utils/inventory.js` 或 `utils/ledger-apply.js` 却不跑 `npm run sync:ledger-inventory`。
+- 给流水加「开单时冻结欠款」之类的派生字段。欠款和汇总一律由当前流水现算，理由见上面「送货单欠款」和「聚合值」两条。
+- 迁移老流水时把非 `out` 记录也按 `orderId` 归并。老退货和被退销售单共享 `orderId`，会被并成一张单。
