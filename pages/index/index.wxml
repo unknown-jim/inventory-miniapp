@@ -47,6 +47,8 @@
     </view>
   </view>
 
+  <view wx:if="{{aggregatesStale}}" class="card quiet js-aggregates-stale">账目正在核对中，金额可能不准，请联系开发者</view>
+
   <view wx:if="{{hasReceivable}}" class="card debt-banner" bindtap="goCustomers">
     <view>
       <view class="muted">客户欠款</view>

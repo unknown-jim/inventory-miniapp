@@ -27,7 +27,8 @@ const MEMORY_AGGREGATE_KEY = 'inv_aggregate'
 const MIGRATED_KEY = 'inv_local_migrated'
 const SNAPSHOT_DONE_KEY = 'inv_local_snapshot_done'
 
-// 首页「最近流水」要几条。20 是 RECORD_PAGE_DEFAULT，服务端会钳到 [1,100]。
+// 首页「最近流水」要几条。20 是 RECORD_PAGE_DEFAULT；limit 非法时服务端给缺省
+// 20、超过上限才钳到 100（apply.clampPageLimit）。
 const RECENT_LIMIT = 20
 
 const cache = {
@@ -47,6 +48,13 @@ const cache = {
   // 当前账套号。换账套（清空 / 恢复 / 填示例数据）时用来把上一本账的
   // recent / today 当场清掉，见 applyLedgerLists。
   bookId: '',
+  // 服务端 getLedger 时比对 aggregate.count 和集合条数报的漂移哨兵（只比条数，
+  // 纯金额漂移它看不见）。首页 / 流水页挂提示条用；只在 getLedger 回包里有，
+  // 记账回包不带（不重拉），所以它一直是「上一次拉账本时」的值。
+  aggregatesStale: false,
+  // 最近一份清空快照的元信息 { savedAt, recordCount }（recordCount 缺失为 null）。
+  // 店铺页「恢复清空前数据」的弹窗要说清恢复的是哪一份。
+  latestClear: null,
   // 上一次 getLedger 用的那个零点，和当时的 mutationSeq。refreshIfStale 靠它
   // 判断「跨午夜了」和「记过账了」。
   dayStart: 0,
@@ -159,12 +167,16 @@ function applyLedgerLists(ledger) {
   // 上一本账。它们只在 getLedger 时更新，而 refreshIfStale 是**不抛**的：
   // 换账套那一次恰好网络抖动，首页就会一边显示已归零的欠款、一边显示清空前的
   // 今日销售和最近流水。钱是对的，旁边那几个数是上一本账的 —— 比空着更误导。
+  // aggregatesStale 一起清：它是 attachRecent 比对**上一本账**比出来的，记账
+  // 回包不带这个字段（applyRecent 只在有 recent 时才动它），不主动清的话
+  // 旧账套的「账目正在核对中」提示条会一直挂到新账套下一次 getLedger。
   // 账套变了就当场清掉，等下一次 getLedger 拿新的。
   const nextBookId = String((lists && lists.bookId) || '')
   if (nextBookId && cache.bookId && nextBookId !== cache.bookId) {
     cache.recent = []
     cache.today = null
     cache.todayComplete = false
+    cache.aggregatesStale = false
   }
   if (nextBookId) cache.bookId = nextBookId
   cache.products = lists.products
@@ -173,6 +185,9 @@ function applyLedgerLists(ledger) {
   cache.categories = lists.categories
   cache.revision = lists.revision
   cache.totals = lists.totals || null
+  // latestClear 每个回包都带（publicListsOf 从账本文档的 clearSnapshots 现算），
+  // 记账回包也不例外 —— clearAll 之后马上点恢复，弹窗拿到的就是刚存的那份。
+  cache.latestClear = (ledger && ledger.latestClear) || null
   cache.ready = true
   cache.hasClearedBackup = apply.hasClearedBackup(ledger) || !!(ledger && ledger.hasClearedBackup)
   if (ledger && ledger.lastRestoredClearAt != null) {
@@ -183,11 +198,15 @@ function applyLedgerLists(ledger) {
 // getLedger 回传的 recent / today 是服务端按客户端给的 dayStart 现算的**读时
 // 投影**，不落库，直接收下。记账回传里没有这两个字段（事务提交后零 IO），
 // 所以它们只在这里更新，其余时候靠 mutationSeq 标脏、refreshIfStale 重取。
+// aggregatesStale 同理：只有 getLedger 走过 attachRecent 那次比对才有这个字段，
+// 也只在这里收。漂移不会因为记了一笔账自己好掉（增量维护会把漂移原样带下去），
+// 所以下一次 getLedger 之前一直显示是诚实的。
 function applyRecent(ledger) {
   if (!ledger || !Array.isArray(ledger.recent)) return
   cache.recent = ledger.recent
   cache.today = ledger.today || null
   cache.todayComplete = !!ledger.todayComplete
+  cache.aggregatesStale = !!ledger.aggregatesStale
 }
 
 // 已经拿到成功响应 = 账已经记上了。从这里往后无论出什么问题都只能降级，
@@ -211,6 +230,7 @@ function applyLedger(ledger) {
   cache.recent = (ledger && Array.isArray(ledger.recent)) ? ledger.recent : []
   cache.today = null
   cache.todayComplete = false
+  cache.aggregatesStale = false
   cache.dayStart = 0
   persist()
 }
@@ -458,20 +478,33 @@ function memoryLedger() {
     accounts: wx.getStorageSync(MEMORY_ACCOUNTS_KEY) || {},
     aggregate: wx.getStorageSync(MEMORY_AGGREGATE_KEY) || inventory.emptyTerms(),
     clearSnapshots: archive.map(function (item) {
-      return { id: item.id, savedAt: item.savedAt }
+      // recordCount：内存模式的快照一定带 aggregate（snapshotLists 从带聚合的
+      // 内存账本克隆的），aggregate.count 就是那份账套的流水数；老格式兜底按
+      // records 数组行数，和云上 snapshotRecordCount 的口径一致。
+      return {
+        id: item.id,
+        savedAt: item.savedAt,
+        recordCount: item.aggregate
+          ? inventory.toNumber(item.aggregate.count)
+          : ((item.records || []).length)
+      }
     }),
     lastRestoredClearAt: Number(wx.getStorageSync(LAST_RESTORED_KEY) || 0)
   }
 }
 
-// 和云上的 publicListsOf 同形状：四张表 + 聚合投影 + 备份元信息，**不带流水**。
-// lastRestoredClearAt 是内存模式专有的：memoryLedger() 要从 storage 读回它，
-// 云模式没人读（服务端自己存着）。
+// 和云上的 publicListsOf 同形状：四张表 + 聚合投影 + 备份元信息（含 latestClear），
+// **不带流水**。lastRestoredClearAt 是内存模式专有的：memoryLedger() 要从
+// storage 读回它，云模式没人读（服务端自己存着）。
 function memoryPublicLists(ledger) {
   const lists = apply.listsOf(ledger)
   lists.hasClearedBackup = apply.hasClearedBackup(ledger)
   lists.archivedClearCount = ((ledger && ledger.clearSnapshots) || []).length
   lists.lastRestoredClearAt = (ledger && ledger.lastRestoredClearAt) || 0
+  const latestClear = apply.latestClearView(ledger)
+  if (latestClear) {
+    lists.latestClear = latestClear
+  }
   return lists
 }
 
@@ -760,6 +793,19 @@ function getCategories() {
 
 function getTotals() {
   return cache.totals || null
+}
+
+// 聚合漂移哨兵（见 cache.aggregatesStale 的注释）。首页 / 流水页挂提示条用：
+// 金额一律来自 accounts / totals 投影，漂了就是「页面上每个数都可能不准」，
+// 这时候要让人知道该找谁，而不是把错数当真。
+function getAggregatesStale() {
+  return !!cache.aggregatesStale
+}
+
+// 最近一份清空快照的 { savedAt, recordCount }（recordCount 缺失为 null）。
+// 「恢复清空前数据」的弹窗用它说清恢复的是哪一天、多少条。
+function getLatestClear() {
+  return cache.latestClear || null
 }
 
 function getSkus() {
@@ -1117,6 +1163,8 @@ module.exports = {
   getCustomers: getCustomers,
   getCategories: getCategories,
   getTotals: getTotals,
+  getAggregatesStale: getAggregatesStale,
+  getLatestClear: getLatestClear,
   getSkus: getSkus,
   getProduct: getProduct,
   getSku: getSku,

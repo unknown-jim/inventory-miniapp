@@ -130,15 +130,35 @@ assert.strictEqual(repriceHint(savedSaleOf({
   lines: [{ lineId: 'l1', unitPrice: 25, qty: 4, returnedQty: 0, returnedAmount: 0 }]
 }), [{ id: 'l1', unitPrice: '99', qty: '4' }], '100'), '')
 
-// 老流水缺 returnedAmount：按 returnedQty × 当时单价回推，和数据层同一条兜底，
-// 因此也不会被误判成两套价。
+// 老流水缺 returnedAmount：快照按 returnedQty × 当时单价回推，和数据层
+//（returnedAmountOfSale）同一条兜底口径。**正因为同口径，两套价那条判据
+//（|returnedAmount − returnedQty × unitPrice|）在这里恒为 0**，抓不到它，
+// 所以 savedSaleOf 单独打一个 returnedAmountMissing 标记，靠它出文案。
+//
+// 这里从前断言的是 ''（静默）—— 钉的是 A5 那个错误行为：店主打开这张单一个字
+// 不改直接保存，同单退货行会被拨到现价、returnedAmount 落成 Σ退货额，而当初那几
+// 张退货单开的可能是另一套价，差额直接落在销售额、毛利和欠款上，一句提示都没有。
 const legacy = savedSaleOf({
   amount: 100,
   paidAmount: 100,
   lines: [{ lineId: 'l1', unitPrice: 25, qty: 4, returnedQty: 2 }]
 })
 assert.strictEqual(legacy.lines.l1.returnedAmount, inv.round2(2 * 25))
-assert.strictEqual(repriceHint(legacy, [{ id: 'l1', unitPrice: '25', qty: '4' }], '100'), '')
+assert.strictEqual(legacy.lines.l1.returnedAmountMissing, true)
+const legacyHint = repriceHint(legacy, [{ id: 'l1', unitPrice: '25', qty: '4' }], '100')
+assert.ok(legacyHint.indexOf('账上没记当时的退货金额') >= 0, legacyHint)
+// 保存后的两个数是准的（Σ退货额由构造 = 已退件数 × 现价，退款现金跟着它现算），
+// 报得出来；改前那一头账上压根没记，详情页也 fetch 不到那几张退货单，如实说看不
+// 出来 —— 报一个可能是错的「改前 ¥X」比不报更糟。
+assert.ok(legacyHint.indexOf('退货额记成 ¥50.00') >= 0, legacyHint)
+assert.ok(legacyHint.indexOf('退款现金记成 ¥50.00') >= 0, legacyHint)
+assert.ok(legacyHint.indexOf('看不出来') >= 0, legacyHint)
+// 同一张单只要 returnedAmount 记着就不走这条：不缺字段、也不是两套价，恒不弹。
+assert.strictEqual(repriceHint(savedSaleOf({
+  amount: 100,
+  paidAmount: 100,
+  lines: [{ lineId: 'l1', unitPrice: 25, qty: 4, returnedQty: 2, returnedAmount: 50 }]
+}), [{ id: 'l1', unitPrice: '25', qty: '4' }], '100'), '')
 
 // —— 老数据的两套价：单价一个字没改也要说一声 ——
 // main 上被改出来的单：销售行 0 元、退货行还按 25 记着 50。保存会把退货行拨回

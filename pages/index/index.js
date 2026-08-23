@@ -17,6 +17,9 @@ Page({
     alerts: [],
     recent: [],
     isEmpty: false,
+    // 聚合漂移哨兵（服务端 getLedger 比对 aggregate.count 和集合条数）。
+    // 真了就说明页面上的金额可能不准，提示条要说清是什么、该找谁。
+    aggregatesStale: false,
     pageLoading: true,
     blocked: false,
     blockedMessage: '',
@@ -43,6 +46,7 @@ Page({
         alertCount: 0,
         alerts: [],
         recent: [],
+        aggregatesStale: false,
         isEmpty: false
       })
       return
@@ -92,6 +96,7 @@ Page({
         return util.withView(item, skus)
       }),
       recent: dash.recent.slice(0, 6).map(util.withRecordView),
+      aggregatesStale: store.getAggregatesStale(),
       isEmpty: dash.productCount === 0
     })
   },

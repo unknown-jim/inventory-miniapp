@@ -9,13 +9,16 @@ const inventory = require('./inventory')
 //
 // 文档形状和 sortKey / _id 的定义在 ledger-apply.js（纯映射，小程序内存模式也要用）。
 //
-// 需要在云控制台建的索引（本文件的每一次查询都对得上其中一条，全部避开数组字段）：
+// 需要在云控制台建的索引（#1–#5 本文件的每一次查询都对得上其中一条，全部避开
+// 数组字段；#6 当前没有任何查询使用——它是给 2b-3 的 deleteShop 清理 ledger_records
+// 预建的，删店目前只删 shops / members / ledgers / ledger_clears，见
+// ledger-core.js 的 deleteShop 和 docs/cloud-ledger.md 的「删除店铺」）：
 //   1  bookId ASC, sortKey DESC                                 -> page / recentAndToday
 //   2  bookId ASC, customerId ASC, sortKey DESC                 -> page(customerId) / suffixOfCustomer
 //   3  bookId ASC, type ASC, sortKey DESC                       -> page(type)
 //   4  bookId ASC, saleOrderId ASC, sortKey ASC                 -> 查一张销售单的退货（整体重算用）
 //   5  bookId ASC, type ASC, productId ASC, skuId ASC, sortKey DESC -> latestPurchases
-//   6  shopId ASC                                               -> deleteShop 清理、跨账套运维
+//   6  shopId ASC                                               -> 给 2b-3 的 deleteShop 清理预留，当前无查询使用
 
 const COLLECTION = 'ledger_records'
 const PAGE_LIMIT = 100
@@ -24,8 +27,12 @@ const PAGE_LIMIT = 100
 //
 // 上限按**条数**判，不按页数判：hasMore = docs.length >= limit 在总数正好是
 // 整页倍数时恒为真，按页数判会把「正好 N 条」也算成超限 —— 老实现名义 5000、
-// 实际 4999 就到顶，就是这个 off-by-one。**这是仓里唯一一份样板**（2b-2b 删掉
-// COMPAT_MAX_RECORDS 之后），下一个写有界循环的人照着这里写，不要再错一遍。
+// 实际 4999 就到顶，就是这个 off-by-one。下一个写有界循环的人照着这里写，
+// 不要再错一遍。**同型的有界循环仓里还有两处**：本文件的 recentAndToday
+//（TODAY_MAX_RECORDS）和 ledger-migrate.js 的 readAllDocs —— 三处**都判条数不判
+// 页数**，但到顶之后的动作不同：本处和 readAllDocs 是 `> cap` + throw，
+// recentAndToday 是 `>= MAX` + break（不抛，回 todayComplete: false）。
+// 单次查询上限（returnsOfSale）是另一种形状，见 SALE_RETURNS_MAX 那段。
 const SUFFIX_MAX_RECORDS = 5000
 // 「集合去掉一个元素之后的最大值」由原集合前 2 名一定能确定，所以取 2 条：
 // 改一条 in 不改 createdAt，删一条要把它从候选里去掉，两种都够。
@@ -37,6 +44,11 @@ const LATEST_PURCHASE_KEEP = 2
 const TODAY_MAX_RECORDS = 2000
 // 一张销售单名下退货单的查询上限：200 张已远超现实（一次退货是一张单，退 200 次
 // 同一张销售单），到顶说明数据不对劲，报错不做无界翻页 —— 有界循环的同一份样板。
+// **查询要 limit(MAX + 1)、判据要 `> MAX`**，理由见 returnsOfSale 里那段。
+// **静默截断现在不只毁份额**：repriceSaleReturns 已经改成按 Σ退货额**覆盖**
+// 销售行的 returnedAmount（不再是「原值 + 差额」），所以只捞回一部分退货单时，
+// returnedAmount 会被就地写小成「捞回来那几张的和」—— 已退货值当场缩水，
+// 下一次退货按这个偏低的基准算冲抵，柜台多退现金。这就是为什么这里宁可抛错。
 // 两件事写在这里，别踩：
 //   ① 这是一道**死角**。到顶之后改这张销售单、以及改/删它名下的任何退货单，
 //      都要先把全部退货单捞齐来整体重算，于是两条路都撞在这里，app 内没有出路，
@@ -94,13 +106,30 @@ function recordStore(ctx, bookId, shopId) {
   // 一张销售单名下的全部退货单，按记账顺序（sortKey 升序）返回，给整体重算用
   // （inventory.recomputeSaleReturns）。where 不加 type：toRecordDoc 只给 return
   // 写非空 saleOrderId，其余类型恒 ''，这条 where 天然只命中退货单，正好对上索引 #4。
+  //
+  // limit 取 **MAX + 1**、判据取 **> MAX**，两条理由：
+  //   ① 名义和实际对齐。limit(MAX) + `>= MAX` 是 SUFFIX_MAX_RECORDS 顶上批评的
+  //      那个 off-by-one：文案说「超过 200 张」，触发点却是「等于 200 张」，
+  //      第 200 张退货单就把这张销售单锁死了。
+  //   ② 多要一条才判得出「到底是刚好取满还是被截断了」。`get()` 的 limit 上限
+  //      是未实测项：真实云开发若把它压到低于 200，limit(MAX) + `>= MAX` 永远
+  //      不触发，返回的是一组**静默截断**
+  //      的退货单，recomputeSaleReturns 在不完整的组上分份额 —— 拆分不变量破裂，
+  //      欠款和现金退款额一起算错，而且不报错。**更糟的是 repriceSaleReturns 会把
+  //      销售行的 returnedAmount 按 Σ 覆盖成「捞回来那几张的和」**，已退货值就地缩水，
+  //      之后每一次退货都按这个偏低的基准算冲抵。
+  //      要 MAX + 1、判 > MAX 之后，只要云端单次上限 ≥ MAX + 1 就一定判得出来
+  //      （wx-server-sdk 云函数侧是 1000，远够）。**这一条不是无条件的**：
+  //      上限恰好等于 MAX 时反而是老写法碰巧会抛（它请求 MAX 拿满就抛），
+  //      而新写法请求 MAX+1 只拿回 MAX、判不出来 —— 所以 MAX 不许调到接近
+  //      云端上限，两者之间必须留出至少一条的余量。
   async function returnsOfSale(saleOrderId) {
     const res = await col.where({
       bookId: book,
       saleOrderId: String(saleOrderId || '')
-    }).orderBy('sortKey', 'asc').limit(SALE_RETURNS_MAX).get()
+    }).orderBy('sortKey', 'asc').limit(SALE_RETURNS_MAX + 1).get()
     const docs = docsOf(res)
-    if (docs.length >= SALE_RETURNS_MAX) {
+    if (docs.length > SALE_RETURNS_MAX) {
       throw new Error('这张销售单的退货单太多（超过 ' + SALE_RETURNS_MAX + ' 张），超出一次能整体重算的范围，请联系开发者处理')
     }
     return docs.map(apply.fromRecordDoc)
@@ -145,7 +174,17 @@ function recordStore(ctx, bookId, shopId) {
 
   async function countAll() {
     const res = await col.where({ bookId: book }).count()
-    return (res && res.total) || 0
+    // total 必须是一个有限数字才算「数着了」。count() 回 {} 或 {total: NaN} 时
+    // `(res && res.total) || 0` 会把它吞成 0：信号②（回滚守卫 / dropLegacy 的
+    // 事务外计数）静默变成「集合是空的」而不是「数不出来」，dropLegacy 因此会报
+    // 出因果错误的「集合里一条流水都没有……多半是 newBook 换过账套」（偏安全侧、
+    // 可重试，但把一次瞬时故障指认成了账套不对）。数不出来就抛，让调用方走
+    // 「数不着」那条路（preCountProbe 会接住、写进 countError）。
+    if (!res || typeof res.total !== 'number' || !isFinite(res.total)) {
+      throw new Error('数 ' + COLLECTION + ' 里账套 ' + book + ' 的条数没数出来：'
+        + JSON.stringify(res) + ' 不是有限的数字')
+    }
+    return res.total
   }
 
   // receivableAt 的口径是 createdAt <= at（含同毫秒的本单自己），

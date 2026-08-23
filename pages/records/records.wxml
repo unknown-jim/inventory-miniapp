@@ -18,6 +18,8 @@
     </view>
   </view>
 
+  <view wx:if="{{aggregatesStale}}" class="card quiet js-aggregates-stale">账目正在核对中，金额可能不准，请联系开发者</view>
+
   <view class="chips">
     <view class="chip {{type === 'all' ? 'on' : ''}}" data-type="all" bindtap="setType">全部 {{count}}</view>
     <view class="chip {{type === 'in' ? 'on' : ''}}" data-type="in" bindtap="setType">进货</view>
@@ -53,5 +55,6 @@
   </view>
 
   <view wx:if="{{loading}}" class="card quiet">正在加载…</view>
+  <button wx:elif="{{loaded && list.length && hasMore}}" class="btn-ghost load-more js-load-more" bindtap="onLoadMore">加载更多</button>
   <view wx:elif="{{loaded && list.length && !hasMore}}" class="card quiet">没有更多了</view>
 </view>

@@ -4,10 +4,6 @@ function money(value) {
   return inventory.round2(value).toFixed(2)
 }
 
-function moneyText(value) {
-  return '¥' + money(value)
-}
-
 function formatTime(ts) {
   const d = new Date(ts)
   const month = pad(d.getMonth() + 1)
@@ -236,7 +232,6 @@ function showError(error) {
 
 module.exports = {
   money: money,
-  moneyText: moneyText,
   formatTime: formatTime,
   formatDate: formatDate,
   formatDateTime: formatDateTime,

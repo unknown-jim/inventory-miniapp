@@ -138,6 +138,12 @@ Page({
     return this.loadLedgerPage(false)
   },
 
+  // 手动「加载更多」：和 onReachBottom 走**同一个** loadLedgerPage(false)，
+  // 不复制逻辑。触底在真机上没实测过，这个按钮是明细翻页的兜底出路。
+  onLoadMoreLedger() {
+    return this.loadLedgerPage(false)
+  },
+
   retryLedger() {
     return this.reloadLedger()
   },

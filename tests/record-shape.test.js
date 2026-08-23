@@ -823,4 +823,62 @@ assert.strictEqual(
   util.money(inv.summarizeCustomerAccount(legacyDeleted.records, 'c1').receivable)
 )
 
+// ---------------------------------------------------------------------------
+// 阶段 3 补口：legacyOrder（归并）的三条老数据兜底，各自钉一个
+// 「取错一行 / 放错一个字段」的静默错账方向。
+// ---------------------------------------------------------------------------
+
+// 多行老销售单的 paidAmount 必须**逐行相加**：两行各是现结 100 / 200，
+// 归并后整单实收 300。只取第一行会让这张单凭空多出 200 元欠款。
+const legacyMultiPaid = inv.migrateRecordShape([
+  legacyRecord({ id: 'mp-b', type: 'out', orderId: 'mp-ord', qty: 2, unitPrice: 100, costPrice: 60, amount: 200, profit: 80, payType: 'cash', customerId: 'c1', customerName: '甲', createdAt: 2000 }),
+  legacyRecord({ id: 'mp-a', type: 'out', orderId: 'mp-ord', qty: 1, unitPrice: 100, costPrice: 60, amount: 100, profit: 40, payType: 'cash', customerId: 'c1', customerName: '甲', createdAt: 2000 })
+])
+assert.strictEqual(legacyMultiPaid.length, 1)
+assert.strictEqual(legacyMultiPaid[0].amount, 300)
+assert.strictEqual(legacyMultiPaid[0].paidAmount, 300, '两行的结算逐行相加，不是只取第一行的 100')
+
+// 老退货单的两个结算形态：
+//   ① 扁平 + payType: 'credit'（paidAmount 缺失）—— settledAmount 回推 0，
+//      归并落成 paidAmount: 0，payType 抹掉；
+//   ② lines 形状 + paidAmount: '' + payType: 'cash'（销售在场）—— 份额重算
+//      给出正确值并删掉 payType。放行 ② 的话，下游 settledAmount 会按老
+//      payType 回推成「整笔退现金、一分不冲欠款」。
+const legacyCreditReturn = inv.migrateRecordShape([
+  legacyRecord({ id: 'cr-r', type: 'return', saleRecordId: 'cr-x', qty: 1, unitPrice: 50, costPrice: 20, amount: 50, profit: -30, payType: 'credit', customerId: 'c1', customerName: '甲', createdAt: 2000 })
+])
+assert.strictEqual(legacyCreditReturn[0].paidAmount, 0, '① credit 老退货归并成 paidAmount: 0')
+assert.ok(!Object.prototype.hasOwnProperty.call(legacyCreditReturn[0], 'payType'),
+  '① 归并是「写」：只写新字段，一条流水不留两份结算数据')
+
+const crSaleDoc = {
+  id: 'cr-s', type: 'out', amount: 100, profit: 40, remark: '', createdAt: 1000,
+  customerId: 'c1', customerName: '甲', customerPhone: '', customerAddress: '',
+  paidAmount: 0,
+  lines: [{ lineId: 'cr-s-l1', productId: 'p1', productName: '货', sku: '', skuId: '', color: '', size: '', qty: 2, unitPrice: 50, costPrice: 30, amount: 100, profit: 40, allocations: [], returnedQty: 0, returnedAmount: 0 }]
+}
+const crReturnDoc = {
+  id: 'cr-r2', type: 'return', amount: 30, profit: -12, remark: '', createdAt: 2000,
+  customerId: 'c1', customerName: '甲', customerPhone: '', customerAddress: '',
+  paidAmount: '', payType: 'cash',
+  lines: [{ lineId: 'cr-r2-l1', productId: 'p1', productName: '货', sku: '', skuId: '', color: '', size: '', qty: 1, unitPrice: 30, costPrice: 30, amount: 30, profit: -12, saleOrderId: 'cr-s', saleLineId: 'cr-s-l1' }]
+}
+const crRepaired = apply.legacyRecordsOf({ records: [crReturnDoc, crSaleDoc] })
+const crFixed = crRepaired.find(function (item) { return item.id === 'cr-r2' })
+assert.strictEqual(crFixed.paidAmount, 0,
+  '② 欠款 100 ≥ 退货 30，全部冲欠款、退现金 0 —— 不是按老 payType 回推的整笔 30')
+assert.ok(!Object.prototype.hasOwnProperty.call(crFixed, 'payType'), '② payType 必须被抹掉')
+assert.strictEqual(inv.accountOf(inv.foldAccountTerms(crRepaired).c1).receivable, 70,
+  '② 自检：修复后欠款 100 − 30 = 70（没修的话是回推口径的 100）')
+
+// sumBy 求和必须 round2：0.1 + 0.2 在浮点里 !== 0.3，直接加会把一张
+// 合法单折叠出亚分金额，后面所有整数分等价性全部作废。
+const legacyCents = inv.migrateRecordShape([
+  legacyRecord({ id: 'ct-b', type: 'out', orderId: 'ct-ord', qty: 1, unitPrice: 0.2, costPrice: 0.1, amount: 0.2, profit: 0.1, payType: 'cash', customerId: 'c1', customerName: '甲', createdAt: 2000 }),
+  legacyRecord({ id: 'ct-a', type: 'out', orderId: 'ct-ord', qty: 1, unitPrice: 0.1, costPrice: 0.05, amount: 0.1, profit: 0.05, payType: 'cash', customerId: 'c1', customerName: '甲', createdAt: 2000 })
+])
+assert.strictEqual(legacyCents[0].amount, 0.3, 'round2(0.1 + 0.2) === 0.3（裸加是 0.30000000000000004）')
+assert.strictEqual(legacyCents[0].profit, 0.15, 'round2(0.05 + 0.1) === 0.15')
+assert.ok((0.1 + 0.2) !== 0.3, '自检：这两行的裸浮点和不等于 0.3，上面两条真的在测 round2')
+
 console.log('record shape tests passed')

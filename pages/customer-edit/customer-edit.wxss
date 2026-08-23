@@ -76,6 +76,12 @@
   margin: 32rpx 0 16rpx;
 }
 
+/* 往来明细触底不触发时的手动兜底。高度用共用 .btn-ghost（--tap-sm），
+   这里只管间距。 */
+.ledger-more {
+  margin: var(--space-md) 0;
+}
+
 .call-btn {
   margin-bottom: 16rpx;
 }

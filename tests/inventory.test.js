@@ -913,6 +913,194 @@ const avail = inv.blankAvailability(hoodieMade.product, hoodieMade.skus, '黑色
 assert.strictEqual(avail.total, 12)
 assert.strictEqual(avail.blank, 12)
 
+// ---------------------------------------------------------------------------
+// 阶段 3 补口（3.1）：待加工拆分在「改单 / 删单」这条路上的完整来回。
+// 卖 5 = 现货 3 + 待加工 2；行成本必须是**加权**值，改单还回再重扣、删单整单还原，
+// 每一步商品库存都要等于全部规格格之和。
+// ---------------------------------------------------------------------------
+const bsMade = inv.applyProductSkus(inv.createProduct({
+  name: '加工衫', costPrice: 4, salePrice: 20, stock: 10, alertQty: 1,
+  colors: ['黑', '白'], sizes: ['M', 'L'], blankProcess: true
+}, 3000, 'p-bsplit'), [], [
+  { color: '黑', size: 'M', stock: 3, costPrice: 10, salePrice: 20 },
+  { color: '黑', size: 'L', stock: 0, costPrice: 10, salePrice: 20 },
+  { color: '白', size: 'M', stock: 0, costPrice: 10, salePrice: 20 },
+  { color: '白', size: 'L', stock: 0, costPrice: 10, salePrice: 20 }
+], 3100, idFactory())
+const bsBlackM = inv.findSkuBySpec(bsMade.skus, 'p-bsplit', '黑', 'M')
+const bsBlank = inv.findBlankSku(bsMade.skus, 'p-bsplit')
+assert.strictEqual(bsBlackM.stock, 3)
+assert.strictEqual(bsBlackM.costPrice, 10)
+assert.strictEqual(bsBlank.stock, 10)
+assert.strictEqual(bsBlank.costPrice, 4, '待加工格的成本来自商品成本价')
+assert.strictEqual(bsMade.product.stock, 13, '现货 3 + 待加工 10')
+
+const bsSold = sale([bsMade.product], [], {
+  productId: 'p-bsplit', skuId: bsBlackM.id, qty: 5, unitPrice: 20
+}, 3200, 'r-bs-sold', bsMade.skus)
+assert.deepStrictEqual(line0(bsSold.record).allocations, [
+  { skuId: bsBlackM.id, qty: 3, source: 'ready', color: '黑', size: 'M', costPrice: 10 },
+  { skuId: bsBlank.id, qty: 2, source: 'blank', color: '', size: '', costPrice: 4 }
+], '3.1：先吃现货 3，差 2 件才动待加工')
+assert.strictEqual(line0(bsSold.record).costPrice, 7.6,
+  '3.1：行成本 = (3×10 + 2×4) / 5 —— 加权，不是简单平均 7，也不是待加工自己的 4')
+assert.strictEqual(inv.findSkuBySpec(bsSold.skus, 'p-bsplit', '黑', 'M').stock, 0)
+assert.strictEqual(inv.findBlankSku(bsSold.skus, 'p-bsplit').stock, 8)
+assert.strictEqual(bsSold.products[0].stock, inv.productStockFromSkus(bsSold.skus, 'p-bsplit'),
+  '3.1：商品库存 === Σ 全部规格格（卖后）')
+assert.strictEqual(bsSold.products[0].stock, 8)
+
+// 改单 5 -> 2：allocations 原样还回（现货 +3、待加工 +2），再按新数量重扣
+const bsEdited = inv.updateRecord(bsSold.products, bsSold.records, {
+  id: 'r-bs-sold', qty: 2, unitPrice: 20
+}, 3300, bsSold.skus)
+assert.strictEqual(inv.findSkuBySpec(bsEdited.skus, 'p-bsplit', '黑', 'M').stock, 1,
+  '3.1：还回 3 再重扣 2，现货格剩 1')
+assert.strictEqual(inv.findBlankSku(bsEdited.skus, 'p-bsplit').stock, 10,
+  '3.1：重扣的 2 件全部由现货出，待加工格回到 10')
+assert.deepStrictEqual(line0(bsEdited.record).allocations, [
+  { skuId: bsBlackM.id, qty: 2, source: 'ready', color: '黑', size: 'M', costPrice: 10 }
+], '3.1：改单后的 allocations 只剩现货那份')
+assert.strictEqual(line0(bsEdited.record).costPrice, 10,
+  '3.1：重扣只吃现货，行成本回到现货自己的 10')
+assert.strictEqual(bsEdited.products[0].stock, inv.productStockFromSkus(bsEdited.skus, 'p-bsplit'),
+  '3.1：商品库存 === Σ 全部规格格（改单后）')
+assert.strictEqual(bsEdited.products[0].stock, 11)
+
+// 删单：按 allocations 整单还原
+const bsDeleted = inv.deleteRecord(bsEdited.products, bsEdited.records, 'r-bs-sold', 3400, bsEdited.skus)
+assert.strictEqual(inv.findSkuBySpec(bsDeleted.skus, 'p-bsplit', '黑', 'M').stock, 3)
+assert.strictEqual(inv.findBlankSku(bsDeleted.skus, 'p-bsplit').stock, 10)
+assert.strictEqual(bsDeleted.products[0].stock, inv.productStockFromSkus(bsDeleted.skus, 'p-bsplit'),
+  '3.1：商品库存 === Σ 全部规格格（删单后）')
+assert.strictEqual(bsDeleted.products[0].stock, 13)
+
+// ---------------------------------------------------------------------------
+// 阶段 3 补口（3.2）：退货入库的移动加权成本。退货按**卖出时那一行**的成本
+// 原样回格（restockLine -> addSkuStock 的加权分支）。构造：
+//   先卖 2 件吃光现货（行成本 20）-> 再卖 3 件纯待加工（行成本 4）
+//   -> 先退 2 件 @20（空格，成本变 20）-> 再退 3 件 @4
+// 格上 (2×20 + 3×4) / 5 = 10.4 —— 不是覆盖成 4，也不是简单平均 12。
+// ---------------------------------------------------------------------------
+const mwMade = inv.applyProductSkus(inv.createProduct({
+  name: '加权衫', costPrice: 4, salePrice: 20, stock: 10, alertQty: 1,
+  colors: ['黑'], sizes: ['M', 'L'], blankProcess: true
+}, 3500, 'p-mw'), [], [
+  { color: '黑', size: 'M', stock: 2, costPrice: 20, salePrice: 20 },
+  { color: '黑', size: 'L', stock: 0, costPrice: 20, salePrice: 20 }
+], 3600, idFactory())
+const mwBlackM = inv.findSkuBySpec(mwMade.skus, 'p-mw', '黑', 'M')
+// 第一笔：恰好卖光现货格，行成本 = 现货 20
+const mwSoldReady = sale([mwMade.product], [], {
+  productId: 'p-mw', skuId: mwBlackM.id, qty: 2, unitPrice: 20
+}, 3700, 'r-mw-ready', mwMade.skus)
+assert.strictEqual(line0(mwSoldReady.record).costPrice, 20, '3.2 前提：这笔全部来自现货')
+// 第二笔：现货空了，3 件全部来自待加工 @4
+const mwSoldBlank = sale(mwSoldReady.products, mwSoldReady.records, {
+  productId: 'p-mw', skuId: mwBlackM.id, qty: 3, unitPrice: 20
+}, 3800, 'r-mw-blank', mwSoldReady.skus)
+assert.strictEqual(line0(mwSoldBlank.record).costPrice, 4, '3.2 前提：这笔全部来自待加工')
+// 退货按各自销售行的成本回格
+const mwRetReady = inv.applyReturn(mwSoldBlank.products, mwSoldBlank.records, {
+  saleOrderId: 'r-mw-ready', saleLineId: line0(mwSoldReady.record).lineId, qty: 2
+}, 3900, 'r-mw-ret-ready', mwSoldBlank.skus)
+assert.strictEqual(inv.findSkuBySpec(mwRetReady.skus, 'p-mw', '黑', 'M').stock, 2)
+assert.strictEqual(inv.findSkuBySpec(mwRetReady.skus, 'p-mw', '黑', 'M').costPrice, 20,
+  '3.2 前提：空格退 2 件 @20，格成本就是 20')
+const mwRetBlank = inv.applyReturn(mwRetReady.products, mwRetReady.records, {
+  saleOrderId: 'r-mw-blank', saleLineId: line0(mwSoldBlank.record).lineId, qty: 3
+}, 4000, 'r-mw-ret-blank', mwRetReady.skus)
+const mwGridAfter = inv.findSkuBySpec(mwRetBlank.skus, 'p-mw', '黑', 'M')
+assert.strictEqual(mwGridAfter.stock, 5)
+assert.strictEqual(mwGridAfter.costPrice, 10.4,
+  '3.2：(2×20 + 3×4) / 5 —— 移动加权；覆盖成 4 或简单平均 12 都是错的')
+
+// ---------------------------------------------------------------------------
+// 阶段 3 补口（3.3）：整单共享待加工 —— assertSaleItems 直测。
+// 它是 pages/sale 提交前的整单预扫（sale.js:539），之前没有任何测试直接钉它。
+// 两行各要 12、待加工只有 22：单看每一行都出得了（12 ≤ 22），只有整单一起算
+// 才知道差 2 件。逐行独立判的写法在这里会放行。
+// ---------------------------------------------------------------------------
+const shMade = inv.applyProductSkus(inv.createProduct({
+  name: '共享衫', costPrice: 5, salePrice: 20, stock: 22, alertQty: 1,
+  colors: ['黑', '白'], sizes: ['M'], blankProcess: true
+}, 4100, 'p-share'), [], null, 4200, idFactory())
+const shBlackM = inv.findSkuBySpec(shMade.skus, 'p-share', '黑', 'M')
+const shWhiteM = inv.findSkuBySpec(shMade.skus, 'p-share', '白', 'M')
+assert.strictEqual(inv.findBlankSku(shMade.skus, 'p-share').stock, 22)
+assert.throws(function () {
+  inv.assertSaleItems([shMade.product], shMade.skus, [
+    { productId: 'p-share', skuId: shBlackM.id, qty: 12, unitPrice: 20 },
+    { productId: 'p-share', skuId: shWhiteM.id, qty: 12, unitPrice: 20 }
+  ])
+}, /共享衫 白 · M 库存不足，可出 10/,
+  '3.3：第一行吃掉 12 之后第二行只剩 10，报的是「可出 10」不是当前库存 22')
+// 放行侧：整单 20 ≤ 22 必须过，别把预扫写成一刀切
+inv.assertSaleItems([shMade.product], shMade.skus, [
+  { productId: 'p-share', skuId: shBlackM.id, qty: 10, unitPrice: 20 },
+  { productId: 'p-share', skuId: shWhiteM.id, qty: 10, unitPrice: 20 }
+])
+
+// ---------------------------------------------------------------------------
+// 阶段 3 补口（3.4）：负库存守卫的四条路，都用分规格商品（走 addSkuStock /
+// adjustStock 的格守卫）。非规格那几条路上面 heavySale 已经钉过一条。
+// 铺底：进货 5 到黑M，卖 3，格上剩 2。
+// ---------------------------------------------------------------------------
+const gdMade = inv.applyProductSkus(inv.createProduct({
+  name: '守卫衫', costPrice: 6, salePrice: 20, stock: 0, alertQty: 1,
+  colors: ['黑'], sizes: ['M', 'L']
+}, 4300, 'p-guard'), [], [
+  { color: '黑', size: 'M', stock: 0, costPrice: 6, salePrice: 20 },
+  { color: '黑', size: 'L', stock: 0, costPrice: 6, salePrice: 20 }
+], 4400, idFactory())
+const gdBlackM = inv.findSkuBySpec(gdMade.skus, 'p-guard', '黑', 'M')
+const gdBlackL = inv.findSkuBySpec(gdMade.skus, 'p-guard', '黑', 'L')
+const gdBought = inv.applyPurchase([gdMade.product], [], {
+  productId: 'p-guard', skuId: gdBlackM.id, qty: 5, unitPrice: 6
+}, 4500, 'r-gd-in', gdMade.skus)
+const gdSold = sale(gdBought.products, gdBought.records, {
+  productId: 'p-guard', skuId: gdBlackM.id, qty: 3, unitPrice: 20
+}, 4600, 'r-gd-sold', gdBought.skus)
+assert.strictEqual(inv.findSkuBySpec(gdSold.skus, 'p-guard', '黑', 'M').stock, 2, '3.4 铺底：格上剩 2')
+
+assert.throws(function () {
+  inv.applyAdjust(gdSold.products, gdSold.records, {
+    productId: 'p-guard', skuId: gdBlackM.id, direction: 'out', reason: 'damage', qty: 3
+  }, 4700, 'r-gd-adj', gdSold.skus)
+}, /库存不足/, '3.4 路 1：调整出库不许把格扣成负数')
+assert.throws(function () {
+  inv.deleteRecord(gdSold.products, gdSold.records, 'r-gd-in', 4800, gdSold.skus)
+}, /库存不足/, '3.4 路 2：已卖掉的进货不许删')
+assert.throws(function () {
+  inv.updateRecord(gdSold.products, gdSold.records, {
+    id: 'r-gd-in', qty: 1, unitPrice: 6
+  }, 4900, gdSold.skus)
+}, /库存不足/, '3.4 路 3：进货改小到低于已卖出量不许')
+assert.throws(function () {
+  inv.applyConvert(gdSold.products, gdSold.records, {
+    productId: 'p-guard', fromSkuId: gdBlackM.id, toSkuId: gdBlackL.id, qty: 3
+  }, 5000, 'r-gd-conv', gdSold.skus)
+}, /库存不足/, '3.4 路 4：改规格不许超过来源格')
+assert.strictEqual(inv.findSkuBySpec(gdSold.skus, 'p-guard', '黑', 'M').stock, 2,
+  '3.4：四条都被拒，格上库存一点没动')
+
+// 路 5 走的是**另一道**守卫：路 1–3 撞在 adjustStock 里那条内联判断上，
+// 删退货（restockLine 负数）撞在 addSkuStock 自己的负库存判断上。退回的货
+// 又卖出去之后再删退货单，那 3 件已经不在格上了，必须拦。
+const gdReturn = inv.applyReturn(gdSold.products, gdSold.records, {
+  saleOrderId: 'r-gd-sold', saleLineId: line0(gdSold.record).lineId, qty: 3
+}, 5100, 'r-gd-ret', gdSold.skus)
+assert.strictEqual(inv.findSkuBySpec(gdReturn.skus, 'p-guard', '黑', 'M').stock, 5,
+  '3.4 路 5 铺底：退货入库后格上有 5')
+const gdResold = sale(gdReturn.products, gdReturn.records, {
+  productId: 'p-guard', skuId: gdBlackM.id, qty: 3, unitPrice: 20
+}, 5200, 'r-gd-sold2', gdReturn.skus)
+assert.strictEqual(inv.findSkuBySpec(gdResold.skus, 'p-guard', '黑', 'M').stock, 2,
+  '3.4 路 5 铺底：退回来的 3 件又卖出去了，格上剩 2')
+assert.throws(function () {
+  inv.deleteRecord(gdResold.products, gdResold.records, 'r-gd-ret', 5300, gdResold.skus)
+}, /库存不足/, '3.4 路 5：退回的货已再卖掉，删退货不许把格扣成负数')
+
 assert.throws(function () {
   inv.createCategory({ name: '  ' }, 1, 'c0')
 }, /种类名称/)

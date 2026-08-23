@@ -401,6 +401,43 @@ function receivableOf(accounts, customerId) {
   assert.strictEqual(emptyIdAudit.emptyIds, 1, 'M3 V8：空 id 要报出来')
   assert.deepStrictEqual(emptyIdAudit.duplicateIds, [], 'M3 V8：空 id 不算重复 id')
 
+  // V12 专项（阶段 3）：现有 M3 语料的亚分值只放在**单头**。subCentOf 对行上
+  // 另有一份键（MONEY_LINE_KEYS：amount / profit / unitPrice / costPrice /
+  // returnedAmount），哪边少一个键名，放在那儿的亚分值就会被静默放行。
+  const lineSubCent = cleanSet()
+  lineSubCent[0].lines[0].unitPrice = 50.005
+  assert.ok(migrate.auditRecords(lineSubCent).subCent.some(function (item) {
+    return item.field === 'lines[0].unitPrice'
+  }), 'V12 专项：亚分值放在行上也要报，且指出是哪个字段')
+
+  // 容差必须还是 1e-9，不是 1e-2：centDiff 落在 (1e-9, 1e-2) 区间里的值
+  // （10.00001 ×100 后差 0.001）只有 1e-9 的容差会报；放宽到 1e-2 它就静默过掉。
+  const tightSubCent = cleanSet()
+  tightSubCent[0].amount = 110.00001
+  assert.ok(migrate.auditRecords(tightSubCent).subCent.some(function (item) {
+    return item.field === 'amount' && item.id === 'S1'
+  }), 'V12 专项：centDiff 0.001 也要报 —— 容差是 1e-9，不是 1e-2')
+
+  // 反向：round2 的合法输出必须放行。0.07 ×100 = 7.000000000000001，
+  // centDiff 约 1e-15。这道容差存在的意义就是吃掉这类浮点表示误差。
+  const benignCents = cleanSet()
+  benignCents[0].amount = 0.07
+  benignCents[0].lines[0].amount = 0.07
+  assert.deepStrictEqual(migrate.auditRecords(benignCents).subCent, [],
+    'V12 专项：round2 的输出不许被当成亚分（否则整条 V12 都没法用）')
+
+  // V4 专项（阶段 3）：数量对得上、金额对不上。现有 M3 语料只造了 returnedQty
+  // 不一致，returnedAmount 那半（stored vs Σ退货额）从没以失败形态跑过。
+  const amountMismatch = cleanSet()
+  amountMismatch[0].lines[0].returnedAmount = 999
+  const amountAudit = migrate.auditRecords(amountMismatch)
+  assert.ok(amountAudit.returnedMismatch.some(function (item) {
+    return item.field === 'returnedAmount' && item.stored === 999 && item.fromReturns === 50
+  }), 'V4 专项：returnedAmount 对不上必须报，且给出两边的数')
+  assert.ok(amountAudit.returnedMismatch.every(function (item) {
+    return item.field !== 'returnedQty'
+  }), 'V4 专项：数量是一致的（1 == 1），不许顺带报 returnedQty')
+
   // V9 / V10：归并前后的结构守恒。两条判据分开验。
   const flatPair = [
     { id: 'f2', type: 'out', orderId: 'f-ord', productId: 'p1', qty: 1, unitPrice: 10, costPrice: 5, amount: 10, profit: 5, payType: 'cash', createdAt: 100 },
@@ -811,6 +848,199 @@ function receivableOf(accounts, customerId) {
   }, /要重来请带 restart/)
 
   // =========================================================================
+  // M9b（阶段 3）四份脏语料各跑一遍**完整迁移**：verifyPhase 翻完页之后那道
+  //       总门（recordFailures 的 V4/V5/V6/V8/V12 + foldProblems 的 V3 + 条数
+  //       的 V1）从来没有以失败形态被跑过 —— M9 只测了 per-chunk 的 V2，
+  //       M15b 只测了 init 之前就存在的残骸。
+  //
+  // 语料构造原则：脏的地方全在「单的内容」上，集合往返逐条相等，per-chunk
+  // 校验（V1/V2/V7 的逐条比对）必然干净，失败只能来自翻完后的总门。
+  // 唯一的例外是重复 id 那份，见下面它自己的注释。
+  // =========================================================================
+  function subCentLegacy() {
+    return [{
+      id: 'SC-s', type: 'out', amount: 10.005, profit: 4, remark: '', createdAt: 2000,
+      customerId: 'nc1', customerName: '甲', customerPhone: '', customerAddress: '',
+      paidAmount: 0, operatorOpenid: '', operatorName: '',
+      lines: [{ lineId: 'SC-s-l1', productId: 'p1', productName: '牛奶', sku: '', skuId: '', color: '', size: '', qty: 1, unitPrice: 10.005, costPrice: 6, amount: 10.005, profit: 4, allocations: [], returnedQty: 0, returnedAmount: 0 }]
+    }]
+  }
+
+  function negativeAccountLegacy() {
+    // 负账户要「份额重算改了钱」才显形（实测：孤儿退货**折不出负账户**——
+    // settledAmount 对两个结算字段都没有的退货保守回推成整笔退现金，贡献 0）。
+    // 这份语料和 10c-V6 同构：赊销 100 ＋ 无结算字段的退货 30 ＋ 收款 100。
+    // 重算前：退货被当整笔退现金，欠款 100 − 100 = 0，那笔收款当时合法；
+    // 重算把退货拨成全部冲欠款，欠款变成 100 − 30 − 100 = −30。
+    return [
+      { id: 'NA-pay', type: 'pay', amount: 100, remark: '', customerId: 'nc2', customerName: '乙', customerPhone: '', customerAddress: '', createdAt: 3000 },
+      { id: 'NA-r', type: 'return', saleRecordId: 'NA-l1', productId: 'p1', productName: '牛奶', qty: 1, unitPrice: 30, costPrice: 20, amount: 30, profit: -10, customerId: 'nc2', customerName: '乙', customerPhone: '', customerAddress: '', createdAt: 2000 },
+      { id: 'NA-l1', type: 'out', orderId: 'NA-ord', productId: 'p1', productName: '牛奶', qty: 1, unitPrice: 100, costPrice: 60, amount: 100, profit: 40, payType: 'credit', customerId: 'nc2', customerName: '乙', customerPhone: '', customerAddress: '', createdAt: 1000 }
+    ]
+  }
+
+  function duplicateIdLegacy() {
+    function row(id, createdAt) {
+      return {
+        id: id, type: 'in', amount: 20, profit: 0, remark: '', createdAt: createdAt,
+        lines: [{ lineId: id + '-l1', productId: 'p1', productName: '牛奶', sku: '', skuId: '', color: '', size: '', qty: 2, unitPrice: 10, costPrice: 10, amount: 20, profit: 0 }]
+      }
+    }
+    return [row('DUP-a', 2000), row('DUP-a', 3000)]
+  }
+
+  function returnedLieLegacy() {
+    // 销售行谎报 returnedQty: 5，整份账本里没有任何指向它的退货单。
+    // returnedAmount 记 0（和 Σ退货额 0 一致），只踩 returnedQty 那半。
+    return [{
+      id: 'LIE-s', type: 'out', amount: 100, profit: 40, remark: '', createdAt: 2000,
+      customerId: 'nc1', customerName: '甲', customerPhone: '', customerAddress: '',
+      paidAmount: 0, operatorOpenid: '', operatorName: '',
+      lines: [{ lineId: 'LIE-s-l1', productId: 'p1', productName: '牛奶', sku: '', skuId: '', color: '', size: '', qty: 2, unitPrice: 50, costPrice: 30, amount: 100, profit: 40, allocations: [], returnedQty: 5, returnedAmount: 0 }]
+    }]
+  }
+
+  const M9B_CORPORA = [
+    { name: 'V12 亚分金额', make: subCentLegacy, check: 'V12' },
+    { name: 'V6 负账户', make: negativeAccountLegacy, check: 'V6' },
+    { name: 'V8 重复 id', make: duplicateIdLegacy, check: null },
+    { name: 'V4 returnedQty 谎报', make: returnedLieLegacy, check: 'V4' }
+  ]
+  for (let i = 0; i < M9B_CORPORA.length; i++) {
+    const item = M9B_CORPORA[i]
+    const shop = await openLegacyShop('m9b' + i, item.make())
+    const done = await shop.runMigration({ limit: 50 })
+    assert.strictEqual(done.state, 'failed',
+      'M9b（' + item.name + '）：完整迁移必须 failed，不许带着病切开关')
+    assert.ok(!shop.doc().recordsMigratedAt,
+      'M9b（' + item.name + '）：failed 之后绝不写 recordsMigratedAt')
+    assert.strictEqual((await shop.call('getLedger', {})).ledger.recordsPendingMigration, true,
+      'M9b（' + item.name + '）：读路径仍然走老数组')
+    await rejects(function () {
+      return shop.call('addSale', {
+        paidAmount: 0, customerId: 'nc1', items: [{ productId: 'p1', qty: 1, unitPrice: 30 }]
+      })
+    }, /还没完成流水升级/)
+    if (item.check) {
+      // problems 会被 REPORT_LIST_LIMIT 截断、多项可能同时命中，只做存在性断言
+      assert.ok(done.problems.some(function (p) { return p && p.check === item.check }),
+        'M9b（' + item.name + '）：problems 里必须有 check === ' + item.check)
+    }
+  }
+
+  // 重复 id 那份单独说明：迁移路上它**到不了**总门的 V8。两条记录同一个 id
+  // → 集合里被 set() 覆盖成一条 → per-chunk 的逐条比对先错位（V1/V2/V7 之一）
+  // → failMigration 在翻页阶段就发生。所以这里只断言「failed + 没切开关 +
+  // 确实报了问题」，不断言 V8 —— V8 的失败形态由下面 M4b 的纯函数路（P9）
+  // 钉住。实测这份语料在迁移路上报的是 V2（第二条把第一条盖掉，逐条比对
+  // 发现字段对不上）。
+  {
+    const dupShop = await openLegacyShop('m9b-dup', duplicateIdLegacy())
+    const dupDone = await dupShop.runMigration({ limit: 50 })
+    assert.strictEqual(dupDone.state, 'failed')
+    assert.ok(!dupShop.doc().recordsMigratedAt)
+    assert.ok(dupDone.problemsTotal > 0 && dupDone.problems.length > 0,
+      'M9b 重复 id：虽然到不了 V8，逐条比对必须把这次失败报出来')
+  }
+
+  // =========================================================================
+  // M4b（阶段 3）同一批脏语料只跑预检：blocking 必须非空且**点名**。
+  //       M4 只断言过干净语料 blocking === []，blockingOf 里逐项 add 去掉
+  //       任何一行测试都还是绿的（变异 H02：开头 return []）。
+  // =========================================================================
+  const M4B_CORPORA = [
+    { name: 'V12 亚分金额', make: subCentLegacy, blocking: 'P3 亚分金额' },
+    { name: 'V6 负账户', make: negativeAccountLegacy, blocking: 'P5 迁移后仍有负账户' },
+    { name: 'V8 重复 id', make: duplicateIdLegacy, blocking: 'P9 重复 id' },
+    { name: 'V4 returnedQty 谎报', make: returnedLieLegacy, blocking: 'P8 returnedQty/Amount 跨行不一致' }
+  ]
+  for (let i = 0; i < M4B_CORPORA.length; i++) {
+    const item = M4B_CORPORA[i]
+    const shop = await openLegacyShop('m4b' + i, item.make())
+    const report = await shop.call('checkAggregates', {})
+    assert.ok(report.blocking.length > 0,
+      'M4b（' + item.name + '）：blocking 必须非空，否则预检会说「可以迁」')
+    assert.ok(report.blocking.some(function (b) { return b && b.check === item.blocking }),
+      'M4b（' + item.name + '）：blocking 必须点名 ' + item.blocking)
+  }
+
+  // =========================================================================
+  // M9c（阶段 3）V1 专项：删掉集合里**排在最后**（最老）的那条文档。
+  //       剩下的 6 条恰好还是 wanted 的前 6 条，per-chunk 逐条比对全部对齐，
+  //       失败只能来自翻完页之后的两条条数判定（nextVerified ≠ total、
+  //       collectionCount ≠ total）。这是总门里 V1 的失败形态；M15b 那条
+  //       （残骸 createdAt 更小、也排在最后）走的其实是同一形态，但那份语料
+  //       的残骸是 init 之前就在的，这里钉的是「迁移过程中丢一条」。
+  // =========================================================================
+  const m9c = await openLegacyShop('m9c')
+  await m9c.call('migrateRecords', { limit: 50 })   // init
+  await m9c.call('migrateRecords', { limit: 50 })   // 一片写完
+  let m9cState = await m9c.call('migrateRecords', { limit: 50 })   // writing -> verifying
+  assert.strictEqual(m9cState.phase, 'verifying')
+  const m9cBook = m9c.doc().bookId
+  const m9cMerged = apply.legacyRecordsOf({ records: clone(m9c.doc().records) })
+  const m9cOldest = migrate.sortDesc(m9cMerged)[m9cMerged.length - 1]   // A-ord（createdAt 2000）
+  const m9cKey = Object.keys(m9c.db.records).find(function (key) {
+    return m9c.db.records[key].bookId === m9cBook && m9c.db.records[key].id === m9cOldest.id
+  })
+  delete m9c.db.records[m9cKey]
+  m9cState = await m9c.call('migrateRecords', { limit: 50 })
+  assert.strictEqual(m9cState.state, 'failed', 'M9c：少了一条必须 failed')
+  assert.ok(m9cState.problems.some(function (p) { return p && p.check === 'V1' }),
+    'M9c：problems 里必须有 V1（条数和归并条数不等）')
+  assert.ok(!m9c.doc().recordsMigratedAt, 'M9c：failed 之后绝不写 recordsMigratedAt')
+
+  // =========================================================================
+  // M9d（阶段 3）V3 专项：只漂**一个客户**时，diff 必须点名那个 customerId。
+  //       M6 的 brokenDocs 改的是 docs[0]，受影响的是哪个客户取决于文档袋的
+  //       key 顺序，从来没断言过「报出来的就是漂了的那个客户」。
+  //       两条路各钉一次：verifyMigrated（纯函数）和已迁移店的 checkAggregates
+  //      （账本存的 accounts vs 集合全量折叠，aggregateDiffs）。
+  // =========================================================================
+  const m9dDocs = clone(m6.docsOfBook(m6.doc().bookId))
+  const m9dVictim = m9dDocs.find(function (doc) { return doc.id === 'B-s' })   // nc2 的销售单
+  m9dVictim.amount = m9dVictim.amount + 1
+  const m9dProblems = migrate.verifyMigrated(m6Merged, m9dDocs, m6.doc().bookId, m6.shopId)
+  assert.ok(m9dProblems.some(function (item) {
+    return item.check === 'V3' && item.customerId === 'nc2'
+  }), 'M9d：verifyMigrated 的 V3 必须点名漂了的那个 customerId')
+
+  const m9dAccountsBefore = clone(m6.doc().accounts)
+  m6.patchDoc({
+    accounts: Object.assign({}, m9dAccountsBefore, { nc2: inv.emptyTerms() })
+  })
+  const m9dCheck = await m6.call('checkAggregates', {})
+  assert.strictEqual(m9dCheck.aggregatesStale, true, 'M9d：单客户漂移必须点亮哨兵')
+  assert.ok(m9dCheck.aggregateDiffs.some(function (item) {
+    return item.customerId === 'nc2' && item.field === 'salesSum'
+  }), 'M9d：aggregateDiffs 必须点名 nc2 的具体字段')
+  assert.ok(!m9dCheck.aggregateDiffs.some(function (item) {
+    return item.customerId && item.customerId !== 'nc2'
+  }), 'M9d：只漂了 nc2，别的客户不许被点名')
+  m6.patchDoc({ accounts: m9dAccountsBefore })
+
+  // =========================================================================
+  // M9e（阶段 3）clampChunk 上界：limit 传 9999，一次 writing 只许写 500
+  //       （MIGRATE_CHUNK_MAX）。下界（limit:1）和缺省 M8 已测。
+  //       clampChunk 没有导出，从返回包的 cursor 读实际生效值。
+  // =========================================================================
+  const m9eLegacy = []
+  for (let i = 0; i < 520; i++) {
+    m9eLegacy.push({
+      id: 'm9e-' + i, type: 'in', amount: 1, profit: 0, remark: '', createdAt: 2000 + i,
+      lines: [{ lineId: 'm9e-' + i + '-l1', productId: 'p1', productName: '牛奶', sku: '', skuId: '', color: '', size: '', qty: 1, unitPrice: 1, costPrice: 1, amount: 1, profit: 0 }]
+    })
+  }
+  const m9e = await openLegacyShop('m9e', clone(m9eLegacy))
+  await m9e.call('migrateRecords', { limit: 9999 })   // init
+  const m9eWrite = await m9e.call('migrateRecords', { limit: 9999 })
+  assert.strictEqual(m9eWrite.total, 520, 'M9e 前提：归并后 520 条（每张进货各自成单）')
+  assert.strictEqual(m9eWrite.phase, 'writing')
+  assert.strictEqual(m9eWrite.cursor, 500,
+    'M9e：limit 9999 必须被钳到 500，一次 writing 只前进 500')
+  assert.strictEqual(m9eWrite.written, 500)
+
+  // =========================================================================
   // M10 restart / newBook / rollback 三条恢复路
   // =========================================================================
   // restart：同账套重写，把 M9 改坏的那条盖回去（_id 确定，set 幂等，直接覆盖）
@@ -855,6 +1085,315 @@ function receivableOf(accounts, customerId) {
   // 集合里的文档留着，重跑时原样覆盖
   const m10cAgain = await m10c.runMigration({ limit: 50, restart: true })
   assert.strictEqual(m10cAgain.state, 'done', 'M10 rollback：回滚之后还能再迁一次')
+
+  // -------------------------------------------------------------------------
+  // M10d 回滚守卫：迁完之后记过账，不带 force 必须拒绝
+  // -------------------------------------------------------------------------
+  // 夹具坑：语料里的 createdAt 是 3000..8000，而 Shop 的合成时钟从 1000 起步。
+  // 这里显式传 now = 9000，让新记的这笔账真的排在最新一页最前面 —— 否则测的是
+  // 「一页装得下全部」的退化情形，验不到「新账在前缀」这条性质。
+  const m10d = await openLegacyShop('m10d')
+  await m10d.runMigration({ limit: 50 })
+  const m10dMerged = apply.legacyRecordsOf({ records: clone(m10d.doc().records) }).length
+  const m10dSale = await m10d.call('addSale', {
+    paidAmount: 0, customerId: 'nc1', items: [{ productId: 'p1', qty: 1, unitPrice: 30 }]
+  }, 9000)
+  // addSale 的回包里那条流水挂在 result.order 上（applyMutation 写的是
+  // `result.order = applied.order`，而 applySaleOrder 的 order 就是 record 本身），
+  // **不是** result.record —— 别照着 addPurchase 的写法抄。
+  const m10dNewId = m10dSale.result.order.id
+  await rejects(function () {
+    return m10d.call('migrateRecords', { mode: 'rollback' })
+  }, /迁完之后动过/)
+  assert.ok(m10d.doc().recordsMigratedAt > 0, 'M10d：被拒绝的回滚一个字都不许改账本')
+  // 迁完之后记一笔账，ledgers.migration **必须还在**（2b-1b 审计 A6：以前
+  // applyMutation 只带 records / recordsMigratedAt / migratedFromLocal / importing
+  // 四个字段，第一笔销售就把它抹了，dropLegacy 当场没了出路）。钉在 M16b。
+
+  const m10dForced = await m10d.call('migrateRecords', { mode: 'rollback', force: true })
+  assert.strictEqual(m10dForced.state, 'rolledBack')
+  assert.strictEqual(m10dForced.forced, true)
+  assert.strictEqual(m10dForced.foreignCount, 1, 'M10d：最新一页里有一条不在老数组')
+  assert.strictEqual(m10dForced.foreignMore, false)
+  assert.strictEqual(m10dForced.foreignSample[0].id, m10dNewId)
+  assert.strictEqual(m10dForced.mergedCount, m10dMerged)
+  assert.strictEqual(m10dForced.collectionCount, m10dMerged + 1)
+  assert.strictEqual(m10dForced.discarded, 1)
+  assert.strictEqual(m10dForced.probeError, '')
+  assert.strictEqual(m10dForced.countError, '')
+  assert.strictEqual(m10d.doc().recordsMigratedAt, 0, 'M10d：force 之后确实回滚了')
+
+  // -------------------------------------------------------------------------
+  // M10e 条数骗得过、id 骗不过 —— 只比条数的守卫会在这里放行
+  // -------------------------------------------------------------------------
+  const m10e = await openLegacyShop('m10e')
+  await m10e.runMigration({ limit: 50 })
+  const m10eMerged = apply.legacyRecordsOf({ records: clone(m10e.doc().records) }).length
+  await m10e.call('addSale', {
+    paidAmount: 0, customerId: 'nc1', items: [{ productId: 'p1', qty: 1, unitPrice: 30 }]
+  }, 9000)
+  await m10e.call('deleteRecord', { id: 'A-pay' })   // 删掉一条老账，条数抹平
+  const m10eForced = await m10e.call('migrateRecords', { mode: 'rollback', force: true })
+  assert.strictEqual(m10eForced.collectionCount, m10eMerged,
+    'M10e 前提：删一条加一条之后集合条数和归并条数相等，只比条数的守卫在这里是瞎的')
+  assert.strictEqual(m10eForced.foreignCount, 1, 'M10e：id 比对仍然抓得到那笔新账')
+  assert.strictEqual(m10eForced.discarded, 1)
+
+  // 同一场景不带 force 必须被拒（上一句已经把 m10e 回滚掉了，另开一家店重跑）
+  const m10e2 = await openLegacyShop('m10e2')
+  await m10e2.runMigration({ limit: 50 })
+  await m10e2.call('addSale', {
+    paidAmount: 0, customerId: 'nc1', items: [{ productId: 'p1', qty: 1, unitPrice: 30 }]
+  }, 9000)
+  await m10e2.call('deleteRecord', { id: 'A-pay' })
+  await rejects(function () {
+    return m10e2.call('migrateRecords', { mode: 'rollback' })
+  }, /迁完之后动过/)
+
+  // -------------------------------------------------------------------------
+  // M10f B-1 回归：**事务内不许依赖 count()**
+  // -------------------------------------------------------------------------
+  // wx-server-sdk 的 Transaction.Collection 有没有实现 count() 是未实测项，而
+  // rollbackMigration 是全店停摆窗口里唯一的紧急出路。这里把「事务快照那一侧」的
+  // count() 换成抛错（事务外那一份不动，它是当晚已经跑过的那一份），整条回滚路
+  // 必须表现得和 M10d 一模一样。谁把 countAll() 挪回事务里，这条当场变红。
+  const m10f = await openLegacyShop('m10f')
+  await m10f.runMigration({ limit: 50 })
+  await m10f.call('addSale', {
+    paidAmount: 0, customerId: 'nc1', items: [{ productId: 'p1', qty: 1, unitPrice: 30 }]
+  }, 9000)
+  const m10fProto = Object.getPrototypeOf(m10f.db.recordsCtx().collection.where({}))
+  const m10fRealCount = m10fProto.count
+  // 事务里拿到的是 snapshot 里那份 bag（runTransaction 提交时会整份换掉 db.records，
+  // 所以这里必须**每次调用时**去读 m10f.db.records，不能提前存下来）
+  m10fProto.count = async function () {
+    if (this.bag !== m10f.db.records) {
+      throw new TypeError('transaction.collection(...).where(...).count is not a function')
+    }
+    return m10fRealCount.apply(this, arguments)
+  }
+  try {
+    await rejects(function () {
+      return m10f.call('migrateRecords', { mode: 'rollback' })
+    }, /迁完之后动过/)
+    const m10fForced = await m10f.call('migrateRecords', { mode: 'rollback', force: true })
+    assert.strictEqual(m10fForced.foreignCount, 1)
+    assert.strictEqual(m10fForced.probeError, '', 'M10f：事务内探针不许碰 count()')
+    assert.strictEqual(m10fForced.countError, '', 'M10f：事务外那一次 count() 应当照常')
+    assert.strictEqual(m10f.doc().recordsMigratedAt, 0)
+  } finally {
+    m10fProto.count = m10fRealCount
+  }
+
+  // -------------------------------------------------------------------------
+  // M10g 整页都是外来的 -> foreignMore
+  // -------------------------------------------------------------------------
+  const m10g = await openLegacyShop('m10g')
+  await m10g.runMigration({ limit: 50 })
+  const m10gBook = m10g.doc().bookId
+  const m10gMerged = apply.legacyRecordsOf({ records: clone(m10g.doc().records) }).length
+  for (let i = 0; i < 100; i++) {
+    // 带外塞（模拟迁移后记了一整页以上的账），createdAt 全都大于语料里的最大值
+    const doc = apply.toRecordDoc({
+      id: 'm10g-ghost-' + i, type: 'pay', amount: 1, remark: '', createdAt: 10000 + i,
+      customerId: 'nc1', customerName: '甲', customerPhone: '', customerAddress: '', lines: []
+    }, m10gBook, m10g.shopId)
+    m10g.db.records[doc._id] = doc
+  }
+  await rejects(function () {
+    return m10g.call('migrateRecords', { mode: 'rollback' })
+  }, /迁完之后动过/)
+  const m10gForced = await m10g.call('migrateRecords', { mode: 'rollback', force: true })
+  assert.strictEqual(m10gForced.foreignCount, 100, 'M10g：最新一页 100 条全是外来的')
+  assert.strictEqual(m10gForced.foreignMore, true, 'M10g：整页装满就要说「还有更多」')
+  assert.strictEqual(m10gForced.foreignSample.length, 5, 'M10g：样本最多 5 条')
+  assert.strictEqual(m10gForced.collectionCount, m10gMerged + 100)
+  assert.strictEqual(m10gForced.discarded, 100)
+
+  // -------------------------------------------------------------------------
+  // M10h 信号②的牙：残骸埋在最新一页**之外**
+  // -------------------------------------------------------------------------
+  // 这条是回滚守卫「双信号」这个说法的**唯一**证据。M10d/e/e2/f/g 里的外来记录
+  // 全部落在最新一页，信号①一个人就能让它们五条全绿 —— 2b-1b 审计把信号②整段
+  // 拆掉之后 npm test 照样 EXIT=0。
+  //
+  // 验收标准（改这段的人必须自己跑一遍）：把 rollbackMigration 里的
+  //   const extra = (guard.collectionCount == null || guard.mergedCount == null) ? null : Math.max(...)
+  // 改成 `const extra = 0`（= 拆掉信号②的牙），**M10h 必须当场变红**
+  //（不带 force 那次不再抛，rejects 里的 assert.fail 触发）。实测确实如此。
+  //
+  // 场景：老数组 130 条（createdAt 2000..2129）迁完之后，带外塞进 2 条
+  // createdAt=500 的文档 —— sortKey 倒序排在 130 条老账**后面**，最新一页
+  // （ROLLBACK_PROBE_LIMIT=100 条）里一条都看不见，①在这里是瞎的；
+  // 集合 132 条、归并 130 条，②一眼看出多 2 条。
+  //
+  // 夹具坑：Shop 的合成时钟从 1000 起步，所以 createdAt=500 真的比老数组还早。
+  const m10hLegacy = []
+  for (let i = 0; i < 130; i++) {
+    m10hLegacy.push({
+      id: 'm10h-s' + i, type: 'out', amount: 10, profit: 2, remark: '', createdAt: 2000 + i,
+      customerId: 'nc1', customerName: '甲', customerPhone: '13800000001', customerAddress: '甲街 1 号',
+      paidAmount: 10, operatorOpenid: '', operatorName: '',
+      lines: [{
+        lineId: 'm10h-s' + i + '-l1', productId: 'p1', productName: '牛奶', sku: '', skuId: '',
+        color: '', size: '', qty: 1, unitPrice: 10, costPrice: 8, amount: 10, profit: 2,
+        allocations: [], returnedQty: 0, returnedAmount: 0
+      }]
+    })
+  }
+  const m10h = await openLegacyShop('m10h', clone(m10hLegacy))
+  await m10h.runMigration({ limit: 50 })
+  const m10hBook = m10h.doc().bookId
+  const m10hMerged = apply.legacyRecordsOf({ records: clone(m10h.doc().records) }).length
+  assert.strictEqual(m10hMerged, 130, 'M10h 前提：老数组归并后 130 条，比探针的一页（100）多')
+  for (let i = 0; i < 2; i++) {
+    // createdAt=500：比老数组里最早的一条（2000）还早，sortKey 倒序排在最后
+    const doc = apply.toRecordDoc({
+      id: 'm10h-ghost-' + i, type: 'pay', amount: 1, remark: '', createdAt: 500 + i,
+      customerId: 'nc1', customerName: '甲', customerPhone: '', customerAddress: '', lines: []
+    }, m10hBook, m10h.shopId)
+    m10h.db.records[doc._id] = doc
+  }
+  await rejects(function () {
+    return m10h.call('migrateRecords', { mode: 'rollback' })
+  }, /迁完之后动过/)
+  assert.ok(m10h.doc().recordsMigratedAt > 0, 'M10h：被拒绝的回滚一个字都不许改账本')
+  const m10hForced = await m10h.call('migrateRecords', { mode: 'rollback', force: true })
+  assert.strictEqual(m10hForced.foreignCount, 0,
+    'M10h 前提：外来文档排在最新一页之外，信号①在这里是瞎的（这一条塌了整条用例就不测②了）')
+  assert.strictEqual(m10hForced.foreignMore, false, 'M10h：一条都没看见，谈不上还有更多')
+  assert.strictEqual(m10hForced.mergedCount, m10hMerged)
+  assert.strictEqual(m10hForced.collectionCount, m10hMerged + 2, 'M10h：集合比归并多 2 条')
+  assert.strictEqual(m10hForced.discarded, 2, 'M10h：抹掉条数的下界由②给出')
+  assert.strictEqual(m10hForced.probeError, '')
+  assert.strictEqual(m10hForced.countError, '')
+  assert.strictEqual(m10h.doc().recordsMigratedAt, 0, 'M10h：force 之后确实回滚了')
+
+  // -------------------------------------------------------------------------
+  // M10i 两个探针都瞎时 discarded 是 null，不是 0
+  // -------------------------------------------------------------------------
+  // 0 读起来像「什么都没丢」。两个探针都读不到数的时候我们什么都不知道，
+  // 回包必须说「不知道」。
+  const m10i = await openLegacyShop('m10i')
+  await m10i.runMigration({ limit: 50 })
+  await m10i.call('addSale', {
+    paidAmount: 0, customerId: 'nc1', items: [{ productId: 'p1', qty: 1, unitPrice: 30 }] }, 9000)
+  const m10iQuery = Object.getPrototypeOf(m10i.db.recordsCtx().collection.where({}))
+  const m10iGet = m10iQuery.get
+  const m10iCount = m10iQuery.count
+  m10iQuery.get = async function () { throw new Error('翻页炸了') }
+  m10iQuery.count = async function () { throw new Error('数数炸了') }
+  try {
+    await rejects(function () {
+      return m10i.call('migrateRecords', { mode: 'rollback' })
+    }, /回滚守卫读不到数[\s\S]*force: true/)
+    const m10iForced = await m10i.call('migrateRecords', { mode: 'rollback', force: true })
+    assert.strictEqual(m10iForced.state, 'rolledBack', 'M10i：两个探针都瞎，force 照样出得去')
+    assert.strictEqual(m10iForced.discarded, null, 'M10i：两个都瞎时 discarded 必须是 null')
+    assert.ok(/翻页炸了/.test(m10iForced.probeError), 'M10i：①失败的原因原样回包')
+    assert.ok(/数数炸了/.test(m10iForced.countError), 'M10i：②失败的原因原样回包')
+    assert.strictEqual(m10i.doc().recordsMigratedAt, 0)
+  } finally {
+    m10iQuery.get = m10iGet
+    m10iQuery.count = m10iCount
+  }
+
+  // -------------------------------------------------------------------------
+  // M10j 守卫机器**不许**把紧急出路一起带走
+  // -------------------------------------------------------------------------
+  // 合同：「守卫可以失灵，这条出路不许失灵」。2b-1b 审计阻塞 1 就是事务外那次
+  // db.getLedger 漏在 try 外面 —— 真云的 getLedger 把一切异常吞成 null，一次瞬时
+  // 读失败就变成「店铺账本不存在」，**带不带 force 都一样报错**。
+  // 这里把守卫机器的三个零件逐个弄坏，每一个都要：不带 force -> 拒绝且点名 force；
+  // 带 force -> 回滚成功。
+  const brokenParts = [
+    {
+      name: '事务外 getLedger 返回 null',
+      // 真云 index.js 的 createDb().getLedger 是 catch (error) { return null }
+      install: function (shop) {
+        const real = shop.db.getLedger
+        shop.db.getLedger = async function () { return null }
+        return function () { shop.db.getLedger = real }
+      }
+    },
+    {
+      name: '事务外 getLedger 抛错',
+      install: function (shop) {
+        const real = shop.db.getLedger
+        shop.db.getLedger = async function () { throw new Error('读账本超时') }
+        return function () { shop.db.getLedger = real }
+      }
+    },
+    {
+      name: '老数组归并抛错',
+      // legacyRecordsOf 是纯函数，但它也是守卫机器的一部分，不该有能力带走 force
+      install: function () {
+        const real = apply.legacyRecordsOf
+        apply.legacyRecordsOf = function () { throw new Error('归并炸了') }
+        return function () { apply.legacyRecordsOf = real }
+      }
+    }
+  ]
+  for (let i = 0; i < brokenParts.length; i++) {
+    const part = brokenParts[i]
+    const shop = await openLegacyShop('m10j' + i)
+    await shop.runMigration({ limit: 50 })
+    assert.ok(shop.doc().recordsMigratedAt > 0)
+    const restore = part.install(shop)
+    try {
+      await rejects(function () {
+        return shop.call('migrateRecords', { mode: 'rollback' })
+      }, /回滚守卫读不到数[\s\S]*force: true/)
+      assert.ok(shop.doc().recordsMigratedAt > 0,
+        'M10j（' + part.name + '）：被拒绝的回滚一个字都不许改账本')
+      const forced = await shop.call('migrateRecords', { mode: 'rollback', force: true })
+      assert.strictEqual(forced.state, 'rolledBack',
+        'M10j（' + part.name + '）：force 必须出得去')
+      assert.strictEqual(shop.doc().recordsMigratedAt, 0,
+        'M10j（' + part.name + '）：force 之后确实回滚了')
+      assert.strictEqual(shop.doc().migration, null)
+    } finally {
+      restore()
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // M10j 的第四个零件：**事务内** tx.getLedger 返回 null。它和前三个不一样——
+  // 前三个是守卫机器坏了，force 必须出得去；这一个测的是「要不要回滚」这个决定
+  // 本身的前提（cur 都没读到），**force 也必须出不去**。真云的 tx.getLedger
+  // （index.js 的事务适配器）把读失败也吞成 null，在这里和「账本文档不存在」
+  // 分不开；而 cur 没读到还往下走，putLedger 就是整文档 set()，会毁账本，拒绝
+  // 是对的。代价是这条路上 force 无效、只能重试，所以文案必须把两种可能都点到、
+  // 给出「再调一次」的指引，不许断言「店铺账本不存在」——那会让凌晨两点的人
+  // 以为账本真没了、跑去控制台手改文档。
+  // -------------------------------------------------------------------------
+  const m10jTxShop = await openLegacyShop('m10j-tx')
+  await m10jTxShop.runMigration({ limit: 50 })
+  assert.ok(m10jTxShop.doc().recordsMigratedAt > 0)
+  const m10jTxRun = m10jTxShop.db.runTransaction
+  m10jTxShop.db.runTransaction = async function (fn) {
+    return m10jTxRun.call(m10jTxShop.db, function (tx) {
+      tx.getLedger = async function () { return null }
+      return fn(tx)
+    })
+  }
+  try {
+    await rejects(function () {
+      return m10jTxShop.call('migrateRecords', { mode: 'rollback' })
+    }, /再调一次/)
+    assert.ok(m10jTxShop.doc().recordsMigratedAt > 0,
+      'M10j（事务内读失败）：不带 force，被拒的回滚一个字都不许改账本')
+    // force 在这条路上**不该**有效果 —— 和前三个零件正好相反（有意）
+    await rejects(function () {
+      return m10jTxShop.call('migrateRecords', { mode: 'rollback', force: true })
+    }, /再调一次/)
+    assert.ok(m10jTxShop.doc().recordsMigratedAt > 0,
+      'M10j（事务内读失败）：带 force 也必须出不去，recordsMigratedAt 一动不动')
+    assert.ok(m10jTxShop.doc().migration,
+      'M10j（事务内读失败）：migration 也不许被清')
+  } finally {
+    m10jTxShop.db.runTransaction = m10jTxRun
+  }
 
   // =========================================================================
   // M11 recomputeAggregates
@@ -953,6 +1492,41 @@ function receivableOf(accounts, customerId) {
     assert.ok(apply.MUTATIONS.indexOf(action) < 0,
       'M12：' + action + ' 不许进 MUTATIONS（那会让它走 applyMutation）')
   })
+  // M12b：deleteShop 不带 apiVersion 必须被拒。它不回传账本（那批放行名单的判据），
+  // 但它是不可逆动作 —— 冻结窗口里店主到处撞「请更新小程序到最新版本」、最容易
+  // 乱点的时候，删店按钮就在同一个店铺页上。老客户端发起的不可逆动作要当场挡住，
+  // 不是「回传了什么」能换的。全量放行名单的实测钉在 M12c。
+  await rejects(function () {
+    return m12.callRaw('deleteShop', {}, null, 0)
+  }, /请更新小程序到最新版本/, 'M12b：deleteShop 不带 apiVersion 必须被版本门挡住')
+  await rejects(function () {
+    return m12.callRaw('deleteShop', {}, null, 1)
+  }, /请更新小程序到最新版本/, 'M12b：apiVersion 1（老客户端）同样挡住')
+  // M12c：把「不带 apiVersion 到底放行哪几个」整个钉住。docs/cloud-ledger.md 的
+  // 放行清单是从这里抄的，名单再变（新 action 忘了进 VERSIONED_READS / 新增
+  // 不可逆 action 忘了进 VERSIONED_DESTRUCTIVE）测试当场红，不用等审计来数。
+  const ALL_ACTIONS = ['whoami', 'listShops', 'createShop', 'listMembers', 'addMember',
+    'updateMember', 'removeMember', 'deleteShop', 'getLedger', 'getSlip', 'getRecord',
+    'listRecords', 'migrateLocal'].concat(migrate.OPS_ACTIONS).concat(apply.MUTATIONS)
+  const m12Allowed = []
+  for (let i = 0; i < ALL_ACTIONS.length; i++) {
+    const action = ALL_ACTIONS[i]
+    let message = ''
+    try {
+      await core.dispatch({
+        db: new MemoryDb(), makeId: idFactory('m12v'), openid: 'user-a',
+        action: action, shopId: 'shop-1', apiVersion: 0,
+        payload: action === 'createShop' ? { name: '店' } : {}, now: 1000
+      })
+    } catch (error) {
+      message = String((error && error.message) || error)
+    }
+    // 过了门但因缺参数等报别的错 = 放行；报「请更新」= 被挡
+    if (message.indexOf('请更新小程序到最新版本') < 0) m12Allowed.push(action)
+  }
+  assert.deepStrictEqual(m12Allowed.sort(),
+    ['addMember', 'createShop', 'listMembers', 'listShops', 'removeMember', 'updateMember', 'whoami'],
+    'M12c：版本门的放行名单就是这 7 个（deleteShop 必须不在里面）')
 
   // =========================================================================
   // M15 特例：空 records（stamp-only）/ 已迁移再调 / 目标账套有残骸
@@ -1032,6 +1606,171 @@ function receivableOf(accounts, customerId) {
     return m16.call('migrateRecords', { mode: 'nope' })
   }, /未知的升级模式/)
 
+  // -------------------------------------------------------------------------
+  // M16b dropLegacy 必须活过「上线清单自己写的那个顺序」
+  // -------------------------------------------------------------------------
+  // docs/cloud-ledger.md 阶段 2 的顺序是：迁完 -> 记一笔 1 元测试销售确认写路径
+  // 解冻 -> 再删掉 -> 账本文档 > 3 MB 的店跑 dropLegacy。2b-1b 审计 A6：那一笔
+  // 测试账会把 ledgers.migration 抹掉（applyMutation 只带 records /
+  // recordsMigratedAt / migratedFromLocal / importing），而老 dropLegacy 要
+  // migration.phase === 'done'，于是需要它的那家店必然卡死，app 内没有出路。
+  // 修法有两半，这条用例把两半都钉住。
+  const m16b = await openLegacyShop('m16b')
+  await m16b.runMigration({ limit: 50 })
+  const m16bMigration = clone(m16b.doc().migration)
+  assert.strictEqual(m16bMigration.phase, 'done')
+  const m16bSale = await m16b.call('addSale', {
+    paidAmount: 0, customerId: 'nc1', items: [{ productId: 'p1', qty: 1, unitPrice: 30 }]
+  }, 9000)
+  // 半一：migration 活过记账（applyMutation 把它原样带过去）
+  assert.deepStrictEqual(m16b.doc().migration, m16bMigration,
+    'M16b：记一笔账不许把 ledgers.migration 抹掉')
+  await m16b.call('deleteRecord', { id: m16bSale.result.order.id })
+  assert.deepStrictEqual(m16b.doc().migration, m16bMigration,
+    'M16b：删一笔账也不许把它抹掉')
+  // 半二：dropLegacy 的前置条件不再看 migration，只看 recordsMigratedAt + 集合非空
+  const m16bDropped = await m16b.call('migrateRecords', { mode: 'dropLegacy' })
+  assert.strictEqual(m16bDropped.state, 'dropped',
+    'M16b：按上线清单的顺序走完，dropLegacy 必须能跑')
+  assert.strictEqual(m16bDropped.collectionCount, m16bDropped.mergedCount,
+    'M16b：回包里带上「集合 N 条 / 归并 M 条」，当晚不用再猜')
+  assert.strictEqual(m16bDropped.shortfall, 0)
+  assert.deepStrictEqual(m16b.doc().records, [], 'M16b：老数组被清空')
+
+  // -------------------------------------------------------------------------
+  // M16c dropLegacy 的新闸：集合是空的 = 老数组是唯一副本，不许删
+  // -------------------------------------------------------------------------
+  // 老前置条件（migration.phase === 'done'）挡不住这一种：migration 好好写着、
+  // recordsMigratedAt 也写着，但集合里一条都没有（bookId 被改过 / newBook 换过
+  // 账套 / 集合被清过）。这时候删老数组就是把唯一一份副本删掉。
+  const m16c = await openLegacyShop('m16c')
+  await m16c.runMigration({ limit: 50 })
+  assert.strictEqual(m16c.doc().migration.phase, 'done', 'M16c 前提：老前置条件在这里是满足的')
+  m16c.db.records = {}   // 带外把集合清空
+  await rejects(function () {
+    return m16c.call('migrateRecords', { mode: 'dropLegacy' })
+  }, /一条流水都没有[\s\S]*唯一/)
+  assert.ok(m16c.doc().records.length, 'M16c：被拒绝的 dropLegacy 一条都不许删')
+
+  // -------------------------------------------------------------------------
+  // M16d dropLegacy 数不着条数就报错，**不给 force**
+  // -------------------------------------------------------------------------
+  // 和 rollback 不同：rollback 是紧急出路，堵死它等于把店锁死，所以给 force；
+  // dropLegacy 是优化，堵一次什么都没坏，下次再调就行 —— 给一条不可逆操作配
+  // 「绕过唯一一道闸」的开关才是错的。
+  const m16d = await openLegacyShop('m16d')
+  await m16d.runMigration({ limit: 50 })
+  const m16dQuery = Object.getPrototypeOf(m16d.db.recordsCtx().collection.where({}))
+  const m16dCount = m16dQuery.count
+  m16dQuery.count = async function () { throw new Error('数数炸了') }
+  try {
+    await rejects(function () {
+      return m16d.call('migrateRecords', { mode: 'dropLegacy' })
+    }, /先数一遍集合[\s\S]*数数炸了/)
+    // force 在这条路上**不该**有效果
+    await rejects(function () {
+      return m16d.call('migrateRecords', { mode: 'dropLegacy', force: true })
+    }, /先数一遍集合/)
+    assert.ok(m16d.doc().records.length, 'M16d：两次都不许删')
+  } finally {
+    m16dQuery.count = m16dCount
+  }
+
+  // -------------------------------------------------------------------------
+  // M16e migration 已经被抹掉的账本，dropLegacy 照样要能跑
+  // -------------------------------------------------------------------------
+  // 这不是假想：2b-1b 那一版部署上去之后，只要哪家店迁完再记过一笔账，
+  // ledgers.migration 就永久没了 —— applyMutation 带 migration 的修法**不会**
+  // 把它补回来。所以 dropLegacy 的前置条件必须**结构上**不依赖 migration，
+  // 而不是「靠 A6 的另一半兜着」。谁把 migration.phase === 'done' 加回前置条件，
+  // 这条当场变红。
+  const m16e = await openLegacyShop('m16e')
+  await m16e.runMigration({ limit: 50 })
+  m16e.patchDoc({ migration: null })
+  assert.ok(m16e.doc().recordsMigratedAt > 0, 'M16e 前提：迁移确实成功过')
+  const m16eDropped = await m16e.call('migrateRecords', { mode: 'dropLegacy' })
+  assert.strictEqual(m16eDropped.state, 'dropped',
+    'M16e：dropLegacy 的前置条件不许依赖 ledgers.migration')
+  assert.deepStrictEqual(m16e.doc().records, [])
+
+  // -------------------------------------------------------------------------
+  // M16f preCountProbe 的 known 标志有牙（rollback 守卫的账套号漂移闸）
+  // -------------------------------------------------------------------------
+  // known 回答的是「事务外那次读，读没读到账本」。它守着两件事，缺一不可：
+  //   ① 读到了（known=true）才有资格比对「事务外数的那本 == 事务里这本」——
+  //     数完之后账套号被并发 clearAll / loadSeed 换掉时，守卫必须作废那次计数、
+  //     点名「账套号变了」，而不是拿老账套的条数当数。
+  //   ② 没读到（known=false，pre.bookId 是 ''）时**不许**做那个比对——'' 和任何
+  //     真实账套号都不相等，不判 known 就会把「数不着」误报成「账套号变了」，
+  //     因果是错的。
+  // 变异验证的靶子：把 preCountProbe 里 out.known = true 改成 false（整个机制
+  // 作废），第一段当场变红——漂移检查被跳过，守卫拿老账套的条数当数，一次连
+  // bookId 都被换掉的回滚静默放行。反过来把 rollbackGuard 里 if 条件的
+  // pre.known && 删掉，第二段当场变红。
+  const m16f = await openLegacyShop('m16f')
+  await m16f.runMigration({ limit: 50 })
+  // 第一段：读到了 + 事务里账套号被换掉 -> 必须拒绝并点名「账套号变了」。
+  // hook 挂在 MemoryDb 的 tx.getLedger 上：事务外 preCountProbe 数完老账套之后、
+  // 事务里读到的那一份才被换 bookId，正是这道闸要拦的窗口。
+  m16f.db.hooks.afterGetLedger = function (shopId, snap) {
+    snap.ledgers[shopId] = Object.assign({}, snap.ledgers[shopId], { bookId: 'm16f-drift' })
+  }
+  try {
+    await rejects(function () {
+      return m16f.call('migrateRecords', { mode: 'rollback' })
+    }, /账套号在读数和事务之间变了[\s\S]*再调一次/)
+    assert.ok(m16f.doc().recordsMigratedAt > 0,
+      'M16f：被拒绝的回滚一个字都不许改账本')
+  } finally {
+    delete m16f.db.hooks.afterGetLedger
+  }
+  // 第二段：事务外没读到账本（真云的 getLedger 把读失败吞成 null）-> 报的必须是
+  // 「数不着」那条文案，**不是**「账套号变了」。
+  const m16fBlindGet = m16f.db.getLedger
+  m16f.db.getLedger = async function () { return null }
+  try {
+    let m16fBlindError = null
+    try {
+      await m16f.call('migrateRecords', { mode: 'rollback' })
+    } catch (error) {
+      m16fBlindError = error
+    }
+    assert.ok(m16fBlindError, 'M16f：盲探针的回滚必须被拒绝')
+    assert.ok(/事务外没读到账本文档/.test(m16fBlindError.message),
+      'M16f：报的是「数不着」那条文案')
+    assert.ok(!/账套号在读数和事务之间变了/.test(m16fBlindError.message),
+      'M16f：不许把「数不着」误报成「账套号变了」（known=false 时 bookId 是空串，不做 known 判断就会）')
+    assert.ok(m16f.doc().recordsMigratedAt > 0,
+      'M16f：盲探针的回滚也不许改账本')
+  } finally {
+    m16f.db.getLedger = m16fBlindGet
+  }
+
+  // -------------------------------------------------------------------------
+  // M16g dropLegacy 的账套号漂移闸有牙
+  // -------------------------------------------------------------------------
+  // 场景：事务外数完条数（老账套，数得着、非空）之后、事务开始之前，账套号被
+  // 并发 clearAll / loadSeed 换到一个**空集合**的新账套。闸在：拒绝并点名
+  // 「账套号在数条数和事务之间变了」。删掉那个 throw 试试：pre.count 是老账套
+  // 的数、非零，后面两道检查（数得着、非空）全过，事务一路走到清空老数组——
+  // 而当前账套是空的，账本里那份数当场消失，老账套的文档虽还在集合里、却已经
+  // 没有任何账本指向它。变异验证：删 throw，这条必须变红（dropLegacy 会放行）。
+  const m16g = await openLegacyShop('m16g')
+  await m16g.runMigration({ limit: 50 })
+  assert.ok(m16g.doc().records.length, 'M16g 前提：老数组还在')
+  m16g.db.hooks.afterGetLedger = function (shopId, snap) {
+    snap.ledgers[shopId] = Object.assign({}, snap.ledgers[shopId], { bookId: 'm16g-empty-book' })
+  }
+  try {
+    await rejects(function () {
+      return m16g.call('migrateRecords', { mode: 'dropLegacy' })
+    }, /账套号在数条数和事务之间变了[\s\S]*再调一次/)
+    assert.ok(m16g.doc().records.length, 'M16g：被拒绝的 dropLegacy 一条都不许删')
+    assert.ok(m16g.doc().recordsMigratedAt > 0, 'M16g：recordsMigratedAt 也不许动')
+  } finally {
+    delete m16g.db.hooks.afterGetLedger
+  }
+
   // =========================================================================
   // 截断：明细只在带 IO 的壳里截断，纯函数返回全量
   // =========================================================================
@@ -1106,6 +1845,15 @@ function receivableOf(accounts, customerId) {
   assert.deepStrictEqual(s1Doc.records, s1Legacy,
     'S1：records 数组**保留不删** —— 和 ledgers.records 同一个理由，那是回滚路')
   assert.deepStrictEqual(s1Res.report.map(function (item) { return item.status }), ['converted'])
+  // 转换把归并条数回填进账本 clearSnapshots 的元数据：「恢复清空前数据」弹窗
+  // 要报的数（pages/shop/shop.js）。老元数据只有 {id, savedAt}（installLegacyClears
+  // 装的就是这个形状），records 数组按行数又**不等于**归并条数（同 orderId 的行
+  // 并成一张单），全店只有转换这里拿得到归并结果。
+  assert.strictEqual(s1.doc().clearSnapshots[0].recordCount, s1Merged.length,
+    'S1：元数据回填 recordCount = 归并条数（不是 records 行数）')
+  const s1View = (await s1.call('getLedger', {})).ledger
+  assert.deepStrictEqual(s1View.latestClear, { savedAt: 3000, recordCount: s1Merged.length },
+    'S1：latestClear 带日期和归并条数回传给客户端')
 
   // ---- S2 幂等：再跑一次 converted === 0，快照文档逐字段不变 -------------
   const s2Before = clone(s1.db.clears['s1-c1'])
@@ -1142,6 +1890,8 @@ function receivableOf(accounts, customerId) {
   const s3Now = (await s3.call('getLedger', {})).ledger
   assert.strictEqual(s3Now.totals.receivable, 240, 'S3 自检：现在欠 240（210 + 新卖的 30）')
   assert.strictEqual(s3Now.hasClearedBackup, true, 'S3 自检：「恢复清空前数据」按钮此刻能点')
+  assert.strictEqual(s3Now.latestClear.recordCount, null,
+    'S3 自检：老元数据还没有 recordCount（转换之前），弹窗退化成只带日期')
   // 转换之前恢复要报错，而且要指出能走通的那条路
   await rejects(function () {
     return s3.call('restoreCleared', {})
@@ -1167,6 +1917,8 @@ function receivableOf(accounts, customerId) {
   assert.ok(!s3Records.some(function (item) { return item.id === s3SaleId }),
     'S3：清空之后记的那笔账不许出现在恢复出来的账套里')
   assert.strictEqual(s3After.totals.receivable, 210, 'S3：全店欠款回到 210（修复后的口径）')
+  assert.strictEqual(s3After.latestClear.recordCount, s3Merged.length,
+    'S3：转换把归并条数回填进元数据，恢复之后弹窗照样报得出条数')
   assert.strictEqual(receivableOf(s3Doc.accounts, 'nc1'), 50, 'S3：nc1 = (100 − 30) − 20')
   assert.strictEqual(receivableOf(s3Doc.accounts, 'nc2'), 100, 'S3：nc2 = 200 − 40 − 60')
   assert.strictEqual(receivableOf(s3Doc.accounts, 'nc3'), 60, 'S3：nc3 = 80 − 20')
@@ -1345,9 +2097,13 @@ function receivableOf(accounts, customerId) {
     'S8：恢复出来的账套里拆分不变量成立')
 
   console.log('ledger-migrate tests passed')
+  console.log('阶段 3 补口：V12 行上亚分与 1e-9 容差、V4 金额那半（M3 专项）、'
+    + 'M9b 四份脏语料完整迁移必须 failed（末尾总门的失败形态）、M4b 同批语料预检 '
+    + 'blocking 点名、M9c 删最老一条走终局 V1、M9d 单客户漂移报 customerId、'
+    + 'M9e clampChunk 上界 500')
   console.log('M3 纯函数 V4–V12 逐项隔离、M4 三代混合预检 P1–P13、M5 送货单前后逐张相等、'
     + 'M6/M14 端到端、M7 解冻、M8 幂等重发 ×3、M9 校验不过不切开关、'
-    + 'M10 restart/newBook/rollback、M11 重算与上限、M12 权限与版本门、M15 三个特例、M16 dropLegacy')
+    + 'M10 restart/newBook/rollback + 回滚守卫双信号（M10d-g，②的牙在 M10h，探针不许带走 force 在 M10i/j、事务内读失败带 force 也出不去是 M10j 第四个零件）、M11 重算与上限、M12 权限与版本门、M15 三个特例、M16 dropLegacy（M16b 上线清单顺序、M16c 集合空、M16d 数不着不给 force、M16e 不依赖 migration、M16f known 标志、M16g 账套号漂移闸）')
   console.log('老清空快照转换 S1 三字段与集合、S2 幂等、S3 端到端恢复（商品/库存/流水/欠款回到清空之前）、'
     + 'S4 stamp-only、S5 前置条件、S6 一份坏的不拖累其他份、S7 limit 分批、S8 份额重算')
 })().catch(function (error) {
