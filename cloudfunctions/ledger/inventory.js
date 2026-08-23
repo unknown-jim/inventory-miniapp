@@ -1005,9 +1005,10 @@ function returnCashRefund(saleRecord, returnAmount, othersReturned) {
 // 同一条规则：先冲这张单没收到的钱，冲不掉的才算退现金。
 // 记账顺序 = (createdAt 升序, id 升序) = sortKey 升序：sortKey = pad13(createdAt)_id，
 // 前缀相同后比较的子串与 id 字符串比较逐条等价（ledger-apply.js 的 makeSortKey）。
-// 同时把退货单头过期的 customerId 拨到销售单当前客户（退货单头继承自被退销售单，
-// 改销售单客户后不拨会把这个客户的退货挂在旧客户账上）。姓名等快照字段不拨，
-// 它们是各自开单时刻的快照。
+// 同时把退货单头过期的客户字段拨到销售单当前值 —— id / 姓名 / 电话 / 地址四个
+// 都继承自被退销售单（applyReturnOrder），不是各自录入的：不拨 customerId 会把
+// 这个客户的退货挂在旧客户账上，只拨 customerId 又会让这条记录自相矛盾（挂在新
+// 客户账下，却印着旧客户的名字和地址）。所以要拨就整组拨。
 // 返回 { records, changes }：records 是替换后的新数组；changes = [{before, after}]
 // 只含有实际变化的退货单，供多条 delta 的欠款校验和上层 diff 用。
 function recomputeSaleReturns(records, saleRecord) {
@@ -1034,18 +1035,26 @@ function recomputeSaleReturns(records, saleRecord) {
     const amount = round2(toNumber(ret.amount))
     const cash = left <= 0 ? amount : (left >= amount ? 0 : round2(amount - left))
     left = round2(Math.max(0, round2(left - amount)))
-    const wantCustomer = saleRecord.customerId || ''
-    // paidAmount == null 的老退货单即使算出来相等也要重写（materialize：
-    // paidAmount = cash 并 delete payType）——否则下游 settledAmount 会按老
-    // payType 把缺 paidAmount 的单回推成整笔退现金 / 整笔冲欠款，账就飞了。
-    if (ret.paidAmount != null && round2(ret.paidAmount) === cash
-      && ret.customerId === wantCustomer) {
+    const want = {
+      customerId: saleRecord.customerId || '',
+      customerName: saleRecord.customerName || '',
+      customerPhone: saleRecord.customerPhone || '',
+      customerAddress: saleRecord.customerAddress || ''
+    }
+    // 「还没 materialize」的判据和 settledAmount 保持同一条：null 和 '' 都算缺。
+    // 这类老退货单即使份额算出来相等也要重写（paidAmount = cash 并 delete
+    // payType）——否则下游 settledAmount 会按老 payType 把它回推成整笔退现金 /
+    // 整笔冲欠款，账就飞了。两处判据必须一致，否则空串会被当成已 materialize
+    // 跳过重写，读的时候却仍按 payType 回推。
+    const materialized = !(ret.paidAmount == null || ret.paidAmount === '')
+    if (materialized && round2(ret.paidAmount) === cash
+      && ret.customerId === want.customerId
+      && ret.customerName === want.customerName
+      && ret.customerPhone === want.customerPhone
+      && ret.customerAddress === want.customerAddress) {
       return ret
     }
-    const nextRet = Object.assign({}, ret, {
-      paidAmount: cash,
-      customerId: wantCustomer
-    })
+    const nextRet = Object.assign({}, ret, want, { paidAmount: cash })
     delete nextRet.payType
     changes.push({ before: ret, after: nextRet })
     return nextRet

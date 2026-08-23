@@ -37,6 +37,14 @@ const LATEST_PURCHASE_KEEP = 2
 const TODAY_MAX_RECORDS = 2000
 // 一张销售单名下退货单的查询上限：200 张已远超现实（一次退货是一张单，退 200 次
 // 同一张销售单），到顶说明数据不对劲，报错不做无界翻页 —— 有界循环的同一份样板。
+// 两件事写在这里，别踩：
+//   ① 这是一道**死角**。到顶之后改这张销售单、以及改/删它名下的任何退货单，
+//      都要先把全部退货单捞齐来整体重算，于是两条路都撞在这里，app 内没有出路，
+//      只能后台处理。所以错误文案不许写成「请先删掉一些退货单」——那是店主做不到
+//      的事。真要给出路，得单开一条「不重算只删」的运维通道，那是另一件事。
+//   ② 真正的约束不是这个数，而是**单次事务的写入量**：整体重算会连带重写全部
+//      退货单，写放大 = ledgers 1 + 目标 1 + N。200 是按「现实里不会有这么多」
+//      拍的，不是拿真环境验证过的安全值，部署前要实测再定。
 const SALE_RETURNS_MAX = 200
 
 function docsOf(res) {
@@ -93,7 +101,7 @@ function recordStore(ctx, bookId, shopId) {
     }).orderBy('sortKey', 'asc').limit(SALE_RETURNS_MAX).get()
     const docs = docsOf(res)
     if (docs.length >= SALE_RETURNS_MAX) {
-      throw new Error('这张销售单的退货单太多，请先删掉一些退货单再改')
+      throw new Error('这张销售单的退货单太多（超过 ' + SALE_RETURNS_MAX + ' 张），超出一次能整体重算的范围，请联系开发者处理')
     }
     return docs.map(apply.fromRecordDoc)
   }

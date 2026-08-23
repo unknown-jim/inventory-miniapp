@@ -1653,6 +1653,30 @@ const fullPaidFirstGone = inv.deleteRecord(fullPaidReturn2.products, fullPaidRet
   'r-full-return', 40360, fullPaidReturn2.skus, null)
 assert.strictEqual(inv.summarizeCustomerAccount(fullPaidFirstGone.records, 'c-full').receivable, 0)
 
+// —— 改销售单客户：退货单头的客户字段整组跟着拨 ——
+// 退货单头的 id / 姓名 / 电话 / 地址四个都继承自被退销售单，不是各自录入的。
+// 只拨 customerId 会让这条记录自相矛盾：挂在新客户账下，客户页和送货单却印着
+// 旧客户的名字和地址。钱在两种写法下都是对的，所以只有这条用例守着它。
+const movedSale = inv.updateRecord(partialReturn.products, partialReturn.records, {
+  id: 'r-partial',
+  items: [{ id: 'r-partial-l1', qty: 4, unitPrice: 25 }],
+  paidAmount: 40,
+  customerId: 'c-moved',
+  customerName: '改挂客户',
+  customerPhone: '13900000000',
+  customerAddress: '新地址'
+}, 40460, partialReturn.skus, null)
+const movedReturn = movedSale.records.find(function (item) {
+  return item.id === 'r-partial-return'
+})
+assert.strictEqual(movedReturn.customerId, 'c-moved')
+assert.strictEqual(movedReturn.customerName, '改挂客户', '退货单头的客户名要跟着销售单拨')
+assert.strictEqual(movedReturn.customerPhone, '13900000000')
+assert.strictEqual(movedReturn.customerAddress, '新地址')
+// 钱跟着一起走：旧客户清零，新客户 = max(0, 100 − 40 − 25) = 35
+assert.strictEqual(inv.summarizeCustomerAccount(movedSale.records, 'c-partial').receivable, 0)
+assert.strictEqual(inv.summarizeCustomerAccount(movedSale.records, 'c-moved').receivable, 35)
+
 // —— 分位恒等：returnedAmount 让「已退货值」由构造等于 Σ退货额 ——
 // 小数数量下逐张取整会分岔：round2(0.5×7.77)×2 = 7.78 ≠ round2(1×7.77) = 7.77。
 // 旧口径按 returnedQty × 当前单价现算，退两张 0.5 的单会把已退货值记小 1 分，
