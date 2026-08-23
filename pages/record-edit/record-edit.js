@@ -3,6 +3,7 @@ const util = require('../../utils/util')
 const inventory = require('../../utils/inventory')
 const slipActions = require('../../utils/slip-actions')
 const memberChips = require('../../utils/member-chips').memberChips
+const repriceHintView = require('../../utils/reprice-hint')
 
 function navTitle(view, editing) {
   if (view.isPay) return editing ? '修改收款' : '收款详情'
@@ -123,6 +124,10 @@ Page({
         }
       })
     }
+    // 改之前这张单长什么样，给保存前那句提示用（见 utils/reprice-hint.js）。
+    // data.lines 和实收都会被编辑改掉，所以要在这里另存一份。
+    this.saleBefore = view.isOut ? repriceHintView.savedSaleOf(record) : null
+    this.repriceConfirmed = false
     if (view.isOut) {
       canReturn = recordLines.some(function (item) {
         return inventory.returnableQty(item) > 0
@@ -475,6 +480,22 @@ Page({
           wx.showToast({ title: '实收比应收多，请改实收', icon: 'none' })
           return
         }
+        const hint = repriceHintView.repriceHint(
+          this.saleBefore, this.data.lines, this.data.paidAmount)
+        if (hint && !this.repriceConfirmed) {
+          wx.showModal({
+            title: '这张单有退货',
+            content: hint,
+            confirmText: '继续保存',
+            cancelText: '再想想',
+            success: (res) => {
+              if (!res.confirm) return
+              this.repriceConfirmed = true
+              this.save()
+            }
+          })
+          return
+        }
         await store.updateRecord(this.data.id, {
           remark: this.data.remark,
           paidAmount: inventory.round2(this.data.paidAmount),
@@ -520,6 +541,9 @@ Page({
         wx.navigateBack()
       }, 400)
     } catch (error) {
+      // 保存失败（比如「数量不能小于已退货」）后还停在编辑态，店主会接着改。
+      // 不复位的话同一页里再改一次单价就不再提示了。
+      this.repriceConfirmed = false
       util.showError(error)
     }
   },

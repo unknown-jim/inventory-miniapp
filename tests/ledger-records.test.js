@@ -784,8 +784,8 @@ function totalStock(skus, productId) {
   const spBookId = spLists.bookId
   const beforeEdit = docSnapshot(spShop, spBookId)
   const ledgerBefore = JSON.stringify(spShop.db.ledgers[spShop.shopId])
-  // 改成一分不欠（40 收满 40）：D 60 → 0，两张退货单都变成纯退现金，
-  // 份额 0→25、15→50 双双被重算（有一张份额没变时它会按 skip 规则不重写）。
+  // 单价 25 → 10 并收满（应收 40、实收 40）：两张退货单先跟着拨到新单价
+  // （25 → 10、50 → 20），再按 D = 0 重算份额，双双变成纯退现金。
   await spShop.call('updateRecord', {
     id: spSale.id,
     items: [{ id: spSale.lines[0].lineId, qty: 4, unitPrice: 10 }],
@@ -796,11 +796,18 @@ function totalStock(skus, productId) {
   const retDoc = function (id) {
     return spLists.records.find(function (item) { return item.id === id })
   }
-  assert.strictEqual(retDoc(spRet1.id).paidAmount, 25)
-  assert.strictEqual(retDoc(spRet2.id).paidAmount, 50, '改销售单后 D=0，两张退货单都重算成纯退现金')
+  assert.strictEqual(retDoc(spRet1.id).amount, 10, '退货单跟着销售行拨到新单价')
+  assert.strictEqual(retDoc(spRet2.id).amount, 20, '退货单跟着销售行拨到新单价')
+  assert.strictEqual(retDoc(spRet1.id).lines[0].unitPrice, 10)
+  assert.strictEqual(retDoc(spRet2.id).lines[0].unitPrice, 10)
+  assert.strictEqual(retDoc(spRet1.id).paidAmount, 10)
+  assert.strictEqual(retDoc(spRet2.id).paidAmount, 20, '改销售单后 D=0，两张退货单都重算成纯退现金')
   assert.strictEqual(spLists.customers[0].account.receivable, 0)
   assert.deepStrictEqual(spLists.accounts, inv.foldAccountTerms(spLists.records))
-  assert.strictEqual(retDoc(spSale.id).lines[0].returnedAmount, 75, '已退金额按退货单实际金额累加')
+  assert.strictEqual(retDoc(spSale.id).lines[0].returnedAmount, 30, '已退金额按退货单实际金额累加')
+  // 对外三项不能两套价拼：卖 4 件 @10、退 3 件，销售额 = 40 − 30 = 10。
+  assert.strictEqual(inv.computeTotals(spLists.records).salesAmount, 10)
+  assert.strictEqual(spLists.customers[0].account.amount, 10)
   // 一次事务的写入量：账本文档 1 个 + 记录 3 条（销售单 + 两张退货单）
   const afterEdit = docSnapshot(spShop, spBookId)
   const changedIds = Object.keys(afterEdit).filter(function (key) {
