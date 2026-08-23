@@ -400,7 +400,7 @@ function pushUnique(list, value) {
 
 function recordsNeeded(action, payload, loaded) {
   payload = payload || {}
-  const need = { ids: [], saleOrderIds: [], purchases: [] }
+  const need = { ids: [], saleOrderIds: [], purchases: [], saleReturns: [] }
 
   if (action === 'addReturn') {
     ;(payload.items || []).forEach(function (item) {
@@ -421,10 +421,13 @@ function recordsNeeded(action, payload, loaded) {
   }
 
   if (existing.type === 'return') {
-    // 退货单和被退销售单必须在同一个事务里写，否则 returnedQty 会跨文档半写
+    // 退货单和被退销售单必须在同一个事务里写，否则 returnedQty 会跨文档半写。
+    // 同时要这张销售单的**全部退货单**：改退货会挪动同单其余退货单的份额，
+    // 整体重算（inventory.recomputeSaleReturns）需要它们都在场。
     inventory.recordLines(existing).forEach(function (line) {
       pushUnique(need.saleOrderIds, String((line && line.saleOrderId) || ''))
     })
+    pushUnique(need.saleReturns, String((inventory.firstLine(existing) || {}).saleOrderId || ''))
   } else if (existing.type === 'in') {
     // 「集合去掉一个元素之后的最大值」由原集合前 2 名一定能确定，所以取 2 条
     const line = inventory.firstLine(existing)
@@ -432,12 +435,20 @@ function recordsNeeded(action, payload, loaded) {
       productId: String((line && line.productId) || ''),
       skuId: String((line && line.skuId) || '')
     })
+  } else if (existing.type === 'out') {
+    // 有退货的销售单：改欠款基准（金额 / 实收 / 单价 / 客户）会让冻结在退货单头
+    // 的现金退款份额失效，全部加载进来一起重算。没退货的单不加载。
+    if (inventory.recordLines(existing).some(function (line) {
+      return inventory.toNumber(line && line.returnedQty) > 0
+    })) {
+      pushUnique(need.saleReturns, existing.id)
+    }
   }
   return need
 }
 
 function emptyLoaded() {
-  return { byId: {}, saleOrders: [], latestPurchases: [] }
+  return { byId: {}, saleOrders: [], latestPurchases: [], saleReturns: [] }
 }
 
 // store 由调用方注入（云函数是 ledger-records.js 的 recordStore，
@@ -469,6 +480,21 @@ async function fetchNeeded(store, need, loaded) {
       if (!known) loaded.latestPurchases.push(record)
     }
   }
+  for (let i = 0; i < need.saleReturns.length; i++) {
+    const saleId = need.saleReturns[i]
+    const known = loaded.saleReturns.some(function (item) {
+      return String((inventory.recordLines(item)[0] || {}).saleOrderId || '') === saleId
+    })
+    if (known) continue
+    const found = await store.returnsOfSale(saleId)
+    for (let n = 0; n < found.length; n++) {
+      const record = found[n]
+      const seen = loaded.saleReturns.some(function (item) {
+        return item.id === record.id
+      })
+      if (!seen) loaded.saleReturns.push(record)
+    }
+  }
   return loaded
 }
 
@@ -487,6 +513,7 @@ function applyMutation(ledger, action, payload, now, nextId, loaded) {
   const loadedById = loaded.byId || {}
   const loadedSales = loaded.saleOrders || []
   const loadedPurchases = loaded.latestPurchases || []
+  const loadedSaleReturns = loaded.saleReturns || []
 
   const next = listsOf(ledger)
   next.clearSnapshots = cloneList(ledger && ledger.clearSnapshots)
@@ -733,7 +760,9 @@ function applyMutation(ledger, action, payload, now, nextId, loaded) {
     if (!existing) {
       throw new Error('流水不存在')
     }
-    const working = mergeRecords([[existing], loadedSales, loadedPurchases])
+    // 同单退货单一并进 working：整体重算改到它们，diffRecords 才会产出写操作。
+    // existing 在前，dedupe 时目标单优先。
+    const working = mergeRecords([[existing], loadedSales, loadedPurchases, loadedSaleReturns])
     const extra = {}
     if (existing.type === 'out') {
       Object.assign(extra, customerSnapshot(next.customers, payload.customerId))
@@ -758,7 +787,7 @@ function applyMutation(ledger, action, payload, now, nextId, loaded) {
     if (!existing) {
       throw new Error('流水不存在')
     }
-    const working = mergeRecords([[existing], loadedSales, loadedPurchases])
+    const working = mergeRecords([[existing], loadedSales, loadedPurchases, loadedSaleReturns])
     const applied = inventory.deleteRecord(
       next.products,
       working,
