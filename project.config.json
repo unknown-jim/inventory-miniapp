@@ -103,6 +103,10 @@
       {
         "type": "file",
         "value": "utils/member-chips.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/reprice-hint.js"
       }
     ]
   },
