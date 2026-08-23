@@ -41,11 +41,21 @@ node scripts/wxcloud-login.js
 node scripts/wxcloud-deploy-ledger.js
 ```
 
-脚本会：登录（若尚未登录）→ 创建或更新云函数 `ledger`（超时 20 秒、云端装依赖）→ 补齐集合 `shops` / `members` / `ledgers` / `ledger_clears`。
+脚本会：登录（若尚未登录）→ 创建或更新云函数 `ledger`（超时 20 秒、云端装依赖）→ 补齐集合 `shops` / `members` / `ledgers` / `ledger_records` / `ledger_clears` → 补齐 `ledger_records` 的 6 条索引。
 
 不要用 `wxcloud function:upload` 做第一次创建：官方命令会先查函数信息，函数不存在时直接失败。
 
 集合权限仍须在微信云开发控制台设成「仅管理端可读写」。
+
+## 建索引
+
+`ledger_records` 的 6 条复合索引不要在控制台手点。已验证可用 `@wxcloud/cli` 内部接口 `flexdbDescribeTable` / `flexdbUpdateTable`（`createIndexes`）。可单独跑：
+
+```bash
+node scripts/wxcloud-ensure-indexes.js
+```
+
+幂等：只补「字段名 + 升降序」还不存在的索引。升降序用 `'1'` / `'-1'`。定义与 `cloudfunctions/ledger/ledger-records.js` 顶部注释、`docs/cloud-ledger.md` 必须一致。不要把密钥写进命令输出。
 
 ## 环境 ID 与 AppID
 

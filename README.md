@@ -21,8 +21,8 @@
 1. 安装 [微信开发者工具](https://developers.weixin.qq.com/miniprogram/dev/devtools/download.html)
 2. 导入本仓库根目录，使用正式 AppID（测试号没有云开发）
 3. 开通云开发，把**环境 ID**填进 [`utils/cloud-config.js`](utils/cloud-config.js) 的 `CLOUD_ENV_ID`。空着不能记账，也不会自动用第一个环境
-4. 在云开发控制台创建集合 `shops`、`members`、`ledgers`、`ledger_clears`，权限选「仅管理端可读写」
-5. 上传并部署云函数 `ledger`（目录 `cloudfunctions/ledger`，超时 20 秒）
+4. 在云开发控制台创建集合 `shops`、`members`、`ledgers`、`ledger_records`、`ledger_clears`，权限选「仅管理端可读写」。`ledger_records` 的 6 条索引用 `node scripts/wxcloud-ensure-indexes.js` 建（部署脚本末尾也会跑）
+5. 上传并部署云函数 `ledger`（目录 `cloudfunctions/ledger`，超时 20 秒；或 `node scripts/wxcloud-deploy-ledger.js`）
 6. 编译预览。先建店或让老板把你的 openid 加进白名单，才能记账
 
 公式对不对，不依赖微信开发者工具：

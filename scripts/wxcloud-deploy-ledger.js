@@ -154,7 +154,7 @@ async function main() {
   const tag = (db && db.instanceId) || ENV_ID
   // ledger_records 漏了就是**上线路径直接断掉**：集合不存在，部署完每一次流水
   // 查询（listRecords / getSlip / getRecord / 记账）都报错。
-  // 建表不建索引 —— 那 6 条复合索引仍须在控制台手建，见 docs/cloud-ledger.md。
+  // 表建完后补 ledger_records 的 6 条索引（幂等），见 scripts/wxcloud-ensure-indexes.js。
   const names = ['shops', 'members', 'ledgers', 'ledger_records', 'ledger_clears']
   let tables = []
   try {
@@ -180,6 +180,8 @@ async function main() {
       console.log('create table', name, error.message || error.code || error)
     }
   }
+  const indexes = require('./wxcloud-ensure-indexes')
+  await indexes.ensureIndexes(wx.api, { region: region, tag: tag })
 }
 
 main().catch(function (error) {

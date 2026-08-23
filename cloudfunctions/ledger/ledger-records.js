@@ -9,10 +9,11 @@ const inventory = require('./inventory')
 //
 // 文档形状和 sortKey / _id 的定义在 ledger-apply.js（纯映射，小程序内存模式也要用）。
 //
-// 需要在云控制台建的索引（#1–#5 本文件的每一次查询都对得上其中一条，全部避开
-// 数组字段；#6 当前没有任何查询使用——它是给 2b-3 的 deleteShop 清理 ledger_records
-// 预建的，删店目前只删 shops / members / ledgers / ledger_clears，见
-// ledger-core.js 的 deleteShop 和 docs/cloud-ledger.md 的「删除店铺」）：
+// 需要的索引（用 node scripts/wxcloud-ensure-indexes.js 建，幂等；不要靠控制台手点。
+// #1–#5 本文件的每一次查询都对得上其中一条，全部避开数组字段；#6 当前没有任何
+// 查询使用——它是给 2b-3 的 deleteShop 清理 ledger_records 预建的，删店目前只删
+// shops / members / ledgers / ledger_clears，见 ledger-core.js 的 deleteShop 和
+// docs/cloud-ledger.md 的「删除店铺」）：
 //   1  bookId ASC, sortKey DESC                                 -> page / recentAndToday
 //   2  bookId ASC, customerId ASC, sortKey DESC                 -> page(customerId) / suffixOfCustomer
 //   3  bookId ASC, type ASC, sortKey DESC                       -> page(type)

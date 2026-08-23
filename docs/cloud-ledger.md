@@ -60,15 +60,25 @@
 
 建店、加成员、选店、店主删店在低频页，不进 tab，不挂全局组件。店铺页按有没有店分流：没店只展示创建和复制身份，有店后才展示本店、切换、账本和删除。tab 仍留主包。`lazyCodeLoading` 保持开启。`cloudfunctions/` 不进小程序包。
 
-## 上线前在控制台做的事
+## 上线前要做的事
 
 1. 开通云开发，把**开发者工具云开发面板里的**环境 ID 填进 `utils/cloud-config.js`。
-2. 建集合 `shops`、`members`、`ledgers`、`ledger_records`、`ledger_clears`，权限选「仅管理端可读写」。`node scripts/wxcloud-deploy-ledger.js` 会自动建这五张表（缺 `ledger_records` 就是部署完每一次流水查询都报错，所以它必须在那个数组里），**但索引仍须手建**，见下一条。
-3. 给 `ledger_records` 建上面「集合」那条里列的 **6 条索引**（复合索引，字段顺序和升降序都不能改；漏一条就会退化成全表扫，条数一多就超时）。**这一步不是可选的**：#1–#5 是流水的每一次查询都要用的，当天漏任何一条都当场报错；#6 当前没有查询用，但它是 2b-3 清理的前置，趁这次一起预建，免得到时候再回来动生产索引。
-4. 用微信云托管 CLI 部署 `ledger`：密钥只放环境变量 `WXCLOUD_PRIVATE_KEY`（或 gitignore 的 `.env`），执行 `node scripts/wxcloud-login.js` 和 `node scripts/wxcloud-deploy-ledger.js`。不要用腾讯云账号的 `tcb`，也不要把密钥写进仓库。Agent 步骤见 [`.cursor/skills/wxcloud-cli/SKILL.md`](../.cursor/skills/wxcloud-cli/SKILL.md)。开发者工具右键「上传并部署：云端安装依赖」也可以。超时已设 20 秒。
+2. 建集合 `shops`、`members`、`ledgers`、`ledger_records`、`ledger_clears`，权限选「仅管理端可读写」。`node scripts/wxcloud-deploy-ledger.js` 会自动建这五张表（缺 `ledger_records` 就是部署完每一次流水查询都报错，所以它必须在那个数组里），并补 `ledger_records` 的 6 条索引。
+3. 给 `ledger_records` 建上面「集合」那条里列的 **6 条索引**（复合索引，字段顺序和升降序都不能改；漏一条就会退化成全表扫，条数一多就超时）。**这一步不是可选的**：#1–#5 是流水的每一次查询都要用的；#6 当前没有查询用，但是 2b-3 清理的前置，一起预建。
+
+   不要在控制台手点。用微信云托管 CLI 的 FlexDB 接口，脚本已写好且可重复执行：
+
+   ```bash
+   node scripts/wxcloud-ensure-indexes.js
+   ```
+
+   部署 `node scripts/wxcloud-deploy-ledger.js` 末尾也会跑同一段。做法是 `@wxcloud/cli` 内部 API：`flexdbDescribeTable` 列出已有索引，缺的再用 `flexdbUpdateTable({ createIndexes })` 补。升降序传字符串 `'1'` / `'-1'`。已有**字段名和升降序都相同**的索引会跳过，不按索引名判断，也不删除多余索引。
+
+   官方也有 HTTP 接口 [updateIndex](https://developers.weixin.qq.com/minigame/dev/wxcloud/reference-http-api/database/updateIndex.html)，本仓库不走那条，因为登录态已经在 CLI 里。
+4. 用微信云托管 CLI 部署 `ledger`：密钥只放环境变量 `WXCLOUD_PRIVATE_KEY`（或 gitignore 的 `.env`），执行 `node scripts/wxcloud-login.js` 和 `node scripts/wxcloud-deploy-ledger.js`。不要用腾讯云账号的 `tcb`，也不要把密钥写进仓库。Agent 步骤见 [`.cursor/skills/wxcloud-cli/SKILL.md`](../.cursor/skills/wxcloud-cli/SKILL.md)。开发者工具右键「上传并部署：云端安装依赖」也可以。超时已设 20 秒。只走开发者工具上传时，仍须另跑一次 `node scripts/wxcloud-ensure-indexes.js`。
 5. 开发者工具使用正式 AppID（测试号没有云开发）。
 
-可选：给 `members` 的 `openid`、`shopId` 以及 `ledger_clears` 的 `shopId` 加索引，名单或清空记录变长时更快。`ledger_records` 的 6 条不在「可选」里。
+可选：给 `members` 的 `openid`、`shopId` 以及 `ledger_clears` 的 `shopId` 加索引，名单或清空记录变长时更快。同一套 `flexdbUpdateTable`。`ledger_records` 的 6 条不在「可选」里。
 
 ## 本地旧账
 
