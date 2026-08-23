@@ -14,6 +14,14 @@ function clone(value) {
 // 没有它，2b-1 之后的所有东西在本机都无法验证：跑不了 test:ui，也没有云环境。
 // 只实现 ledger-records.js 真正用到的那几种查询，多余的一律抛错 —— 悄悄放过一种
 // 没实现的查询，测试就会给出假绿。
+//
+// **这句话应验过一次，代价是三家店停摆。** 老的 MemoryDoc.set 不但放过了带 `_id`
+// 的 data，还主动补上 `data._id = this.id`；而真实云开发对同一个调用报
+// `document.set:fail -501007 invalid parameters. 不能更新_id的值`。
+// `ledger_records` 的写从没在真云上跑过，于是 3000 步随机记账、变异测试、真实
+// 数据复演全部在这个比真货宽松的替身上跑绿，直到账本升级的 writePhase 在生产
+// 上第一次 set 就失败。**替身宽松一分，测试就假绿一分**：拿不准的时候，
+// 照着真云最严的那一侧写，不要照着「能跑通」写。
 // ---------------------------------------------------------------------------
 
 function memCommand(op) {
@@ -58,8 +66,15 @@ MemoryDoc.prototype.get = async function () {
   return { data: clone(this.bag[this.id]) }
 }
 
+// 文档 id 由 doc(id) 指定，data 里再带一个 `_id` 真云会拒绝 —— 原样镜像过来，
+// 连错误文案一起，这样测试里读到的和生产日志里看到的是同一句话。
+// 拒绝之后仍然按 doc(id) 补 `_id` 落盘：那是**数据库自己做的事**，读回来的文档
+// 一定带 `_id`（迁移校验 V7 比对的就是读回文档的 `_id`），不是调用方写进去的。
 MemoryDoc.prototype.set = async function (options) {
   const data = clone((options && options.data) || {})
+  if (Object.prototype.hasOwnProperty.call(data, '_id')) {
+    throw new Error('document.set:fail -501007 invalid parameters. 不能更新_id的值')
+  }
   data._id = this.id
   this.bag[this.id] = data
   return { stats: { updated: 1 } }

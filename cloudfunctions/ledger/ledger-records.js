@@ -214,9 +214,28 @@ function recordStore(ctx, bookId, shopId) {
     }
   }
 
+  // 写入的 data **不许带 `_id`**：文档 id 已经由 `col.doc(id)` 指定，data 里再
+  // 出现一次，真实云开发直接拒绝——
+  //   document.set:fail -501007 invalid parameters. 不能更新_id的值
+  // `ledgers` / `shops` / `members` / `ledger_clears` 四条写路径早就在 index.js 的
+  // cloneData 里剥掉了 `_id`，只有这一条没剥——因为它是 2b-1 才加的，而
+  // **`ledger_records` 的写在此之前从没在真云上跑过**，第一次跑就是账本升级
+  // 的 writePhase，当场 -501007。
+  //
+  // 剥掉不影响迁移校验 V7：V7 比的是**读回来的**文档的 `_id`，那是数据库按
+  // `doc(id)` 自己填的，和 `apply.recordDocId(book, id)` 恒等。
+  //
+  // 这一类错误测试抓不到过一次：tests/memory-db.js 的 MemoryDoc.set 不但不拒绝
+  // 带 `_id` 的 data，还主动补一个，于是 3000 步随机记账、变异测试、真实数据
+  // 复演全在替身上跑绿。那边现在会抛错了，别再把它改回去。
   async function set(record) {
     const doc = apply.toRecordDoc(record, book, shop)
-    await col.doc(doc._id).set({ data: doc })
+    const data = {}
+    Object.keys(doc).forEach(function (key) {
+      if (key === '_id') return
+      data[key] = doc[key]
+    })
+    await col.doc(doc._id).set({ data: data })
   }
 
   // 只删本事务里刚读到过的记录，删不掉要让事务失败：

@@ -2,6 +2,6 @@
   "permissions": {
     "openapi": []
   },
-  "timeout": 20,
-  "memorySize": 256
+  "timeout": 60,
+  "memorySize": 512
 }
