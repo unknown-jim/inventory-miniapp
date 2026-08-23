@@ -104,7 +104,8 @@ const sold = sale(purchased.products, purchased.records, {
 assert.strictEqual(sold.products[0].stock, 11)
 assert.strictEqual(sold.record.profit, 7.6)
 assert.strictEqual(sold.record.amount, 18)
-assert.strictEqual(sold.record.payType, 'cash')
+assert.strictEqual(sold.record.paidAmount, 18)
+assert.strictEqual(sold.record.payType, undefined)
 assert.strictEqual(sold.record.operatorOpenid, '')
 assert.strictEqual(sold.record.operatorName, '')
 
@@ -215,9 +216,20 @@ assert.throws(function () {
     productId: 'p1',
     qty: 1,
     unitPrice: 4.5,
-    payType: 'credit'
+    paidAmount: 0
   }, 8100, 'r-credit-no-customer')
 }, /客户/)
+
+assert.throws(function () {
+  sale(purchased.products, purchased.records, {
+    productId: 'p1',
+    qty: 1,
+    unitPrice: 4.5,
+    customerId: 'c1',
+    customerName: '张三超市',
+    paidAmount: 5
+  }, 8100, 'r-over-paid')
+}, /实收不能超过应收/)
 
 const creditSale = sale(purchased.products, purchased.records, {
   productId: 'p1',
@@ -225,10 +237,18 @@ const creditSale = sale(purchased.products, purchased.records, {
   unitPrice: 4.5,
   customerId: 'c1',
   customerName: '张三超市',
-  payType: 'credit'
+  paidAmount: 0
 }, 8200, 'r-credit')
-assert.strictEqual(creditSale.record.payType, 'credit')
+assert.strictEqual(creditSale.record.paidAmount, 0)
 assert.strictEqual(inv.summarizeCustomerAccount(creditSale.records, 'c1').receivable, 9)
+
+// 老流水只有 payType 没有实收：读的时候按现结收满、赊账一分未收回推。
+const legacyCredit = { id: 'legacy-credit', type: 'out', customerId: 'c-legacy', amount: 100, qty: 1, unitPrice: 100, payType: 'credit', orderId: 'legacy-credit', createdAt: 1 }
+const legacyCash = { id: 'legacy-cash', type: 'out', customerId: 'c-legacy', amount: 60, qty: 1, unitPrice: 60, payType: 'cash', orderId: 'legacy-cash', createdAt: 2 }
+assert.strictEqual(inv.settledAmount(legacyCredit), 0)
+assert.strictEqual(inv.settledAmount(legacyCash), 60)
+assert.strictEqual(inv.summarizeCustomerAccount([legacyCredit, legacyCash], 'c-legacy').receivable, 100)
+assert.strictEqual(inv.getTotalReceivable([legacyCredit, legacyCash]), 100)
 
 const paid = inv.applyPayment(creditSale.records, {
   customerId: 'c1',
@@ -363,7 +383,7 @@ const multi = inv.applySaleOrder(
     ],
     customerId: 'c1',
     customerName: '张三超市',
-    payType: 'credit'
+    paidAmount: 0
   },
   9100,
   'order-1',
@@ -437,7 +457,7 @@ const orderItemsEdit = inv.updateRecord(multi.products, multi.records, {
     { id: multi.order.lines[0].lineId, qty: 3, unitPrice: 4.5 },
     { id: multi.order.lines[1].lineId, qty: 1, unitPrice: 9.9 }
   ],
-  payType: 'credit',
+  paidAmount: 0,
   customerId: 'c1',
   customerName: '张三超市',
   remark: '整单备注'
@@ -708,12 +728,13 @@ const orderEdit = inv.updateRecord(multi.products, multi.records, {
     { id: multi.order.lines[0].lineId, qty: 2, unitPrice: 4.5 },
     { id: multi.order.lines[1].lineId, qty: 1, unitPrice: 9.9 }
   ],
-  payType: 'cash',
+  paidAmount: 9,
   customerId: 'c1',
   customerName: '张三超市'
 }, 2900, [])
-assert.strictEqual(orderEdit.record.payType, 'cash')
 assert.strictEqual(orderEdit.record.amount, 18.9)
+assert.strictEqual(orderEdit.record.paidAmount, 9)
+assert.strictEqual(orderEdit.record.payType, undefined)
 
 const specEdited = inv.updateRecord(soldTee.products, soldTee.records, {
   id: 'r-tee',
@@ -875,7 +896,7 @@ const creditBlank = sale([hoodieMade.product], [], {
   unitPrice: 99,
   customerId: 'c-blank',
   customerName: '测试客户',
-  payType: 'credit'
+  paidAmount: 0
 }, 2100, 'r-credit-blank', hoodieMade.skus)
 assert.strictEqual(inv.summarizeCustomerAccount(creditBlank.records, 'c-blank').receivable, 99)
 const creditReturn = inv.applyReturn(creditBlank.products, creditBlank.records, {
@@ -1352,4 +1373,460 @@ assert.strictEqual(opItemsEdit.records.find(function (item) {
   return item.id === 'order-op'
 }).operatorName, '老板')
 
+// —— 部分付款 ——
+// 以前只有「全付」和「全欠」两种，现在实收可以落在中间。下面三段分别盯住
+// 欠款计算、退货怎么冲、以及改流水时整单实收怎么摊回每一行。
+
+const partialTee = inv.createProduct({
+  name: '部分付款样品',
+  costPrice: 10,
+  salePrice: 25,
+  stock: 20,
+  alertQty: 1
+}, 40000, 'p-partial')
+
+// 1）欠款计算：卖 100 只收 40，欠款就是 60。
+const partialSale = sale([partialTee], [], {
+  productId: 'p-partial',
+  qty: 4,
+  unitPrice: 25,
+  customerId: 'c-partial',
+  customerName: '半款客户',
+  paidAmount: 40
+}, 40100, 'r-partial')
+assert.strictEqual(partialSale.record.amount, 100)
+assert.strictEqual(partialSale.record.paidAmount, 40)
+const partialAccount = inv.summarizeCustomerAccount(partialSale.records, 'c-partial')
+assert.strictEqual(partialAccount.creditAmount, 60)
+assert.strictEqual(partialAccount.receivable, 60)
+assert.strictEqual(inv.getTotalReceivable(partialSale.records), 60)
+assert.strictEqual(inv.summarizeAllCustomerAccounts(partialSale.records)['c-partial'].receivable, 60)
+
+// 收满不欠、一分不收全欠，两头也要对。
+const paidInFull = sale([partialTee], [], {
+  productId: 'p-partial',
+  qty: 4,
+  unitPrice: 25,
+  customerId: 'c-full',
+  customerName: '付清客户',
+  paidAmount: 100
+}, 40110, 'r-paid-full')
+assert.strictEqual(inv.summarizeCustomerAccount(paidInFull.records, 'c-full').receivable, 0)
+const paidNone = sale([partialTee], [], {
+  productId: 'p-partial',
+  qty: 4,
+  unitPrice: 25,
+  customerId: 'c-none',
+  customerName: '全欠客户',
+  paidAmount: 0
+}, 40120, 'r-paid-none')
+assert.strictEqual(inv.summarizeCustomerAccount(paidNone.records, 'c-none').receivable, 100)
+
+// 有欠款就必须挂到客户名下，散客不能欠钱。
+assert.throws(function () {
+  sale([partialTee], [], {
+    productId: 'p-partial',
+    qty: 4,
+    unitPrice: 25,
+    paidAmount: 40
+  }, 40130, 'r-partial-walkin')
+}, /客户/)
+
+// 收款仍然只冲欠款：再收 25，欠款剩 35。
+const partialPay = inv.applyPayment(partialSale.records, {
+  customerId: 'c-partial',
+  customerName: '半款客户',
+  amount: 25
+}, 40140, 'r-partial-pay')
+assert.strictEqual(inv.summarizeCustomerAccount(partialPay.records, 'c-partial').receivable, 35)
+
+// 2）退货：退的钱先冲这张单没收到的部分，冲不掉的才算退现金。
+const partialReturn = inv.applyReturn(partialSale.products, partialSale.records, {
+  saleOrderId: 'r-partial',
+  saleLineId: 'r-partial-l1',
+  qty: 1
+}, 40200, 'r-partial-return', partialSale.skus)
+assert.strictEqual(inv.summarizeCustomerAccount(partialReturn.records, 'c-partial').receivable, 35)
+// 送货单要按单据时刻截断算欠款：退货的冲抵挂在退货单自己的时间点上，
+// 不能倒回去改销售单当时的欠款。
+assert.strictEqual(inv.receivableAt(partialReturn.records, 'c-partial', 40100), 60)
+assert.strictEqual(inv.receivableAt(partialReturn.records, 'c-partial', 40200), 35)
+// 再退两件（累计退 75 > 欠款 60）：欠款冲到 0 就停，不会做成负数。
+const partialReturnMore = inv.applyReturn(partialReturn.products, partialReturn.records, {
+  saleOrderId: 'r-partial',
+  saleLineId: 'r-partial-l1',
+  qty: 2
+}, 40300, 'r-partial-return-2', partialReturn.skus)
+assert.strictEqual(inv.summarizeCustomerAccount(partialReturnMore.records, 'c-partial').receivable, 0)
+// 全额收讫的单退货不产生欠款；一分未收的单退货全额冲欠款（和改造前一致）。
+const fullPaidReturn = inv.applyReturn(paidInFull.products, paidInFull.records, {
+  saleOrderId: 'r-paid-full',
+  saleLineId: 'r-paid-full-l1',
+  qty: 2
+}, 40310, 'r-full-return', paidInFull.skus)
+assert.strictEqual(inv.summarizeCustomerAccount(fullPaidReturn.records, 'c-full').receivable, 0)
+const nonePaidReturn = inv.applyReturn(paidNone.products, paidNone.records, {
+  saleOrderId: 'r-paid-none',
+  saleLineId: 'r-paid-none-l1',
+  qty: 2
+}, 40320, 'r-none-return', paidNone.skus)
+assert.strictEqual(inv.summarizeCustomerAccount(nonePaidReturn.records, 'c-none').receivable, 50)
+
+// —— 退货拆分的三条守卫（第一轮漏掉的三条静默算错欠款的路径）——
+
+// 场景 1：有退货的单改金额（实收不变），且累计退货额已经跨过欠款线
+// （退 75 > 欠款 60 —— 先记的那张退货单头上冻结的现金退款额是 0、后记的是 15）。
+// 第一轮会静默把欠款算成 100（main #47 读时口径是 85），现在拦下来。
+assert.throws(function () {
+  inv.updateRecord(partialReturnMore.products, partialReturnMore.records, {
+    id: 'r-partial',
+    items: [{ id: 'r-partial-l1', qty: 8, unitPrice: 25 }],
+    paidAmount: 40,
+    customerId: 'c-partial',
+    customerName: '半款客户'
+  }, 40400, partialReturnMore.skus, null)
+}, /这张单有退货/)
+
+// 反过来，累计退货额还盖在欠款里面（退 25 ≤ 欠款 60）时，每张退货单的现金
+// 退款额恒为 0，改销售单不牵动它们，**必须放行** —— 而且逐值等于 main #47 的
+// 读时口径 max(0, 200 − 40 − 25) = 135。这条是防止守卫被收紧成一刀切的钉子。
+const partialScaled = inv.updateRecord(partialReturn.products, partialReturn.records, {
+  id: 'r-partial',
+  items: [{ id: 'r-partial-l1', qty: 8, unitPrice: 25 }],
+  paidAmount: 40,
+  customerId: 'c-partial',
+  customerName: '半款客户'
+}, 40405, partialReturn.skus, null)
+assert.strictEqual(inv.summarizeCustomerAccount(partialScaled.records, 'c-partial').receivable, 135)
+
+// 有退货的单改单价：会挪动「已退货值」这个基准，将来再退货时 othersReturned
+// 会算错、把欠款静默算大。部分收款的单一律不许改单价。
+assert.throws(function () {
+  inv.updateRecord(partialReturn.products, partialReturn.records, {
+    id: 'r-partial',
+    items: [{ id: 'r-partial-l1', qty: 4, unitPrice: 70 }],
+    paidAmount: 40,
+    customerId: 'c-partial',
+    customerName: '半款客户'
+  }, 40415, partialReturn.skus, null)
+}, /这张单有退货/)
+
+// 一分未收的单也不例外：改已退货行的单价会让「已退货值」和实际退货额分岔，
+// 这张单以后一旦收了钱（改实收是放行的），分岔就会把将来那笔退货的冲抵算小、
+// 欠款算大。所以「有退货就不许改单价」不看收没收钱。
+assert.throws(function () {
+  inv.updateRecord(nonePaidReturn.products, nonePaidReturn.records, {
+    id: 'r-paid-none',
+    items: [{ id: 'r-paid-none-l1', qty: 4, unitPrice: 30 }],
+    paidAmount: 0,
+    customerId: 'c-none',
+    customerName: '全欠客户'
+  }, 40370, nonePaidReturn.skus, null)
+}, /这张单有退货/)
+
+// 全款单也不例外：把有退货那行的单价改成 0（赠品）会把「已退货值」压成 0，
+// 这张单以后一旦变成部分收款，档② 就会拿着这个被压小的基准把欠款静默算大。
+// 0 元行是这个 app 的一等公民（赠品走销售、售价填 0），不是构造出来的极端值。
+assert.throws(function () {
+  inv.updateRecord(fullPaidReturn.products, fullPaidReturn.records, {
+    id: 'r-paid-full',
+    items: [{ id: 'r-paid-full-l1', qty: 4, unitPrice: 0 }],
+    paidAmount: 0,
+    customerId: 'c-full',
+    customerName: '付清客户'
+  }, 40380, fullPaidReturn.skus, null)
+}, /这张单有退货/)
+
+// 必须放行：全款单有退货，涨数量并且把钱收满 —— 已退货值没变、改前改后都一分
+// 不欠，冻结值不受影响。这条钉住「全款单改数量并收满」这条日常路径（档① 与
+// 档③ 共同覆盖：档① 加上「已退货值没变」之后恒被档③ 包含），别让它被收紧掉。
+const fullPaidGrown = inv.updateRecord(fullPaidReturn.products, fullPaidReturn.records, {
+  id: 'r-paid-full',
+  items: [{ id: 'r-paid-full-l1', qty: 8, unitPrice: 25 }],
+  paidAmount: 200,
+  customerId: 'c-full',
+  customerName: '付清客户'
+}, 40390, fullPaidReturn.skus, null)
+assert.strictEqual(inv.summarizeCustomerAccount(fullPaidGrown.records, 'c-full').receivable, 0)
+
+// 档③ 必须放行：Σ退货已经超过欠款（档② 在这里不成立）、但改动后欠款一分没变
+// —— 只改客户名这类。这条钉住档③，它现在没有任何用例守着。
+// 期望值按 main #47 口径 max(0, 应收 − 实收 − Σ退货额) 手工复算：Σ退货额是
+// r-partial-return(25) + r-partial-return-2(50) = 75，max(0, 100 − 40 − 75) = 0；
+// 与实测一致（不是 25 —— 这张单欠款早已被两次退货冲光，见 partialReturnMore 的
+// receivable 断言）。
+const moreReturnRenamed = inv.updateRecord(partialReturnMore.products, partialReturnMore.records, {
+  id: 'r-partial',
+  items: partialReturnMore.records.find(function (item) {
+    return item.id === 'r-partial'
+  }).lines.map(function (line) {
+    return { id: line.lineId, qty: inv.toNumber(line.qty), unitPrice: inv.toNumber(line.unitPrice) }
+  }),
+  paidAmount: 40,
+  customerId: 'c-partial',
+  customerName: '半款客户改名'
+}, 40395, partialReturnMore.skus, null)
+assert.strictEqual(inv.summarizeCustomerAccount(moreReturnRenamed.records, 'c-partial').receivable, 0)
+
+// 但「数量和实收一起改、欠款正好不变」不该被误伤：冻结值本来就还对。
+const partialGrown = inv.updateRecord(partialReturn.products, partialReturn.records, {
+  id: 'r-partial',
+  items: [{ id: 'r-partial-l1', qty: 8, unitPrice: 25 }],
+  paidAmount: 140,
+  customerId: 'c-partial',
+  customerName: '半款客户'
+}, 40410, partialReturn.skus, null)
+assert.strictEqual(partialGrown.record.amount, 200)
+assert.strictEqual(inv.summarizeCustomerAccount(partialGrown.records, 'c-partial').receivable, 35)
+
+// 场景 2：同一张销售单有两张退货单时，改先记的那张。第一轮会静默算成 40。
+assert.throws(function () {
+  inv.updateRecord(partialReturnMore.products, partialReturnMore.records, {
+    id: 'r-partial-return',
+    items: [{ id: 'r-partial-return-1', qty: 2 }]
+  }, 40420, partialReturnMore.skus, null)
+}, /后面还有别的退货单/)
+
+// 最后一张仍然改得动，改完欠款按「先冲欠款」重算：累计退 50 < 欠款 60 → 欠 10。
+const lastReturnEdited = inv.updateRecord(partialReturnMore.products, partialReturnMore.records, {
+  id: 'r-partial-return-2',
+  items: [{ id: 'r-partial-return-2-1', qty: 1 }]
+}, 40430, partialReturnMore.skus, null)
+assert.strictEqual(inv.summarizeCustomerAccount(lastReturnEdited.records, 'c-partial').receivable, 10)
+
+// 场景 3：删先记的那张。第一轮会静默算成 50。
+assert.throws(function () {
+  inv.deleteRecord(partialReturnMore.products, partialReturnMore.records,
+    'r-partial-return', 40440, partialReturnMore.skus, null)
+}, /后面还有别的退货单/)
+
+// 删最后一张仍然删得掉：只剩退 25，欠 100 − 40 − 25 = 35。
+const lastReturnDeleted = inv.deleteRecord(partialReturnMore.products, partialReturnMore.records,
+  'r-partial-return-2', 40450, partialReturnMore.skus, null)
+assert.strictEqual(inv.summarizeCustomerAccount(lastReturnDeleted.records, 'c-partial').receivable, 35)
+
+// —— 不许误伤：全赊单和全款单退两次，删先记的那张必须放行 ——
+
+// 全赊：欠款盖得住全部退货，每张退货单的现金退款额恒为 0，互不牵连。
+const nonePaidReturn2 = inv.applyReturn(nonePaidReturn.products, nonePaidReturn.records, {
+  saleOrderId: 'r-paid-none',
+  saleLineId: 'r-paid-none-l1',
+  qty: 1
+}, 40330, 'r-none-return-2', nonePaidReturn.skus)
+const nonePaidFirstGone = inv.deleteRecord(nonePaidReturn2.products, nonePaidReturn2.records,
+  'r-none-return', 40340, nonePaidReturn2.skus, null)
+assert.strictEqual(inv.summarizeCustomerAccount(nonePaidFirstGone.records, 'c-none').receivable, 75)
+
+// 全款：一分不欠，每张退货单都是纯退现金，也互不牵连。
+const fullPaidReturn2 = inv.applyReturn(fullPaidReturn.products, fullPaidReturn.records, {
+  saleOrderId: 'r-paid-full',
+  saleLineId: 'r-paid-full-l1',
+  qty: 1
+}, 40350, 'r-full-return-2', fullPaidReturn.skus)
+const fullPaidFirstGone = inv.deleteRecord(fullPaidReturn2.products, fullPaidReturn2.records,
+  'r-full-return', 40360, fullPaidReturn2.skus, null)
+assert.strictEqual(inv.summarizeCustomerAccount(fullPaidFirstGone.records, 'c-full').receivable, 0)
+
+// 3）改流水：整单实收按各行金额摊回去，合计等于填进去的实收。
+const partialBread = inv.createProduct({
+  name: '部分付款面包',
+  costPrice: 5,
+  salePrice: 10,
+  stock: 20,
+  alertQty: 1
+}, 40000, 'p-partial-2')
+const partialOrder = inv.applySaleOrder([partialTee, partialBread], [], {
+  items: [
+    { productId: 'p-partial', qty: 2, unitPrice: 25 },
+    { productId: 'p-partial-2', qty: 5, unitPrice: 10 }
+  ],
+  customerId: 'c-partial-order',
+  customerName: '半款客户二',
+  paidAmount: 30
+}, 40400, 'order-partial', idFactory(), [])
+assert.strictEqual(partialOrder.record.amount, 100)
+assert.strictEqual(partialOrder.record.paidAmount, 30)
+assert.strictEqual(inv.round2(partialOrder.record.amount - partialOrder.record.paidAmount), 70)
+assert.strictEqual(inv.summarizeCustomerAccount(partialOrder.records, 'c-partial-order').receivable, 70)
+
+const partialEdit = inv.updateRecord(partialOrder.products, partialOrder.records, {
+  id: 'order-partial',
+  items: [
+    { id: partialOrder.record.lines[0].lineId, qty: 2, unitPrice: 25 },
+    { id: partialOrder.record.lines[1].lineId, qty: 5, unitPrice: 10 }
+  ],
+  paidAmount: 80,
+  customerId: 'c-partial-order',
+  customerName: '半款客户二'
+}, 40500, [])
+assert.strictEqual(partialEdit.record.amount, 100)
+assert.strictEqual(partialEdit.record.paidAmount, 80)
+assert.strictEqual(inv.summarizeCustomerAccount(partialEdit.records, 'c-partial-order').receivable, 20)
+
+// 改数量把应收压到实收以下：实收自动收口到新的应收，不会记成负欠款。
+const shrunk = inv.updateRecord(paidInFull.products, paidInFull.records, {
+  id: 'r-paid-full',
+  qty: 2,
+  unitPrice: 25,
+  customerId: 'c-full',
+  customerName: '付清客户'
+}, 40600, [])
+assert.strictEqual(shrunk.record.amount, 50)
+assert.strictEqual(shrunk.record.paidAmount, 50)
+assert.strictEqual(inv.summarizeCustomerAccount(shrunk.records, 'c-full').receivable, 0)
+
+// 实收不能超过应收，改流水也一样。
+assert.throws(function () {
+  inv.updateRecord(partialOrder.products, partialOrder.records, {
+    id: 'order-partial',
+    items: [
+      { id: partialOrder.record.lines[0].lineId, qty: 2, unitPrice: 25 },
+      { id: partialOrder.record.lines[1].lineId, qty: 5, unitPrice: 10 }
+    ],
+    paidAmount: 120,
+    customerId: 'c-partial-order',
+    customerName: '半款客户二'
+  }, 40700, [])
+}, /实收不能超过应收/)
+
 console.log('inventory tests passed')
+
+// —— 拆分不变量 fuzzer（常驻守门员）——
+//
+// 手写用例只能钉住想得到的那几条路径。「改单价埋下的分岔要等到后来改实收才
+// 发作」这种跨两步的洞，第 3 轮是随机漫步抓出来的，所以收编成常驻。
+//
+// 不变量：任何一次**被放行**的写入之后，客户欠款必须逐分等于 main #47 的读时
+// 口径 max(0, 应收 − 实收 − Σ退货额)。这条恒等式就是【拆分不变量】的外部表现
+// （Σ(r−c) == min(D, Σr) ⟺ 欠款 == max(0, D − Σr)），比逐条断言冻结值更难写错。
+//
+// 只造一张多行销售单：跨退货单的分配耦合全部发生在同一张销售单内部；多客户、
+// 收款、期初这些线性项由上面的手写用例覆盖。500 局 × 14 步，本机约 0.2 秒。
+function splitFuzzRandom(seed) {
+  let a = seed
+  return function () {
+    a = (a + 0x6D2B79F5) | 0
+    let t = Math.imul(a ^ (a >>> 15), 1 | a)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
+const fuzzRnd = splitFuzzRandom(777)
+function fuzzPick(list) {
+  return list[Math.floor(fuzzRnd() * list.length)]
+}
+// 放行次数的下限。守卫一旦被收紧成一刀切，不变量会永远成立而这个数会塌下来 ——
+// 「全拦住」和「全算对」在断言上长得一模一样，必须另外钉住功能还在。当前 6112。
+const FUZZ_MIN_ALLOWED = 5500
+const FUZZ_EXPECTED_ERRORS = /这张单有退货|后面还有别的退货单|退货不能超过可退数量|改完后收款会超过赊账|数量不能小于已退货|销售数量必须大于|退货数量必须大于|实收不能超过应收|售价不能为负数/
+let fuzzAllowed = 0
+for (let trial = 0; trial < 500; trial++) {
+  let fuzzSeq = 0
+  const nextFuzzId = function () {
+    fuzzSeq += 1
+    return 'fz' + trial + '-' + fuzzSeq
+  }
+  const in1 = inv.applyPurchase([
+    { id: 'fp1', name: '甲货', stock: 0, costPrice: 0, price: 25, specs: null },
+    { id: 'fp2', name: '乙货', stock: 0, costPrice: 0, price: 9, specs: null }
+  ], [], { productId: 'fp1', qty: 9999, unitPrice: 1 }, 1000, 'fi1-' + trial, [])
+  const in2 = inv.applyPurchase(in1.products, in1.records,
+    { productId: 'fp2', qty: 9999, unitPrice: 1 }, 1001, 'fi2-' + trial, in1.skus)
+  const fuzzItems = [
+    { productId: 'fp1', qty: 1 + Math.floor(fuzzRnd() * 5), unitPrice: fuzzPick([10, 25, 12.5, 0]) },
+    { productId: 'fp2', qty: 1 + Math.floor(fuzzRnd() * 5), unitPrice: fuzzPick([9, 7.77, 20, 0]) }
+  ]
+  const fuzzDue = inv.round2(fuzzItems.reduce(function (sum, item) {
+    return sum + item.qty * item.unitPrice
+  }, 0))
+  const started = inv.applySaleOrder(in2.products, in2.records, {
+    items: fuzzItems,
+    customerId: 'fc1',
+    customerName: '随机客户',
+    paidAmount: fuzzPick([0, fuzzDue, inv.round2(fuzzDue * fuzzRnd())])
+  }, 2000, 'fs' + trial, nextFuzzId, in2.skus)
+  let cur = { products: started.products, records: started.records, skus: started.skus }
+  const fuzzSaleId = started.record.id
+  const fuzzLineIds = started.record.lines.map(function (line) { return line.lineId })
+  let fuzzTs = 3000
+  for (let step = 0; step < 14; step++) {
+    fuzzTs += 100
+    const saleNow = cur.records.find(function (item) { return item.id === fuzzSaleId })
+    if (!saleNow) break
+    const retsNow = cur.records.filter(function (item) { return item.type === 'return' })
+    const op = fuzzPick(['addReturn', 'editReturn', 'delReturn', 'editSale', 'editSale'])
+    let done = null
+    try {
+      if (op === 'addReturn') {
+        const target = saleNow.lines[Math.floor(fuzzRnd() * saleNow.lines.length)]
+        const remain = inv.returnableQty(target)
+        if (remain <= 0) continue
+        done = inv.applyReturnOrder(cur.products, cur.records, {
+          items: [{
+            saleOrderId: fuzzSaleId,
+            saleLineId: target.lineId,
+            qty: 1 + Math.floor(fuzzRnd() * remain)
+          }]
+        }, fuzzTs, nextFuzzId, cur.skus, null)
+      } else if (op === 'editReturn' && retsNow.length) {
+        const target = fuzzPick(retsNow)
+        done = inv.updateRecord(cur.products, cur.records, {
+          id: target.id,
+          items: target.lines.map(function (line) {
+            return { id: line.lineId, qty: 1 + Math.floor(fuzzRnd() * 4) }
+          })
+        }, fuzzTs, cur.skus, null)
+      } else if (op === 'delReturn' && retsNow.length) {
+        done = inv.deleteRecord(cur.products, cur.records, fuzzPick(retsNow).id,
+          fuzzTs, cur.skus, null)
+      } else {
+        const nextItems = saleNow.lines.map(function (line, at) {
+          return {
+            id: fuzzLineIds[at],
+            qty: Math.max(inv.round2(inv.toNumber(line.returnedQty)), 1) + Math.floor(fuzzRnd() * 4),
+            unitPrice: fuzzPick([
+              inv.toNumber(line.unitPrice),
+              inv.round2(inv.toNumber(line.unitPrice) * (0.3 + fuzzRnd() * 2)),
+              0
+            ])
+          }
+        })
+        const due = inv.round2(nextItems.reduce(function (sum, item) {
+          return sum + item.qty * item.unitPrice
+        }, 0))
+        done = inv.updateRecord(cur.products, cur.records, {
+          id: fuzzSaleId,
+          items: nextItems,
+          paidAmount: Math.min(fuzzPick([0, due, inv.round2(due * fuzzRnd()),
+            inv.toNumber(saleNow.paidAmount)]), due),
+          customerId: 'fc1',
+          customerName: '随机客户'
+        }, fuzzTs, cur.skus, null)
+      }
+    } catch (error) {
+      // 拦下来是允许的结果，但不许拦出一条没人认识的错
+      assert.ok(FUZZ_EXPECTED_ERRORS.test(error.message),
+        '拆分 fuzzer 撞到意料之外的错误：' + error.message)
+      continue
+    }
+    if (!done) continue
+    fuzzAllowed += 1
+    cur = { products: done.products, records: done.records, skus: done.skus }
+    const after = cur.records.find(function (item) { return item.id === fuzzSaleId })
+    if (!after) continue
+    const returnedSum = inv.round2(cur.records.filter(function (item) {
+      return item.type === 'return'
+    }).reduce(function (sum, item) {
+      return sum + inv.toNumber(item.amount)
+    }, 0))
+    const mainWay = Math.max(0, inv.round2(
+      inv.toNumber(after.amount) - inv.settledAmount(after) - returnedSum))
+    const got = inv.round2(inv.summarizeCustomerAccount(cur.records, 'fc1').receivable)
+    assert.strictEqual(got, mainWay, '拆分不变量被破坏（trial ' + trial
+      + ' step ' + step + ' ' + op + '）：算出 ' + got + '，main #47 口径 ' + mainWay)
+  }
+}
+assert.ok(fuzzAllowed >= FUZZ_MIN_ALLOWED, '拆分 fuzzer 放行次数塌到 ' + fuzzAllowed
+  + '（下限 ' + FUZZ_MIN_ALLOWED + '）：守卫可能被收紧成一刀切，不变量恒成立但功能没了')
+console.log('拆分不变量 fuzzer：500 局 × 14 步，放行 ' + fuzzAllowed
+  + ' 次，全部与 main #47 口径逐分一致')

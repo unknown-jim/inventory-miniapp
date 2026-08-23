@@ -368,7 +368,7 @@ assert.deepStrictEqual(migratedOrder.lines.map(function (line) {
 }), ['oa', 'ob'])
 assert.strictEqual(migratedOrder.amount, 150)
 assert.strictEqual(migratedOrder.profit, 40)
-assert.strictEqual(migratedOrder.payType, 'credit')
+assert.strictEqual(migratedOrder.paidAmount, 0)
 assert.strictEqual(migratedOrder.customerId, 'c1')
 assert.strictEqual(migratedOrder.operatorName, '小李')
 assert.strictEqual(migratedOrder.createdAt, 2000)
@@ -453,7 +453,6 @@ function toLegacyShape(records) {
       customerName: record.customerName || '',
       customerPhone: record.customerPhone || '',
       customerAddress: record.customerAddress || '',
-      payType: record.payType,
       operatorOpenid: record.operatorOpenid,
       operatorName: record.operatorName,
       createdAt: record.createdAt
@@ -472,8 +471,15 @@ function toLegacyShape(records) {
       }))
       return
     }
+    // 老形状一行一记录，整单的结算金额要拆到每一行上；欠款贡献是线性的
+    // （Σ(amount − paid)），怎么切都不影响聚合，所以贪心填满就行。
+    let paidLeft = inv.round2(record.paidAmount != null
+      ? record.paidAmount
+      : (record.payType === 'credit' ? 0 : record.amount))
     // 老数据是 unshift 进数组的，同一单的行倒着存
     lines.slice().reverse().forEach(function (line) {
+      const rowPaid = Math.min(inv.round2(line.amount), paidLeft)
+      paidLeft = inv.round2(paidLeft - rowPaid)
       out.push(Object.assign({}, shared, {
         id: line.lineId,
         orderId: record.type === 'out' ? record.id : record.id,
@@ -488,6 +494,7 @@ function toLegacyShape(records) {
         costPrice: line.costPrice,
         amount: line.amount,
         profit: line.profit,
+        paidAmount: rowPaid,
         allocations: line.allocations,
         saleRecordId: line.saleLineId,
         reason: line.reason

@@ -6,3 +6,6 @@ project.private.config.json
 .env
 .env.*
 !.env.example
+
+# 智谱 Z Code CLI 本地配置
+.zcode/

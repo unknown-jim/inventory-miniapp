@@ -38,6 +38,7 @@
 ### 记账和现场规矩
 
 - 件数守恒、退货原样入库、整单共享待加工：记账要自洽，必须守。
+- 销售填实收，不选「现结 / 赊账」；欠款 = 应收 − 实收，实收少于应收必须选客户。退货先冲这张单没收到的钱。详见 [docs/accounting-vs-policy.md](docs/accounting-vs-policy.md)。
 - 库存调整只改件数，不计入进货、销售、毛利和欠款，也不改进价。详见 [docs/accounting-vs-policy.md](docs/accounting-vs-policy.md)。
 - 上线前欠款走期初往来，不拿销售去凑；不改库存、不计入销售和毛利。
 - 能不能换某一根轴、先改再卖还是当场改：现场规矩，不要写成软件限制。
@@ -51,4 +52,5 @@
 - 部署 `ledger` 用微信云托管 CLI；密钥只放环境变量 `WXCLOUD_PRIVATE_KEY`，步骤见 [`.cursor/skills/wxcloud-cli/SKILL.md`](.cursor/skills/wxcloud-cli/SKILL.md)。不要用腾讯云账号的 `tcb` 管微信侧环境。
 - 改 `utils/inventory.js` 或 `utils/ledger-apply.js` 后运行 `npm run sync:ledger-inventory`，保持云函数副本一致。
 - 流水是「一单一记录」，明细在 `lines[]`；`allocations` 逐行保留，已退数量记在销售行的 `returnedQty` 上。欠款和汇总一律由当前流水现算，不要加冻结字段。详见 [docs/cloud-ledger.md](docs/cloud-ledger.md)。
+- 流水**字段**换形状时读的一端兜底、写的一端抹掉老字段，不写迁移脚本（例：`settledAmount` 按老 `payType` 回推实收）。这条管字段，不管**搬家**：流水搬进 `ledger_records` 是一次显式的迁移动作，两件事不要互相套用。详见 [docs/cloud-ledger.md](docs/cloud-ledger.md)。
 - `app.json` 的 `lazyCodeLoading` 仍须保留；`cloudfunctions/` 不进小程序包。详见 [docs/cloud-ledger.md](docs/cloud-ledger.md)。

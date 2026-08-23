@@ -1,8 +1,26 @@
-const WIDTH = 1760
-const PAD = 48
-const LINE_H = 28
-const CELL_PAD_X = 12
-const CELL_PAD_Y = 10
+// 送货单是给客户看的，客户多为中老年。导出图在手机上按宽度铺满，字的观感由「字号 ÷ 画布宽」
+// 决定，高度不进这个式子。所以放大字号的前提是收窄画布：列宽改成按本单内容量出来，不再写死。
+const WIDTH = 1700
+const PAD = 36
+const LINE_H = 65
+const CELL_PAD_X = 24
+const CELL_PAD_Y = 23
+
+// 品名列吸收各单差异，最窄留三个中文字，再长就在单元格内折行，不缩字号。
+const NAME_MIN_CHARS = 3
+
+// 规格轴超过这个数就并成一列。每多一轴至少多占三个中文字，画布被撑宽、整张单的字跟着挤小；
+// 并成一列只是这一格折行，比全单字号缩水划算。
+// 定在 2 而不是 3：颜色+尺码是绝大多数单据的形态，保持分列；三轴分列会占到 648，
+// 比合并后的 216 宽出一大截，字号反而比四轴还小，所以三轴起就合并。
+const SPEC_AXIS_LIMIT = 2
+
+// 列宽按量出来的字宽定，但真机字体和估算值有出入，留一点余量，免得货号顶出格线。
+const MEASURE_SLACK = 1.04
+
+// 画布高度至少是宽度的这个倍数。内容不够高就在表格和汇总区之间补白，把手机预览的上下黑边压一压；
+// 再往上调黑边会更少，但补出来的空白也更显眼。
+const MIN_HEIGHT_RATIO = 1.15
 
 const COLORS = {
   bg: '#FFFFFF',
@@ -16,17 +34,19 @@ const COLORS = {
   ok: '#0F766E'
 }
 
+// 括号里是 1550 宽画布在 390pt 宽手机上铺满时的观感字号，按 18px 正文的适老化线来对。
 const FONT = {
-  kicker: '22px sans-serif',
-  title: '700 44px sans-serif',
-  meta: '22px sans-serif',
-  value: '600 24px sans-serif',
-  head: '600 22px sans-serif',
-  name: '24px sans-serif',
-  num: '24px sans-serif',
-  total: '700 26px sans-serif',
-  debt: '700 26px sans-serif',
-  sign: '22px sans-serif'
+  kicker: '51px sans-serif',           // 12.8pt 请核对后签收
+  title: '700 88px sans-serif',        // 22.1pt 店名
+  meta: '51px sans-serif',             // 12.8pt 收货人/单号这类标签
+  value: '600 59px sans-serif',        // 14.8pt 上面这些标签对应的值
+  head: '600 51px sans-serif',         // 12.8pt 表头
+  name: '56px sans-serif',             // 14.1pt 品名、规格
+  num: '56px sans-serif',              // 14.1pt 序号、货号、数量、单价、金额
+  total: '700 80px sans-serif',        // 20.1pt 合计，客户最想看清的数
+  debt: '700 64px sans-serif',         // 16.1pt 结算盒主行的值
+  small: '48px sans-serif',            // 12.1pt 往来欠款那一行
+  smallStrong: '700 56px sans-serif'   // 14.1pt 累计欠款，小字里唯一要跳出来的
 }
 
 function parseFontSize(font) {
@@ -60,6 +80,21 @@ function wrapText(text, maxWidth, measure) {
   }
   if (current) lines.push(current)
   return lines
+}
+
+function scaleFont(font, size) {
+  const m = String(font).match(/^(\d+\s+)?\d+px\s+(.+)$/)
+  return m ? (m[1] || '') + size + 'px ' + m[2] : font
+}
+
+// 金额可能到百万甚至千万，格子塞不下就一档档降字号，宁可小一点也不让数字出界。
+function fitFont(text, font, maxWidth, measure) {
+  const base = parseFontSize(font)
+  for (let size = base; size > 36; size -= 4) {
+    const candidate = scaleFont(font, size)
+    if (measure(text, candidate) <= maxWidth) return candidate
+  }
+  return scaleFont(font, 36)
 }
 
 function textTop(y, rowH, font) {
@@ -120,14 +155,22 @@ function qtyTotalText(lines) {
   return String(Math.round(total * 100) / 100)
 }
 
-function layoutLabeled(cmds, label, value, x, y, maxWidth, measure) {
+function labelWidth(labels, measure) {
+  let widest = 0
+  labels.forEach(function (label) {
+    widest = Math.max(widest, measure(label + '：', FONT.meta))
+  })
+  return Math.ceil(widest) + 12
+}
+
+function layoutLabeled(cmds, label, value, x, y, maxWidth, measure, prefixWidth) {
   const prefix = label + '：'
-  const prefixW = measure(prefix, FONT.meta)
-  const inner = Math.max(48, maxWidth - prefixW)
+  const prefixW = prefixWidth || measure(prefix, FONT.meta)
+  const inner = Math.max(112, maxWidth - prefixW)
   const lines = wrapText(String(value || ''), inner, function (text) {
     return measure(text, FONT.value)
   })
-  const lineH = 32
+  const lineH = 80
   lines.forEach(function (line, index) {
     const top = y + index * lineH
     if (index === 0) {
@@ -135,7 +178,7 @@ function layoutLabeled(cmds, label, value, x, y, maxWidth, measure) {
     }
     pushText(cmds, line, x + prefixW, top, FONT.value, COLORS.value)
   })
-  return y + Math.max(lineH, lines.length * lineH) + 6
+  return y + Math.max(lineH, lines.length * lineH) + 14
 }
 
 function specAxisNames(lines) {
@@ -176,45 +219,135 @@ function specCellValue(line, axisName) {
   return ''
 }
 
-function specColWidth(count) {
-  if (count <= 1) return 280
-  if (count === 2) return 200
-  return 150
+function canWrapColumn(col) {
+  // 数量、单价、金额折行会被看错，品名/货号/规格折行只是变矮一点。
+  return col.key === 'name' || col.key === 'sku' || col.key.indexOf('spec:') === 0
 }
 
-function tableColumns(slip) {
-  const contentWidth = WIDTH - PAD * 2
-  const axes = specAxisNames(slip && slip.lines)
-  const specWidth = specColWidth(axes.length)
-  const defs = [
-    { key: 'seq', title: '序号', width: 68, align: 'center', font: FONT.num },
-    { key: 'sku', title: '货号', width: axes.length >= 3 ? 160 : 200, align: 'left', font: FONT.num },
-    { key: 'name', title: '品名', width: 0, align: 'left', font: FONT.name }
-  ]
-  axes.forEach(function (name) {
-    defs.push({
-      key: 'spec:' + name,
-      title: name,
-      width: specWidth,
-      align: 'left',
-      font: FONT.name
+function floorWidth(col, measure) {
+  return Math.ceil(measure('汉'.repeat(NAME_MIN_CHARS), col.font)) + CELL_PAD_X * 2
+}
+
+function columnValues(lines, key, axisName) {
+  if (key === 'seq') {
+    return lines.map(function (line, index) {
+      return String(index + 1)
     })
+  }
+  if (key === 'sku') return lines.map(skuText)
+  if (key === 'spec') {
+    return lines.map(function (line) {
+      return specCellValue(line, axisName)
+    })
+  }
+  return lines.map(function (line) {
+    return line[key]
   })
+}
+
+function mergedSpecValues(lines, axes) {
+  return lines.map(function (line) {
+    return axes.map(function (name) {
+      return specCellValue(line, name)
+    }).filter(function (value) {
+      return value
+    }).join(' · ')
+  })
+}
+
+function tableColumns(slip, measure) {
+  const lines = (slip && slip.lines) || []
+  const axes = specAxisNames(lines)
+  const defs = [
+    { key: 'seq', title: '序号', align: 'center', font: FONT.num, values: columnValues(lines, 'seq') },
+    { key: 'sku', title: '货号', align: 'center', font: FONT.num, values: columnValues(lines, 'sku') },
+    { key: 'name', title: '品名', align: 'left', font: FONT.name, values: columnValues(lines, 'productName') }
+  ]
+  if (axes.length > SPEC_AXIS_LIMIT) {
+    defs.push({
+      key: 'spec:*',
+      title: '规格',
+      align: 'left',
+      font: FONT.name,
+      values: mergedSpecValues(lines, axes)
+    })
+  } else {
+    axes.forEach(function (name) {
+      defs.push({
+        key: 'spec:' + name,
+        title: name,
+        align: 'center',
+        font: FONT.name,
+        values: columnValues(lines, 'spec', name)
+      })
+    })
+  }
   defs.push(
-    { key: 'qty', title: '数量', width: 100, align: 'center', font: FONT.num },
-    { key: 'price', title: '单价', width: 140, align: 'right', font: FONT.num },
-    { key: 'amount', title: '金额', width: 156, align: 'right', font: FONT.num }
+    { key: 'qty', title: '数量', align: 'center', font: FONT.num, values: columnValues(lines, 'qtyText') },
+    { key: 'price', title: '单价', align: 'right', font: FONT.num, values: columnValues(lines, 'priceText') },
+    { key: 'amount', title: '金额', align: 'right', font: FONT.num, values: columnValues(lines, 'amountText') }
   )
-  const used = defs.reduce(function (sum, col) {
+
+  // 表头和本单每一行都量一遍，取最宽的那个，谁也不多占。
+  defs.forEach(function (col) {
+    let need = measure(col.title, FONT.head)
+    col.values.forEach(function (value) {
+      need = Math.max(need, measure(value == null ? '' : String(value), col.font))
+    })
+    col.width = Math.ceil(need * MEASURE_SLACK) + CELL_PAD_X * 2
+  })
+
+  return { defs: defs, natural: defs.reduce(function (sum, col) {
     return sum + col.width
-  }, 0)
+  }, 0) }
+}
+
+// 把量出来的列塞进给定宽度：有富余就全给品名，不够就压可折行的列，压到底还不够才让画布变宽。
+function fitColumns(cols, pageWidth, measure) {
+  const defs = cols.defs
+  const contentWidth = pageWidth - PAD * 2
+  let over = cols.natural - contentWidth
+  if (over <= 0) {
+    const nameCol = defs.find(function (col) {
+      return col.key === 'name'
+    })
+    if (nameCol) nameCol.width -= over
+  } else {
+    defs.forEach(function (col) {
+      if (over <= 0 || !canWrapColumn(col)) return
+      const room = col.width - floorWidth(col, measure)
+      if (room <= 0) return
+      const cut = Math.min(room, over)
+      col.width -= cut
+      over -= cut
+    })
+  }
   let x = PAD
   defs.forEach(function (col) {
-    if (!col.width) col.width = contentWidth - used
     col.x = x
     x += col.width
   })
-  return { defs: defs, contentWidth: contentWidth }
+  return { defs: defs, contentWidth: x - PAD, pageWidth: Math.max(pageWidth, x + PAD) }
+}
+
+// 四五根规格轴时连折行都救不回来，这时画布变宽保信息完整，字号不动。
+function pageWidthFor(cols, measure) {
+  const floor = cols.defs.reduce(function (sum, col) {
+    return sum + (canWrapColumn(col) ? floorWidth(col, measure) : col.width)
+  }, 0)
+  return Math.max(WIDTH, floor + PAD * 2)
+}
+
+function shiftCommands(cmds, dy) {
+  cmds.forEach(function (cmd) {
+    if (cmd.type === 'line') {
+      cmd.y1 += dy
+      cmd.y2 += dy
+    } else {
+      cmd.y += dy
+    }
+  })
+  return cmds
 }
 
 function colByKey(cols, key) {
@@ -238,57 +371,56 @@ function wrapCell(text, col, measure) {
   })
 }
 
-function layoutMeta(cmds, slip, y, measure) {
-  const contentWidth = WIDTH - PAD * 2
-  const gap = 28
-  const colW = (contentWidth - gap * 2) / 3
+// 三列改两列：单号和日期这类长字符串在三列里逼得字号上不去，两列才放得开。
+function layoutMeta(cmds, slip, pageWidth, y, measure) {
+  const contentWidth = pageWidth - PAD * 2
+  const gap = 48
+  const colW = (contentWidth - gap) / 2
   const x2 = PAD + colW + gap
-  const x3 = PAD + (colW + gap) * 2
+  // 两列共用一个标签宽度，值才会左边缘对齐；各算各的会参差出来。
+  // 结算方式已并进底部的应收/实收，这里剩六个字段正好铺满三行，谁也不用单独占一行。
+  const lw = labelWidth(slip.hasCustomer
+    ? ['收货人', '电话', '地址', '单号', '日期', '经手人']
+    : ['单号', '日期', '经手人'], measure)
   if (!slip.hasCustomer) {
-    layoutLabeled(cmds, '单号', slip.docNo, PAD, y, colW, measure)
-    layoutLabeled(cmds, '日期', slip.timeText, x2, y, colW, measure)
-    y = layoutLabeled(cmds, '结算', slip.payText, x3, y, colW, measure)
-  } else {
     const row1 = Math.max(
-      layoutLabeled(cmds, '收货人', slip.customerName, PAD, y, colW, measure),
-      layoutLabeled(cmds, '电话', slip.customerPhone, x2, y, colW, measure),
-      layoutLabeled(cmds, '单号', slip.docNo, x3, y, colW, measure)
+      layoutLabeled(cmds, '单号', slip.docNo, PAD, y, colW, measure, lw),
+      layoutLabeled(cmds, '日期', slip.timeText, x2, y, colW, measure, lw)
     )
-    y = Math.max(
-      layoutLabeled(cmds, '地址', slip.customerAddress, PAD, row1, colW, measure),
-      layoutLabeled(cmds, '结算', slip.payText, x2, row1, colW, measure),
-      layoutLabeled(cmds, '日期', slip.timeText, x3, row1, colW, measure)
-    )
+    return layoutLabeled(cmds, '经手人', slip.operatorText || '—', PAD, row1, colW, measure, lw) + 18
   }
-  y = layoutLabeled(cmds, '经手人', slip.operatorText || '—', PAD, y, contentWidth, measure)
-  return y + 8
+  const row1 = Math.max(
+    layoutLabeled(cmds, '收货人', slip.customerName, PAD, y, colW, measure, lw),
+    layoutLabeled(cmds, '电话', slip.customerPhone, x2, y, colW, measure, lw)
+  )
+  const row2 = Math.max(
+    layoutLabeled(cmds, '地址', slip.customerAddress, PAD, row1, colW, measure, lw),
+    layoutLabeled(cmds, '单号', slip.docNo, x2, row1, colW, measure, lw)
+  )
+  return Math.max(
+    layoutLabeled(cmds, '日期', slip.timeText, PAD, row2, colW, measure, lw),
+    layoutLabeled(cmds, '经手人', slip.operatorText || '—', x2, row2, colW, measure, lw)
+  ) + 18
 }
 
-function layoutTable(cmds, slip, y, measure) {
-  const headerH = 42
-  const totalH = 48
-  const cols = tableColumns(slip)
+function layoutTable(cmds, slip, cols, y, measure) {
+  const headerH = 98
   const defs = cols.defs
   const lines = slip.lines || []
-  const axes = specAxisNames(lines)
   const rows = lines.map(function (line, index) {
-    const cells = {
-      seq: [String(index + 1)],
-      sku: wrapCell(skuText(line), colByKey(cols, 'sku'), measure),
-      name: wrapCell(line.productName, colByKey(cols, 'name'), measure),
-      qty: [line.qtyText],
-      price: [line.priceText],
-      amount: [line.amountText]
-    }
-    axes.forEach(function (name) {
-      cells['spec:' + name] = wrapCell(specCellValue(line, name), colByKey(cols, 'spec:' + name), measure)
+    const cells = {}
+    defs.forEach(function (col) {
+      const raw = col.values[index]
+      cells[col.key] = canWrapColumn(col)
+        ? wrapCell(raw, col, measure)
+        : [raw == null ? '' : String(raw)]
     })
     const lineCount = defs.reduce(function (max, col) {
       return Math.max(max, (cells[col.key] || []).length)
     }, 1)
     return {
       cells: cells,
-      height: Math.max(44, CELL_PAD_Y * 2 + lineCount * LINE_H)
+      height: Math.max(103, CELL_PAD_Y * 2 + lineCount * LINE_H)
     }
   })
   const tableTop = y
@@ -298,21 +430,17 @@ function layoutTable(cmds, slip, y, measure) {
     row.y = y
     y += row.height
   })
-  const totalY = y
-  y += totalH
   const tableH = y - tableTop
-  const tableRight = WIDTH - PAD
+  const tableRight = PAD + cols.contentWidth
 
   pushRect(cmds, PAD, headerY, cols.contentWidth, headerH, COLORS.header)
-  pushRect(cmds, PAD, totalY, cols.contentWidth, totalH, COLORS.total)
   pushStroke(cmds, PAD, tableTop, cols.contentWidth, tableH, 2)
   pushLine(cmds, PAD, headerY + headerH, tableRight, headerY + headerH, 1)
   rows.forEach(function (row) {
     pushLine(cmds, PAD, row.y + row.height, tableRight, row.y + row.height, 1)
   })
   defs.slice(1).forEach(function (col) {
-    const throughTotal = col.key === 'qty' || col.key === 'price' || col.key === 'amount'
-    pushLine(cmds, col.x, tableTop, col.x, throughTotal ? y : totalY, 1)
+    pushLine(cmds, col.x, tableTop, col.x, y, 1)
   })
 
   defs.forEach(function (col) {
@@ -331,85 +459,128 @@ function layoutTable(cmds, slip, y, measure) {
     })
   })
 
-  const qtyCol = colByKey(cols, 'qty')
-  const amountCol = colByKey(cols, 'amount')
-  pushText(cmds, '合计', qtyCol.x - CELL_PAD_X, textTop(totalY, totalH, FONT.total), FONT.total, COLORS.title, 'right')
-  pushText(cmds, qtyTotalText(lines), cellX(qtyCol), textTop(totalY, totalH, FONT.total), FONT.total, COLORS.title, qtyCol.align)
-  pushText(cmds, '¥' + slip.amountText, cellX(amountCol), textTop(totalY, totalH, FONT.total), FONT.total, COLORS.title, amountCol.align)
-  return y + 16
+  return y + 24
 }
 
-function layoutDebt(cmds, slip, x, y, boxW) {
-  const rows = [
-    { label: '之前欠款', value: '¥' + slip.prevDebtText, color: COLORS.value },
-    { label: '本次欠款', value: '¥' + slip.thisDebtText, color: COLORS.value },
-    { label: '累计欠款', value: '¥' + slip.receivableText, color: slip.hasDebt ? COLORS.debt : COLORS.ok }
+// 合计搬出表格：金额列原本被合计的 ¥1582.00 撑着，明细行最长才 495.00。搬出来这列窄一截，
+// 画布跟着窄，字号就能再大一点；合计本身也不再受列宽约束，可以用最大的字。
+function summaryRows(slip) {
+  // 结算方式去掉了：应收 1582 / 实收 0 已经把赊账说清楚，再写一遍是废话。
+  return [
+    { label: '总数', value: qtyTotalText(slip.lines) + ' 件' },
+    { label: '应收', value: '¥' + slip.dueText },
+    { label: '实收', value: '¥' + slip.paidText }
   ]
-  const rowH = 40
-  const height = rowH * rows.length
-  pushRect(cmds, x, y + rowH * 2, boxW, rowH, COLORS.total)
-  pushStroke(cmds, x, y, boxW, height, 1)
-  rows.forEach(function (row, index) {
-    if (index) pushLine(cmds, x, y + rowH * index, x + boxW, y + rowH * index, 1)
-    const font = index === 2 ? FONT.debt : FONT.value
-    pushText(cmds, row.label, x + 14, textTop(y + rowH * index, rowH, FONT.head), FONT.head, COLORS.muted)
-    pushText(cmds, row.value, x + boxW - 14, textTop(y + rowH * index, rowH, font), font, row.color, 'right')
+}
+
+function debtRow(slip) {
+  if (!slip.hasCustomer) return null
+  return [
+    { label: '之前欠款', value: '¥' + slip.prevDebtText, color: COLORS.value, font: FONT.small },
+    { label: '本次欠款', value: '¥' + slip.thisDebtText, color: COLORS.value, font: FONT.small },
+    { label: '累计欠款', value: '¥' + slip.receivableText, color: slip.hasDebt ? COLORS.debt : COLORS.ok, font: FONT.smallStrong }
+  ]
+}
+
+const SUMMARY_MAIN_H = 200
+const SUMMARY_DEBT_H = 96
+
+function debtSpan(item, measure) {
+  return Math.ceil(measure(item.label, FONT.small)) + 12 + Math.ceil(measure(item.value, item.font))
+}
+
+function drawDebtLine(cmds, items, x, y, measure) {
+  let dx = x
+  items.forEach(function (item) {
+    pushText(cmds, item.label, dx, textTop(y, SUMMARY_DEBT_H, FONT.small), FONT.small, COLORS.muted)
+    dx += Math.ceil(measure(item.label, FONT.small)) + 12
+    pushText(cmds, item.value, dx, textTop(y, SUMMARY_DEBT_H, item.font), item.font, item.color)
+    dx += Math.ceil(measure(item.value, item.font)) + 56
+  })
+}
+
+// 合计和结算并成一块。不套完整边框：货物表格已经是个框了，再画一个会显得堆在一起，
+// 这里改成浅底加上下两条线，视觉上是表格的收尾而不是第二张表。
+function layoutSummary(cmds, slip, x, y, boxW, measure) {
+  const main = summaryRows(slip)
+  const debts = debtRow(slip)
+  const room = boxW - 64
+  // 欠款三项优先挤一行，千万级数字放不下就让累计欠款独占第二行（它最该被看见）。
+  let debtLines = []
+  if (debts) {
+    const spans = debts.map(function (item) {
+      return debtSpan(item, measure)
+    })
+    const oneLine = spans.reduce(function (a, b) {
+      return a + b
+    }, 0) + 56 * (debts.length - 1)
+    debtLines = oneLine <= room ? [debts] : [debts.slice(0, 2), debts.slice(2)]
+  }
+  const height = SUMMARY_MAIN_H + SUMMARY_DEBT_H * debtLines.length
+  pushRect(cmds, x, y, boxW, height, COLORS.total)
+  pushLine(cmds, x, y, x + boxW, y, 3)
+  pushLine(cmds, x, y + height, x + boxW, y + height, 3)
+
+  const cellW = boxW / main.length
+  main.forEach(function (item, index) {
+    const cx = x + cellW * index + 32
+    pushText(cmds, item.label, cx, y + 30, FONT.head, COLORS.muted)
+    pushText(cmds, item.value, cx, y + 96, fitFont(item.value, FONT.total, cellW - 64, measure), COLORS.title)
+  })
+
+  let dy = y + SUMMARY_MAIN_H
+  debtLines.forEach(function (items, index) {
+    if (index === 0) pushLine(cmds, x, dy, x + boxW, dy, 1)
+    drawDebtLine(cmds, items, x + 32, dy, measure)
+    dy += SUMMARY_DEBT_H
   })
   return y + height
 }
 
-function layoutSign(cmds, y) {
-  pushText(cmds, '客户签收：', PAD, y, FONT.sign, COLORS.muted)
-  const lineX = PAD + 110
-  pushLine(cmds, lineX, y + 22, lineX + 360, y + 22, 1)
-  return y + 36
-}
-
-function layoutFooter(cmds, slip, y, measure) {
+function layoutFooter(cmds, slip, pageWidth, y, measure) {
   let next = y
   if (slip.remark) {
-    next = layoutLabeled(cmds, '备注', slip.remark, PAD, y, WIDTH - PAD * 2, measure) + 8
+    next = layoutLabeled(cmds, '备注', slip.remark, PAD, y, pageWidth - PAD * 2, measure) + 18
   }
-  const signY = next + 12
-  layoutSign(cmds, signY)
-  if (slip.hasCustomer) {
-    const boxW = 420
-    const debtY = layoutDebt(cmds, slip, WIDTH - PAD - boxW, next, boxW)
-    return Math.max(signY + 36, debtY) + 8
-  }
-  return signY + 36
+  return layoutSummary(cmds, slip, PAD, next, pageWidth - PAD * 2, measure) + 24
 }
 
-function layoutSlip(slip, measure) {
+function layoutSlip(slip, measure, options) {
   // 预览弹层仍是手机竖向卡片；导出用横向表格，规格按本单出现的轴名分列。
   const measureFn = measure || estimateWidth
+  const ratio = options && options.minHeightRatio != null ? options.minHeightRatio : MIN_HEIGHT_RATIO
+  const raw = tableColumns(slip, measureFn)
+  const pageWidth = pageWidthFor(raw, measureFn)
+  const cols = fitColumns(raw, pageWidth, measureFn)
   const cmds = []
   let y = PAD
   const shopName = String(slip.shopName || '').trim()
 
-  if (shopName) {
-    pushText(cmds, shopName, WIDTH / 2, y, FONT.title, COLORS.title, 'center')
-    y += 50
-    pushText(cmds, '送货单', WIDTH / 2, y, FONT.head, COLORS.title, 'center')
-    y += 32
-  } else {
-    pushText(cmds, '送货单', WIDTH / 2, y, FONT.title, COLORS.title, 'center')
-    y += 50
-  }
-  pushText(cmds, '请核对后签收', WIDTH / 2, y, FONT.kicker, COLORS.muted, 'center')
-  y += 32
-  pushLine(cmds, PAD, y, WIDTH - PAD, y, 2)
-  y += 5
-  pushLine(cmds, PAD, y, WIDTH - PAD, y, 1)
-  y += 18
+  // 抬头只留店名。没填店名才用「送货单」兜底，否则单据连个标题都没有。
+  pushText(cmds, shopName || '送货单', pageWidth / 2, y, FONT.title, COLORS.title, 'center')
+  y += 130
+  pushLine(cmds, PAD, y, pageWidth - PAD, y, 3)
+  y += 10
+  pushLine(cmds, PAD, y, pageWidth - PAD, y, 1)
+  y += 36
 
-  y = layoutMeta(cmds, slip, y, measureFn)
-  y = layoutTable(cmds, slip, y, measureFn)
-  y = layoutFooter(cmds, slip, y, measureFn)
+  y = layoutMeta(cmds, slip, pageWidth, y, measureFn)
+  y = layoutTable(cmds, slip, cols, y, measureFn)
+
+  // 签收和欠款先画在临时数组里量高，好把差的高度补成中间留白，把签收区压到底部。
+  const footCmds = []
+  const footH = layoutFooter(footCmds, slip, pageWidth, 0, measureFn)
+  const contentHeight = y + footH + PAD
+  const minHeight = Math.round(pageWidth * ratio)
+  shiftCommands(footCmds, y + Math.max(0, minHeight - contentHeight))
+  footCmds.forEach(function (cmd) {
+    cmds.push(cmd)
+  })
 
   return {
-    width: WIDTH,
-    height: y + PAD,
+    width: pageWidth,
+    height: Math.max(contentHeight, minHeight),
+    contentHeight: contentHeight,
     commands: cmds
   }
 }
@@ -460,6 +631,16 @@ function getPixelRatio() {
     }
   } catch (error) {}
   return 2
+}
+
+// 微信 canvas 2d 的单边上限各机型不同，常见 4096~16384，超了导出会失败或出白图。
+// 货多的单子画布很高，这里按尺寸把倍率压下来；压到 1 还不够就整体缩小，
+// 字会跟着变小，但总比导不出来强。
+const MAX_CANVAS_PX = 16384
+
+function exportRatio(width, height) {
+  const limit = Math.min(MAX_CANVAS_PX / width, MAX_CANVAS_PX / height)
+  return Math.min(getPixelRatio(), limit)
 }
 
 function makeMeasure(ctx) {
@@ -524,7 +705,7 @@ function exportToTempFile(page, slip) {
   const probe = createOffscreen(16, 16)
   const measure = makeMeasure(probe && probe.getContext ? probe.getContext('2d') : null)
   const layout = layoutSlip(slip, measure)
-  const dpr = getPixelRatio()
+  const dpr = exportRatio(layout.width, layout.height)
   const pixelWidth = Math.ceil(layout.width * dpr)
   const pixelHeight = Math.ceil(layout.height * dpr)
   const offscreen = createOffscreen(pixelWidth, pixelHeight)
@@ -648,6 +829,8 @@ module.exports = {
   WIDTH: WIDTH,
   FONT: FONT,
   estimateWidth: estimateWidth,
+  exportRatio: exportRatio,
+  MAX_CANVAS_PX: MAX_CANVAS_PX,
   specAxisNames: specAxisNames,
   wrapText: wrapText,
   layoutSlip: layoutSlip,

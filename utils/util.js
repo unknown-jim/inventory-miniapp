@@ -50,7 +50,10 @@ function withSlipView(order, receivable, products, shopName) {
     : inventory.round2(lines.reduce(function (sum, item) {
       return sum + inventory.toNumber(item.amount)
     }, 0))
-  const thisDebt = order.payType === 'credit' ? amount : 0
+  // amount 允许从 lines[] 求和补出来，settledAmount 却按 record.amount 收口；
+  // 不把补出来的 amount 递给它，缺 amount 的单据实收会被夹成 0，送货单印错。
+  const paidAmount = inventory.settledAmount(Object.assign({}, order, { amount: amount }))
+  const thisDebt = inventory.round2(amount - paidAmount)
   const totalDebt = inventory.toNumber(receivable)
   const prevDebt = inventory.round2(totalDebt - thisDebt)
   const productsMap = productById(products)
@@ -79,13 +82,15 @@ function withSlipView(order, receivable, products, shopName) {
       }
     }),
     amountText: money(amount),
+    // 应收恒等于货物总额；实收是开单时填的那个数，欠款是两者之差。
+    dueText: money(amount),
+    paidText: money(paidAmount),
     remark: order.remark || '',
     hasCustomer: !!order.customerName,
     customerName: order.customerName || '',
     customerPhone: order.customerPhone || '',
     customerAddress: order.customerAddress || '',
-    isCredit: order.payType === 'credit',
-    payText: order.payType === 'credit' ? '赊账' : '现结',
+    isCredit: thisDebt > 0,
     prevDebtText: money(prevDebt),
     thisDebtText: money(thisDebt),
     receivableText: money(totalDebt),
@@ -134,7 +139,9 @@ function withRecordView(record) {
   const isReturn = record.type === 'return'
   const isConvert = record.type === 'convert'
   const isAdjust = inventory.isAdjust(record)
-  const isCredit = isOut && record.payType === 'credit'
+  const paidAmount = isOut ? inventory.settledAmount(record) : 0
+  const debtAmount = isOut ? inventory.round2(inventory.toNumber(record.amount) - paidAmount) : 0
+  const isCredit = debtAmount > 0
   const lines = inventory.recordLines(record)
   const line = lines[0] || {}
   const single = lines.length === 1
@@ -189,6 +196,9 @@ function withRecordView(record) {
       : (isOpening || isCredit ? 'tag-credit' : (isIn ? 'tag-in' : (isReturn ? 'tag-return' : (isConvert ? 'tag-convert' : 'tag-out'))))),
     timeText: formatTime(record.createdAt),
     amountText: money(record.amount),
+    paidText: money(paidAmount),
+    debtText: money(debtAmount),
+    hasDebt: debtAmount > 0,
     priceText: money(single ? line.unitPrice : 0),
     profitText: money(record.profit),
     qtyText: isPay || isOpening ? '' : String(qty),

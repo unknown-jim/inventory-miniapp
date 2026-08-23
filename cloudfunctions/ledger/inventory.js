@@ -936,12 +936,139 @@ function filterCategories(categories, keyword) {
   })
 }
 
-function isCreditSale(record) {
-  return record && record.type === 'out' && record.payType === 'credit'
+// 这张单当场结清、因而不进客户欠款的现金。
+//   out    = 客户当场付进来的钱
+//   return = 店里当场退出去的现金（冲不掉欠款的那部分，见 returnCashRefund）
+// 老流水只有 payType 没有 paidAmount，读的时候回推：现结当作全额结清、
+// 赊账当作一分没结。不写迁移脚本，理由见 docs/cloud-ledger.md。
+// **返回值必须是 round2 的输出**：recordTerms 的整数分等价性依赖这一点。
+function settledAmount(record) {
+  if (!record) return 0
+  const amount = toNumber(record.amount)
+  if (record.paidAmount == null || record.paidAmount === '') {
+    return record.payType === 'credit' ? 0 : amount
+  }
+  const paid = round2(record.paidAmount)
+  if (paid <= 0) return 0
+  return paid > amount ? amount : paid
 }
 
-function isCreditReturn(record) {
-  return record && record.type === 'return' && record.payType === 'credit'
+// 一张销售单上已经退掉的货值（按销售行的 returnedQty × 售价算，不扫退货记录：
+// 流水已经在集合里，扫全表要多键索引）。
+function returnedAmountOfSale(saleRecord) {
+  return round2(recordLines(saleRecord).reduce(function (sum, line) {
+    return sum + round2(toNumber(line.returnedQty) * toNumber(line.unitPrice))
+  }, 0))
+}
+
+// 本次退货里冲不掉欠款、只能退现金的部分。othersReturned = 这张销售单上
+// 「除本次以外」已退的货值。
+//
+// 为什么把这一刀切在写路径、结果记在退货单头上，而不是像 main 那样在读的时候
+// 现算 max(0, 应收−实收−已退)：夹断不可加。聚合的增量维护（applyTermsDelta）
+// 要求单条记录的贡献只依赖自己；getSlip 的「当前欠款 − 后缀」要求贡献能按时间
+// 拆开。把 max(0,…) 放进折叠里，这两条路都会算错。
+// 规则本身仍是 AGENTS.md 那条：退的钱先冲这张单没收到的，冲不掉的才算退现金。
+function returnCashRefund(saleRecord, returnAmount, othersReturned) {
+  const amount = round2(returnAmount)
+  if (!saleRecord) return amount
+  const debt = round2(toNumber(saleRecord.amount) - settledAmount(saleRecord))
+  const left = round2(debt - round2(othersReturned))
+  if (left <= 0) return amount
+  return left >= amount ? 0 : round2(amount - left)
+}
+
+// ---------------------------------------------------------------------------
+// 退货拆分的「新鲜度」守卫
+//
+// 退货单头的 paidAmount（现金退款额）是**按记账当时的先后顺序**分出来的份额：
+//     c_i = clamp(前 i 张退货额之和 − 销售单欠款 D, 0, 本张退货额 r_i)
+// 它只有作为一组才有意义。这一组的唯一正确性判据是：
+//     Σ(r_i − c_i) == min(D, Σr_i)                      —— 【拆分不变量】
+//
+// 加一张新退货单永远维持它（新的那张就是最后一张）。破坏它的有三条写入：
+// 改销售单的欠款基准、改同单里不是最后一张的退货单、删同单里不是最后一张的退货单。
+// 而其余那些退货单**不在这次事务的加载范围里**（recordsNeeded 对 out 编辑不加载
+// 退货、对 return 编辑只加载销售单，见 utils/ledger-apply.js:400-434），改不动。
+//
+// 所以这里的选择是：改不动就不许改，报一条店主看得懂的错，绝不静默算错一笔钱。
+// 「把整张销售单的退货全加载进来整体重算」是更完整的做法，代价和取舍见 PR 正文。
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// 改销售单时的守卫。
+//
+// 退货单头冻结的现金退款额 c_i 是一组按记账顺序分出来的份额，判据是
+// 【拆分不变量】Σ(r_i − c_i) == min(D, Σr_i)。改销售单会同时动两样东西：
+// 欠款基准 D，以及「已退货值」returnedAmountOfSale —— 后者是将来那笔退货算
+// othersReturned 时用的基准。两样都要管住。
+//
+// 只有三种情况能「只看销售单」就断定放行安全：
+//   ① 改前改后都一分不欠 —— 每张退货单都是「纯退现金」，c_i 恒 = 自己的退货额，
+//      与顺序无关；将来再退也恒是全额退现金。全款单退货落在这里。但已退货值必须
+//      没变：改单价会造出分岔，见下面那条注意。
+//   ② 已退货值一个子儿没变，且改前改后欠款都盖得住它 —— c_i 恒 0，且不挪动将来
+//      退货的 othersReturned 基准。**全赊单改数量落在这里，最常见，不能误伤。**
+//   ③ 欠款基准和已退货值都没变 —— c_i 本来就还对（只改客户/备注这类）。
+// 三条都不成立就拦。
+//
+// 两条容易想歪、都已经被随机漫步证伪过的写法，不要再加回来：
+//   * **不要**为「一分未收」单开一档放行改单价。退货单记的是退货**当时**的单价，
+//     改销售行单价会让已退货值和 Σ退货额分岔；这张单以后只要经 ② 收一笔钱，
+//     分岔就会把将来那笔退货的冲抵算小、**欠款静默算大**（第 3 轮 fuzz 抓到的）。
+//     一分未收在 ② 里本来就被包含（已退货值 ≤ 应收 = 欠款），它唯一独占的就是
+//     这个洞。要根治得给销售行加 returnedAmount 字段，见 PR 正文的下一步。
+//   * **不要**以为这几条放行只会把欠款算小、由 assertAccountsValid 兜住。
+//     上面那条分岔的方向恰恰是算大，没有任何兜底。守门员是文件末尾的
+//     「拆分不变量 fuzzer」，改这个函数必须让它继续全绿且放行次数不塌。
+// ---------------------------------------------------------------------------
+function assertSaleEditKeepsReturnSplit(existing, next, paidAmount) {
+  const hasReturns = recordLines(existing).some(function (line) {
+    return toNumber(line.returnedQty) > 0
+  })
+  if (!hasReturns) return
+  const prevDebt = round2(toNumber(existing.amount) - settledAmount(existing))
+  const nextDebt = round2(toNumber(next.amount) - round2(paidAmount))
+  const prevReturned = returnedAmountOfSale(existing)
+  const nextReturned = returnedAmountOfSale(next)
+  // 注意 nextReturned === prevReturned 三档都要：它是「不许造出已退货值与
+  // Σ退货额分岔」的唯一保证，档① 少了它，0 元行能把 R_basis 压成 0，随后
+  // 档② 就会把欠款静默算大（第 4 轮审计的扩展 fuzz 抓到的）。
+  if (prevDebt <= 0 && nextDebt <= 0 && nextReturned === prevReturned) return  // ①
+  if (nextReturned === prevReturned
+    && prevDebt >= prevReturned
+    && nextDebt >= prevReturned) return                                   // ②
+  if (nextDebt === prevDebt && nextReturned === prevReturned) return      // ③
+  throw new Error('这张单有退货，改金额或实收会让退货冲抵对不上，请先删掉退货单再改')
+}
+
+// 改/删一张退货单时的守卫：只有它是「这张销售单最后一张退货单」时才动得。
+// 判据不需要去数兄弟退货单：c_i 只有在等于「把自己当成最后一张重算」的结果时，
+// 才说明它后面没有以它为基准分过份额的退货单。
+function assertReturnSplitFresh(saleRecord, returnRecord) {
+  if (!saleRecord) return
+  const debt = round2(toNumber(saleRecord.amount) - settledAmount(saleRecord))
+  if (debt <= 0) return                    // 一分不欠：每张都是纯退现金，互不牵连
+  const total = returnedAmountOfSale(saleRecord)
+  const amount = toNumber(returnRecord.amount)
+  if (total <= debt) return                // 全被欠款吸收：每张 c_i 都是 0，互不牵连
+  const fresh = returnCashRefund(saleRecord, amount, round2(total - amount))
+  if (round2(settledAmount(returnRecord)) !== round2(fresh)) {
+    throw new Error('这张销售单后面还有别的退货单，请先删掉后面那些再动这一单')
+  }
+}
+
+// 退货单指向的销售单。一次退货只能退同一张销售单，所以看第一行就够；找不到
+// （老退货行没有 saleOrderId，或指向的不是销售单）就返回 null，守卫随之放行，
+// 和 updateRecord 里对老退货行的既有容忍口径一致：updateRecord 那条路后面
+// findSaleLine 会抛「销售流水不存在」拦住（同样只认 type === 'out'，见
+// findSaleLine），deleteRecord 那条路本来就该让坏数据删得掉。
+function saleOrderOfReturn(records, returnRecord) {
+  const saleId = String((recordLines(returnRecord)[0] || {}).saleOrderId || '')
+  if (!saleId) return null
+  return (records || []).find(function (item) {
+    return item.id === saleId && item.type === 'out'
+  }) || null
 }
 
 function isOpening(record) {
@@ -1053,8 +1180,8 @@ function recordTerms(record) {
     saleCount: type === 'out' ? 1 : 0,
     salesSum: type === 'out' ? amount : 0,
     returnsSum: type === 'return' ? amount : 0,
-    creditSalesSum: isCreditSale(record) ? amount : 0,
-    creditReturnsSum: isCreditReturn(record) ? amount : 0,
+    creditSalesSum: type === 'out' ? amount - cents(settledAmount(record)) : 0,
+    creditReturnsSum: type === 'return' ? amount - cents(settledAmount(record)) : 0,
     openingsSum: isOpening(record) ? amount : 0,
     paidSum: type === 'pay' ? amount : 0,
     purchaseSum: type === 'in' ? amount : 0,
@@ -1183,38 +1310,17 @@ function summarizeCustomerAccount(records, customerId) {
   const sales = related.filter(function (item) {
     return item.type === 'out'
   })
-  const returns = related.filter(function (item) {
-    return item.type === 'return'
+  let terms = emptyTerms()
+  related.forEach(function (item) {
+    terms = addTerms(terms, recordTerms(item), 1)
   })
-  const payments = related.filter(function (item) {
-    return item.type === 'pay'
-  })
-  const openings = related.filter(isOpening)
-  const creditAmount = round2(
-    sales.reduce(function (sum, item) {
-      return isCreditSale(item) ? sum + toNumber(item.amount) : sum
-    }, 0) + openings.reduce(function (sum, item) {
-      return sum + toNumber(item.amount)
-    }, 0) - returns.reduce(function (sum, item) {
-      return isCreditReturn(item) ? sum + toNumber(item.amount) : sum
-    }, 0)
-  )
-  const paidAmount = round2(payments.reduce(function (sum, item) {
-    return sum + toNumber(item.amount)
-  }, 0))
-  const saleAmount = round2(
-    sales.reduce(function (sum, item) {
-      return sum + toNumber(item.amount)
-    }, 0) - returns.reduce(function (sum, item) {
-      return sum + toNumber(item.amount)
-    }, 0)
-  )
+  const account = accountOf(terms)
   return {
-    count: sales.length,
-    amount: saleAmount,
-    creditAmount: creditAmount,
-    paidAmount: paidAmount,
-    receivable: round2(creditAmount - paidAmount),
+    count: account.count,
+    amount: account.amount,
+    creditAmount: account.creditAmount,
+    paidAmount: account.paidAmount,
+    receivable: account.receivable,
     records: sales,
     ledger: related
   }
@@ -1285,7 +1391,6 @@ function applyPayment(records, payload, now, id, ctx) {
     customerName: String(payload.customerName || '').trim(),
     customerPhone: String(payload.customerPhone || '').trim(),
     customerAddress: String(payload.customerAddress || '').trim(),
-    payType: 'cash',
     createdAt: now,
     lines: []
   }
@@ -1326,26 +1431,60 @@ function applyOpening(records, payload, now, id) {
   }
 }
 
+// 本单实收。新写法直接给 paidAmount；没给就按老的 payType 回推，让还没更新的
+// 小程序也能继续开单（云函数和小程序不是同一次部署）。两个都没有时按收满算，
+// 和以前默认现结一致。fallback 用于改流水：不动实收时保留原值，并跟着新应收收口。
+function resolvePaidAmount(payload, amount, fallback) {
+  const due = round2(amount)
+  if (payload && payload.paidAmount != null && payload.paidAmount !== '') {
+    const paid = round2(payload.paidAmount)
+    if (paid < 0) {
+      throw new Error('实收不能为负数')
+    }
+    if (paid > due) {
+      throw new Error('实收不能超过应收 ' + due)
+    }
+    return paid
+  }
+  if (payload && payload.payType === 'credit') return 0
+  if (payload && payload.payType === 'cash') return due
+  if (fallback == null) return due
+  const kept = round2(fallback)
+  if (kept <= 0) return 0
+  return kept > due ? due : kept
+}
+
+function assertCustomerForDebt(paidAmount, amount, customerId) {
+  if (round2(paidAmount) < round2(amount) && !customerId) {
+    throw new Error('实收少于应收，欠款必须记在客户名下，请先选择客户')
+  }
+}
+
 function applySaleOrder(products, records, payload, now, orderId, nextId, skus) {
   const items = payload.items || []
   if (!items.length) {
     throw new Error('请先加入商品')
   }
 
-  const payType = payload.payType === 'credit' ? 'credit' : 'cash'
-  const customerId = String(payload.customerId || '')
-  if (payType === 'credit' && !customerId) {
-    throw new Error('赊账必须选择客户')
-  }
-
-  items.forEach(function (item) {
-    if (round2(item.qty) <= 0) {
+  // 先把每行金额算出来，整单应收才有得比；顺带把数量和售价挡在实收校验前面，
+  // 免得填错数量时先报「实收超过应收」这种看不懂的错。
+  const lineAmounts = items.map(function (item) {
+    const qty = round2(item.qty)
+    const unitPrice = round2(item.unitPrice)
+    if (qty <= 0) {
       throw new Error('销售数量必须大于 0')
     }
-    if (round2(item.unitPrice) < 0) {
+    if (unitPrice < 0) {
       throw new Error('售价不能为负数')
     }
+    return round2(qty * unitPrice)
   })
+  const amount = round2(lineAmounts.reduce(function (sum, value) {
+    return sum + value
+  }, 0))
+  const paidAmount = resolvePaidAmount(payload, amount)
+  const customerId = String(payload.customerId || '')
+  assertCustomerForDebt(paidAmount, amount, customerId)
 
   // 整单预扫：同一张单里的待加工要整单一起算，不能两行各把待加工算满。
   // 记录形状改了也要留着——它保证的是「整单能不能出货」的原子校验。
@@ -1393,7 +1532,7 @@ function applySaleOrder(products, records, payload, now, orderId, nextId, skus) 
     customerName: String(payload.customerName || '').trim(),
     customerPhone: String(payload.customerPhone || '').trim(),
     customerAddress: String(payload.customerAddress || '').trim(),
-    payType: payType,
+    paidAmount: paidAmount,
     operatorOpenid: String(payload.operatorOpenid || ''),
     operatorName: String(payload.operatorName || '').trim().slice(0, 32),
     createdAt: now,
@@ -1713,10 +1852,18 @@ function applyReturnOrder(products, records, payload, now, nextId, skus, ctx) {
     customerName: saleHead.customerName || '',
     customerPhone: saleHead.customerPhone || '',
     customerAddress: saleHead.customerAddress || '',
-    payType: saleHead.payType === 'credit' ? 'credit' : 'cash',
     createdAt: now,
     lines: lines
   }
+  // 被退销售单此刻的 returnedQty 已经包含本单，减掉本单才是「除本单以外已退的」
+  const patchedSale = nextRecords.find(function (item) {
+    return item.id === saleOrderId
+  })
+  record.paidAmount = returnCashRefund(
+    patchedSale,
+    record.amount,
+    round2(returnedAmountOfSale(patchedSale) - record.amount)
+  )
   nextRecords = [record].concat(nextRecords)
   assertAccountsAfter(ctx, nextRecords, null, record)
   return {
@@ -1825,8 +1972,12 @@ function legacyOrder(items) {
     record.customerPhone = first.customerPhone || ''
     record.customerAddress = first.customerAddress || ''
   }
-  if (type === 'out' || type === 'return' || type === 'pay') {
-    record.payType = first.payType === 'credit' ? 'credit' : 'cash'
+  // 迁移是「写」：只写新字段、抹掉老的 payType，一条流水不留两份结算数据。
+  // 老的一行一记录，各行结算相加就是整单结算（和 main 的 groupRecords 同一口径）。
+  if (type === 'out' || type === 'return') {
+    record.paidAmount = round2(items.reduce(function (sum, row) {
+      return sum + settledAmount(row)
+    }, 0))
   }
   if (type === 'out') {
     record.operatorOpenid = first.operatorOpenid || ''
@@ -2133,11 +2284,7 @@ function updateRecord(products, records, payload, now, skus, ctx) {
     next.remark = String(payload.remark || '').trim()
   } else if (existing.type === 'out') {
     const updates = collectLineUpdates(existing, payload, '请逐行填写数量和售价')
-    const payType = payload.payType === 'credit' ? 'credit' : 'cash'
     const customerId = String(payload.customerId || '')
-    if (payType === 'credit' && !customerId) {
-      throw new Error('赊账必须选择客户')
-    }
     // 逐行就地改：每行先把自己占的货还回去，再按新数量重扣，
     // 所以两行都要同一商品的待加工时也不会各算满一遍。
     const nextLines = existingLines.map(function (line) {
@@ -2187,7 +2334,11 @@ function updateRecord(products, records, payload, now, skus, ctx) {
     next.amount = sumBy(nextLines, 'amount')
     next.profit = sumBy(nextLines, 'profit')
     next.remark = String(payload.remark || '').trim()
-    next.payType = payType
+    const paidAmount = resolvePaidAmount(payload, next.amount, settledAmount(existing))
+    assertCustomerForDebt(paidAmount, next.amount, customerId)
+    assertSaleEditKeepsReturnSplit(existing, next, paidAmount)
+    next.paidAmount = paidAmount
+    delete next.payType
     next.customerId = customerId
     next.customerName = String(payload.customerName || '').trim()
     next.customerPhone = String(payload.customerPhone || '').trim()
@@ -2200,6 +2351,8 @@ function updateRecord(products, records, payload, now, skus, ctx) {
     }
   } else if (existing.type === 'return') {
     const updates = collectLineUpdates(existing, payload, '请逐行填写退货数量')
+    // 冻结的现金退款额是按记账顺序分出来的，只有最后一张动得（见守卫注释）
+    assertReturnSplitFresh(saleOrderOfReturn(nextRecords, existing), existing)
     const nextLines = existingLines.map(function (line) {
       const patch = updates[String(line.lineId || '')]
       if (!patch) return line
@@ -2236,6 +2389,22 @@ function updateRecord(products, records, payload, now, skus, ctx) {
     next.amount = sumBy(nextLines, 'amount')
     next.profit = sumBy(nextLines, 'profit')
     next.remark = String(payload.remark || '').trim()
+    // 改退货数量会改欠款冲抵，重算这张退货单的现金退款额，口径和新增退货一致
+    const saleId = String((nextLines[0] || {}).saleOrderId || '')
+    const patchedSale = saleId ? nextRecords.find(function (item) {
+      return item.id === saleId
+    }) : null
+    if (patchedSale) {
+      next.paidAmount = returnCashRefund(
+        patchedSale,
+        next.amount,
+        round2(returnedAmountOfSale(patchedSale) - next.amount)
+      )
+    } else {
+      const kept = round2(settledAmount(existing))
+      next.paidAmount = kept > next.amount ? next.amount : kept
+    }
+    delete next.payType
   } else if (existing.type === 'convert') {
     const line = Object.assign({}, firstLine(existing))
     const qty = round2(payload.qty)
@@ -2391,6 +2560,11 @@ function deleteRecord(products, records, id, now, skus, ctx) {
     if (hasReturn) {
       throw new Error('请先删除退货记录')
     }
+  }
+
+  // 删退货同理：只有该销售单最后一张退货单删得掉，否则前面那些的冻结值会失效
+  if (existing.type === 'return') {
+    assertReturnSplitFresh(saleOrderOfReturn(records, existing), existing)
   }
 
   const restored = restoreRecordStock(products, skus || [], existing, now)
@@ -2607,7 +2781,7 @@ function buildSeed(now, nextId) {
     customerName: customerA.name,
     customerPhone: customerA.phone,
     customerAddress: customerA.address,
-    payType: 'credit'
+    paidAmount: 0
   }, now - 40 * 60000, nextId(), nextId, skus)
   working = saleMilk.products
   records = saleMilk.records
@@ -2629,8 +2803,7 @@ function buildSeed(now, nextId) {
     customerId: customerB.id,
     customerName: customerB.name,
     customerPhone: customerB.phone,
-    customerAddress: customerB.address,
-    payType: 'cash'
+    customerAddress: customerB.address
   }, now - 25 * 60000, nextId(), nextId, skus)
   working = saleBread.products
   records = saleBread.records
@@ -2645,8 +2818,7 @@ function buildSeed(now, nextId) {
     customerId: customerB.id,
     customerName: customerB.name,
     customerPhone: customerB.phone,
-    customerAddress: customerB.address,
-    payType: 'cash'
+    customerAddress: customerB.address
   }, now - 18 * 60000, nextId(), nextId, skus)
   working = saleTee.products
   records = saleTee.records
@@ -2661,8 +2833,7 @@ function buildSeed(now, nextId) {
     customerId: customerB.id,
     customerName: customerB.name,
     customerPhone: customerB.phone,
-    customerAddress: customerB.address,
-    payType: 'cash'
+    customerAddress: customerB.address
   }, now - 16 * 60000, nextId(), nextId, skus)
   working = saleHoodie.products
   records = saleHoodie.records
@@ -2733,7 +2904,7 @@ module.exports = {
   recordLines: recordLines,
   firstLine: firstLine,
   returnableQty: returnableQty,
-  isCreditReturn: isCreditReturn,
+  settledAmount: settledAmount,
   createProduct: createProduct,
   updateProduct: updateProduct,
   createSku: createSku,
@@ -2763,7 +2934,6 @@ module.exports = {
   receivableDelta: receivableDelta,
   assertAccountsValid: assertAccountsValid,
   assertReceivableValid: assertReceivableValid,
-  isCreditSale: isCreditSale,
   isOpening: isOpening,
   isAdjust: isAdjust,
   isInboundStock: isInboundStock,

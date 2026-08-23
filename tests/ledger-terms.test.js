@@ -19,11 +19,31 @@ function legacyToNumber(value, fallback) {
 function legacyRound2(value) {
   return Math.round((legacyToNumber(value) + Number.EPSILON) * 100) / 100
 }
-function legacyIsCreditSale(record) {
-  return record && record.type === 'out' && record.payType === 'credit'
+// #47 起结算从「现结 / 赊账」两档换成了金额 paidAmount，migrateRecordShape 写出来的
+// 也是新字段（老 payType 会被抹掉）。参照实现必须跟着把定义域扩到新字段，否则拿
+// 只认 payType 的老口径去量一份新形状的流水，会把赊账单当成收满、算出负欠款。
+// 仍然**不复用 inv.settledAmount**：这里是独立誊抄的一份，比对才有意义。
+// 只有 paidAmount 缺失时才回推老的 payType —— 在只有 payType 的输入上，
+// 下面两个函数与被它们替换掉的 legacyIsCreditSale / legacyIsCreditReturn 分支恒等。
+function legacySettledAmount(record) {
+  if (!record) return 0
+  const amount = legacyToNumber(record.amount)
+  if (record.paidAmount == null || record.paidAmount === '') {
+    return record.payType === 'credit' ? 0 : amount
+  }
+  const paid = legacyRound2(record.paidAmount)
+  if (paid <= 0) return 0
+  return paid > amount ? amount : paid
 }
-function legacyIsCreditReturn(record) {
-  return record && record.type === 'return' && record.payType === 'credit'
+// 刻意不在这里 round：老口径是「先浮点累加、最后四舍五入一次」，
+// 逐条先取整就把 (c) 段那条亚分分歧掩盖掉了。
+function legacySaleDebt(record) {
+  if (!record || record.type !== 'out') return 0
+  return legacyToNumber(record.amount) - legacySettledAmount(record)
+}
+function legacyReturnDebt(record) {
+  if (!record || record.type !== 'return') return 0
+  return legacyToNumber(record.amount) - legacySettledAmount(record)
 }
 function legacyIsOpening(record) {
   return record && record.type === 'opening'
@@ -58,15 +78,11 @@ function legacySummarizeAllCustomerAccounts(records) {
     const entry = ensure(item.customerId)
     if (item.type === 'out') {
       entry.salesSum += legacyToNumber(item.amount)
-      if (legacyIsCreditSale(item)) {
-        entry.creditSalesSum += legacyToNumber(item.amount)
-      }
+      entry.creditSalesSum += legacySaleDebt(item)
       entry.saleCount += 1
     } else if (item.type === 'return') {
       entry.returnsSum += legacyToNumber(item.amount)
-      if (legacyIsCreditReturn(item)) {
-        entry.creditReturnsSum += legacyToNumber(item.amount)
-      }
+      entry.creditReturnsSum += legacyReturnDebt(item)
     } else if (item.type === 'pay') {
       entry.paidSum += legacyToNumber(item.amount)
     } else if (legacyIsOpening(item)) {
@@ -91,8 +107,9 @@ function legacySummarizeAllCustomerAccounts(records) {
 
 function legacyGetTotalReceivable(records) {
   return legacyRound2(records.reduce(function (sum, item) {
-    if (legacyIsCreditSale(item) || legacyIsOpening(item)) return sum + legacyToNumber(item.amount)
-    if (legacyIsCreditReturn(item)) return sum - legacyToNumber(item.amount)
+    if (item.type === 'out') return sum + legacySaleDebt(item)
+    if (legacyIsOpening(item)) return sum + legacyToNumber(item.amount)
+    if (item.type === 'return') return sum - legacyReturnDebt(item)
     if (item.type === 'pay') return sum - legacyToNumber(item.amount)
     return sum
   }, 0))
@@ -258,6 +275,22 @@ const legacyStored = [
 ]
 const migratedForTerms = inv.migrateRecordShape(legacyStored)
 assertMatchesLegacy(migratedForTerms, 'migratedForTerms')
+// 迁移是「写」：payType 被抹掉、换成 paidAmount。换字段不许换钱 —— 归并前后
+// 每个客户的钱必须一模一样（count 例外：一张单 N 行归并成 1 条，本来就该变）。
+const migratedAccounts = inv.summarizeAllCustomerAccounts(migratedForTerms)
+const preMigrateAccounts = legacySummarizeAllCustomerAccounts(legacyStored)
+assert.deepStrictEqual(Object.keys(migratedAccounts).sort(), Object.keys(preMigrateAccounts).sort())
+Object.keys(preMigrateAccounts).forEach(function (customerId) {
+  ;['amount', 'creditAmount', 'paidAmount', 'receivable'].forEach(function (field) {
+    assert.strictEqual(migratedAccounts[customerId][field], preMigrateAccounts[customerId][field],
+      'migrateRecordShape 不许改动 ' + customerId + ' 的 ' + field)
+  })
+})
+assert.strictEqual(
+  inv.getTotalReceivable(migratedForTerms),
+  legacyGetTotalReceivable(legacyStored),
+  'migrateRecordShape 不许改动全店欠款'
+)
 // 迁移前的老形状本身也走同一套折叠（老算法一直支持按 orderId 混进来的散记录）
 assertMatchesLegacy(legacyStored, 'legacyStored（未归并）')
 
@@ -273,12 +306,19 @@ function makeFuzzRecord(id, index) {
   const type = pick(rndFuzz, fuzzTypes)
   const acct = isAcctType(type)
   const customerId = acct ? pick(rndFuzz, fuzzCustomers) : ''
-  const payType = (type === 'out' || type === 'return') ? (rndFuzz() < 0.5 ? 'credit' : 'cash') : 'cash'
+  // 第三档产 paidAmount（#47 的部分收款），把新叶子的 paidAmount 分支也量进来
+  const roll = rndFuzz()
   const amount = randomAmount2dp(rndFuzz, 0, 2000)
+  const settle = (type === 'out' || type === 'return')
+    ? (roll < 0.34 ? { payType: 'credit' }
+      : roll < 0.67 ? { payType: 'cash' }
+      : { paidAmount: [-1, 0, Math.round(amount * roll * 100) / 100, amount,
+          Math.round(amount * 150) / 100][index % 5] })
+    : { payType: 'cash' }
   const profit = (type === 'out' || type === 'return')
     ? inv.round2((rndFuzz() < 0.25 ? -1 : 1) * rndFuzz() * amount * 0.4)
     : 0
-  return rec({ id: id, type: type, customerId: customerId, payType: payType, amount: amount, profit: profit, createdAt: 1000 + index })
+  return rec(Object.assign({ id: id, type: type, customerId: customerId, amount: amount, profit: profit, createdAt: 1000 + index }, settle))
 }
 
 const fuzzRecords = []
@@ -382,12 +422,20 @@ function makeIncrRecord(id, createdAt, forceType) {
   const type = forceType || pick(rndIncr, incrTypes)
   const acct = isAcctType(type)
   const customerId = acct ? pick(rndIncr, incrCustomers) : ''
-  const payType = (type === 'out' || type === 'return') ? (rndIncr() < 0.5 ? 'credit' : 'cash') : 'cash'
+  // 第三档产 paidAmount（#47 的部分收款），把新叶子的 paidAmount 分支也量进来
+  const roll = rndIncr()
   const amount = randomAmount2dp(rndIncr, 0.01, 999.99)
+  const rotor = Math.floor(rndIncr() * 5)
+  const settle = (type === 'out' || type === 'return')
+    ? (roll < 0.34 ? { payType: 'credit' }
+      : roll < 0.67 ? { payType: 'cash' }
+      : { paidAmount: [-1, 0, Math.round(amount * roll * 100) / 100, amount,
+          Math.round(amount * 150) / 100][rotor % 5] })
+    : { payType: 'cash' }
   const profit = (type === 'out' || type === 'return')
     ? inv.round2((rndIncr() < 0.3 ? -1 : 1) * rndIncr() * amount * 0.4)
     : 0
-  return rec({ id: id, type: type, customerId: customerId, payType: payType, amount: amount, profit: profit, createdAt: createdAt })
+  return rec(Object.assign({ id: id, type: type, customerId: customerId, amount: amount, profit: profit, createdAt: createdAt }, settle))
 }
 
 let incrRecords = []

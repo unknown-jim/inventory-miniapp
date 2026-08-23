@@ -38,8 +38,12 @@ Page({
     profitText: '0.00',
     costText: '',
     remark: '',
-    payType: 'cash',
-    payTypeText: '现结',
+    paidAmount: '',
+    paidTouched: false,
+    debtText: '0.00',
+    hasNewDebt: false,
+    paidOver: false,
+    overText: '0.00',
     customerId: '',
     customerName: '散客（可不选）',
     customerPhone: '',
@@ -95,6 +99,12 @@ Page({
     const profitText = view.isOut || view.isReturn ? util.money(record.profit) : '0.00'
     let productName = view.productName
     let specText = view.specText
+    let orderDue = 0
+    let orderPaid = 0
+    if (view.isOut) {
+      orderDue = inventory.toNumber(record.amount)
+      orderPaid = inventory.settledAmount(record)
+    }
     if (view.isOut || view.isReturn) {
       lines = recordLines.map(function (item) {
         const spec = inventory.specText(item.color, item.size)
@@ -133,7 +143,7 @@ Page({
         util.showError(error)
       }
     }
-    this.setData({
+    this.setData(Object.assign({
       id: record.id,
       type: record.type,
       typeText: view.typeText,
@@ -156,8 +166,8 @@ Page({
       amountText: amountText,
       profitText: profitText,
       remark: record.remark || '',
-      payType: record.payType === 'credit' ? 'credit' : 'cash',
-      payTypeText: record.payType === 'credit' ? '赊账' : '现结',
+      paidAmount: view.isOut ? util.money(orderPaid) : '',
+      paidTouched: false,
       customerId: record.customerId || '',
       customerName: record.customerName || (view.isOut ? '散客（可不选）' : (record.customerName || '')),
       customerPhone: record.customerPhone || '',
@@ -179,7 +189,26 @@ Page({
         : '不计入进货、不改进价',
       lines: lines,
       showCustomerPicker: false
-    })
+    }, this.paidPatch(orderDue, orderPaid)))
+  },
+
+  // 实收和应收的差额，跟销售页一套算法：欠款就是差额，多收要拦下来。
+  paidPatch(dueAmount, paidValue) {
+    const debt = inventory.round2(inventory.round2(dueAmount) - inventory.round2(paidValue))
+    return {
+      debtText: util.money(debt > 0 ? debt : 0),
+      hasNewDebt: debt > 0,
+      paidOver: debt < 0,
+      overText: util.money(debt < 0 ? -debt : 0)
+    }
+  },
+
+  // 改数量或售价之后的应收。这里不让实收自动跟着变：原来收了多少是既成事实，
+  // 改单不等于又收了钱。差额会立刻显示成欠款，要改就点「收满」或手填。
+  orderDue(lines) {
+    return inventory.round2((lines || this.data.lines).reduce(function (sum, item) {
+      return sum + inventory.toNumber(item.qty) * inventory.toNumber(item.unitPrice)
+    }, 0))
   },
 
   startEdit() {
@@ -207,10 +236,10 @@ Page({
       const profit = this.data.lines.reduce(function (sum, item) {
         return sum + (inventory.toNumber(item.unitPrice) - inventory.toNumber(item.costPrice)) * inventory.toNumber(item.qty) * sign
       }, 0)
-      this.setData({
+      this.setData(Object.assign(this.paidPatch(amount, this.data.paidAmount), {
         amountText: util.money(amount),
         profitText: util.money(profit)
-      })
+      }))
       return
     }
     const qty = inventory.toNumber(this.data.qty)
@@ -288,20 +317,38 @@ Page({
     const profit = lines.reduce(function (sum, item) {
       return sum + (inventory.toNumber(item.unitPrice) - inventory.toNumber(item.costPrice)) * inventory.toNumber(item.qty) * sign
     }, 0)
-    this.setData({
+    this.setData(Object.assign(this.paidPatch(amount, this.data.paidAmount), {
       lines: lines,
       amountText: util.money(amount),
       profitText: util.money(profit)
-    })
+    }))
   },
 
-  setPayType(e) {
+  onPaidInput(e) {
     if (!this.data.editing) return
-    const payType = e.currentTarget.dataset.type
-    this.setData({
-      payType: payType,
-      payTypeText: payType === 'credit' ? '赊账' : '现结'
-    })
+    const value = e.detail.value
+    this.setData(Object.assign({
+      paidAmount: value,
+      paidTouched: true
+    }, this.paidPatch(this.orderDue(), value)))
+  },
+
+  fillPaidFull() {
+    if (!this.data.editing) return
+    const due = this.orderDue()
+    this.setData(Object.assign({
+      paidAmount: util.money(due),
+      paidTouched: true
+    }, this.paidPatch(due, due)))
+  },
+
+  fillPaidNone() {
+    if (!this.data.editing) return
+    const due = this.orderDue()
+    this.setData(Object.assign({
+      paidAmount: '0',
+      paidTouched: true
+    }, this.paidPatch(due, 0)))
   },
 
   pickReason(e) {
@@ -420,9 +467,17 @@ Page({
           remark: this.data.remark
         })
       } else if (this.data.isOut) {
+        if (!String(this.data.paidAmount).trim()) {
+          wx.showToast({ title: '请填实收，没收到就填 0', icon: 'none' })
+          return
+        }
+        if (this.data.paidOver) {
+          wx.showToast({ title: '实收比应收多，请改实收', icon: 'none' })
+          return
+        }
         await store.updateRecord(this.data.id, {
           remark: this.data.remark,
-          payType: this.data.payType,
+          paidAmount: inventory.round2(this.data.paidAmount),
           customerId: this.data.customerId,
           operatorOpenid: this.data.operatorOpenid,
           operatorName: this.data.operatorName,
@@ -457,7 +512,6 @@ Page({
           qty: this.data.qty,
           unitPrice: this.data.unitPrice,
           remark: this.data.remark,
-          payType: this.data.payType,
           customerId: this.data.customerId
         })
       }
