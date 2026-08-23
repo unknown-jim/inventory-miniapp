@@ -106,11 +106,16 @@ function recordStore(ctx, bookId, shopId) {
     return docs.map(apply.fromRecordDoc)
   }
 
-  // 倒序一页。cursor 是上一页最后一条的 sortKey。
+  // 倒序一页的**原始文档**。cursor 是上一页最后一条的 sortKey。
   // limit 钳制走 apply.clampPageLimit：不传时缺省 20（2b-2 之前是 100），
   // 调用方核实过这条变化 —— recentAndToday / suffixOfCustomer 都显式传自己的
   // limit（PAGE_LIMIT=100），不受影响，见 tests/ledger-records.test.js。
-  async function page(options) {
+  //
+  // page() 就是它加一层 fromRecordDoc。分成两层是因为迁移校验要看
+  // _id / sortKey / bookId / shopId 这几个派生字段有没有和来源脱节（V7），而
+  // fromRecordDoc 正好把它们剥掉了。**这条 where 只有这一份定义**，
+  // 不要在 ledger-migrate.js 里另写一条。
+  async function pageDocs(options) {
     options = options || {}
     const limit = apply.clampPageLimit(options.limit)
     const where = { bookId: book }
@@ -125,11 +130,16 @@ function recordStore(ctx, bookId, shopId) {
       where.sortKey = _.lt(String(options.cursor))
     }
     const res = await col.where(where).orderBy('sortKey', 'desc').limit(limit).get()
-    const docs = docsOf(res)
+    return { docs: docsOf(res), limit: limit }
+  }
+
+  async function page(options) {
+    const got = await pageDocs(options)
+    const docs = got.docs
     return {
       records: docs.map(apply.fromRecordDoc),
       cursor: docs.length ? String(docs[docs.length - 1].sortKey || '') : '',
-      hasMore: docs.length >= limit
+      hasMore: docs.length >= got.limit
     }
   }
 
@@ -184,6 +194,7 @@ function recordStore(ctx, bookId, shopId) {
     latestPurchases: latestPurchases,
     returnsOfSale: returnsOfSale,
     page: page,
+    pageDocs: pageDocs,
     countAll: countAll,
     suffixOfCustomer: suffixOfCustomer,
     set: set,

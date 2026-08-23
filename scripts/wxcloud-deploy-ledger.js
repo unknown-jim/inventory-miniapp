@@ -152,7 +152,10 @@ async function main() {
 
   const db = currentEnv.databases && currentEnv.databases[0]
   const tag = (db && db.instanceId) || ENV_ID
-  const names = ['shops', 'members', 'ledgers', 'ledger_clears']
+  // ledger_records 漏了就是**上线路径直接断掉**：集合不存在，部署完每一次流水
+  // 查询（listRecords / getSlip / getRecord / 记账）都报错。
+  // 建表不建索引 —— 那 6 条复合索引仍须在控制台手建，见 docs/cloud-ledger.md。
+  const names = ['shops', 'members', 'ledgers', 'ledger_records', 'ledger_clears']
   let tables = []
   try {
     const listed = await wx.api.flexdbListTables({

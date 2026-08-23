@@ -855,8 +855,13 @@ function applyMutation(ledger, action, payload, now, nextId, loaded) {
     }
     if (!snapshot.bookId) {
       // 升级前的快照把流水装在数组里，恢复要逐条写回集合，不是一次事务能做完的事。
-      // 宁可报错，也不要恢复出一本没有流水的账。迁移动作会顺带把这类快照转过来。
-      throw new Error('这份备份是账本升级前存的，请先完成账本升级再恢复')
+      // 宁可报错，也不要恢复出一本没有流水的账。
+      //
+      // 文案不能写成「请先完成账本升级再恢复」：账本升级（migrateRecords）**不转换
+      // 老快照**（要为每份快照发一个账套 + 逐条写集合，那是第二个无界写循环，
+      // 见方案 §六-(e)）。升级跑完之后那句话就变成了一句谎话 —— 店主照做也没用。
+      // 预检的 P11（clearSnapshots.latestHasBookId）会提前报出哪几家店会撞上这条。
+      throw new Error('这份备份是账本升级前存的，暂时恢复不了，请联系开发者')
     }
     next.products = cloneList(snapshot.products)
     next.skus = cloneList(snapshot.skus)

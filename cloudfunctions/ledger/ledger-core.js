@@ -1,6 +1,7 @@
 const apply = require('./ledger-apply')
 const inventory = require('./inventory')
 const records = require('./ledger-records')
+const migrate = require('./ledger-migrate')
 
 const NOT_MEMBER = '不是该店成员'
 
@@ -295,8 +296,14 @@ function isMutation(action) {
 // 的回传会把本地流水缓存清成空数组，下一张送货单就会印一个 0.00 的前欠。
 const API_VERSION = 2
 const VERSIONED_READS = ['getLedger', 'getSlip', 'migrateLocal', 'listRecords', 'getRecord']
+// 账本升级的三个运维动作（2b-1b）。同样过版本门 —— 它们回传的是账本内部形状，
+// 老客户端拿去解释只会更糟。三个都**不进 MUTATIONS**、不走 applyMutation：
+// 它们改的是账本的迁移状态和聚合本身，不是一笔账。
+function isOpsAction(action) {
+  return migrate.OPS_ACTIONS.indexOf(action) >= 0
+}
 function needsApiVersion(action) {
-  return VERSIONED_READS.indexOf(action) >= 0 || isMutation(action)
+  return VERSIONED_READS.indexOf(action) >= 0 || isOpsAction(action) || isMutation(action)
 }
 
 async function membersOfShop(db, tx, shopId) {
@@ -530,6 +537,25 @@ async function dispatch(input) {
       await tx.removeShop(shopId)
       return { deleted: true, shopId: shopId }
     })
+  }
+
+  // 账本升级的三个运维动作。owner-gated：照抄 deleteShop 的内联写法，
+  // **不复用 requireOwner** —— 它的文案是「只有店主能改成员」，用在这里会误导。
+  // 客户端一个入口都没有（方案 §六-(f)）：从开发者工具 Console 直接
+  // wx.cloud.callFunction 调。加个隐藏按钮就等于把「一键重写全店流水」发到线上。
+  if (isOpsAction(action)) {
+    const members = await db.listMembersByShop(shopId)
+    const member = requireMember(members, shopId, openid)
+    if (member.role !== 'owner') {
+      throw new Error('只有店主能做账本升级')
+    }
+    if (action === 'checkAggregates') {
+      return migrate.checkAggregates(db, shopId, payload)
+    }
+    if (action === 'migrateRecords') {
+      return migrate.migrateRecords(db, shopId, payload, now, nextId)
+    }
+    return migrate.recomputeAggregates(db, shopId, payload, now)
   }
 
   if (action === 'getLedger') {
