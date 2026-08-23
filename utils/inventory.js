@@ -942,11 +942,35 @@ function filterCategories(categories, keyword) {
 // 老流水只有 payType 没有 paidAmount，读的时候回推：现结当作全额结清、
 // 赊账当作一分没结。不写迁移脚本，理由见 docs/cloud-ledger.md。
 // **返回值必须是 round2 的输出**：recordTerms 的整数分等价性依赖这一点。
+//
+// 库里一共有三代形状，缺字段的回推必须把三代都吃下来：
+//   代 A  销售有 payType，退货也有 payType（开退货单时从销售单抄过去的）
+//   代 B  销售有 paidAmount，退货**两个字段都没有** —— 那一版把退货冲抵改成了
+//         读时现算，退货单头不再存任何结算字段
+//   代 C  销售和退货都有 paidAmount（退货的那份由 returnCashRefund 写单头）
+//
+// 「两个字段都没有」（代 B 的退货）仍然回推成 amount，也就是「整笔退了现金、
+// 一分不冲欠款」。这是**刻意的保守值**，不要改成 0，三条独立理由：
+//   1. 改成 0 会折出负欠款。现结卖 100 / 退 30 / 无字段 -> receivable = -30，
+//      而 assertAccountsValid 是全账户扫描（见下方），一个负账户会让这家店
+//      退货 / 改单 / 删单三条写路径一起卡死。
+//   2. 出错方向必须可补救。算成「退了现金」，现场若真没退，事后补记一笔收款
+//      就对上；算小了要一笔负数收款，系统里没这个操作。见
+//      docs/accounting-vs-policy.md 的「退货先冲这张单没收到的钱」。
+//   3. 结构上这里算不出正确值。正确值是
+//      returnCashRefund(被退销售单, 本次退货额, 其余已退)，需要被退销售单在场；
+//      settledAmount 只吃一条记录，不可能给出它。**正确值由
+//      repairReturnSplits 在整组退货单上重算给出**（apply.legacyRecordsOf 会跑）。
+// 六格分支表钉在 tests/ledger-terms.test.js（M2），反向的负欠款断言在 M2b。
 function settledAmount(record) {
   if (!record) return 0
   const amount = toNumber(record.amount)
   if (record.paidAmount == null || record.paidAmount === '') {
-    return record.payType === 'credit' ? 0 : amount
+    if (record.payType === 'credit') return 0
+    if (record.payType === 'cash') return amount
+    // 两个字段都没有（代 B 的退货单）：保守回推成整笔现金，理由见上方第 1-3 条。
+    // 与 'cash' 同值是**故意**的，不是漏写的分支。
+    return amount
   }
   const paid = round2(record.paidAmount)
   if (paid <= 0) return 0
@@ -1073,6 +1097,78 @@ function recomputeSaleReturns(records, saleRecord) {
     }),
     changes: changes
   }
+}
+
+// 一整份流水上的退货份额整体重算：把 recomputeSaleReturns 按销售单铺开跑一遍。
+//
+// 为什么需要它：单张退货单的 paidAmount 只有作为一组才有意义（见上方【拆分不变量】），
+// 而库里存着三代形状（见 settledAmount 的注释）。代 B 的退货单两个结算字段都没有，
+// 读时被 settledAmount 保守回推成「整笔退现金」——一分都不冲欠款，欠款算大（B1）；
+// 改过销售单客户之后，退货单头留着旧 customerId，一个客户少算、另一个多算（B2）。
+// 这两类都不是单条记录能修的，必须把同一张销售单名下的退货单**整组**拿到一起，
+// 按记账顺序重新分份额、并把客户四字段拨到销售单当前值。
+//
+// 为什么不塞进 migrateRecordShape：**那一层受 needsRecordMigration 门控**，只在
+// 「还是按行的老形状」时才跑。代 B / 代 C 的账本已经是 lines 形状，塞进去会让它们
+// 整批跳过修复——而代 B 恰恰是 B1 的来源。挂载点必须是无条件跑的 legacyRecordsOf
+// （见 utils/ledger-apply.js）。
+// 顺带一提口径也不同：那一层是「换字段不许换钱」，这一层就是来改钱的。但**不要**
+// 拿「否则 tests/ledger-terms.test.js 那条常驻断言会变红」当理由——实测不会红，
+// 那条语料的退货是一致的代 A，重算恰好是恒等。门控才是真理由。
+//
+// 复杂度必须是 O(n)：它在读路径上，未迁移的账本每次读都要跑一遍。所以先一趟
+// 建索引分组，每组只在自己那几条上调一次 recomputeSaleReturns，**不要**写成
+// 「对每张销售单在全量数组上 filter」的 O(n·m)。
+//
+// 幂等：代 C（已 materialize 且客户字段已对齐）零改动，此时返回**入参本身**，
+// 引用相等、零分配。
+//
+// 孤儿退货（lines[0].saleOrderId 为空，或被退销售单不在这份数组里）份额无从算起，
+// 原样保留 settledAmount 的回推值。**注意这个回推值只对代 B 孤儿是保守的**：
+// 代 A 孤儿（payType:'credit'）和代 C 孤儿（paidAmount < amount）仍然会折出负账户
+// ——销售 cash 100 + 同客户孤儿退货 credit 30 → receivable = -30。这不是本次引入的
+// （基线同样如此），但下一趟写迁移校验（V6 负账户 / V11 孤儿清单）的人别假设
+// 「孤儿一定非负」。
+function repairReturnSplits(records) {
+  const list = records || []
+  const salesById = Object.create(null)
+  const groups = Object.create(null)
+  const saleIds = []
+  for (let i = 0; i < list.length; i++) {
+    const item = list[i]
+    if (!item) continue
+    if (item.type === 'out') {
+      const saleId = String(item.id || '')
+      if (saleId) salesById[saleId] = item
+      continue
+    }
+    if (item.type !== 'return') continue
+    const saleId = String((recordLines(item)[0] || {}).saleOrderId || '')
+    if (!saleId) continue
+    if (!groups[saleId]) {
+      groups[saleId] = []
+      saleIds.push(saleId)
+    }
+    groups[saleId].push(item)
+  }
+  let replaced = null
+  for (let i = 0; i < saleIds.length; i++) {
+    const saleId = saleIds[i]
+    const sale = salesById[saleId]
+    if (!sale) continue
+    const result = recomputeSaleReturns(groups[saleId], sale)
+    if (!result.changes.length) continue
+    if (!replaced) replaced = Object.create(null)
+    result.changes.forEach(function (change) {
+      const id = String((change.after && change.after.id) || '')
+      if (id) replaced[id] = change.after
+    })
+  }
+  if (!replaced) return records
+  return list.map(function (item) {
+    const id = item && item.id
+    return (id && replaced[id]) || item
+  })
 }
 
 // 退货单指向的销售单。一次退货只能退同一张销售单，所以看第一行就够；找不到
@@ -2964,6 +3060,9 @@ module.exports = {
   firstLine: firstLine,
   returnableQty: returnableQty,
   settledAmount: settledAmount,
+  returnedAmountOfSale: returnedAmountOfSale,
+  recomputeSaleReturns: recomputeSaleReturns,
+  repairReturnSplits: repairReturnSplits,
   createProduct: createProduct,
   updateProduct: updateProduct,
   createSku: createSku,

@@ -65,7 +65,12 @@ function stripComments(src) {
 // 后三个（recordTerms / addTerms / emptyTerms）是手工攒累加器的零件：
 // let t = emptyTerms(); list.forEach(r => t = addTerms(t, recordTerms(r), 1))
 // 绕开上面那些折叠函数，一样能从一页流水里折出一个偏小的欠款。
-const MONEY_FROM_RECORDS = /\b(summarizeCustomerAccount|summarizeAllCustomerAccounts|receivableAt|receivableDelta|getTotalReceivable|summarizeRecords|computeTotals|foldAccountTerms|foldTotalTerms|totalsOf|recordTerms|addTerms|emptyTerms)\s*\(/
+// 末两个（repairReturnSplits / recomputeSaleReturns）不折钱，但**改钱**：退货份额
+// 只有把同一张销售单名下的退货单**整组**拿到一起才算得对。在一页流水上跑，组是
+// 不完整的（缺被退销售单、或只翻到一半的退货单），会静默算出错的 paidAmount ——
+// 和 foldAccountTerms 同一类危险，一并禁掉。份额重算只有服务端 legacyRecordsOf
+// 一条路。
+const MONEY_FROM_RECORDS = /\b(summarizeCustomerAccount|summarizeAllCustomerAccounts|receivableAt|receivableDelta|getTotalReceivable|summarizeRecords|computeTotals|foldAccountTerms|foldTotalTerms|totalsOf|recordTerms|addTerms|emptyTerms|repairReturnSplits|recomputeSaleReturns)\s*\(/
 // accountOf(null) 是「空账户」的构造器，不碰流水，customer-edit 的 B1 修复在用；
 // 传别的东西进去就是在投影一份自己攒的累加器，同样不该出现在页面里
 const ACCOUNT_OF_MISUSE = /\baccountOf\s*\(\s*(?!null\s*\))/
@@ -93,6 +98,8 @@ assert.strictEqual(
 // 自检：禁令的正则真的能抓到东西，否则上面那条断言是假绿
 assert.ok(MONEY_FROM_RECORDS.test('inventory.summarizeCustomerAccount(list, id)'))
 assert.ok(MONEY_FROM_RECORDS.test('receivableAt(list, id, at)'))
+assert.ok(MONEY_FROM_RECORDS.test('inventory.repairReturnSplits(page.records)'))
+assert.ok(MONEY_FROM_RECORDS.test('recomputeSaleReturns(list, sale)'))
 assert.ok(!MONEY_FROM_RECORDS.test('// 口径和 summarizeCustomerAccount 相等'))
 assert.ok(ACCOUNT_OF_MISUSE.test('inventory.accountOf(terms)'))
 assert.ok(!ACCOUNT_OF_MISUSE.test('inventory.accountOf(null)'))

@@ -662,4 +662,329 @@ assert.strictEqual(paPage3.records.length, 0, '正好整页倍数，翻完之后
 assert.strictEqual(paPage3.hasMore, false)
 assert.strictEqual(paPage3.cursor, '', '空页 cursor 必须是空字符串')
 
+// ---------------------------------------------------------------------------
+// 6) 退货份额整体重算：repairReturnSplits（挂在 apply.legacyRecordsOf 里）
+//
+//    库里三代形状（见 utils/inventory.js 的 settledAmount 注释）：
+//      代 A  销售有 payType，退货也有 payType（开退货单时从销售单抄）
+//      代 B  销售有 paidAmount，退货**两个结算字段都没有**
+//      代 C  销售和退货都有 paidAmount（returnCashRefund 写的单头）
+//
+//    B1：代 B 的退货落进 settledAmount 的「缺字段」分支，被保守回推成
+//        「整笔退了现金」→ 一分都不冲欠款 → 欠款算大。
+//    B2：退货单头的 customerId 是开单当时抄的，改过销售单客户之后就过期了 →
+//        一个客户少算、另一个多算（后者常常是负欠款，会卡死全店写路径）。
+//
+//    判据是【拆分不变量】：每张销售单上 Σ(rᵢ − settledAmount(rᵢ)) == min(D, Σrᵢ)，
+//    D = 该销售单欠款基准 = amount − settledAmount(sale)。
+// ---------------------------------------------------------------------------
+
+function splitLine(overrides) {
+  return Object.assign({
+    lineId: '', productId: 'sp1', productName: '货', sku: '', skuId: '', color: '', size: '',
+    qty: 1, unitPrice: 0, costPrice: 0, amount: 0, profit: 0
+  }, overrides)
+}
+
+// 刻意不复用上面的 rec()：它给 payType 一个 'cash' 缺省值，而这一节的全部意义
+// 就在于「哪些结算字段在、哪些不在」，缺省值会把代 B 语料悄悄变成代 A。
+function splitSale(overrides) {
+  const amount = overrides.amount != null ? overrides.amount : 100
+  const record = {
+    id: overrides.id || 'ss-1',
+    type: 'out',
+    customerId: 'sc1', customerName: '甲', customerPhone: '13800000000', customerAddress: '甲街 1 号',
+    amount: amount, profit: 0, createdAt: overrides.createdAt != null ? overrides.createdAt : 2000,
+    lines: [splitLine({ lineId: (overrides.id || 'ss-1') + '-l1', unitPrice: amount, amount: amount, allocations: [], returnedQty: 0, returnedAmount: 0 })]
+  }
+  return Object.assign(record, overrides)
+}
+
+function splitReturn(overrides) {
+  const amount = overrides.amount != null ? overrides.amount : 30
+  const saleOrderId = overrides.saleOrderId != null ? overrides.saleOrderId : 'ss-1'
+  const record = {
+    id: overrides.id || 'sr-1',
+    type: 'return',
+    customerId: 'sc1', customerName: '甲', customerPhone: '13800000000', customerAddress: '甲街 1 号',
+    amount: amount, profit: 0, createdAt: overrides.createdAt != null ? overrides.createdAt : 3000,
+    lines: [splitLine({ lineId: (overrides.id || 'sr-1') + '-l1', unitPrice: amount, amount: amount, saleOrderId: saleOrderId, saleLineId: saleOrderId + '-l1' })]
+  }
+  const next = Object.assign(record, overrides)
+  delete next.saleOrderId
+  return next
+}
+
+function splitReceivable(records, customerId) {
+  const accounts = inv.summarizeAllCustomerAccounts(apply.legacyRecordsOf({ records: records }))
+  return accounts[customerId] ? accounts[customerId].receivable : 0
+}
+
+// 返回破坏【拆分不变量】的销售单 id 列表。没有退货的销售单不参与。
+function splitViolations(records) {
+  const bad = []
+  ;(records || []).forEach(function (sale) {
+    if (!sale || sale.type !== 'out') return
+    const debt = inv.round2(inv.toNumber(sale.amount) - inv.settledAmount(sale))
+    const rets = records.filter(function (item) {
+      return item && item.type === 'return'
+        && String((inv.recordLines(item)[0] || {}).saleOrderId || '') === sale.id
+    })
+    if (!rets.length) return
+    const sumReturn = inv.round2(rets.reduce(function (acc, item) {
+      return acc + inv.toNumber(item.amount)
+    }, 0))
+    const offset = inv.round2(rets.reduce(function (acc, item) {
+      return acc + (inv.toNumber(item.amount) - inv.settledAmount(item))
+    }, 0))
+    if (offset !== Math.min(debt, sumReturn)) bad.push(sale.id)
+  })
+  return bad
+}
+
+// --- M1：三代形状语料逐条过 legacyRecordsOf，欠款等于手算值 -----------------
+// 每一格都是「赊账/现结卖 100、退 30」，右列是手算的正确欠款。
+const m1Cases = [
+  ['代A credit', [splitSale({ payType: 'credit' }), splitReturn({ payType: 'credit' })], 70],
+  ['代A cash', [splitSale({ payType: 'cash' }), splitReturn({ payType: 'cash' })], 0],
+  ['代B 实收0', [splitSale({ paidAmount: 0 }), splitReturn({})], 70],
+  ['代B 实收40', [splitSale({ paidAmount: 40 }), splitReturn({})], 30],
+  ['代B 实收90', [splitSale({ paidAmount: 90 }), splitReturn({})], 0],
+  ['代B 双退货 实收0', [splitSale({ paidAmount: 0 }),
+    splitReturn({ id: 'sr-1', amount: 30, createdAt: 3000 }),
+    splitReturn({ id: 'sr-2', amount: 50, createdAt: 4000 })], 20],
+  ['代B 双退货 实收90', [splitSale({ paidAmount: 90 }),
+    splitReturn({ id: 'sr-1', amount: 30, createdAt: 3000 }),
+    splitReturn({ id: 'sr-2', amount: 50, createdAt: 4000 })], 0],
+  ['代C 实收40', [splitSale({ paidAmount: 40 }), splitReturn({ paidAmount: 0 })], 30],
+  ['代C 实收90', [splitSale({ paidAmount: 90 }), splitReturn({ paidAmount: 20 })], 0]
+]
+m1Cases.forEach(function (row) {
+  const label = row[0]
+  const repaired = apply.legacyRecordsOf({ records: row[1] })
+  assert.strictEqual(splitReceivable(row[1], 'sc1'), row[2], 'M1 ' + label + '：欠款必须等于手算值')
+  assert.deepStrictEqual(splitViolations(repaired), [], 'M1 ' + label + '：修复后拆分不变量必须成立')
+  assert.doesNotThrow(function () {
+    inv.assertAccountsValid(inv.foldAccountTerms(repaired))
+  }, 'M1 ' + label + '：修复后不许出现负账户')
+})
+
+// M1 孤儿退货：lines[0].saleOrderId 为空，份额无从算起。原样保留 settledAmount
+// 的保守回推值（欠款偏大、方向可补救），**不许**被改成 0 折出负欠款。
+const m1Orphan = [splitSale({ paidAmount: 0 }), splitReturn({ saleOrderId: '' })]
+const m1OrphanOut = apply.legacyRecordsOf({ records: m1Orphan })
+assert.strictEqual(splitReceivable(m1Orphan, 'sc1'), 100,
+  'M1 孤儿退货：份额修不了，保持「整笔退现金」的保守值，欠款仍是 100')
+assert.strictEqual(m1OrphanOut[1].paidAmount, undefined, 'M1 孤儿退货：不许被塞进 paidAmount')
+assert.doesNotThrow(function () {
+  inv.assertAccountsValid(inv.foldAccountTerms(m1OrphanOut))
+}, 'M1 孤儿退货：保守值不许折出负账户')
+
+// M1 B2：退货单头挂着改客户之前的旧 customerId（代 A）。
+// 修好之后：新客户拿到正确欠款、旧客户从 accounts 里消失、退货单头四个客户字段全部拨过来。
+const m1B2 = [
+  splitSale({ payType: 'credit' }),
+  splitReturn({ payType: 'credit', customerId: 'sc9', customerName: '旧甲', customerPhone: '13900000000', customerAddress: '旧街 9 号' })
+]
+const m1B2Out = apply.legacyRecordsOf({ records: m1B2 })
+const m1B2Accounts = inv.summarizeAllCustomerAccounts(m1B2Out)
+assert.strictEqual(m1B2Accounts.sc1.receivable, 70, 'M1 B2：新客户欠款 100 − 30 = 70')
+assert.ok(!Object.prototype.hasOwnProperty.call(m1B2Accounts, 'sc9'),
+  'M1 B2：旧客户必须从 accounts 里消失，不能留一个 −30 的负账户')
+const m1B2Return = m1B2Out.find(function (item) { return item.type === 'return' })
+assert.strictEqual(m1B2Return.customerId, 'sc1', 'M1 B2：customerId 要拨到销售单当前值')
+assert.strictEqual(m1B2Return.customerName, '甲', 'M1 B2：四个客户字段要整组拨，不能只拨 id')
+assert.strictEqual(m1B2Return.customerPhone, '13800000000')
+assert.strictEqual(m1B2Return.customerAddress, '甲街 1 号')
+assert.strictEqual(m1B2Return.payType, undefined, 'M1 B2：重写过的退货单不许留着老 payType')
+
+// M1 幂等：代 C（已 materialize 且客户字段已对齐）零改动，返回**入参本身**。
+// 这是把 repairReturnSplits 放在读路径上的前提：不改动时零分配。
+const m1GenC = [splitSale({ paidAmount: 40 }), splitReturn({ paidAmount: 0 })]
+const m1GenCOut = inv.repairReturnSplits(m1GenC)
+assert.strictEqual(m1GenCOut, m1GenC, 'M1 代C：无改动时必须返回入参本身（引用相等）')
+m1GenC.forEach(function (item, at) {
+  assert.strictEqual(m1GenCOut[at], item, 'M1 代C：引用必须逐条不变')
+})
+// 再跑一次仍然零改动 —— 幂等
+assert.strictEqual(inv.repairReturnSplits(m1GenCOut), m1GenC, 'M1 代C：repairReturnSplits 必须幂等')
+// 混进一条代 B 时，只有那一条被换掉，其余引用不动
+const m1Mixed = [
+  splitSale({ id: 'ss-1', paidAmount: 40 }), splitReturn({ id: 'sr-1', paidAmount: 0 }),
+  splitSale({ id: 'ss-2', paidAmount: 0, amount: 200, createdAt: 5000 }),
+  splitReturn({ id: 'sr-2', amount: 60, createdAt: 6000, saleOrderId: 'ss-2' })
+]
+const m1MixedOut = inv.repairReturnSplits(m1Mixed)
+assert.notStrictEqual(m1MixedOut, m1Mixed, 'M1 混合：有改动时必须返回新数组')
+assert.strictEqual(m1MixedOut[0], m1Mixed[0], 'M1 混合：销售单不被重写')
+assert.strictEqual(m1MixedOut[1], m1Mixed[1], 'M1 混合：已 materialize 的退货单引用不动')
+assert.strictEqual(m1MixedOut[2], m1Mixed[2])
+assert.notStrictEqual(m1MixedOut[3], m1Mixed[3], 'M1 混合：只有代 B 那条被换掉')
+assert.strictEqual(m1MixedOut[3].paidAmount, 0, 'M1 混合：ss-2 欠 200、退 60，全额冲欠款、不退现金')
+
+// --- M1b：拆分不变量 fuzz 400 组 -------------------------------------------
+// 每组一张销售单 + 1..3 张退货单，退货单的「代」随机（代 B 无字段 / 代 C 已
+// materialize / 代 A 有 payType），其中一部分挂着过期的 customerId（B2）。
+// 修复前必须真的破坏、真的折出负账户（否则这两条断言是假绿），
+// 修复后 0 组破坏、且 assertAccountsValid 一次都不抛。
+const rndSplit = mulberry32(20260825)
+let m1bBrokenBefore = 0
+let m1bNegativeBefore = 0
+for (let g = 0; g < 400; g++) {
+  const amount = randomAmount2dp(rndSplit, 10, 2000)
+  const paid = [0, inv.round2(amount * rndSplit()), amount][g % 3]
+  const sale = splitSale({ id: 'fs-' + g, amount: amount, paidAmount: paid, customerId: 'fc-' + (g % 7) })
+  const retCount = 1 + Math.floor(rndSplit() * 3)
+  const corpus = [sale]
+  let leftQty = amount
+  for (let k = 0; k < retCount && leftQty > 0.02; k++) {
+    const retAmount = k === retCount - 1
+      ? inv.round2(leftQty * (rndSplit() < 0.3 ? 1 : rndSplit()))
+      : inv.round2(leftQty * rndSplit() * 0.6)
+    if (retAmount <= 0) break
+    leftQty = inv.round2(leftQty - retAmount)
+    // 三代形状按 roll 混着来：代 B 占一半（B1 的主战场），其余是代 C / 代 A
+    const roll = rndSplit()
+    const shape = roll < 0.5 ? {}
+      : roll < 0.7 ? { paidAmount: 0 }
+        : roll < 0.85 ? { payType: 'credit' } : { payType: 'cash' }
+    // 30% 的退货单挂着改客户之前的旧 id —— B2
+    const stale = rndSplit() < 0.3 ? { customerId: 'fc-stale-' + (g % 7) } : {}
+    corpus.push(splitReturn(Object.assign({
+      id: 'fr-' + g + '-' + k, amount: retAmount, saleOrderId: 'fs-' + g,
+      createdAt: 3000 + k, customerId: sale.customerId
+    }, shape, stale)))
+  }
+  if (corpus.length < 2) continue
+  if (splitViolations(corpus).length) m1bBrokenBefore++
+  let negativeBefore = false
+  try { inv.assertAccountsValid(inv.foldAccountTerms(corpus)) } catch (err) { negativeBefore = true }
+  if (negativeBefore) m1bNegativeBefore++
+
+  const repaired = apply.legacyRecordsOf({ records: corpus })
+  assert.deepStrictEqual(splitViolations(repaired), [],
+    'M1b 第 ' + g + ' 组：修复后拆分不变量必须成立')
+  assert.doesNotThrow(function () {
+    inv.assertAccountsValid(inv.foldAccountTerms(repaired))
+  }, 'M1b 第 ' + g + ' 组：修复后不许出现负账户')
+  // 二次重算是恒等变换
+  assert.strictEqual(inv.repairReturnSplits(repaired), repaired,
+    'M1b 第 ' + g + ' 组：修复后再跑一次必须零改动')
+}
+assert.ok(m1bBrokenBefore > 0, 'M1b 自检：修复前必须真的有组破坏拆分不变量，否则这条 fuzz 是假绿')
+// 负账户主要来自「代 A 退货 payType 与销售过期」那一类，不只是 B2 ——
+// 审计实测：把 B2 完全去掉，这条自检仍然绿。B2 自身的覆盖在 M1 和 M13 里有硬断言。
+assert.ok(m1bNegativeBefore > 0, 'M1b 自检：修复前必须真的有组折出负账户，否则负账户断言是假绿')
+
+// --- M1c：「纯代 A 且退货 payType 与销售一致」600 组，0 组欠款变化 ----------
+// 生产上的 12 家店就是这一类（代 A、退货 payType 从销售单抄过去）。这一条把
+// 「这次重算在生产数据上是恒等变换」钉住 —— 已经正确的账一分都不许动。
+const rndGenA = mulberry32(20260826)
+for (let g = 0; g < 600; g++) {
+  const payType = rndGenA() < 0.5 ? 'credit' : 'cash'
+  const amount = randomAmount2dp(rndGenA, 10, 2000)
+  const customerId = 'ac-' + (g % 5)
+  const sale = splitSale({ id: 'as-' + g, amount: amount, payType: payType, customerId: customerId })
+  const corpus = [sale]
+  let left = amount
+  const retCount = Math.floor(rndGenA() * 3)   // 0..2 张退货
+  for (let k = 0; k < retCount && left > 0.02; k++) {
+    const retAmount = inv.round2(left * rndGenA() * 0.8)
+    if (retAmount <= 0) break
+    left = inv.round2(left - retAmount)
+    corpus.push(splitReturn({
+      id: 'ar-' + g + '-' + k, amount: retAmount, saleOrderId: 'as-' + g,
+      createdAt: 3000 + k, customerId: customerId, payType: payType
+    }))
+  }
+  // 掺一笔收款和一笔期初，确保比对的不只是销售/退货两项
+  corpus.push(rec({ id: 'ap-' + g, type: 'pay', customerId: customerId, amount: inv.round2(amount * 0.1), createdAt: 4000 }))
+  const before = inv.summarizeAllCustomerAccounts(corpus)
+  const after = inv.summarizeAllCustomerAccounts(apply.legacyRecordsOf({ records: corpus }))
+  assert.deepStrictEqual(after, before,
+    'M1c 第 ' + g + ' 组：纯代 A 且 payType 一致时，整体重算必须是恒等变换')
+}
+
+// --- M2：settledAmount 六格分支表 -------------------------------------------
+// 这张表是「不许把退货缺两个字段那一格改成 0」的护栏。改动 settledAmount 之前
+// 先读它上面的注释，再读下面的 M2b。
+const m2Table = [
+  ['① paidAmount 缺 + payType=credit', { amount: 100, payType: 'credit' }, 0],
+  ['② paidAmount 缺 + payType=cash', { amount: 100, payType: 'cash' }, 100],
+  ['③ 两个字段都缺（代 B 的退货单）', { amount: 100 }, 100],
+  ['④ paidAmount = 0', { amount: 100, paidAmount: 0 }, 0],
+  ['⑤ paidAmount 正常', { amount: 100, paidAmount: 40 }, 40],
+  ['⑥ paidAmount 超额，封顶到 amount', { amount: 100, paidAmount: 150 }, 100]
+]
+m2Table.forEach(function (row) {
+  assert.strictEqual(inv.settledAmount(row[1]), row[2], 'M2 ' + row[0])
+})
+// paidAmount 的「算不算缺」判据：null / '' 算缺（退回 payType），0 不算缺
+assert.strictEqual(inv.settledAmount({ amount: 100, paidAmount: null, payType: 'credit' }), 0, 'M2 null 算缺，退回 payType')
+assert.strictEqual(inv.settledAmount({ amount: 100, paidAmount: '', payType: 'credit' }), 0, 'M2 空串算缺，退回 payType')
+assert.strictEqual(inv.settledAmount({ amount: 100, paidAmount: null }), 100, 'M2 null + 无 payType 仍是保守值 amount')
+assert.strictEqual(inv.settledAmount({ amount: 100, paidAmount: '' }), 100, 'M2 空串 + 无 payType 仍是保守值 amount')
+assert.strictEqual(inv.settledAmount({ amount: 100, paidAmount: 0 }), 0, 'M2 数字 0 不算缺，就是「一分没收」')
+assert.strictEqual(inv.settledAmount({ amount: 100, paidAmount: -5 }), 0, 'M2 负数钳到 0')
+assert.strictEqual(inv.settledAmount({ amount: 100, paidAmount: '40' }), 40, 'M2 字符串数字按数字算')
+assert.strictEqual(inv.settledAmount({ amount: 100, payType: 'somethingElse' }), 100, 'M2 认不出的 payType 也走保守值')
+assert.strictEqual(inv.settledAmount(null), 0, 'M2 空记录')
+assert.strictEqual(inv.settledAmount(undefined), 0, 'M2 undefined')
+// 返回值必须是 round2 的输出（recordTerms 的整数分等价性依赖这一条）
+assert.strictEqual(inv.settledAmount({ amount: 100, paidAmount: 33.333 }), inv.round2(33.333), 'M2 返回值必须是 round2 的输出')
+
+// --- M2b：反向断言，把「为什么不能改成 0」变成可执行的 ----------------------
+// 只在这条测试里存在的假想实现：把 M2 表里第 ③ 格改成 0。
+function settledAmountIfReturnsZero(record) {
+  if (!record) return 0
+  const amount = inv.toNumber(record.amount)
+  if (record.paidAmount == null || record.paidAmount === '') {
+    if (record.payType === 'credit') return 0
+    if (record.payType === 'cash') return amount
+    return 0                                  // ← 被否掉的那个改法
+  }
+  const paid = inv.round2(record.paidAmount)
+  if (paid <= 0) return 0
+  return paid > amount ? amount : paid
+}
+// 现结卖 100 / 退 30，退货单两个结算字段都没有，而且是**孤儿退货**
+// （lines[0].saleOrderId 为空）—— 这是 repairReturnSplits 结构上修不了的那一类，
+// 所以 settledAmount 的回推值就是最终值，改错了没有第二道防线。
+const m2bSale = splitSale({ id: 'zs-1', amount: 100, payType: 'cash' })
+const m2bReturn = splitReturn({ id: 'zr-1', amount: 30, saleOrderId: '' })
+const m2bCorpus = apply.legacyRecordsOf({ records: [m2bSale, m2bReturn] })
+
+// 现状（回推成 amount）：账是保守的、非负的，全店写路径畅通
+assert.strictEqual(inv.settledAmount(m2bCorpus[1]), 30, 'M2b 现状：缺字段的退货回推成整笔现金')
+assert.doesNotThrow(function () {
+  inv.assertAccountsValid(inv.foldAccountTerms(m2bCorpus))
+}, 'M2b 现状：assertAccountsValid 不抛，退货/改单/删单三条写路径畅通')
+
+// 假想改法（回推成 0）：同一份语料折出 −30 的负账户
+assert.strictEqual(settledAmountIfReturnsZero(m2bCorpus[1]), 0, 'M2b 自检：假想实现确实把第 ③ 格改成了 0')
+const m2bZeroAccounts = {}
+m2bCorpus.forEach(function (record) {
+  if (record.type !== 'out' && record.type !== 'return') return
+  const cid = record.customerId
+  const credit = inv.toNumber(record.amount) - settledAmountIfReturnsZero(record)
+  m2bZeroAccounts[cid] = inv.addTerms(m2bZeroAccounts[cid], Object.assign(inv.emptyTerms(), {
+    creditSalesSum: record.type === 'out' ? Math.round(credit * 100) : 0,
+    creditReturnsSum: record.type === 'return' ? Math.round(credit * 100) : 0,
+    count: 1
+  }), 1)
+})
+assert.strictEqual(inv.accountOf(m2bZeroAccounts.sc1).receivable, -30,
+  'M2b：把第 ③ 格改成 0 会折出 −30 的欠款')
+assert.throws(function () {
+  inv.assertAccountsValid(m2bZeroAccounts)
+}, /改完后收款会超过赊账/,
+'M2b：负账户会让 assertAccountsValid 抛错 —— assertAccountsValid 是**全账户扫描**'
++ '（inventory.js 的 assertAccountsValid，被 applyReturnOrder / updateRecord / deleteRecord'
++ ' 三处调用），一个负账户 = 这家店从此退不了货、改不了单、删不了单。'
++ '这就是「退货缺两个字段时不许回推成 0」的第一条理由。')
+
+console.log('退货份额整体重算：M1 ' + (m1Cases.length + 3) + ' 组语料、M1b fuzz 400 组'
+  + '（修复前 ' + m1bBrokenBefore + ' 组破坏拆分不变量、' + m1bNegativeBefore + ' 组折出负账户）'
+  + '、M1c 恒等 600 组，全部通过')
+
 console.log('ledger terms tests passed')
