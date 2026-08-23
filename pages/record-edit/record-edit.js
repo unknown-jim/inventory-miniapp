@@ -3,6 +3,7 @@ const util = require('../../utils/util')
 const inventory = require('../../utils/inventory')
 const slipActions = require('../../utils/slip-actions')
 const memberChips = require('../../utils/member-chips').memberChips
+const repriceHintView = require('../../utils/reprice-hint')
 
 function navTitle(view, editing) {
   if (view.isPay) return editing ? '修改收款' : '收款详情'
@@ -123,6 +124,10 @@ Page({
         }
       })
     }
+    // 改之前的每行已退情况，给保存前那句提示用（见 utils/reprice-hint.js）。
+    // data.lines 会被编辑改掉，所以要在这里另存一份。
+    this.saleReturned = view.isOut ? repriceHintView.savedReturnsOf(recordLines) : {}
+    this.repriceConfirmed = false
     if (view.isOut) {
       canReturn = recordLines.some(function (item) {
         return inventory.returnableQty(item) > 0
@@ -473,6 +478,21 @@ Page({
         }
         if (this.data.paidOver) {
           wx.showToast({ title: '实收比应收多，请改实收', icon: 'none' })
+          return
+        }
+        const hint = repriceHintView.repriceHint(this.saleReturned, this.data.lines)
+        if (hint && !this.repriceConfirmed) {
+          wx.showModal({
+            title: '这张单有退货',
+            content: hint,
+            confirmText: '继续保存',
+            cancelText: '再想想',
+            success: (res) => {
+              if (!res.confirm) return
+              this.repriceConfirmed = true
+              this.save()
+            }
+          })
           return
         }
         await store.updateRecord(this.data.id, {

@@ -1075,6 +1075,83 @@ function recomputeSaleReturns(records, saleRecord) {
   }
 }
 
+// 把同单退货行的单价拨到销售行的新单价。
+//
+// 退货行的 unitPrice 从来不是用户录的：pages/sale-return 只收数量，价格是
+// applyReturnOrder 从被退销售行复制过去的**派生值**。销售行改了价、退货行不跟，
+// 同一张单里同一件商品就有了两套价 —— 销售额 = 新价销售额 − 旧价退货额，毛利和
+// 欠款同理，误差 = 已退件数 ×（旧单价 − 新单价），没有上界；改成 0 元赠品还能把
+// 销售额和客户「累计销售」算成负数。returnedAmount 让「Σ退货额」这条**内部**
+// 一致性成立，但内部自洽不等于对外正确，两套价是另一件事。
+//
+// 口径等于店主手工的「先删退货 → 改价 → 重录退货」，这里把它做成一步：那条路
+// 重录出来的退货行本来就会从改完价的销售行再复制一次单价。
+//
+// 只拨 unitPrice，**不碰 costPrice**：退货行的 costPrice 是 restockLine 当时把成本
+// 放回哪一格的依据，事后改它而不重跑一遍入库，库存成本就和流水对不上了。
+//
+// saleLines = 已经改好的销售行（updateRecord 里的 nextLines）。它们的
+// returnedAmount 必须已经落成显式值：老流水缺这个字段时要按 returnedQty ×
+// **改价前**的单价回推，那一步只有调用方做得了，所以留在 updateRecord 里。
+// 返回 { records, lines, changes }：lines 是回填了新 returnedAmount 的销售行，
+// 保住「returnedAmount ≡ Σ退货额」；changes = [{before, after}] 只含真的变了的
+// 退货单，供 assertAccountsAfterAll 的欠款校验和 ledger-apply 的写入 diff 用。
+function repriceSaleReturns(records, saleId, saleLines) {
+  const orderId = String(saleId || '')
+  const changes = []
+  if (!orderId) {
+    return { records: records, lines: saleLines, changes: changes }
+  }
+  const priceOf = Object.create(null)
+  ;(saleLines || []).forEach(function (line) {
+    const lineId = String(line.lineId || '')
+    if (lineId) priceOf[lineId] = round2(toNumber(line.unitPrice))
+  })
+  const deltaOf = Object.create(null)
+  const rewritten = (records || []).map(function (item) {
+    if (!item || item.type !== 'return') return item
+    if (String((recordLines(item)[0] || {}).saleOrderId || '') !== orderId) return item
+    let touched = false
+    const lines = recordLines(item).map(function (line) {
+      const lineId = String(line.saleLineId || '')
+      if (!Object.prototype.hasOwnProperty.call(priceOf, lineId)) return line
+      const unitPrice = priceOf[lineId]
+      if (round2(toNumber(line.unitPrice)) === unitPrice) return line
+      touched = true
+      const qty = round2(toNumber(line.qty))
+      const amount = round2(qty * unitPrice)
+      deltaOf[lineId] = round2(toNumber(deltaOf[lineId]) + round2(amount - toNumber(line.amount)))
+      return Object.assign({}, line, {
+        unitPrice: unitPrice,
+        amount: amount,
+        profit: round2((unitPrice - toNumber(line.costPrice)) * qty * -1)
+      })
+    })
+    if (!touched) return item
+    const after = Object.assign({}, item, {
+      lines: lines,
+      amount: sumBy(lines, 'amount'),
+      profit: sumBy(lines, 'profit')
+    })
+    changes.push({ before: item, after: after })
+    return after
+  })
+  if (!changes.length) {
+    return { records: records, lines: saleLines, changes: changes }
+  }
+  return {
+    records: rewritten,
+    lines: (saleLines || []).map(function (line) {
+      const delta = deltaOf[String(line.lineId || '')]
+      if (!delta) return line
+      return Object.assign({}, line, {
+        returnedAmount: round2(toNumber(line.returnedAmount) + delta)
+      })
+    }),
+    changes: changes
+  }
+}
+
 // 退货单指向的销售单。一次退货只能退同一张销售单，所以看第一行就够；找不到
 // （老退货行没有 saleOrderId，或指向的不是销售单）就返回 null、不触发整体重算，
 // 和 updateRecord 里对老退货行的既有容忍口径一致：updateRecord 那条路后面
@@ -2277,6 +2354,9 @@ function updateRecord(products, records, payload, now, skus, ctx) {
   let nextProducts = products
   let nextSkus = skus || []
   let nextRecords = records.slice()
+  // 改销售单单价时同单退货行跟着拨价（repriceSaleReturns）产生的变化。
+  // 和后面整体重算的份额变化拼在一起过欠款校验，两段 delta 首尾相接。
+  let repriceChanges = []
 
   if (existing.type === 'pay') {
     const amount = round2(payload.amount)
@@ -2344,6 +2424,13 @@ function updateRecord(products, records, payload, now, skus, ctx) {
         throw new Error('数量不能小于已退货 ' + returned)
       }
       const nextLine = Object.assign({}, line)
+      // 老流水没有 returnedAmount，读的时候按 returnedQty × 单价 兜底。这个回推
+      // 只在**改价前**的单价上成立，所以在改价之前就把它落成显式值；
+      // 后面 repriceSaleReturns 才能只做加减。（写的一端 materialize、读的一端
+      // 兜底，和 settledAmount 同一套做法，见 docs/cloud-ledger.md。）
+      if (nextLine.returnedAmount == null || nextLine.returnedAmount === '') {
+        nextLine.returnedAmount = round2(toNumber(line.returnedQty) * toNumber(line.unitPrice))
+      }
       if (line.allocations && line.allocations.length) {
         const released = releaseSaleLine(nextProducts, nextSkus, line, now)
         nextProducts = released.products
@@ -2371,9 +2458,15 @@ function updateRecord(products, records, payload, now, skus, ctx) {
       nextLine.amount = round2(qty * unitPrice)
       return nextLine
     })
-    next.lines = nextLines
-    next.amount = sumBy(nextLines, 'amount')
-    next.profit = sumBy(nextLines, 'profit')
+    // 同单退货行的单价是从销售行复制来的派生值，销售行改了价就得跟着拨，
+    // 否则同一张单里同一件商品有两套价（见 repriceSaleReturns）。销售行自己的
+    // amount / profit 不受影响，拨的是退货行和销售行的 returnedAmount。
+    const repriced = repriceSaleReturns(nextRecords, existing.id, nextLines)
+    nextRecords = repriced.records
+    repriceChanges = repriced.changes
+    next.lines = repriced.lines
+    next.amount = sumBy(repriced.lines, 'amount')
+    next.profit = sumBy(repriced.lines, 'profit')
     next.remark = String(payload.remark || '').trim()
     const paidAmount = resolvePaidAmount(payload, next.amount, settledAmount(existing))
     assertCustomerForDebt(paidAmount, next.amount, customerId)
@@ -2516,15 +2609,17 @@ function updateRecord(products, records, payload, now, skus, ctx) {
   nextRecords[at] = next
 
   // 改销售单（有退货）或改退货单：牵一发动全身，把该销售单的全部退货单按记账
-  // 顺序整体重算（拆分不变量的根治，见 recomputeSaleReturns）。改进货 / 收款 /
+  // 顺序整体重算（拆分不变量的根治，见 recomputeSaleReturns）。改销售单时上面
+  // 已经先拨过一次价（repriceSaleReturns），两段变化首尾相接：原状 → 拨完价 →
+  // 分完份额，applyTermsDelta 按序套下来正好等于原状 → 末态。改进货 / 收款 /
   // 期初 / 改规格 / 调整不碰退货拆分，splitChanges 恒为空。
-  let splitChanges = []
+  let splitChanges = repriceChanges
   if (next.type === 'out' && recordLines(next).some(function (line) {
     return toNumber(line.returnedQty) > 0
   })) {
     const recomputed = recomputeSaleReturns(nextRecords, next)
     nextRecords = recomputed.records
-    splitChanges = recomputed.changes
+    splitChanges = splitChanges.concat(recomputed.changes)
   } else if (next.type === 'return') {
     const sale = saleOrderOfReturn(nextRecords, next)
     if (sale) {

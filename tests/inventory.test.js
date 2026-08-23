@@ -1503,10 +1503,13 @@ const partialScaled = inv.updateRecord(partialReturn.products, partialReturn.rec
 }, 40405, partialReturn.skus, null)
 assert.strictEqual(inv.summarizeCustomerAccount(partialScaled.records, 'c-partial').receivable, 135)
 
-// 有退货的单改单价：returnedAmount 记的是退货**当时**的金额，改单价不挪这个基准
-//（旧守卫一刀切拦掉），整体重算把各份额按新欠款拨对。这里 D = 240 盖得住退货，
-// c 恒 0；欠款逐分等于 main #47 口径 max(0, 280 − 40 − 25) = 215，
-// 销售行的 returnedAmount 保持 25 不随单价变。
+// 有退货的单改单价：退货行的单价是 applyReturnOrder 从销售行复制来的派生值，
+// 销售行改了价，同单退货行跟着按新价重算（repriceSaleReturns），returnedAmount
+// 随之等于 Σ新退货额。退 1 件、25 → 70：退货额 25 → 70，D = 240 盖得住退货，
+// c 恒 0，欠款 = max(0, 280 − 40 − 70) = 170。
+//
+// 这里原来断言的是 215（退货冻在旧价 25）。215 是销售行按 70、退货行按 25
+// 拼出来的数：误差 = 已退件数 ×（新单价 − 旧单价）= 1 × 45 = 45，没有上界。
 const priceChanged = inv.updateRecord(partialReturn.products, partialReturn.records, {
   id: 'r-partial',
   items: [{ id: 'r-partial-l1', qty: 4, unitPrice: 70 }],
@@ -1514,13 +1517,20 @@ const priceChanged = inv.updateRecord(partialReturn.products, partialReturn.reco
   customerId: 'c-partial',
   customerName: '半款客户'
 }, 40415, partialReturn.skus, null)
-assert.strictEqual(inv.summarizeCustomerAccount(priceChanged.records, 'c-partial').receivable, 215)
+assert.strictEqual(inv.summarizeCustomerAccount(priceChanged.records, 'c-partial').receivable, 170)
 assert.strictEqual(priceChanged.records.find(function (item) {
   return item.id === 'r-partial'
-}).lines[0].returnedAmount, 25)
+}).lines[0].returnedAmount, 70)
+// 退货单自己也被拨到新价：单价、金额、毛利三项一起走，不能只改销售行的镜像字段。
+const partialRetAfter = priceChanged.records.find(function (item) {
+  return item.id === 'r-partial-return'
+})
+assert.strictEqual(partialRetAfter.lines[0].unitPrice, 70)
+assert.strictEqual(partialRetAfter.amount, 70)
+assert.strictEqual(partialRetAfter.profit, -60)
 
-// 一分未收的单也放行改单价：已退金额记在销售行上、按退货当时金额，
-// 不随单价挪动。D = 120 盖得住退 50 → c 恒 0，欠款 = max(0, 120 − 0 − 50) = 70。
+// 一分未收的单改单价：退 2 件、25 → 30，退货额 50 → 60。
+// D = 120 盖得住退 60 → c 恒 0，欠款 = max(0, 120 − 0 − 60) = 60。
 const noneRepriced = inv.updateRecord(nonePaidReturn.products, nonePaidReturn.records, {
   id: 'r-paid-none',
   items: [{ id: 'r-paid-none-l1', qty: 4, unitPrice: 30 }],
@@ -1528,14 +1538,18 @@ const noneRepriced = inv.updateRecord(nonePaidReturn.products, nonePaidReturn.re
   customerId: 'c-none',
   customerName: '全欠客户'
 }, 40370, nonePaidReturn.skus, null)
-assert.strictEqual(inv.summarizeCustomerAccount(noneRepriced.records, 'c-none').receivable, 70)
+assert.strictEqual(inv.summarizeCustomerAccount(noneRepriced.records, 'c-none').receivable, 60)
 assert.strictEqual(noneRepriced.records.find(function (item) {
   return item.id === 'r-paid-none'
-}).lines[0].returnedAmount, 50)
+}).lines[0].returnedAmount, 60)
 
-// 全款单改成 0 元行（赠品）也放行：returnedAmount 不被压小，改后一分不欠、
-// 每张退货单仍是纯退现金（paidAmount = 自己的退货额），欠款 = max(0, 0 − 0 − 50) = 0。
-// 0 元行是这个 app 的一等公民（赠品走销售、售价填 0），不是构造出来的极端值。
+// 全款单改成 0 元行（赠品）：退货跟着变成 0 元，销售额、毛利、客户「累计销售」
+// 三项一起归位。0 元行是这个 app 的一等公民（赠品走销售、售价填 0），不是构造
+// 出来的极端值 —— 这条正是缺陷最显眼的一档。
+//
+// 这里原来断言 returnedAmount 保持 50、退货单 paidAmount 保持 50。那组数配上
+// amount = 0 的销售行，算出来是 销售额 −50 / 毛利 −60 / 客户累计销售 −50：
+// pages/customers/customers.wxml 会直接印出「累计销售 ¥−50」。
 const fullZeroed = inv.updateRecord(fullPaidReturn.products, fullPaidReturn.records, {
   id: 'r-paid-full',
   items: [{ id: 'r-paid-full-l1', qty: 4, unitPrice: 0 }],
@@ -1543,13 +1557,46 @@ const fullZeroed = inv.updateRecord(fullPaidReturn.products, fullPaidReturn.reco
   customerId: 'c-full',
   customerName: '付清客户'
 }, 40380, fullPaidReturn.skus, null)
-assert.strictEqual(inv.summarizeCustomerAccount(fullZeroed.records, 'c-full').receivable, 0)
+const fullZeroedAccount = inv.summarizeCustomerAccount(fullZeroed.records, 'c-full')
+assert.strictEqual(fullZeroedAccount.receivable, 0)
+assert.strictEqual(fullZeroedAccount.amount, 0)
 assert.strictEqual(fullZeroed.records.find(function (item) {
   return item.id === 'r-paid-full'
-}).lines[0].returnedAmount, 50)
+}).lines[0].returnedAmount, 0)
 assert.strictEqual(fullZeroed.records.find(function (item) {
   return item.id === 'r-full-return'
-}).paidAmount, 50)
+}).paidAmount, 0)
+// 销售额和毛利也要跟着归位。进价 10、卖 4 件改成 0 元、退回 2 件：
+// 销售额 0 − 0 = 0，毛利 (0−10)×4 + (0−10)×2×(−1) = −20。
+const fullZeroedTotals = inv.computeTotals(fullZeroed.records)
+assert.strictEqual(fullZeroedTotals.salesAmount, 0)
+assert.strictEqual(fullZeroedTotals.profit, -20)
+
+// 口径钉死：改单价的结果必须和店主手工的「先删退货 → 改价 → 重录退货」逐分
+// 一致。这条是 repriceSaleReturns 的定义，比单看几个数更难写错。
+const zeroedByHand = (function () {
+  const dropped = inv.deleteRecord(fullPaidReturn.products, fullPaidReturn.records,
+    'r-full-return', 40381, fullPaidReturn.skus, null)
+  const repriced = inv.updateRecord(dropped.products, dropped.records, {
+    id: 'r-paid-full',
+    items: [{ id: 'r-paid-full-l1', qty: 4, unitPrice: 0 }],
+    paidAmount: 0,
+    customerId: 'c-full',
+    customerName: '付清客户'
+  }, 40382, dropped.skus, null)
+  return inv.applyReturn(repriced.products, repriced.records, {
+    saleOrderId: 'r-paid-full',
+    saleLineId: 'r-paid-full-l1',
+    qty: 2
+  }, 40383, 'r-full-return-redo', repriced.skus)
+})()
+const zeroedByHandTotals = inv.computeTotals(zeroedByHand.records)
+assert.strictEqual(zeroedByHandTotals.salesAmount, fullZeroedTotals.salesAmount)
+assert.strictEqual(zeroedByHandTotals.profit, fullZeroedTotals.profit)
+assert.strictEqual(inv.summarizeCustomerAccount(zeroedByHand.records, 'c-full').amount,
+  fullZeroedAccount.amount)
+assert.strictEqual(inv.summarizeCustomerAccount(zeroedByHand.records, 'c-full').receivable,
+  fullZeroedAccount.receivable)
 
 // 必须放行：全款单有退货，涨数量并且把钱收满 —— 已退货值没变、改前改后都一分
 // 不欠，冻结值不受影响。这条钉住「全款单改数量并收满」这条日常路径（档① 与
@@ -1562,6 +1609,12 @@ const fullPaidGrown = inv.updateRecord(fullPaidReturn.products, fullPaidReturn.r
   customerName: '付清客户'
 }, 40390, fullPaidReturn.skus, null)
 assert.strictEqual(inv.summarizeCustomerAccount(fullPaidGrown.records, 'c-full').receivable, 0)
+// 单价没动就一个字段都别碰：拨价只在单价真的变了的时候发生，改数量不许连累退货单。
+assert.deepStrictEqual(fullPaidGrown.records.find(function (item) {
+  return item.id === 'r-full-return'
+}), fullPaidReturn.records.find(function (item) {
+  return item.id === 'r-full-return'
+}))
 
 // 档③ 必须放行：Σ退货已经超过欠款（档② 在这里不成立）、但改动后欠款一分没变
 // —— 只改客户名这类。这条钉住档③，它现在没有任何用例守着。
@@ -1677,6 +1730,54 @@ assert.strictEqual(movedReturn.customerAddress, '新地址')
 assert.strictEqual(inv.summarizeCustomerAccount(movedSale.records, 'c-partial').receivable, 0)
 assert.strictEqual(inv.summarizeCustomerAccount(movedSale.records, 'c-moved').receivable, 35)
 
+// —— 多行单只拨被改价的那一行 ——
+// 退货行按 saleLineId 认回销售行，改甲的价不许动乙那一行的退货。
+const twoLineA = inv.createProduct({
+  name: '两行货甲', costPrice: 4, salePrice: 10, stock: 20, alertQty: 1
+}, 40700, 'p-two-a')
+const twoLineB = inv.createProduct({
+  name: '两行货乙', costPrice: 6, salePrice: 20, stock: 20, alertQty: 1
+}, 40701, 'p-two-b')
+let twoSeq = 0
+const twoSale = inv.applySaleOrder([twoLineA, twoLineB], [], {
+  items: [
+    { productId: 'p-two-a', qty: 3, unitPrice: 10 },
+    { productId: 'p-two-b', qty: 2, unitPrice: 20 }
+  ],
+  customerId: 'c-two', customerName: '两行客户', paidAmount: 0
+}, 40710, 'r-two', function () { twoSeq += 1; return 'r-two-l' + twoSeq }, [])
+let twoRetSeq = 0
+const twoReturned = inv.applyReturnOrder(twoSale.products, twoSale.records, {
+  items: [
+    { saleOrderId: 'r-two', saleLineId: 'r-two-l1', qty: 1 },
+    { saleOrderId: 'r-two', saleLineId: 'r-two-l2', qty: 1 }
+  ]
+}, 40720, function () { twoRetSeq += 1; return 'r-two-ret-' + twoRetSeq }, twoSale.skus, null)
+// 只把甲那一行 10 → 4。
+const twoRepriced = inv.updateRecord(twoReturned.products, twoReturned.records, {
+  id: 'r-two',
+  items: [
+    { id: 'r-two-l1', qty: 3, unitPrice: 4 },
+    { id: 'r-two-l2', qty: 2, unitPrice: 20 }
+  ],
+  paidAmount: 0,
+  customerId: 'c-two', customerName: '两行客户'
+}, 40730, twoReturned.skus, null)
+const twoRetAfter = twoRepriced.records.find(function (item) {
+  return item.id === twoReturned.record.id
+})
+assert.strictEqual(twoRetAfter.lines[0].unitPrice, 4, '甲那一行的退货跟着拨价')
+assert.strictEqual(twoRetAfter.lines[1].unitPrice, 20, '乙那一行没改价，退货原样不动')
+assert.strictEqual(twoRetAfter.amount, 24)
+const twoSaleAfter = twoRepriced.records.find(function (item) {
+  return item.id === 'r-two'
+})
+assert.strictEqual(twoSaleAfter.lines[0].returnedAmount, 4)
+assert.strictEqual(twoSaleAfter.lines[1].returnedAmount, 20)
+// 销售额 = 留在客户手上的货 × 当前单价 = 2 × 4 + 1 × 20 = 28。
+assert.strictEqual(inv.computeTotals(twoRepriced.records).salesAmount, 28)
+assert.strictEqual(inv.summarizeCustomerAccount(twoRepriced.records, 'c-two').receivable, 28)
+
 // —— 分位恒等：returnedAmount 让「已退货值」由构造等于 Σ退货额 ——
 // 小数数量下逐张取整会分岔：round2(0.5×7.77)×2 = 7.78 ≠ round2(1×7.77) = 7.77。
 // 旧口径按 returnedQty × 当前单价现算，退两张 0.5 的单会把已退货值记小 1 分，
@@ -1702,31 +1803,34 @@ assert.strictEqual(fracRet2.records.find(function (item) {
 }).paidAmount, 3.78)
 assert.strictEqual(inv.summarizeCustomerAccount(fracRet2.records, 'c-frac').receivable, 0)
 
-// —— 改单价后再退：基准是 returnedAmount，不是 returnedQty × 新单价 ——
+// —— 改单价后再退：旧退货跟着拨价，新退货的基准仍是 returnedAmount ——
 const fracRepriced = inv.updateRecord(fracRet2.products, fracRet2.records, {
   id: 'r-frac',
   items: [{ id: 'r-frac-l1', qty: 2, unitPrice: 9.99 }],
   paidAmount: 3.77,
   customerId: 'c-frac', customerName: '分位客户'
 }, 40540, fracRet2.skus, null)
-// 改完先核对整体重算：D = 19.98 − 3.77 = 16.21 盖得住 Σr 7.78，两张旧退货的
-// paidAmount 全拨成 0（第二张原是 3.78）；已退金额不随单价挪。
+// 改完先核对整体重算：两张旧退货跟着拨到新单价，各 round2(0.5 × 9.99) = 5，
+// Σr = 10（returnedAmount 仍由构造等于 Σ退货额，分位恒等在新价上照样成立）。
+// D = 19.98 − 3.77 = 16.21 盖得住 Σr 10 → 两张的 paidAmount 全是 0（第二张原是 3.78）。
 assert.strictEqual(fracRepriced.records.find(function (item) {
   return item.id === 'r-frac-ret-2'
 }).paidAmount, 0)
 assert.strictEqual(fracRepriced.records.find(function (item) {
   return item.id === 'r-frac'
-}).lines[0].returnedAmount, 7.78)
-assert.strictEqual(inv.summarizeCustomerAccount(fracRepriced.records, 'c-frac').receivable, 8.43)
-// 再按可退余量退 1 件：othersReturned = 7.78 → left = 16.21 − 7.78 = 8.43 →
-// c₃ = 9.99 − 8.43 = 1.56；欠款 = max(0, 19.98 − 3.77 − 17.77) = 0。
+}).lines[0].returnedAmount, 10)
+assert.strictEqual(inv.summarizeCustomerAccount(fracRepriced.records, 'c-frac').receivable, 6.21)
+// 再按可退余量退 1 件：othersReturned = 10 → left = 16.21 − 10 = 6.21 →
+// c₃ = 9.99 − 6.21 = 3.78；欠款 = max(0, 19.98 − 3.77 − 19.99) = 0。
+// Σ退货额 19.99 比单据金额 19.98 多 1 分，正是分位取整的那一分：已退货值跟着
+// 实际退货额走，不去凑 qty × 单价。
 const fracRet3 = inv.applyReturn(fracRepriced.products, fracRepriced.records, {
   saleOrderId: 'r-frac', saleLineId: 'r-frac-l1', qty: 1
 }, 40550, 'r-frac-ret-3', fracRepriced.skus)
-assert.strictEqual(fracRet3.record.paidAmount, 1.56)
+assert.strictEqual(fracRet3.record.paidAmount, 3.78)
 assert.strictEqual(fracRet3.records.find(function (item) {
   return item.id === 'r-frac'
-}).lines[0].returnedAmount, 17.77)
+}).lines[0].returnedAmount, 19.99)
 assert.strictEqual(inv.summarizeCustomerAccount(fracRet3.records, 'c-frac').receivable, 0)
 
 // —— 老数据回退：销售行缺 returnedAmount 时按 returnedQty × 当前单价兜底 ——
@@ -1758,10 +1862,11 @@ const legacyDropped = inv.deleteRecord(legacyRet2.products, legacyRet2.records,
 assert.strictEqual(legacyDropped.records.find(function (item) {
   return item.id === 'r-legacy'
 }).lines[0].returnedAmount, 10)
-// 回退口径按「当前单价」回推，这是它和持久字段唯一可观察的差别：删字段后改单价
-// 再退，新退货的冲抵基准跟着新单价走（持久字段在的话跟退货当时的金额走）。
-// 已知边界，只存在于缺字段的老数据上；迁移自愈（legacyLine / backfillReturnedQty）
-// 会把字段补齐，新写出的流水一律带字段。
+// 缺字段的老数据也能改单价：updateRecord 先按 returnedQty × **改价前**的单价把
+// returnedAmount 落成显式值（正是持久字段该有的数），再让同单退货跟着拨价。
+// 所以「缺字段」和「有字段」两条路在改单价上逐分相同 —— 下面两段对着跑一遍。
+// 残留的可观察差别只剩分位那一档（两张 0.5 的退货 Σ = 7.78，回退口径回推成 7.77）；
+// 迁移自愈（legacyLine / backfillReturnedQty）会把字段补齐，新流水一律带字段。
 const legacyRecords2 = JSON.parse(JSON.stringify(legacyRet1.records))
 delete legacyRecords2.find(function (item) { return item.id === 'r-legacy' }).lines[0].returnedAmount
 const legacyRepriced = inv.updateRecord(legacyRet1.products, legacyRecords2, {
@@ -1770,12 +1875,32 @@ const legacyRepriced = inv.updateRecord(legacyRet1.products, legacyRecords2, {
   paidAmount: 16,
   customerId: 'c-legacy', customerName: '老数据客户'
 }, 40650, legacyRet1.skus, null)
+// 已退 1 件、10 → 18：退货单跟着拨到 18，已退金额 10 → 18。
+assert.strictEqual(legacyRepriced.records.find(function (item) {
+  return item.id === 'r-legacy'
+}).lines[0].returnedAmount, 18)
+assert.strictEqual(legacyRepriced.records.find(function (item) {
+  return item.id === 'r-legacy-ret-1'
+}).amount, 18)
 const legacyRet3 = inv.applyReturn(legacyRepriced.products, legacyRepriced.records, {
   saleOrderId: 'r-legacy', saleLineId: 'r-legacy-l1', qty: 0.5
 }, 40660, 'r-legacy-ret-3', legacyRepriced.skus)
-// 回退底数 = round2(1 × 18) = 18 → left = max(0, 20 − 18) = 2 → c₃ = 9 − 2 = 7。
-// （持久字段在的话底数是 10、left = 10、c₃ = 0 —— 差值就是回退口径在起作用。）
+// D = 36 − 16 = 20，othersReturned = 18 → left = 2 → c₃ = 9 − 2 = 7。
 assert.strictEqual(legacyRet3.record.paidAmount, 7)
+// 带着持久字段把同一条路再跑一遍：逐分相同。
+const legacyKept = inv.updateRecord(legacyRet1.products, legacyRet1.records, {
+  id: 'r-legacy',
+  items: [{ id: 'r-legacy-l1', qty: 2, unitPrice: 18 }],
+  paidAmount: 16,
+  customerId: 'c-legacy', customerName: '老数据客户'
+}, 40655, legacyRet1.skus, null)
+assert.strictEqual(legacyKept.records.find(function (item) {
+  return item.id === 'r-legacy'
+}).lines[0].returnedAmount, 18)
+const legacyKeptRet3 = inv.applyReturn(legacyKept.products, legacyKept.records, {
+  saleOrderId: 'r-legacy', saleLineId: 'r-legacy-l1', qty: 0.5
+}, 40665, 'r-legacy-ret-4', legacyKept.skus)
+assert.strictEqual(legacyKeptRet3.record.paidAmount, legacyRet3.record.paidAmount)
 
 // —— 客户改挂：退货单头的 customerId 跟着销售单走 ——
 // 退货单头继承自被退销售单；改销售单客户后不拨，这笔退货会一直挂在旧客户账上。
@@ -1872,9 +1997,14 @@ console.log('inventory tests passed')
 // 手写用例只能钉住想得到的那几条路径。「改单价埋下的分岔要等到后来改实收才
 // 发作」这种跨两步的洞，第 3 轮是随机漫步抓出来的，所以收编成常驻。
 //
-// 不变量：任何一次**被放行**的写入之后，客户欠款必须逐分等于 main #47 的读时
-// 口径 max(0, 应收 − 实收 − Σ退货额)。这条恒等式就是【拆分不变量】的外部表现
-// （Σ(r−c) == min(D, Σr) ⟺ 欠款 == max(0, D − Σr)），比逐条断言冻结值更难写错。
+// 不变量一（欠款）：任何一次**被放行**的写入之后，客户欠款必须逐分等于 main #47
+// 的读时口径 max(0, 应收 − 实收 − Σ退货额)。这条恒等式就是【拆分不变量】的外部
+// 表现（Σ(r−c) == min(D, Σr) ⟺ 欠款 == max(0, D − Σr)），比逐条断言冻结值更难写错。
+//
+// 不变量二（一套价）：销售额和毛利必须逐分等于「留在客户手上的货 × 当前单价」。
+// 不变量一两边都拿**实际**退货额，所以看不见「销售行按新价、退货行按旧价」这种
+// 分岔；那正是改单价时不给同单退货拨价留下的洞（PR #53 之后 main 上的阻塞级
+// 缺陷：改成 0 元赠品能把销售额和客户「累计销售」算成负数）。
 //
 // 只造一张多行销售单：跨退货单的分配耦合全部发生在同一张销售单内部；多客户、
 // 收款、期初这些线性项由上面的手写用例覆盖。500 局 × 14 步，本机约 0.2 秒。
@@ -2001,6 +2131,20 @@ for (let trial = 0; trial < 500; trial++) {
     const got = inv.round2(inv.summarizeCustomerAccount(cur.records, 'fc1').receivable)
     assert.strictEqual(got, mainWay, '拆分不变量被破坏（trial ' + trial
       + ' step ' + step + ' ' + op + '）：算出 ' + got + '，main #47 口径 ' + mainWay)
+    // 不变量二：进价恒为 1（两笔进货都是 unitPrice 1），所以毛利也能这样现推。
+    const fuzzNet = inv.recordLines(after).reduce(function (acc, line) {
+      const left = inv.toNumber(line.qty) - inv.toNumber(line.returnedQty)
+      acc.amount += left * inv.toNumber(line.unitPrice)
+      acc.profit += left * (inv.toNumber(line.unitPrice) - 1)
+      return acc
+    }, { amount: 0, profit: 0 })
+    const fuzzTotals = inv.computeTotals(cur.records)
+    assert.strictEqual(fuzzTotals.salesAmount, inv.round2(fuzzNet.amount),
+      '一套价被破坏（销售额，trial ' + trial + ' step ' + step + ' ' + op + '）：算出 '
+      + fuzzTotals.salesAmount + '，按当前单价现推 ' + inv.round2(fuzzNet.amount))
+    assert.strictEqual(fuzzTotals.profit, inv.round2(fuzzNet.profit),
+      '一套价被破坏（毛利，trial ' + trial + ' step ' + step + ' ' + op + '）：算出 '
+      + fuzzTotals.profit + '，按当前单价现推 ' + inv.round2(fuzzNet.profit))
   }
 }
 assert.ok(fuzzAllowed >= FUZZ_MIN_ALLOWED, '拆分 fuzzer 放行次数塌到 ' + fuzzAllowed
