@@ -82,7 +82,7 @@
 
 ### `checkAggregates` —— 只读预检
 
-`payload: { limit?: 50 }`（只截断返回包里的明细长度）。不开事务，纯读无副作用。按有没有搬完分流：未搬完跑纯函数 `checkLedger(ledger)` 给出 P1–P13；已搬完翻完账套（上限 `AUDIT_MAX_RECORDS` 5000，到顶报错不做无界翻页）跑同一套 `auditRecords`，与账本里存的 `accounts`/`aggregate` 逐字段比——`aggregatesStale` 哨兵只说「有漂」，这里说「漂在**哪个客户的哪一项**」。
+`payload: { limit?: 50 }`（只截断返回包里的明细长度）。不开事务，纯读无副作用。按有没有搬完分流：未搬完跑纯函数 `checkLedger(ledger)` 给出 P1–P14；已搬完翻完账套（上限 `AUDIT_MAX_RECORDS` 5000，到顶报错不做无界翻页）跑同一套 `auditRecords`，与账本里存的 `accounts`/`aggregate` 逐字段比——`aggregatesStale` 哨兵只说「有漂」，这里说「漂在**哪个客户的哪一项**」。
 
 **预检可以不部署就跑。** 核心是只吃一份 `ledgers` 文档的纯函数，所以控制台导出 `ledgers` 全表（只读，不影响营业）之后本机就能跑：
 
@@ -90,7 +90,7 @@
 node scripts/check-ledger-export.js <ledgers 导出文件> [--clears <ledger_clears 导出文件>] [--json]
 ```
 
-这解开了「必须先部署才能预检、而部署那一刻所有店全部停摆」的死结。**阶段 0 停下来的代价是零。** 阻塞项：P3 亚分金额、P4 无法归类的改动、P5 迁移后仍有负账户、P7 拆分不变量仍被破坏、P8 `returnedQty`/`returnedAmount` 跨行不一致、P9 重复/空 id、V9/V10 归并结构不守恒。**P6 孤儿退货是非阻塞的**（份额无从算起，报数人工确认，保持保守回推值）。
+这解开了「必须先部署才能预检、而部署那一刻所有店全部停摆」的死结。**阶段 0 停下来的代价是零。** 阻塞项：P3 亚分金额、P4 无法归类的改动、P5 迁移后仍有负账户、P7 拆分不变量仍被破坏、P8 `returnedQty`/`returnedAmount` 跨行不一致、P9 重复/空 id、V9/V10 归并结构不守恒。**P6 孤儿退货和 P14 两套价都是非阻塞的**：P6 份额无从算起（报数人工确认，保持保守回推值）；P14 是「同一件商品销售行一个价、退货行另一个价」——那段「改有退货的单的单价放行、退货行不跟着走」留下的既有损伤，迁移既不制造也不加重它，而且迁移前后都能修（写路径的 `repriceSaleReturns` 会拨回一致）。报出来让操作者自己决定，不拿它挡住整店迁移。**注意 `repairReturnSplits` 只重算份额、不碰单价**，所以搬进集合之后销售额和毛利仍然是两套价拼的，直到有人去改那张单。
 
 > **阻塞项必须在部署之前修完。** 同一批检查在 `migrateRecords` 切开关前还会跑一遍（V4–V12），不过就 `failed`；而部署之后写路径已经被 `assertRecordsReady` 冻结，店里**改不了任何一张单**——修不了就只能在控制台手改 `ledgers.records`。部署之前老云函数还在跑，同样一张单在 app 里就能改。这是阶段 0 唯一不能省的理由。
 
@@ -165,7 +165,7 @@ payload: { mode: 'snapshots', limit?: 50 }
 
 ### 上线清单
 
-**阶段 0（T−7 天，不部署、不影响营业）**：控制台导出 `ledgers` 全表（另导 `ledger_clears` 的 `_id`/`shopId`/`savedAt`/`bookId`）→ `node scripts/check-ledger-export.js <文件> --json > 预检报告.json` → 逐店过 P1–P13，阻塞项必须为空、P4 每条改动能归到三类之一 → `mergedCount` 填进排期表 → **下载存档当前线上 `ledger` 云函数代码包**（唯一的整体回滚路，事后补不回来）。任何一项不过就停在这里。
+**阶段 0（T−7 天，不部署、不影响营业）**：控制台导出 `ledgers` 全表（另导 `ledger_clears` 的 `_id`/`shopId`/`savedAt`/`bookId`）→ `node scripts/check-ledger-export.js <文件> --json > 预检报告.json` → 逐店过 P1–P14，阻塞项必须为空、P4 每条改动能归到三类之一 → `mergedCount` 填进排期表 → **下载存档当前线上 `ledger` 云函数代码包**（唯一的整体回滚路，事后补不回来）。任何一项不过就停在这里。
 
 **阶段 1（T−1 天）**：确认集合 `ledger_records` 存在且权限为「仅管理端可读写」→ 建 **6 条复合索引**（字段顺序和升降序逐条核对，漏一条会退化成全表扫）→ 确认操作者 openid 是**每一家**店的 owner → 新建测试店灌一份导出副本走完整流程，**顺便验一下当晚要用的调用方式能不能调通**（控制台云函数测试面板里 `getWXContext().OPENID` 可能为空，那就只能走开发者工具 Console，别留到当晚才发现）。
 

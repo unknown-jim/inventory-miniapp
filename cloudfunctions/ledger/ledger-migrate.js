@@ -328,6 +328,52 @@ function returnedMismatchOf(records) {
   return { returnedMismatch: bad, missingReturnedAmount: missingReturnedAmount }
 }
 
+// P14：同一张单里同一件商品挂着两套价——销售行一个单价、退货行另一个。
+//
+// 来路：有一段时间「改有退货的销售单的单价」是放行的，而退货行的单价不跟着走
+// （退货行的 unitPrice 从来不是用户录的，是开退货单时从销售行抄的）。于是销售额、
+// 毛利、欠款都是两套价拼出来的，能算出负数的销售额。写路径后来修好了
+// （repriceSaleReturns 会把同单退货行拨到新价），但**已经写进老账本的那些没人管**。
+//
+// 为什么报出来：repairReturnSplits 只重算**份额**（谁退了多少现金），不碰单价。
+// 所以这类单搬进 ledger_records 之后销售额和毛利仍然是两套价拼的。
+//
+// 但它**不是阻塞项**：这是既有的数据损伤，迁移既不制造也不加重它，而且迁移前后
+// 都能修（写路径的 repriceSaleReturns 会拨回一致）。拿它挡住整店迁移不成比例 ——
+// 和 P6 孤儿退货同一类：记录在案，让操作者自己决定。
+//
+// 补救：在小程序里打开这几张单、随便改一下再保存，写路径会把退货行拨到销售行
+// 当前的单价（会弹提示说清账上的退款现金变了多少）。改完重跑预检这条就空了。
+function mixedPriceOf(records) {
+  const sales = salesById(records)
+  const bad = []
+  ;(records || []).forEach(function (item) {
+    if (!item || item.type !== 'return') return
+    const saleId = saleIdOfReturn(item)
+    const sale = saleId && sales[saleId]
+    if (!sale) return
+    const saleLines = inventory.recordLines(sale)
+    inventory.recordLines(item).forEach(function (line) {
+      const lineId = String((line && line.saleLineId) || '')
+      const saleLine = saleLines.find(function (x) {
+        return String((x && x.lineId) || '') === lineId
+      })
+      if (!saleLine) return
+      const salePrice = inventory.round2(inventory.toNumber(saleLine.unitPrice))
+      const returnPrice = inventory.round2(inventory.toNumber(line && line.unitPrice))
+      if (salePrice === returnPrice) return
+      bad.push({
+        saleId: saleId,
+        returnId: String((item && item.id) || ''),
+        lineId: lineId,
+        salePrice: salePrice,
+        returnPrice: returnPrice
+      })
+    })
+  })
+  return bad
+}
+
 // V5 / P7：【拆分不变量】Σ(rᵢ − settledAmount(rᵢ)) == min(D, Σrᵢ)。
 // **B1 的直接判据** —— 只比条数抓不住它。
 function splitViolationsOf(records) {
@@ -402,6 +448,7 @@ function auditRecords(records) {
   const aggregate = inventory.foldTotalTerms(list)
   const ids = idProblemsOf(list)
   const returned = returnedMismatchOf(list)
+  const mixedPrice = mixedPriceOf(list)
   return {
     count: list.length,
     lineCount: sumLineCount(list),
@@ -412,6 +459,7 @@ function auditRecords(records) {
     orphanReturns: orphanReturnsOf(list),
     returnedMismatch: returned.returnedMismatch,
     missingReturnedAmount: returned.missingReturnedAmount,
+    mixedPrice: mixedPrice,
     splitViolations: splitViolationsOf(list),
     subCent: subCentOf(list),
     multiLineOrders: multiLineOrdersOf(list),
@@ -618,6 +666,7 @@ function checkLedger(ledger, options) {
     splitViolationsBefore: auditBefore.splitViolations,
     splitViolationsAfter: auditAfter.splitViolations,
     returnedMismatch: auditAfter.returnedMismatch,
+    mixedPrice: auditAfter.mixedPrice,
     missingReturnedAmount: auditAfter.missingReturnedAmount,
     duplicateIds: auditAfter.duplicateIds,
     emptyIds: auditAfter.emptyIds,
@@ -748,7 +797,7 @@ function clampReportLimit(limit) {
 const REPORT_LISTS = [
   'subCent', 'subCentRaw', 'diffs', 'movingChanges', 'unexplainedChanges', 'negativeBefore',
   'negativeAfter', 'orphanReturns', 'splitViolationsBefore', 'splitViolationsAfter',
-  'returnedMismatch', 'missingReturnedAmount', 'duplicateIds', 'multiLineOrders',
+  'returnedMismatch', 'missingReturnedAmount', 'mixedPrice', 'duplicateIds', 'multiLineOrders',
   'mergeProblems', 'blocking'
 ]
 function truncateReport(report, limit) {
@@ -837,6 +886,7 @@ async function checkAggregates(db, shopId, payload) {
     orphanReturns: audit.orphanReturns,
     splitViolationsAfter: audit.splitViolations,
     returnedMismatch: audit.returnedMismatch,
+    mixedPrice: audit.mixedPrice,
     missingReturnedAmount: audit.missingReturnedAmount,
     duplicateIds: audit.duplicateIds,
     emptyIds: audit.emptyIds,
@@ -852,6 +902,7 @@ async function checkAggregates(db, shopId, payload) {
     negativeAfter: report.negativeAfter,
     splitViolationsAfter: report.splitViolationsAfter,
     returnedMismatch: report.returnedMismatch,
+    mixedPrice: report.mixedPrice,
     duplicateIds: report.duplicateIds,
     emptyIds: report.emptyIds,
     mergeProblems: []

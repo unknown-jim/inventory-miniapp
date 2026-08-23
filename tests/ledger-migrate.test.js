@@ -323,7 +323,7 @@ function receivableOf(accounts, customerId) {
   }
 
   const CHECK_LISTS = ['duplicateIds', 'orphanReturns', 'returnedMismatch',
-    'splitViolations', 'subCent', 'negativeAccounts']
+    'splitViolations', 'subCent', 'negativeAccounts', 'mixedPrice']
 
   const baseAudit = migrate.auditRecords(cleanSet())
   CHECK_LISTS.forEach(function (name) {
@@ -339,6 +339,14 @@ function receivableOf(accounts, customerId) {
       name: 'V4 销售行 returnedQty 和退货行对不上',
       hit: 'returnedMismatch',
       mutate: function (list) { list[0].lines[0].returnedQty = 2 }
+    },
+    {
+      // 迁移不修单价，只修份额。这类单搬进集合之后销售额和毛利仍然是两套价拼的，
+      // 而迁移后 legacyRecordsOf 不再跑，没有第二次读时修复的机会 —— 所以要在
+      // 预检就拦住，让店主先在小程序里把那几张单改一下（写路径会拨回一致）。
+      name: 'P14 同一件商品两套价：销售行改过价、退货行还挂旧价',
+      hit: 'mixedPrice',
+      mutate: function (list) { list[1].lines[0].unitPrice = 99 }
     },
     {
       name: 'V5 拆分不变量：退货被记成整笔退现金',

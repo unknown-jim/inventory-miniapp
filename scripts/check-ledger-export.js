@@ -140,6 +140,12 @@ function printReport(report, limit) {
   head(report.returnedMismatch, limit).forEach(function (item) {
     say('      ' + JSON.stringify(item))
   })
+  say('P14 同一件商品两套价（销售行 / 退货行）' + report.mixedPrice.length + ' 处'
+    + (report.mixedPrice.length ? '（非阻塞：迁移既不制造也不加重它，迁移后打开那张单改一下保存就会拨回一致）' : ''))
+  head(report.mixedPrice, limit).forEach(function (item) {
+    say('      销售单 ' + item.saleId + ' 行 ' + item.lineId + ' 销售价 ' + money(item.salePrice)
+      + ' / 退货单 ' + item.returnId + ' 退货价 ' + money(item.returnPrice))
+  })
   say('P9  重复 id ' + report.duplicateIds.length + ' 个 / 空 id ' + report.emptyIds + ' 个')
   say('P10 多行单 ' + report.multiLineOrders.length + ' 张，抽样：')
   head(report.multiLineOrders, Math.min(limit, 20)).forEach(function (item) {
