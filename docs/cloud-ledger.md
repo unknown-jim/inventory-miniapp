@@ -18,7 +18,7 @@
   - `recent` 和 `today` 是按客户端给的 `dayStart` 现算的**读时投影**，不落库、不冻结。它们和被否掉的 `receivableSnapshot` 不是一回事：投影的定义永远是「当前流水集合的折叠」，任意时刻有唯一正确值；冻结字段存的是另一个量。
 - 流水形状：`records[]` **一张单一条记录**，明细在 `lines[]`。单头只放跨行共享的东西（客户、结算方式、备注、经手人、时间、单级汇总 `amount`/`profit`），其余一律进 `lines`。收款和期初没有明细，`lines` 为空、金额在单头。进货 / 改规格 / 库存调整是单行单，用 `lines[0]`。
   - `lines[].allocations` 必须**逐行保留**（这一行是从哪个规格格、还是从待加工扣的货）。「退货原样入库」完全依赖它，不要拍平或丢弃。
-  - 已退数量记在销售行的 `lines[].returnedQty` 上，不要扫全表数退货记录。新增退货要加、删退货要减、改退货数量要同步改，三条路径都要双向一致。
+  - 已退数量和金额记在销售行的 `lines[].returnedQty` / `lines[].returnedAmount` 上（金额按退货单实际金额累加，老流水缺失读时回退 `returnedQty × 单价`），不要扫全表数退货记录。新增退货要加、删退货要减、改退货数量要同步改，三条路径都要双向一致。
   - 一张退货单只能退同一张销售单。退货单头的客户和结算方式继承自被退销售单，跨单无法定义单头。
   - 老的按行流水由 `migrateRecordShape` 在 `legacyRecordsOf` 里**读时自愈**，不需要迁移脚本。**`listsOf` 不碰流水**（它只出四张表和聚合投影），`legacyRecordsOf` 只在「这本账还没搬进 `ledger_records`」时被兼容读和 `migrateLocal` 调到；同一本账的写路径已经被 `assertRecordsReady` 挡住，不会出现一半在数组一半在集合。**只有 `out` 按 `orderId || id` 归并，其余每条各自成单**——老退货记录和被退销售单共享同一个 `orderId`，一起归并会把退货并进销售单。
 - 送货单欠款：一律按**当前流水**、按单据时间截断现算，**在服务端**（`getSlip`；未迁移的老账本走 `receivableAt`，迁完的走「当前欠款 − 后缀」，两条路的等价性由 `tests/ledger-records.test.js` 钉住）。**不要加冻结欠款的字段。** 同一客户的送货单按时间排开，「合计欠款」必须构成一条连续余额线、末端等于该客户当前欠款；写入时冻结的值在改 / 删更早的记录后会制造一个不出现在任何单据上的断点，客户拿单据对账时对不上。
@@ -40,7 +40,7 @@
   - **不回 `total`**：流水页的「全部 N」用 `getLedger` 的 `totals.count`（零查询），其余 chip 和客户页都不显示条数。
   - **没有条数上限**。2b-2 之前 `getLedger` 整本回传卡在 2000 条（`COMPAT_MAX_RECORDS`），超了报错、账本直接打不开；分页之后这道悬崖不存在了，这是 2b-2 的主要收益，**不要再加回来**。`getSlip` 的 `SUFFIX_MAX_RECORDS`（5000）是另一个量——倒推走多远、与返回包无关——它现在是仓里唯一一份「有界循环判条数不判页数」的样板，下一个写这种循环的人照着它写。
 - 流水**字段**换形状时，**读的一端兜底，不写迁移脚本**。老流水缺新字段就按老字段回推，写的一端只写新字段并把老字段删掉，一条流水不留两份结算数据。例子：结算金额 `paidAmount` 缺失时按老的 `payType` 回推（现结当作全额结清、赊账当作一分没结），见 [`utils/inventory.js`](../utils/inventory.js) 的 `settledAmount`。云函数另外还接受老客户端只送 `payType` 的写入（`resolvePaidAmount`）——小程序和云函数不是同一次发布。**这条管字段，不管搬家**：流水搬进 `ledger_records` 是一次显式的迁移动作，不要拿这条给它背书，也不要拿它否掉这条。
-- 结算口径：`paidAmount` = **这张单当场用现金结清、因而不进客户欠款的金额**。销售是客户付进来的，退货是店里退出去的现金。单据的欠款贡献一律是 `amount − paidAmount`（销售为正、退货为负）。退货单的 `paidAmount` 在**写入时**按「先冲这张销售单没收到的钱、冲不掉的才算退现金」算出来（`returnCashRefund`），**不在读的时候现算 `max(0, 应收−实收−已退)`**：夹断不可加，会同时破坏 `applyTermsDelta` 的增量维护（单条记录的贡献必须只依赖自己）和 `getSlip` 的「当前欠款 − 后缀」（后缀减不回一个被夹断的量，重印老送货单会印错）。退货单头的这一份是**按记账先后顺序**分出来的份额，判据是【拆分不变量】`Σ(退货额 − 现金退款额) == min(销售单欠款, Σ退货额)`。加一张新退货单永远维持它；**改销售单的欠款基准**、**改/删同单里不是最后一张的退货单**会破坏它，而其余那些退货单不在事务的加载范围里（`recordsNeeded` 对 `out` 编辑不加载退货、对 `return` 编辑只加载销售单）。所以这两条路走守卫拦截：`assertSaleEditKeepsReturnSplit` 和 `assertReturnSplitFresh`，改不动就不许改，不静默算错钱。全款单在**保持一分不欠、且已退货值没变**时不受影响；其余的单只在「已退货值一个子儿没变，且改前改后欠款都盖得住它」或「欠款基准和已退货值都一分没变」时放行 —— **有退货就不许改这张单的单价，不看收没收钱**：退货单记的是退货当时的单价，改单价会让「已退货值」和实际退货额分岔，分岔会把将来那笔退货的冲抵算小、欠款静默算大。**已知不足（两条，都留到下一步）**：① 根治「已退货值 vs Σ退货额」分岔要给销售行加 `returnedAmount`（退货时按退货单实际金额累加、读时缺失回退 `returnedQty × 单价`），让它由构造恒等于 Σ退货额——除了改单价，**小数数量下的分位取整也会造成同样的分岔**（`round2(0.5×7.77)×2 = 7.78` vs `round2(1×7.77) = 7.77`）；那是一个新的持久化字段，连带 `patchSaleLineReturned` 的增改删三条路和迁移/round-trip 测试。② 更完整的做法是把该销售单的全部退货单一起加载、按确定序整体重算，代价是新的 `saleOrderId` 多键查询 + 事务写集合放大 + `assertAccountsAfter` 要吃多条 delta。守门员是 `tests/inventory.test.js` 末尾的拆分不变量 fuzzer。
+- 结算口径：`paidAmount` = **这张单当场用现金结清、因而不进客户欠款的金额**。销售是客户付进来的，退货是店里退出去的现金。单据的欠款贡献一律是 `amount − paidAmount`（销售为正、退货为负）。退货单的 `paidAmount` 在**写入时**按「先冲这张销售单没收到的钱、冲不掉的才算退现金」算出来（`returnCashRefund`），**不在读的时候现算 `max(0, 应收−实收−已退)`**：夹断不可加，会同时破坏 `applyTermsDelta` 的增量维护（单条记录的贡献必须只依赖自己）和 `getSlip` 的「当前欠款 − 后缀」（后缀减不回一个被夹断的量，重印老送货单会印错）。退货单头的这一份是**按记账先后顺序**分出来的份额，判据是【拆分不变量】`Σ(退货额 − 现金退款额) == min(销售单欠款, Σ退货额)`。加一张新退货单永远维持它（新的那张就是最后一张，冲抵基准由销售行的 `returnedAmount` 现推）。**改销售单（欠款基准变了）、改/删任何一张退货单（前缀和变了）不再拦截**：事务把该销售单的**全部退货单**加载进来（`recordsNeeded` 的 `saleReturns`，走 `saleOrderId` 索引查询 `returnsOfSale`），`recomputeSaleReturns` 按记账顺序（`(createdAt, id)` 升序 = `sortKey` 升序）整体重算各单 `paidAmount`，并把退货单头过期的客户字段（id / 姓名 / 电话 / 地址，四个都继承自被退销售单，要拨就整组拨）拨到销售单当前值；多条变化由 `assertAccountsAfterAll` 一起过欠款校验。「已退货值」由销售行的 `lines[].returnedAmount` 定义（退货时按退货单实际金额累加，老流水缺失读时回退 `returnedQty × 单价`），由构造恒等于 Σ退货额——改单价、小数数量下的分位取整都不再让它和实际退货额分岔（旧口径 `round2(0.5×7.77)×2 = 7.78` vs `round2(1×7.77) = 7.77` 会差 1 分）。两条旧操作限制随之取消：不用先删后面的退货单，有退货的单也可以改单价（已退金额按退货当时金额记，不随单价挪动）。守门员仍是 `tests/inventory.test.js` 末尾的拆分不变量 fuzzer。
 - 小程序调云函数**必须带 `apiVersion`**；服务端对会回传账本或流水的 action（`getLedger` / `getSlip` / `listRecords` / `getRecord` / `migrateLocal` 和所有记账）设门，版本低就报「请更新小程序到最新版本」。`whoami` / `listShops` / `createShop` / `listMembers` 放行，否则老客户端连店都列不出来。
   - **上线顺序：先部署云函数，再发布小程序**（和 2b-1 定的相反）。理由：2b-2 之前新客户端对老云函数是前向容忍的（老云函数照旧回传整本 `ledger.records`，客户端走整份替换分支）；2b-2 之后这条容忍没了——新客户端要调 `listRecords` / `getRecord`，老云函数会回「未知操作」，流水页直接空白。保住它就得在客户端保留整本缓存 + 本地分页，而那正是这一步要删的。所以只能反过来：① 部署云函数（此刻起老客户端撞 `apiVersion` 门，报「请更新小程序到最新版本」——设计好的响亮失败）→ ② 逐店跑流水迁移 → ③ 发布小程序新版并逐店确认已更新。②③ 之间店里是「老客户端被挡住」的状态，**必须打烊后一口气做完**。配 `wx.getUpdateManager` 冷启动提示更新。
 - 扣账内核只有一份。云函数不能 `require('../../utils/inventory')`，用 `npm run sync:ledger-inventory` 复制到 `cloudfunctions/ledger/`。`npm test` 会在两份不一致时失败。
@@ -51,7 +51,7 @@
     1. `bookId` ASC, `sortKey` DESC —— `page` / `recentAndToday`
     2. `bookId` ASC, `customerId` ASC, `sortKey` DESC —— `page(customerId)` / `suffixOfCustomer`
     3. `bookId` ASC, `type` ASC, `sortKey` DESC —— `page(type)`
-    4. `bookId` ASC, `saleOrderId` ASC —— 查一张销售单的退货
+    4. `bookId` ASC, `saleOrderId` ASC, `sortKey` ASC —— 查一张销售单的退货（整体重算用）
     5. `bookId` ASC, `type` ASC, `productId` ASC, `skuId` ASC, `sortKey` DESC —— `latestPurchases`
     6. `shopId` ASC —— `deleteShop` 清理、跨账套运维
 
@@ -99,3 +99,4 @@
 - 给 `listRecords` 放开「同时按类型和客户筛」。代码上跑得通，但那是一条无索引查询，条数一多就超时。
 - 客户端把「今日三项算不出来」显示成 0。**要显示「—」**：0 是会被当真的错数，店主会拿它当今天真的没卖出东西。
 - 记账之后再顺手拉一次流水。提交之后每多一次可能失败的请求，就多一次「账记上了却报失败」的机会；标脏就够了。
+- 改销售单或退货单时只改单条、不整体重算同单其余退货单的 `paidAmount`。份额是一组按记账顺序分出来的，漏拨会静默算错欠款；整体重算内置在 `updateRecord` / `deleteRecord` 里，别绕开它们直改集合。

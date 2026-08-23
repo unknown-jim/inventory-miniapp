@@ -647,7 +647,7 @@ async function dispatch(input) {
   // 事务边界：ledgers/{shopId} 的读 + 写仍然是全店所有写操作的唯一串行化点。
   // 所以即使「事务内 where() 是否上锁」语义不明，也不出问题 —— 任何并发写者要提交
   // 都必须先写 ledgers 文档，而它已经被本事务锁住了。
-  // 单事务写入量：ledgers 1 个 + 记录 ≤2 个。
+  // 单事务写入量：ledgers 1 个 + 目标记录 1 条 + （改销售单/退货时）该销售单的全部退货单。
   const outcome = await db.runTransaction(async function (tx) {
     const members = await membersOfShop(db, tx, shopId)
     requireMember(members, shopId, openid)

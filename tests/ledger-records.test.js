@@ -255,7 +255,7 @@ function totalStock(skus, productId) {
   await shop.call('saveCustomer', { name: '客户乙' })
   await shop.call('saveCustomer', { name: '客户丙' })
 
-  const EXPECTED_ERRORS = /库存不足|请选择规格|规格不存在|收款不能超过当前欠款|改完后收款会超过赊账|可退数量|退货数量必须大于|销售数量必须大于|进货数量必须大于|调整数量必须大于|改规格数量必须大于|期初欠款必须大于|收款金额必须大于|请选择不同的规格|待加工库存不能改规格|请先删除退货记录|这张单有退货，改金额或实收会让退货冲抵对不上|后面还有别的退货单|流水不存在|商品不存在|客户不存在|商品已删除|请选择客户|赊账必须选择客户|数量不能小于已退货|请填写退货数量|请先加入商品|不能改调整方向|退货请指明销售单|分规格现货没有待加工格|选择其他时请填写备注|待加工库存不存在|一次退货只能退同一张销售单|请选择原因|普通商品不用改规格/
+  const EXPECTED_ERRORS = /库存不足|请选择规格|规格不存在|收款不能超过当前欠款|改完后收款会超过赊账|可退数量|退货数量必须大于|销售数量必须大于|进货数量必须大于|调整数量必须大于|改规格数量必须大于|期初欠款必须大于|收款金额必须大于|请选择不同的规格|待加工库存不能改规格|请先删除退货记录|流水不存在|商品不存在|客户不存在|商品已删除|请选择客户|赊账必须选择客户|数量不能小于已退货|请填写退货数量|请先加入商品|不能改调整方向|退货请指明销售单|分规格现货没有待加工格|选择其他时请填写备注|待加工库存不存在|一次退货只能退同一张销售单|请选择原因|普通商品不用改规格|这张销售单的退货单太多/
 
   let ledger = await shop.ledger()
   const shopBookId = (await shop.db.getLedger(shop.shopId)).bookId
@@ -726,6 +726,129 @@ function totalStock(skus, productId) {
   assert.strictEqual(rqLedger.products[0].stock, 100)
   assert.deepStrictEqual(rqLedger.accounts, inv.foldAccountTerms(rqLedger.records))
   assert.strictEqual(rqLedger.customers[0].account.receivable, 0)
+
+  // -------------------------------------------------------------------------
+  // 3b) 退货拆分整体重算：改销售单 / 改删退货单，同单其余退货单的份额一并拨对
+  // -------------------------------------------------------------------------
+
+  // ① recordsNeeded 的形状：谁要加载 saleReturns、谁不要
+  const needOutWithReturns = apply.recordsNeeded('updateRecord', { id: 'o1' }, {
+    byId: { o1: { id: 'o1', type: 'out', lines: [{ lineId: 'l1', returnedQty: 1 }] } }
+  })
+  assert.deepStrictEqual(needOutWithReturns.saleReturns, ['o1'], '改有退货的销售单要同单退货')
+  const needOutClean = apply.recordsNeeded('updateRecord', { id: 'o2' }, {
+    byId: { o2: { id: 'o2', type: 'out', lines: [{ lineId: 'l1', returnedQty: 0 }] } }
+  })
+  assert.deepStrictEqual(needOutClean.saleReturns, [], '没退货的销售单不加载退货')
+  const needReturn = apply.recordsNeeded('deleteRecord', { id: 'r9' }, {
+    byId: { r9: { id: 'r9', type: 'return', lines: [{ lineId: 'x1', saleOrderId: 'o1' }] } }
+  })
+  assert.deepStrictEqual(needReturn.saleOrderIds, ['o1'])
+  assert.deepStrictEqual(needReturn.saleReturns, ['o1'], '改/删退货单要同单全部退货')
+  const needAdd = apply.recordsNeeded('addReturn', {
+    items: [{ saleOrderId: 'o1', saleLineId: 'l1', qty: 1 }]
+  }, null)
+  assert.deepStrictEqual(needAdd.saleOrderIds, ['o1'])
+  assert.deepStrictEqual(needAdd.saleReturns, [], 'addReturn 不需要 saleReturns：份额由销售行 returnedAmount 现推')
+
+  // ② 整条链路（dispatch → MemoryDb）：部分收款销售 + 两张退货 + 改销售单金额，
+  //    两张退货单的 paidAmount 都被重算，一次事务写 1 个账本文档 + 3 条记录。
+  const spShop = await new Shop({ ids: idFactory('sp') }).open('拆分店')
+  await spShop.call('saveProduct', { name: '拆分货', costPrice: 1, salePrice: 25, stock: 50, alertQty: 1 })
+  await spShop.call('saveCustomer', { name: '拆分客户' })
+  let spLists = await spShop.ledger()
+  const spProduct = spLists.products[0]
+  const spCustomer = spLists.customers[0]
+  const spSale = (await spShop.call('addSale', {
+    customerId: spCustomer.id,
+    paidAmount: 40,
+    items: [{ productId: spProduct.id, qty: 4, unitPrice: 25 }]
+  }, 1000)).result.order
+  const spRet1 = (await spShop.call('addReturn', {
+    items: [{ saleOrderId: spSale.id, saleLineId: spSale.lines[0].lineId, qty: 1 }]
+  }, 2000)).result.recordsCreated[0]
+  const spRet2 = (await spShop.call('addReturn', {
+    items: [{ saleOrderId: spSale.id, saleLineId: spSale.lines[0].lineId, qty: 2 }]
+  }, 3000)).result.recordsCreated[0]
+  spLists = await spShop.ledger()
+  assert.strictEqual(spRet1.paidAmount, 0)
+  assert.strictEqual(spRet2.paidAmount, 15, '欠款 60 冲掉先退的 25，后退的 50 里有 15 只能退现金')
+
+  function docSnapshot(shop, bookId) {
+    const out = {}
+    shop.docsOfBook(bookId).forEach(function (doc) {
+      out[doc._id] = JSON.stringify(doc)
+    })
+    return out
+  }
+  const spBookId = spLists.bookId
+  const beforeEdit = docSnapshot(spShop, spBookId)
+  const ledgerBefore = JSON.stringify(spShop.db.ledgers[spShop.shopId])
+  // 改成一分不欠（40 收满 40）：D 60 → 0，两张退货单都变成纯退现金，
+  // 份额 0→25、15→50 双双被重算（有一张份额没变时它会按 skip 规则不重写）。
+  await spShop.call('updateRecord', {
+    id: spSale.id,
+    items: [{ id: spSale.lines[0].lineId, qty: 4, unitPrice: 10 }],
+    paidAmount: 40,
+    customerId: spCustomer.id
+  }, 4000)
+  spLists = await spShop.ledger()
+  const retDoc = function (id) {
+    return spLists.records.find(function (item) { return item.id === id })
+  }
+  assert.strictEqual(retDoc(spRet1.id).paidAmount, 25)
+  assert.strictEqual(retDoc(spRet2.id).paidAmount, 50, '改销售单后 D=0，两张退货单都重算成纯退现金')
+  assert.strictEqual(spLists.customers[0].account.receivable, 0)
+  assert.deepStrictEqual(spLists.accounts, inv.foldAccountTerms(spLists.records))
+  assert.strictEqual(retDoc(spSale.id).lines[0].returnedAmount, 75, '已退金额按退货单实际金额累加')
+  // 一次事务的写入量：账本文档 1 个 + 记录 3 条（销售单 + 两张退货单）
+  const afterEdit = docSnapshot(spShop, spBookId)
+  const changedIds = Object.keys(afterEdit).filter(function (key) {
+    return afterEdit[key] !== beforeEdit[key]
+  })
+  assert.deepStrictEqual(changedIds.sort(), [spBookId + '_' + spRet1.id, spBookId + '_' + spRet2.id, spBookId + '_' + spSale.id].sort(),
+    '改销售单要连带重写两张退货单文档')
+  assert.notStrictEqual(JSON.stringify(spShop.db.ledgers[spShop.shopId]), ledgerBefore,
+    '账本文档（revision/聚合）也要写')
+
+  // ③ returnedAmount 的文档往返：toRecordDoc / fromRecordDoc 后逐分不变
+  const sampleSaleLine = {
+    lineId: 'sl1', productId: 'p1', qty: 3, unitPrice: 7.77, costPrice: 1, amount: 23.31,
+    profit: 20.31, allocations: [], returnedQty: 1.5, returnedAmount: 11.66
+  }
+  const sampleSaleRecord = {
+    id: 's-rt', type: 'out', amount: 23.31, profit: 20.31, remark: '', customerId: 'c1',
+    customerName: '甲', createdAt: 42, paidAmount: 0, lines: [sampleSaleLine]
+  }
+  assert.deepStrictEqual(apply.fromRecordDoc(apply.toRecordDoc(sampleSaleRecord, 'b-rt', 'sh-rt')), sampleSaleRecord,
+    'returnedAmount 必须原样活过文档往返')
+
+  // ④ returnsOfSale 升序 = 记账顺序：createdAt 乱序录入，取回按 (createdAt, id) 升序
+  const roShop = await new Shop({ ids: idFactory('ro') }).open('顺序店')
+  await roShop.call('saveProduct', { name: '顺序货', costPrice: 1, salePrice: 10, stock: 50, alertQty: 1 })
+  const roLists = await roShop.ledger()
+  const roProduct = roLists.products[0]
+  const roSale = (await roShop.call('addSale', {
+    payType: 'cash', customerId: '',
+    items: [{ productId: roProduct.id, qty: 6, unitPrice: 10 }]
+  }, 1000)).result.order
+  await roShop.call('addReturn', {
+    items: [{ saleOrderId: roSale.id, saleLineId: roSale.lines[0].lineId, qty: 1 }]
+  }, 5000)
+  await roShop.call('addReturn', {
+    items: [{ saleOrderId: roSale.id, saleLineId: roSale.lines[0].lineId, qty: 1 }]
+  }, 3000)
+  await roShop.call('addReturn', {
+    items: [{ saleOrderId: roSale.id, saleLineId: roSale.lines[0].lineId, qty: 1 }]
+  }, 4000)
+  const roBook = (await roShop.db.getLedger(roShop.shopId)).bookId
+  const roStore = recordsModule.recordStore(roShop.db.recordsCtx(), roBook, roShop.shopId)
+  const roReturns = await roStore.returnsOfSale(roSale.id)
+  assert.deepStrictEqual(roReturns.map(function (item) {
+    return item.createdAt
+  }), [3000, 4000, 5000], 'returnsOfSale 必须按记账顺序（sortKey 升序）返回')
+  assert.strictEqual((await roStore.returnsOfSale('missing')).length, 0)
+  assert.strictEqual(recordsModule.SALE_RETURNS_MAX, 200)
 
   // -------------------------------------------------------------------------
   // 4) latestPurchase 取 2 条够用：3 条同 (productId, skuId) 进货，

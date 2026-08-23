@@ -953,11 +953,15 @@ function settledAmount(record) {
   return paid > amount ? amount : paid
 }
 
-// 一张销售单上已经退掉的货值（按销售行的 returnedQty × 售价算，不扫退货记录：
-// 流水已经在集合里，扫全表要多键索引）。
+// 一张销售单上已经退掉的货值。returnedAmount 是退货时按退货单实际金额累加的
+// 持久字段（老流水缺失时回退 returnedQty × 当前单价，老数据读时兜底、不写迁移），
+// 不扫退货记录：流水已经在集合里，扫全表要多键索引。
 function returnedAmountOfSale(saleRecord) {
   return round2(recordLines(saleRecord).reduce(function (sum, line) {
-    return sum + round2(toNumber(line.returnedQty) * toNumber(line.unitPrice))
+    const amount = (line.returnedAmount == null || line.returnedAmount === '')
+      ? round2(toNumber(line.returnedQty) * toNumber(line.unitPrice))
+      : round2(line.returnedAmount)
+    return sum + amount
   }, 0))
 }
 
@@ -979,87 +983,100 @@ function returnCashRefund(saleRecord, returnAmount, othersReturned) {
 }
 
 // ---------------------------------------------------------------------------
-// 退货拆分的「新鲜度」守卫
+// 退货拆分的整体重算
 //
 // 退货单头的 paidAmount（现金退款额）是**按记账当时的先后顺序**分出来的份额：
 //     c_i = clamp(前 i 张退货额之和 − 销售单欠款 D, 0, 本张退货额 r_i)
 // 它只有作为一组才有意义。这一组的唯一正确性判据是：
 //     Σ(r_i − c_i) == min(D, Σr_i)                      —— 【拆分不变量】
 //
-// 加一张新退货单永远维持它（新的那张就是最后一张）。破坏它的有三条写入：
-// 改销售单的欠款基准、改同单里不是最后一张的退货单、删同单里不是最后一张的退货单。
-// 而其余那些退货单**不在这次事务的加载范围里**（recordsNeeded 对 out 编辑不加载
-// 退货、对 return 编辑只加载销售单，见 utils/ledger-apply.js:400-434），改不动。
-//
-// 所以这里的选择是：改不动就不许改，报一条店主看得懂的错，绝不静默算错一笔钱。
-// 「把整张销售单的退货全加载进来整体重算」是更完整的做法，代价和取舍见 PR 正文。
+// 加一张新退货单永远维持它（新的那张就是最后一张）。破坏它的是另外三条写入：
+// 改销售单的欠款基准 D（改金额 / 实收 / 单价 / 客户）、改任一张退货单（前缀和变了）、
+// 删任一张退货单（前缀和变了）。对策不是拦（老实现用 assertSaleEditKeepsReturnSplit /
+// assertReturnSplitFresh 两个守卫一刀切，店主要先删掉后面的退货单才能改），而是把
+// 该销售单名下的**全部退货单**加载进同一笔写入（recordsNeeded 的 saleReturns，
+// 见 utils/ledger-apply.js），在这里按记账顺序整体重算一遍。守卫拿掉的前提就是
+// 这份重算补上了：任何一条牵动拆分的写入，落库时其余份额一并被拨对。
+// 守门员是 tests/inventory.test.js 末尾的拆分不变量 fuzzer。
 // ---------------------------------------------------------------------------
 
-// ---------------------------------------------------------------------------
-// 改销售单时的守卫。
-//
-// 退货单头冻结的现金退款额 c_i 是一组按记账顺序分出来的份额，判据是
-// 【拆分不变量】Σ(r_i − c_i) == min(D, Σr_i)。改销售单会同时动两样东西：
-// 欠款基准 D，以及「已退货值」returnedAmountOfSale —— 后者是将来那笔退货算
-// othersReturned 时用的基准。两样都要管住。
-//
-// 只有三种情况能「只看销售单」就断定放行安全：
-//   ① 改前改后都一分不欠 —— 每张退货单都是「纯退现金」，c_i 恒 = 自己的退货额，
-//      与顺序无关；将来再退也恒是全额退现金。全款单退货落在这里。但已退货值必须
-//      没变：改单价会造出分岔，见下面那条注意。
-//   ② 已退货值一个子儿没变，且改前改后欠款都盖得住它 —— c_i 恒 0，且不挪动将来
-//      退货的 othersReturned 基准。**全赊单改数量落在这里，最常见，不能误伤。**
-//   ③ 欠款基准和已退货值都没变 —— c_i 本来就还对（只改客户/备注这类）。
-// 三条都不成立就拦。
-//
-// 两条容易想歪、都已经被随机漫步证伪过的写法，不要再加回来：
-//   * **不要**为「一分未收」单开一档放行改单价。退货单记的是退货**当时**的单价，
-//     改销售行单价会让已退货值和 Σ退货额分岔；这张单以后只要经 ② 收一笔钱，
-//     分岔就会把将来那笔退货的冲抵算小、**欠款静默算大**（第 3 轮 fuzz 抓到的）。
-//     一分未收在 ② 里本来就被包含（已退货值 ≤ 应收 = 欠款），它唯一独占的就是
-//     这个洞。要根治得给销售行加 returnedAmount 字段，见 PR 正文的下一步。
-//   * **不要**以为这几条放行只会把欠款算小、由 assertAccountsValid 兜住。
-//     上面那条分岔的方向恰恰是算大，没有任何兜底。守门员是文件末尾的
-//     「拆分不变量 fuzzer」，改这个函数必须让它继续全绿且放行次数不塌。
-// ---------------------------------------------------------------------------
-function assertSaleEditKeepsReturnSplit(existing, next, paidAmount) {
-  const hasReturns = recordLines(existing).some(function (line) {
-    return toNumber(line.returnedQty) > 0
-  })
-  if (!hasReturns) return
-  const prevDebt = round2(toNumber(existing.amount) - settledAmount(existing))
-  const nextDebt = round2(toNumber(next.amount) - round2(paidAmount))
-  const prevReturned = returnedAmountOfSale(existing)
-  const nextReturned = returnedAmountOfSale(next)
-  // 注意 nextReturned === prevReturned 三档都要：它是「不许造出已退货值与
-  // Σ退货额分岔」的唯一保证，档① 少了它，0 元行能把 R_basis 压成 0，随后
-  // 档② 就会把欠款静默算大（第 4 轮审计的扩展 fuzz 抓到的）。
-  if (prevDebt <= 0 && nextDebt <= 0 && nextReturned === prevReturned) return  // ①
-  if (nextReturned === prevReturned
-    && prevDebt >= prevReturned
-    && nextDebt >= prevReturned) return                                   // ②
-  if (nextDebt === prevDebt && nextReturned === prevReturned) return      // ③
-  throw new Error('这张单有退货，改金额或实收会让退货冲抵对不上，请先删掉退货单再改')
-}
-
-// 改/删一张退货单时的守卫：只有它是「这张销售单最后一张退货单」时才动得。
-// 判据不需要去数兄弟退货单：c_i 只有在等于「把自己当成最后一张重算」的结果时，
-// 才说明它后面没有以它为基准分过份额的退货单。
-function assertReturnSplitFresh(saleRecord, returnRecord) {
-  if (!saleRecord) return
+// 把一张销售单名下的全部退货单按记账顺序整体重算 paidAmount。触发：改销售单
+// （欠款基准 D 变了）、改/删任何一张退货单（前缀和变了）。份额定义和 returnCashRefund
+// 同一条规则：先冲这张单没收到的钱，冲不掉的才算退现金。
+// 记账顺序 = (createdAt 升序, id 升序) = sortKey 升序：sortKey = pad13(createdAt)_id，
+// 前缀相同后比较的子串与 id 字符串比较逐条等价（ledger-apply.js 的 makeSortKey）。
+// 同时把退货单头过期的客户字段拨到销售单当前值 —— id / 姓名 / 电话 / 地址四个
+// 都继承自被退销售单（applyReturnOrder），不是各自录入的：不拨 customerId 会把
+// 这个客户的退货挂在旧客户账上，只拨 customerId 又会让这条记录自相矛盾（挂在新
+// 客户账下，却印着旧客户的名字和地址）。所以要拨就整组拨。
+// 返回 { records, changes }：records 是替换后的新数组；changes = [{before, after}]
+// 只含有实际变化的退货单，供多条 delta 的欠款校验和上层 diff 用。
+function recomputeSaleReturns(records, saleRecord) {
+  const saleId = String((saleRecord && saleRecord.id) || '')
+  if (!saleRecord || !saleId) {
+    return { records: records, changes: [] }
+  }
   const debt = round2(toNumber(saleRecord.amount) - settledAmount(saleRecord))
-  if (debt <= 0) return                    // 一分不欠：每张都是纯退现金，互不牵连
-  const total = returnedAmountOfSale(saleRecord)
-  const amount = toNumber(returnRecord.amount)
-  if (total <= debt) return                // 全被欠款吸收：每张 c_i 都是 0，互不牵连
-  const fresh = returnCashRefund(saleRecord, amount, round2(total - amount))
-  if (round2(settledAmount(returnRecord)) !== round2(fresh)) {
-    throw new Error('这张销售单后面还有别的退货单，请先删掉后面那些再动这一单')
+  const siblings = (records || []).filter(function (item) {
+    return item && item.type === 'return'
+      && String((recordLines(item)[0] || {}).saleOrderId || '') === saleId
+  }).slice().sort(function (a, b) {
+    const ta = toNumber(a.createdAt)
+    const tb = toNumber(b.createdAt)
+    if (ta !== tb) return ta < tb ? -1 : 1
+    const ia = String(a.id || '')
+    const ib = String(b.id || '')
+    if (ia === ib) return 0
+    return ia < ib ? -1 : 1
+  })
+  const changes = []
+  let left = debt
+  const rewritten = siblings.map(function (ret) {
+    const amount = round2(toNumber(ret.amount))
+    const cash = left <= 0 ? amount : (left >= amount ? 0 : round2(amount - left))
+    left = round2(Math.max(0, round2(left - amount)))
+    const want = {
+      customerId: saleRecord.customerId || '',
+      customerName: saleRecord.customerName || '',
+      customerPhone: saleRecord.customerPhone || '',
+      customerAddress: saleRecord.customerAddress || ''
+    }
+    // 「还没 materialize」的判据和 settledAmount 保持同一条：null 和 '' 都算缺。
+    // 这类老退货单即使份额算出来相等也要重写（paidAmount = cash 并 delete
+    // payType）——否则下游 settledAmount 会按老 payType 把它回推成整笔退现金 /
+    // 整笔冲欠款，账就飞了。两处判据必须一致，否则空串会被当成已 materialize
+    // 跳过重写，读的时候却仍按 payType 回推。
+    const materialized = !(ret.paidAmount == null || ret.paidAmount === '')
+    if (materialized && round2(ret.paidAmount) === cash
+      && ret.customerId === want.customerId
+      && ret.customerName === want.customerName
+      && ret.customerPhone === want.customerPhone
+      && ret.customerAddress === want.customerAddress) {
+      return ret
+    }
+    const nextRet = Object.assign({}, ret, want, { paidAmount: cash })
+    delete nextRet.payType
+    changes.push({ before: ret, after: nextRet })
+    return nextRet
+  })
+  if (!changes.length) {
+    return { records: records, changes: [] }
+  }
+  const byId = {}
+  rewritten.forEach(function (item) {
+    byId[item.id] = item
+  })
+  return {
+    records: (records || []).map(function (item) {
+      const id = item && item.id
+      return byId[id] || item
+    }),
+    changes: changes
   }
 }
 
 // 退货单指向的销售单。一次退货只能退同一张销售单，所以看第一行就够；找不到
-// （老退货行没有 saleOrderId，或指向的不是销售单）就返回 null，守卫随之放行，
+// （老退货行没有 saleOrderId，或指向的不是销售单）就返回 null、不触发整体重算，
 // 和 updateRecord 里对老退货行的既有容忍口径一致：updateRecord 那条路后面
 // findSaleLine 会抛「销售流水不存在」拦住（同样只认 type === 'out'，见
 // findSaleLine），deleteRecord 那条路本来就该让坏数据删得掉。
@@ -1359,12 +1376,23 @@ function assertAccountsValid(accounts) {
   })
 }
 
-function assertAccountsAfter(ctx, records, before, after) {
+// deltas = [{before, after}]，按序套 applyTermsDelta 后整体校验；末态与顺序无关。
+// 多条 delta 是整体重算的配套：改销售单 / 改删退货单时，同单其余退货单的份额
+// 变化也要一并计入欠款校验。
+function assertAccountsAfterAll(ctx, records, deltas) {
   if (ctx && ctx.accounts) {
-    assertAccountsValid(applyTermsDelta({ accounts: ctx.accounts }, before, after).accounts)
+    let accounts = ctx.accounts
+    ;(deltas || []).forEach(function (item) {
+      accounts = applyTermsDelta({ accounts: accounts }, item.before, item.after).accounts
+    })
+    assertAccountsValid(accounts)
     return
   }
   assertReceivableValid(records)
+}
+
+function assertAccountsAfter(ctx, records, before, after) {
+  assertAccountsAfterAll(ctx, records, [{ before: before, after: after }])
 }
 
 function applyPayment(records, payload, now, id, ctx) {
@@ -1518,7 +1546,8 @@ function applySaleOrder(products, records, payload, now, orderId, nextId, skus) 
       amount: round2(qty * unitPrice),
       profit: round2((unitPrice - consumed.costPrice) * qty),
       allocations: consumed.allocations || [],
-      returnedQty: 0
+      returnedQty: 0,
+      returnedAmount: 0
     }
   })
 
@@ -1770,18 +1799,25 @@ function findSaleLine(records, saleOrderId, saleLineId) {
   return found
 }
 
-// returnedQty 是销售行和退货行之间的双向一致性：新增退货加、删退货减、改退货同步改。
-function patchSaleLineReturned(records, saleOrderId, saleLineId, delta) {
+// returnedQty / returnedAmount 是销售行和退货行之间的双向一致性：新增退货加、
+// 删退货减、改退货同步改，两个维度都要对上。returnedAmount 按退货单实际金额
+// （行 amount）累加，让「已退货值」由构造恒等于 Σ退货额；老行缺这个字段时
+// 先按 returnedQty × 当前单价回推出底数再累加（读时兜底口径，见 returnedAmountOfSale）。
+function patchSaleLineReturned(records, saleOrderId, saleLineId, deltaQty, deltaAmount) {
   const orderId = String(saleOrderId || '')
   const lineId = String(saleLineId || '')
-  if (!orderId || !lineId || !delta) return records
+  if (!orderId || !lineId || (!deltaQty && !deltaAmount)) return records
   return records.map(function (item) {
     if (item.type !== 'out' || item.id !== orderId) return item
     return Object.assign({}, item, {
       lines: recordLines(item).map(function (line) {
         if (String(line.lineId || '') !== lineId) return line
+        const base = (line.returnedAmount == null || line.returnedAmount === '')
+          ? round2(toNumber(line.returnedQty) * toNumber(line.unitPrice))
+          : round2(line.returnedAmount)
         return Object.assign({}, line, {
-          returnedQty: round2(toNumber(line.returnedQty) + toNumber(delta))
+          returnedQty: round2(toNumber(line.returnedQty) + toNumber(deltaQty)),
+          returnedAmount: round2(base + toNumber(deltaAmount || 0))
         })
       })
     })
@@ -1821,7 +1857,8 @@ function applyReturnOrder(products, records, payload, now, nextId, skus, ctx) {
     const restocked = restockLine(workingProducts, workingSkus, located.line, qty, now, located.line.costPrice)
     workingProducts = restocked.products
     workingSkus = restocked.skus
-    nextRecords = patchSaleLineReturned(nextRecords, located.record.id, located.line.lineId, qty)
+    nextRecords = patchSaleLineReturned(nextRecords, located.record.id, located.line.lineId,
+      qty, round2(qty * toNumber(located.line.unitPrice)))
     const unitPrice = toNumber(located.line.unitPrice)
     const costPrice = toNumber(located.line.costPrice)
     lines.push({
@@ -1936,6 +1973,7 @@ function legacyLine(old) {
       return Object.assign({}, row)
     })
     line.returnedQty = 0
+    line.returnedAmount = 0
   } else if (old.type === 'return') {
     line.saleOrderId = ''
     line.saleLineId = String(old.saleRecordId || '')
@@ -1987,6 +2025,8 @@ function legacyOrder(items) {
 }
 
 // 老退货行用 saleRecordId 指向老销售行的 id，迁移后那个 id 变成了 line.lineId。
+// returnedQty / returnedAmount 一起回填，金额用退货行自己的 amount，
+// 让「已退货值」由构造恒等于 Σ退货额。
 function backfillReturnedQty(records, converted) {
   const index = Object.create(null)
   records.forEach(function (record) {
@@ -2003,6 +2043,7 @@ function backfillReturnedQty(records, converted) {
       if (!found) return
       line.saleOrderId = found.record.id
       found.line.returnedQty = round2(toNumber(found.line.returnedQty) + toNumber(line.qty))
+      found.line.returnedAmount = round2(toNumber(found.line.returnedAmount) + toNumber(line.amount))
     })
   })
 }
@@ -2336,7 +2377,6 @@ function updateRecord(products, records, payload, now, skus, ctx) {
     next.remark = String(payload.remark || '').trim()
     const paidAmount = resolvePaidAmount(payload, next.amount, settledAmount(existing))
     assertCustomerForDebt(paidAmount, next.amount, customerId)
-    assertSaleEditKeepsReturnSplit(existing, next, paidAmount)
     next.paidAmount = paidAmount
     delete next.payType
     next.customerId = customerId
@@ -2351,8 +2391,6 @@ function updateRecord(products, records, payload, now, skus, ctx) {
     }
   } else if (existing.type === 'return') {
     const updates = collectLineUpdates(existing, payload, '请逐行填写退货数量')
-    // 冻结的现金退款额是按记账顺序分出来的，只有最后一张动得（见守卫注释）
-    assertReturnSplitFresh(saleOrderOfReturn(nextRecords, existing), existing)
     const nextLines = existingLines.map(function (line) {
       const patch = updates[String(line.lineId || '')]
       if (!patch) return line
@@ -2375,7 +2413,8 @@ function updateRecord(products, records, payload, now, skus, ctx) {
       const restocked = restockLine(nextProducts, nextSkus, line, delta, now, line.costPrice)
       nextProducts = restocked.products
       nextSkus = restocked.skus
-      nextRecords = patchSaleLineReturned(nextRecords, sale.record.id, sale.line.lineId, delta)
+      nextRecords = patchSaleLineReturned(nextRecords, sale.record.id, sale.line.lineId,
+        delta, round2(round2(qty * toNumber(line.unitPrice)) - toNumber(line.amount)))
       const unitPrice = toNumber(line.unitPrice)
       const costPrice = toNumber(line.costPrice)
       return Object.assign({}, line, {
@@ -2389,18 +2428,14 @@ function updateRecord(products, records, payload, now, skus, ctx) {
     next.amount = sumBy(nextLines, 'amount')
     next.profit = sumBy(nextLines, 'profit')
     next.remark = String(payload.remark || '').trim()
-    // 改退货数量会改欠款冲抵，重算这张退货单的现金退款额，口径和新增退货一致
+    // 改退货数量会改欠款冲抵。找得到被退销售单时这里**不算** paidAmount，
+    // 交给拼接后的整体重算（recomputeSaleReturns 把本单和兄弟份额一起拨对）；
+    // 找不到（老退货行没有 saleOrderId）才走 fallback：把原结算夹到新金额内。
     const saleId = String((nextLines[0] || {}).saleOrderId || '')
     const patchedSale = saleId ? nextRecords.find(function (item) {
       return item.id === saleId
     }) : null
-    if (patchedSale) {
-      next.paidAmount = returnCashRefund(
-        patchedSale,
-        next.amount,
-        round2(returnedAmountOfSale(patchedSale) - next.amount)
-      )
-    } else {
+    if (!patchedSale) {
       const kept = round2(settledAmount(existing))
       next.paidAmount = kept > next.amount ? next.amount : kept
     }
@@ -2480,6 +2515,25 @@ function updateRecord(products, records, payload, now, skus, ctx) {
   })
   nextRecords[at] = next
 
+  // 改销售单（有退货）或改退货单：牵一发动全身，把该销售单的全部退货单按记账
+  // 顺序整体重算（拆分不变量的根治，见 recomputeSaleReturns）。改进货 / 收款 /
+  // 期初 / 改规格 / 调整不碰退货拆分，splitChanges 恒为空。
+  let splitChanges = []
+  if (next.type === 'out' && recordLines(next).some(function (line) {
+    return toNumber(line.returnedQty) > 0
+  })) {
+    const recomputed = recomputeSaleReturns(nextRecords, next)
+    nextRecords = recomputed.records
+    splitChanges = recomputed.changes
+  } else if (next.type === 'return') {
+    const sale = saleOrderOfReturn(nextRecords, next)
+    if (sale) {
+      const recomputed = recomputeSaleReturns(nextRecords, sale)
+      nextRecords = recomputed.records
+      splitChanges = recomputed.changes
+    }
+  }
+
   if (existing.type === 'in') {
     const line = firstLine(next)
     const costed = applyLatestPurchaseCost(nextProducts, nextSkus, nextRecords, line.productId, line.skuId, now)
@@ -2487,7 +2541,7 @@ function updateRecord(products, records, payload, now, skus, ctx) {
     nextSkus = costed.skus
   }
 
-  assertAccountsAfter(ctx, nextRecords, existing, next)
+  assertAccountsAfterAll(ctx, nextRecords, [{ before: existing, after: next }].concat(splitChanges))
 
   return {
     products: nextProducts,
@@ -2562,11 +2616,6 @@ function deleteRecord(products, records, id, now, skus, ctx) {
     }
   }
 
-  // 删退货同理：只有该销售单最后一张退货单删得掉，否则前面那些的冻结值会失效
-  if (existing.type === 'return') {
-    assertReturnSplitFresh(saleOrderOfReturn(records, existing), existing)
-  }
-
   const restored = restoreRecordStock(products, skus || [], existing, now)
   let nextProducts = restored.products
   let nextSkus = restored.skus
@@ -2575,11 +2624,21 @@ function deleteRecord(products, records, id, now, skus, ctx) {
     return item.id !== existing.id
   })
 
-  // 删退货要把被退销售行的已退数量减回去，否则可退数量会算错还不报错
+  // 删退货要把被退销售行的已退数量和金额减回去，否则可退数量会算错还不报错；
+  // 先 patch 再整体重算剩余兄弟退货单的份额，顺序不能反（重算读的是 patch 后的
+  // 销售行，而且被删的那张必须已经不在兄弟列表里）。
+  let splitChanges = []
   if (existing.type === 'return') {
     recordLines(existing).forEach(function (line) {
-      nextRecords = patchSaleLineReturned(nextRecords, line.saleOrderId, line.saleLineId, round2(-line.qty))
+      nextRecords = patchSaleLineReturned(nextRecords, line.saleOrderId, line.saleLineId,
+        round2(-line.qty), round2(-toNumber(line.amount)))
     })
+    const sale = saleOrderOfReturn(nextRecords, existing)
+    if (sale) {
+      const recomputed = recomputeSaleReturns(nextRecords, sale)
+      nextRecords = recomputed.records
+      splitChanges = recomputed.changes
+    }
   }
 
   if (existing.type === 'in') {
@@ -2589,7 +2648,7 @@ function deleteRecord(products, records, id, now, skus, ctx) {
     nextSkus = costed.skus
   }
 
-  assertAccountsAfter(ctx, nextRecords, existing, null)
+  assertAccountsAfterAll(ctx, nextRecords, [{ before: existing, after: null }].concat(splitChanges))
 
   return {
     products: nextProducts,

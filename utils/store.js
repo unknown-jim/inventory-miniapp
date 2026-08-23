@@ -390,6 +390,16 @@ function memoryRecordStore(bookId) {
           && doc.skuId === String(skuId || '')
       })).slice(0, 2).map(apply.fromRecordDoc)
     },
+    // 一张销售单名下的全部退货单，升序 = 记账顺序（整体重算用），同云上 recordStore.returnsOfSale
+    returnsOfSale: function (saleOrderId) {
+      return rows().filter(function (doc) {
+        return doc.type === 'return'
+          && doc.saleOrderId === String(saleOrderId || '')
+      }).slice().sort(function (a, b) {
+        if (a.sortKey === b.sortKey) return 0
+        return a.sortKey < b.sortKey ? -1 : 1
+      }).map(apply.fromRecordDoc)
+    },
     countAll: function () {
       return rows().length
     },

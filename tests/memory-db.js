@@ -298,11 +298,23 @@ function fetchSyncInto(store, need, loaded) {
       if (!known) loaded.latestPurchases.push(record)
     })
   })
+  need.saleReturns.forEach(function (saleId) {
+    const known = loaded.saleReturns.some(function (item) {
+      return String((inventory.recordLines(item)[0] || {}).saleOrderId || '') === saleId
+    })
+    if (known) return
+    store.returnsOfSale(saleId).forEach(function (record) {
+      const seen = loaded.saleReturns.some(function (item) {
+        return item.id === record.id
+      })
+      if (!seen) loaded.saleReturns.push(record)
+    })
+  })
   return loaded
 }
 
 function prepareSync(store, action, payload) {
-  let loaded = { byId: {}, saleOrders: [], latestPurchases: [] }
+  let loaded = { byId: {}, saleOrders: [], latestPurchases: [], saleReturns: [] }
   loaded = fetchSyncInto(store, apply.recordsNeeded(action, payload, null), loaded)
   loaded = fetchSyncInto(store, apply.recordsNeeded(action, payload, loaded), loaded)
   return loaded
@@ -361,6 +373,18 @@ MemoryBook.prototype.storeFor = function (bookId) {
           && doc.productId === String(productId || '')
           && doc.skuId === String(skuId || '')
       })).slice(0, 2).map(function (doc) {
+        return apply.fromRecordDoc(clone(doc))
+      })
+    },
+    // 一张销售单名下的全部退货单，升序 = 记账顺序（整体重算用）
+    returnsOfSale: function (saleOrderId) {
+      return rows().filter(function (doc) {
+        return doc.type === 'return'
+          && doc.saleOrderId === String(saleOrderId || '')
+      }).slice().sort(function (a, b) {
+        if (a.sortKey === b.sortKey) return 0
+        return a.sortKey < b.sortKey ? -1 : 1
+      }).map(function (doc) {
         return apply.fromRecordDoc(clone(doc))
       })
     },
