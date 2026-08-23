@@ -28,7 +28,7 @@
     <view class="chip {{type === 'adjust' ? 'on' : ''}}" data-type="adjust" bindtap="setType">调整</view>
   </view>
 
-  <view wx:if="{{!list.length}}" class="card empty">还没有流水</view>
+  <view wx:if="{{loaded && !list.length}}" class="card empty">还没有流水</view>
 
   <view class="card list-card" wx:if="{{list.length}}">
     <view class="list-item js-record-item {{item.isOut ? 'js-record-out' : ''}}" wx:for="{{list}}" wx:key="id" data-id="{{item.id}}" bindtap="onRecordTap">
@@ -51,4 +51,7 @@
       </view>
     </view>
   </view>
+
+  <view wx:if="{{loading}}" class="card quiet">正在加载…</view>
+  <view wx:elif="{{loaded && list.length && !hasMore}}" class="card quiet">没有更多了</view>
 </view>

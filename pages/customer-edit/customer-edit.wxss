@@ -64,6 +64,14 @@
   color: #64748B;
 }
 
+/* 明细取不到时的「重试」。和 index / products 的 .link 同一套，
+   字号不低于 --fs-sm，可点高度靠 .quiet 卡片的内边距撑住。 */
+.link {
+  margin-left: var(--space-xs);
+  color: #0F766E;
+  font-size: var(--fs-sm);
+}
+
 .save-btn {
   margin: 32rpx 0 16rpx;
 }

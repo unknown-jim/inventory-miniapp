@@ -9,6 +9,28 @@ function idFactory() {
   }
 }
 
+// 单行销售的写法糖：一张单一条记录，行号从单号派生，方便断言
+function sale(products, records, payload, now, id, skus) {
+  let n = 0
+  return inv.applySaleOrder(products, records, Object.assign({}, payload, {
+    items: [{
+      productId: payload.productId,
+      skuId: payload.skuId,
+      color: payload.color,
+      size: payload.size,
+      qty: payload.qty,
+      unitPrice: payload.unitPrice
+    }]
+  }), now, id, function () {
+    n += 1
+    return id + '-l' + n
+  }, skus)
+}
+
+function line0(record) {
+  return inv.firstLine(record)
+}
+
 function sampleProduct(overrides) {
   return inv.createProduct(Object.assign({
     name: '纯牛奶',
@@ -71,10 +93,10 @@ assert.strictEqual(purchased.record.amount, 13)
 assert.strictEqual(purchased.record.profit, 0)
 
 assert.throws(function () {
-  inv.applySale([created], [], { productId: 'p1', qty: 11, unitPrice: 4.5 }, 4000, 'r2')
+  sale([created], [], { productId: 'p1', qty: 11, unitPrice: 4.5 }, 4000, 'r2')
 }, /库存不足/)
 
-const sold = inv.applySale(purchased.products, purchased.records, {
+const sold = sale(purchased.products, purchased.records, {
   productId: 'p1',
   qty: 4,
   unitPrice: 4.5
@@ -97,12 +119,18 @@ const sameDayPurchase = inv.applyPurchase([created], [], {
   qty: 5,
   unitPrice: 2.6
 }, now - 3600000, 'r-day-in')
-const sameDaySale = inv.applySale(sameDayPurchase.products, sameDayPurchase.records, {
+const sameDaySale = sale(sameDayPurchase.products, sameDayPurchase.records, {
   productId: 'p1',
   qty: 4,
   unitPrice: 4.5
 }, now - 1800000, 'r-day-out')
-const dashboard = inv.getDashboard(sameDaySale.products, sameDaySale.records, now)
+// T-B6：2b-2b 起 getDashboard 的签名是 (products, recent, now, skus, totals, today)。
+// 今日三项不再由它从整本流水现折 —— 那是服务端按客户端给的 dayStart 算好的
+// todayTotals 投影，这里把同一份纯函数当语料喂进去，口径一致。
+const dashboard = inv.getDashboard(
+  sameDaySale.products, sameDaySale.records, now, undefined, null,
+  inv.todayTotals(sameDaySale.records, inv.startOfDay(now))
+)
 assert.strictEqual(dashboard.productCount, 1)
 assert.strictEqual(dashboard.totalStock, 11)
 assert.strictEqual(dashboard.todaySalesAmount, 18)
@@ -171,7 +199,7 @@ assert.strictEqual(updatedCustomer.name, '张三超市（总店）')
 assert.strictEqual(updatedCustomer.lastSaleAt, 0)
 assert.strictEqual(updatedCustomer.createdAt, 6000)
 
-const soldToCustomer = inv.applySale(purchased.products, purchased.records, {
+const soldToCustomer = sale(purchased.products, purchased.records, {
   productId: 'p1',
   qty: 1,
   unitPrice: 4.5,
@@ -184,7 +212,7 @@ assert.strictEqual(soldToCustomer.record.customerName, '张三超市')
 assert.strictEqual(sold.record.customerName, '')
 
 assert.throws(function () {
-  inv.applySale(purchased.products, purchased.records, {
+  sale(purchased.products, purchased.records, {
     productId: 'p1',
     qty: 1,
     unitPrice: 4.5,
@@ -193,7 +221,7 @@ assert.throws(function () {
 }, /客户/)
 
 assert.throws(function () {
-  inv.applySale(purchased.products, purchased.records, {
+  sale(purchased.products, purchased.records, {
     productId: 'p1',
     qty: 1,
     unitPrice: 4.5,
@@ -203,7 +231,7 @@ assert.throws(function () {
   }, 8100, 'r-over-paid')
 }, /实收不能超过应收/)
 
-const creditSale = inv.applySale(purchased.products, purchased.records, {
+const creditSale = sale(purchased.products, purchased.records, {
   productId: 'p1',
   qty: 2,
   unitPrice: 4.5,
@@ -217,8 +245,8 @@ assert.strictEqual(inv.summarizeCustomerAccount(creditSale.records, 'c1').receiv
 // 老流水只有 payType 没有实收：读的时候按现结收满、赊账一分未收回推。
 const legacyCredit = { id: 'legacy-credit', type: 'out', customerId: 'c-legacy', amount: 100, qty: 1, unitPrice: 100, payType: 'credit', orderId: 'legacy-credit', createdAt: 1 }
 const legacyCash = { id: 'legacy-cash', type: 'out', customerId: 'c-legacy', amount: 60, qty: 1, unitPrice: 60, payType: 'cash', orderId: 'legacy-cash', createdAt: 2 }
-assert.strictEqual(inv.salePaidAmount(legacyCredit), 0)
-assert.strictEqual(inv.salePaidAmount(legacyCash), 60)
+assert.strictEqual(inv.settledAmount(legacyCredit), 0)
+assert.strictEqual(inv.settledAmount(legacyCash), 60)
 assert.strictEqual(inv.summarizeCustomerAccount([legacyCredit, legacyCash], 'c-legacy').receivable, 100)
 assert.strictEqual(inv.getTotalReceivable([legacyCredit, legacyCash]), 100)
 
@@ -259,10 +287,24 @@ assert.strictEqual(inv.summarizeCustomerAccount(opened.records, 'c-open').amount
 assert.strictEqual(inv.getTotalReceivable(opened.records), 80)
 assert.strictEqual(purchased.products[0].stock, 15)
 
-const openDash = inv.getDashboard(purchased.products, opened.records, now)
+const openDash = inv.getDashboard(
+  purchased.products, opened.records, now, undefined,
+  inv.summarizeRecords(opened.records),
+  inv.todayTotals(opened.records, inv.startOfDay(now))
+)
 assert.strictEqual(openDash.todaySalesAmount, 0)
 assert.strictEqual(openDash.todayProfit, 0)
 assert.strictEqual(openDash.totalReceivable, 80)
+// totals 缺席时不再有 getTotalReceivable(records) 兜底：分页之后 records 只剩
+// 一页，兜底会算出一个偏小的欠款 —— 比没有更糟，所以给 0 并让 today 为 null
+const noTotalsDash = inv.getDashboard(purchased.products, opened.records, now)
+assert.strictEqual(noTotalsDash.totalReceivable, 0,
+  'T-B6：没有 totals 就不许现折欠款')
+assert.strictEqual(noTotalsDash.todayAvailable, false)
+assert.strictEqual(noTotalsDash.todaySalesAmount, null,
+  'T-B6：今日三项算不出来给 null，页面显示「—」而不是 0')
+assert.strictEqual(noTotalsDash.todayProfit, null)
+assert.strictEqual(noTotalsDash.todayInAmount, null)
 
 const openPaid = inv.applyPayment(opened.records, {
   customerId: 'c-open',
@@ -347,36 +389,29 @@ const multi = inv.applySaleOrder(
   'order-1',
   idFactory()
 )
-assert.strictEqual(multi.order.records.length, 2)
+// 一张单一条记录：两行商品在同一条 records 里
+assert.strictEqual(multi.order.id, 'order-1')
+assert.strictEqual(multi.order.lines.length, 2)
 assert.strictEqual(multi.order.amount, 18.9)
-assert.strictEqual(multi.order.records[0].orderId, 'order-1')
-assert.strictEqual(multi.order.records[1].orderId, 'order-1')
+assert.strictEqual(multi.order, multi.records[0])
+assert.strictEqual(multi.records.filter(function (item) {
+  return item.type === 'out'
+}).length, 1)
+assert.strictEqual(multi.order.lines[0].productId, 'p1')
+assert.strictEqual(multi.order.lines[1].productId, 'p2')
+assert.strictEqual(multi.order.lines[0].returnedQty, 0)
 assert.strictEqual(multi.products.find(function (item) { return item.id === 'p1' }).stock, 13)
 assert.strictEqual(multi.products.find(function (item) { return item.id === 'p2' }).stock, 7)
 assert.strictEqual(inv.summarizeCustomerAccount(multi.records, 'c1').receivable, 18.9)
+assert.ok(!Object.prototype.hasOwnProperty.call(multi.order, 'receivableSnapshot'))
+assert.strictEqual(inv.receivableAt(multi.records, 'c1', multi.order.createdAt), 18.9)
 
-const rebuiltOrder = inv.buildSaleOrder(multi.records, multi.order.records[1])
-assert.strictEqual(rebuiltOrder.id, 'order-1')
-assert.strictEqual(rebuiltOrder.records.length, 2)
-assert.strictEqual(rebuiltOrder.records[0].id, multi.order.records[0].id)
-assert.strictEqual(rebuiltOrder.records[1].id, multi.order.records[1].id)
-assert.strictEqual(rebuiltOrder.amount, 18.9)
-assert.throws(function () {
-  inv.buildSaleOrder(multi.records, { type: 'pay', id: 'x' })
-}, /销售/)
-
-const grouped = inv.groupRecords(multi.records)
-assert.strictEqual(grouped.length, 2)
-assert.strictEqual(grouped[0].type, 'out')
-assert.strictEqual(grouped[0].lineCount, 2)
-assert.strictEqual(grouped[0].amount, 18.9)
-assert.strictEqual(grouped[0].qty, 3)
-assert.strictEqual(grouped[0].productName, '纯牛奶、全麦面包')
-assert.strictEqual(grouped.filter(function (item) {
-  return item.type === 'out'
-}).length, 1)
+assert.strictEqual(inv.orderProductTitle(multi.order.lines), '纯牛奶、全麦面包')
 assert.strictEqual(inv.summarizeCustomerAccount(multi.records, 'c1').count, 1)
-assert.strictEqual(inv.getDashboard(multi.products, multi.records, 9100).recent[0].lineCount, 2)
+// recent 现在是服务端给的一页，getDashboard 只做 slice(0,10)
+assert.strictEqual(inv.getDashboard(multi.products, multi.records, 9100).recent[0].lines.length, 2)
+assert.strictEqual(inv.getDashboard(multi.products, undefined, 9100).recent.length, 0,
+  'T-B6：没有 recent 时不许炸，给空列表')
 
 const cookie = inv.createProduct({
   name: '苏打饼干',
@@ -413,15 +448,14 @@ const titleOrder = inv.applySaleOrder(
   idFactory(),
   juiceSkus.skus
 )
-const titleGrouped = inv.groupRecords(titleOrder.records)
-assert.strictEqual(titleGrouped[0].lineCount, 5)
-assert.strictEqual(titleGrouped[0].productName, '纯牛奶、全麦面包 等5种')
+assert.strictEqual(titleOrder.order.lines.length, 5)
+assert.strictEqual(inv.orderProductTitle(titleOrder.order.lines), '纯牛奶、全麦面包 等5种')
 
 const orderItemsEdit = inv.updateRecord(multi.products, multi.records, {
-  id: multi.order.records[0].id,
+  id: 'order-1',
   items: [
-    { id: multi.order.records[0].id, qty: 3, unitPrice: 4.5 },
-    { id: multi.order.records[1].id, qty: 1, unitPrice: 9.9 }
+    { id: multi.order.lines[0].lineId, qty: 3, unitPrice: 4.5 },
+    { id: multi.order.lines[1].lineId, qty: 1, unitPrice: 9.9 }
   ],
   paidAmount: 0,
   customerId: 'c1',
@@ -429,15 +463,21 @@ const orderItemsEdit = inv.updateRecord(multi.products, multi.records, {
   remark: '整单备注'
 }, 9110, [])
 assert.strictEqual(orderItemsEdit.products.find(function (item) { return item.id === 'p1' }).stock, 12)
-assert.ok(orderItemsEdit.records.filter(function (item) {
-  return item.orderId === 'order-1'
-}).every(function (item) {
-  return item.remark === '整单备注'
-}))
+assert.strictEqual(orderItemsEdit.record.remark, '整单备注')
+assert.strictEqual(orderItemsEdit.record.amount, 23.4)
+assert.strictEqual(orderItemsEdit.record.lines.length, 2)
+assert.throws(function () {
+  inv.updateRecord(multi.products, multi.records, {
+    id: 'order-1',
+    items: [{ id: 'not-a-line', qty: 1, unitPrice: 1 }],
+    payType: 'cash',
+    customerId: 'c1'
+  }, 9111, [])
+}, /流水不存在/)
 
-const deletedOrder = inv.deleteRecord(multi.products, multi.records, multi.order.records[1].id, 9120, [])
+const deletedOrder = inv.deleteRecord(multi.products, multi.records, 'order-1', 9120, [])
 assert.strictEqual(deletedOrder.records.filter(function (item) {
-  return item.orderId === 'order-1'
+  return item.id === 'order-1'
 }).length, 0)
 assert.strictEqual(deletedOrder.products.find(function (item) { return item.id === 'p1' }).stock, 15)
 assert.strictEqual(deletedOrder.products.find(function (item) { return item.id === 'p2' }).stock, 8)
@@ -543,7 +583,7 @@ assert.throws(function () {
 }, /还有库存/)
 
 assert.throws(function () {
-  inv.applySale([teeSkus.product], [], {
+  sale([teeSkus.product], [], {
     productId: 'p-tee',
     qty: 1,
     unitPrice: 59
@@ -553,14 +593,14 @@ assert.throws(function () {
 const blackM = teeSkus.skus.find(function (item) {
   return item.color === '黑色' && item.size === 'M'
 })
-const soldTee = inv.applySale([teeSkus.product], [], {
+const soldTee = sale([teeSkus.product], [], {
   productId: 'p-tee',
   skuId: blackM.id,
   qty: 2,
   unitPrice: 59
 }, 1600, 'r-tee', teeSkus.skus)
-assert.strictEqual(soldTee.record.color, '黑色')
-assert.strictEqual(soldTee.record.size, 'M')
+assert.strictEqual(line0(soldTee.record).color, '黑色')
+assert.strictEqual(line0(soldTee.record).size, 'M')
 assert.strictEqual(soldTee.record.profit, 62)
 assert.strictEqual(soldTee.skus.find(function (item) { return item.id === blackM.id }).stock, 4)
 assert.strictEqual(soldTee.products[0].stock, 19)
@@ -602,8 +642,8 @@ const specOrder = inv.applySaleOrder(
   idFactory(),
   soldTee.skus
 )
-assert.strictEqual(specOrder.order.records.length, 2)
-assert.strictEqual(specOrder.order.records[0].size, 'M')
+assert.strictEqual(specOrder.order.lines.length, 2)
+assert.strictEqual(specOrder.order.lines[0].size, 'M')
 assert.strictEqual(specOrder.skus.find(function (item) { return item.id === blackM.id }).stock, 3)
 
 const colorOnly = inv.filterProducts([teeSkus.product], '黑色', teeSkus.skus)
@@ -619,7 +659,7 @@ const editedSale = inv.updateRecord(sold.products, sold.records, {
   unitPrice: 4.5
 }, 2100, [])
 assert.strictEqual(editedSale.products[0].stock, 13)
-assert.strictEqual(editedSale.record.qty, 2)
+assert.strictEqual(line0(editedSale.record).qty, 2)
 assert.strictEqual(editedSale.record.amount, 9)
 assert.strictEqual(editedSale.record.profit, 3.8)
 
@@ -644,7 +684,7 @@ const deletedSale = inv.deleteRecord(sold.products, sold.records, 'r3', 2400, []
 assert.strictEqual(deletedSale.products[0].stock, 15)
 assert.strictEqual(deletedSale.records.some(function (item) { return item.id === 'r3' }), false)
 
-const heavySale = inv.applySale(purchased.products, purchased.records, {
+const heavySale = sale(purchased.products, purchased.records, {
   productId: 'p1',
   qty: 12,
   unitPrice: 4.5
@@ -671,20 +711,30 @@ assert.throws(function () {
   inv.deleteRecord(creditSale.products, paid.records, 'r-credit', 2800, [])
 }, /超过赊账/)
 
+// 多行单不给 items 就没法定位改哪一行
+assert.throws(function () {
+  inv.updateRecord(multi.products, multi.records, {
+    id: 'order-1',
+    qty: 2,
+    unitPrice: 4.5,
+    payType: 'cash',
+    customerId: 'c1'
+  }, 2890, [])
+}, /请逐行填写/)
+
 const orderEdit = inv.updateRecord(multi.products, multi.records, {
-  id: multi.order.records[0].id,
-  qty: 2,
-  unitPrice: 4.5,
+  id: 'order-1',
+  items: [
+    { id: multi.order.lines[0].lineId, qty: 2, unitPrice: 4.5 },
+    { id: multi.order.lines[1].lineId, qty: 1, unitPrice: 9.9 }
+  ],
   paidAmount: 9,
   customerId: 'c1',
   customerName: '张三超市'
 }, 2900, [])
+assert.strictEqual(orderEdit.record.amount, 18.9)
 assert.strictEqual(orderEdit.record.paidAmount, 9)
-assert.ok(orderEdit.records.filter(function (item) {
-  return item.orderId === 'order-1'
-}).every(function (item) {
-  return item.payType === undefined
-}))
+assert.strictEqual(orderEdit.record.payType, undefined)
 
 const specEdited = inv.updateRecord(soldTee.products, soldTee.records, {
   id: 'r-tee',
@@ -741,7 +791,7 @@ const boughtBlank = inv.applyPurchase([hoodieMade.product], [], {
 assert.strictEqual(inv.findBlankSku(boughtBlank.skus, 'p-hoodie').stock, 25)
 assert.strictEqual(boughtBlank.products[0].stock, 25)
 
-const soldWhite = inv.applySale(boughtBlank.products, boughtBlank.records, {
+const soldWhite = sale(boughtBlank.products, boughtBlank.records, {
   productId: 'p-hoodie',
   skuId: whiteM.id,
   qty: 3,
@@ -749,9 +799,9 @@ const soldWhite = inv.applySale(boughtBlank.products, boughtBlank.records, {
 }, 1300, 'r-hoodie-out', boughtBlank.skus)
 assert.strictEqual(inv.findBlankSku(soldWhite.skus, 'p-hoodie').stock, 22)
 assert.strictEqual(inv.findSkuBySpec(soldWhite.skus, 'p-hoodie', '白色', 'M').stock, 0)
-assert.strictEqual(soldWhite.record.color, '白色')
-assert.strictEqual(soldWhite.record.size, 'M')
-assert.strictEqual(soldWhite.record.allocations[0].source, 'blank')
+assert.strictEqual(line0(soldWhite.record).color, '白色')
+assert.strictEqual(line0(soldWhite.record).size, 'M')
+assert.strictEqual(line0(soldWhite.record).allocations[0].source, 'blank')
 assert.strictEqual(soldWhite.products[0].stock, 22)
 
 assert.throws(function () {
@@ -772,15 +822,22 @@ const sharedOrder = inv.applySaleOrder(soldWhite.products, soldWhite.records, {
 assert.strictEqual(inv.findBlankSku(sharedOrder.skus, 'p-hoodie').stock, 2)
 
 const returned = inv.applyReturn(sharedOrder.products, sharedOrder.records, {
-  saleRecordId: sharedOrder.order.records[0].id,
+  saleOrderId: 'order-blank-ok',
+  saleLineId: sharedOrder.order.lines[0].lineId,
   qty: 2
 }, 1600, 'r-hoodie-return', sharedOrder.skus)
+// 退货行记回被退的销售行，销售行的已退数量同步涨
+assert.strictEqual(line0(returned.record).saleOrderId, 'order-blank-ok')
+assert.strictEqual(returned.records.find(function (item) {
+  return item.id === 'order-blank-ok'
+}).lines[0].returnedQty, 2)
 assert.strictEqual(inv.findSkuBySpec(returned.skus, 'p-hoodie', '白色', 'M').stock, 2)
 assert.strictEqual(inv.findBlankSku(returned.skus, 'p-hoodie').stock, 2)
 assert.strictEqual(returned.products[0].stock, 4)
 assert.throws(function () {
   inv.applyReturn(returned.products, returned.records, {
-    saleRecordId: sharedOrder.order.records[0].id,
+    saleOrderId: 'order-blank-ok',
+    saleLineId: sharedOrder.order.lines[0].lineId,
     qty: 9
   }, 1610, 'r-too-much', returned.skus)
 }, /可退/)
@@ -805,23 +862,23 @@ assert.throws(function () {
 }, /待加工库存不能改规格/)
 
 const blackMHoodie = inv.findSkuBySpec(converted.skus, 'p-hoodie', '黑色', 'M')
-const soldBlackFromBlank = inv.applySale(converted.products, converted.records, {
+const soldBlackFromBlank = sale(converted.products, converted.records, {
   productId: 'p-hoodie',
   skuId: blackMHoodie.id,
   qty: 1,
   unitPrice: 99
 }, 1750, 'r-no-auto-recolor', converted.skus)
-assert.strictEqual(soldBlackFromBlank.record.allocations[0].source, 'blank')
+assert.strictEqual(line0(soldBlackFromBlank.record).allocations[0].source, 'blank')
 assert.strictEqual(inv.findSkuBySpec(soldBlackFromBlank.skus, 'p-hoodie', '红色', 'M').stock, 1)
 assert.strictEqual(inv.findBlankSku(soldBlackFromBlank.skus, 'p-hoodie').stock, 1)
 
-const soldReadyFirst = inv.applySale(soldBlackFromBlank.products, soldBlackFromBlank.records, {
+const soldReadyFirst = sale(soldBlackFromBlank.products, soldBlackFromBlank.records, {
   productId: 'p-hoodie',
   skuId: redM.id,
   qty: 1,
   unitPrice: 99
 }, 1800, 'r-ready-first', soldBlackFromBlank.skus)
-assert.strictEqual(soldReadyFirst.record.allocations[0].source, 'ready')
+assert.strictEqual(line0(soldReadyFirst.record).allocations[0].source, 'ready')
 assert.strictEqual(inv.findSkuBySpec(soldReadyFirst.skus, 'p-hoodie', '红色', 'M').stock, 0)
 assert.strictEqual(inv.findBlankSku(soldReadyFirst.skus, 'p-hoodie').stock, 1)
 
@@ -829,10 +886,10 @@ const undoneReady = inv.deleteRecord(soldReadyFirst.products, soldReadyFirst.rec
 assert.strictEqual(inv.findSkuBySpec(undoneReady.skus, 'p-hoodie', '红色', 'M').stock, 1)
 
 assert.throws(function () {
-  inv.deleteRecord(returned.products, returned.records, sharedOrder.order.records[0].id, 2000, returned.skus)
+  inv.deleteRecord(returned.products, returned.records, 'order-blank-ok', 2000, returned.skus)
 }, /退货/)
 
-const creditBlank = inv.applySale([hoodieMade.product], [], {
+const creditBlank = sale([hoodieMade.product], [], {
   productId: 'p-hoodie',
   skuId: whiteM.id,
   qty: 1,
@@ -843,7 +900,8 @@ const creditBlank = inv.applySale([hoodieMade.product], [], {
 }, 2100, 'r-credit-blank', hoodieMade.skus)
 assert.strictEqual(inv.summarizeCustomerAccount(creditBlank.records, 'c-blank').receivable, 99)
 const creditReturn = inv.applyReturn(creditBlank.products, creditBlank.records, {
-  saleRecordId: 'r-credit-blank',
+  saleOrderId: 'r-credit-blank',
+  saleLineId: line0(creditBlank.record).lineId,
   qty: 1
 }, 2200, 'r-credit-return', creditBlank.skus)
 assert.strictEqual(inv.summarizeCustomerAccount(creditReturn.records, 'c-blank').receivable, 0)
@@ -927,7 +985,8 @@ const adjPlainSkus = inv.applyProductSkus(adjPlain, [], null, 20000, idFactory()
 assert.ok(!Object.prototype.hasOwnProperty.call(adjPlainSkus, 'records'))
 
 const beforeAdjSummary = inv.summarizeRecords([])
-const beforeAdjDash = inv.getDashboard([adjPlain], [], 20000, [])
+const beforeAdjDash = inv.getDashboard([adjPlain], [], 20000, [],
+  inv.summarizeRecords([]), inv.todayTotals([], inv.startOfDay(20000)))
 const adjIn = inv.applyAdjust([adjPlain], [], {
   productId: 'p-adj',
   direction: 'in',
@@ -938,19 +997,21 @@ const adjIn = inv.applyAdjust([adjPlain], [], {
 assert.strictEqual(adjIn.products[0].stock, 7)
 assert.strictEqual(adjIn.products[0].costPrice, 10)
 assert.strictEqual(adjIn.record.type, 'adjust_in')
-assert.strictEqual(adjIn.record.reason, 'surplus')
-assert.strictEqual(adjIn.record.unitPrice, 0)
-assert.strictEqual(adjIn.record.costPrice, 0)
+assert.strictEqual(line0(adjIn.record).reason, 'surplus')
+assert.strictEqual(line0(adjIn.record).unitPrice, 0)
+assert.strictEqual(line0(adjIn.record).costPrice, 0)
 assert.strictEqual(adjIn.record.amount, 0)
 assert.strictEqual(adjIn.record.profit, 0)
 assert.ok(!adjIn.record.customerId)
-assert.ok(!adjIn.record.skuId)
+assert.ok(!line0(adjIn.record).skuId)
 const afterAdjSummary = inv.summarizeRecords(adjIn.records)
 assert.strictEqual(afterAdjSummary.purchaseAmount, beforeAdjSummary.purchaseAmount)
 assert.strictEqual(afterAdjSummary.salesAmount, beforeAdjSummary.salesAmount)
 assert.strictEqual(afterAdjSummary.profit, beforeAdjSummary.profit)
 assert.strictEqual(afterAdjSummary.receivable, beforeAdjSummary.receivable)
-const afterAdjDash = inv.getDashboard(adjIn.products, adjIn.records, 20010, adjIn.skus)
+// 不变量 4 在看板这一层：库存调整只改件数，今日三项和欠款一点不动
+const afterAdjDash = inv.getDashboard(adjIn.products, adjIn.records, 20010, adjIn.skus,
+  inv.summarizeRecords(adjIn.records), inv.todayTotals(adjIn.records, inv.startOfDay(20010)))
 assert.strictEqual(afterAdjDash.todayInAmount, beforeAdjDash.todayInAmount)
 assert.strictEqual(afterAdjDash.todaySalesAmount, beforeAdjDash.todaySalesAmount)
 assert.strictEqual(afterAdjDash.todayProfit, beforeAdjDash.todayProfit)
@@ -997,7 +1058,7 @@ const editedIn = inv.updateRecord(giftOut.products, giftOut.records, {
 }, 20050, giftOut.skus)
 assert.strictEqual(editedIn.products[0].stock, 8)
 assert.strictEqual(editedIn.products[0].costPrice, 10)
-assert.strictEqual(editedIn.record.qty, 4)
+assert.strictEqual(line0(editedIn.record).qty, 4)
 
 const editedReason = inv.updateRecord(editedIn.products, editedIn.records, {
   id: 'r-adj-in',
@@ -1005,7 +1066,7 @@ const editedReason = inv.updateRecord(editedIn.products, editedIn.records, {
   reason: 'gift'
 }, 20060, editedIn.skus)
 assert.strictEqual(editedReason.products[0].stock, 8)
-assert.strictEqual(editedReason.record.reason, 'gift')
+assert.strictEqual(line0(editedReason.record).reason, 'gift')
 
 assert.throws(function () {
   inv.updateRecord(editedReason.products, editedReason.records, {
@@ -1084,9 +1145,11 @@ assert.throws(function () {
     qty: 99
   }, 20125, 'r-adj-lack')
 }, /库存不足/)
+// 2b-1 起 saleOrderId 必填：流水搬进 ledger_records 之后，只给行号全表找一条
+// 销售行需要多键索引。缺了直接报错，不再退化成全表扫描。
 assert.throws(function () {
   inv.applyReturn([adjPlain], [], { qty: 1 }, 20126, 'r-adj-free-return')
-}, /销售流水不存在/)
+}, /退货请指明销售单/)
 
 const lockP = inv.createProduct({
   name: '对照进价',
@@ -1110,7 +1173,7 @@ const adjLock = inv.applyAdjust(boughtLock.products, boughtLock.records, {
 assert.strictEqual(adjLock.products[0].costPrice, 3)
 assert.strictEqual(adjLock.products[0].stock, 6)
 assert.strictEqual(inv.summarizeRecords(adjLock.records).purchaseAmount, 6)
-const soldLock = inv.applySale(adjLock.products, adjLock.records, {
+const soldLock = sale(adjLock.products, adjLock.records, {
   productId: 'p-lock',
   qty: 1,
   unitPrice: 10
@@ -1129,7 +1192,7 @@ const soldAdjIn = inv.applyAdjust([inv.createProduct({
   reason: 'surplus',
   qty: 5
 }, 22010, 'r-adj-sold-in')
-const soldAfterAdj = inv.applySale(soldAdjIn.products, soldAdjIn.records, {
+const soldAfterAdj = sale(soldAdjIn.products, soldAdjIn.records, {
   productId: 'p-adj-sold',
   qty: 5,
   unitPrice: 16
@@ -1172,9 +1235,9 @@ assert.strictEqual(inv.findBlankSku(blankIn.skus, 'p-adj-blank').stock, 13)
 assert.strictEqual(inv.findSkuBySpec(blankIn.skus, 'p-adj-blank', '白', 'M').stock, 0)
 assert.strictEqual(blankIn.products[0].costPrice, 40)
 assert.strictEqual(inv.findBlankSku(blankIn.skus, 'p-adj-blank').costPrice, blankAdjSku.costPrice)
-assert.strictEqual(blankIn.record.skuId, blankAdjSku.id)
-assert.ok(!blankIn.record.color)
-assert.ok(!blankIn.record.size)
+assert.strictEqual(line0(blankIn.record).skuId, blankAdjSku.id)
+assert.ok(!line0(blankIn.record).color)
+assert.ok(!line0(blankIn.record).size)
 const readyIn = inv.applyAdjust(blankIn.products, blankIn.records, {
   productId: 'p-adj-blank',
   skuId: whiteAdjSku.id,
@@ -1242,7 +1305,7 @@ const opProduct = inv.createProduct({
 }, 30000, 'p-op')
 const longOperator = '一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十甲乙丙'
 assert.strictEqual(longOperator.length > 32, true)
-const opSale = inv.applySale([opProduct], [], {
+const opSale = sale([opProduct], [], {
   productId: 'p-op',
   qty: 1,
   unitPrice: 2,
@@ -1251,7 +1314,7 @@ const opSale = inv.applySale([opProduct], [], {
 }, 30010, 'r-op')
 assert.strictEqual(opSale.record.operatorOpenid, 'staff-1')
 assert.strictEqual(opSale.record.operatorName, '小李')
-const opLong = inv.applySale(opSale.products, opSale.records, {
+const opLong = sale(opSale.products, opSale.records, {
   productId: 'p-op',
   qty: 1,
   unitPrice: 2,
@@ -1271,16 +1334,12 @@ const opOrder = inv.applySaleOrder(opLong.products, opLong.records, {
 }, 30030, 'order-op', idFactory())
 assert.strictEqual(opOrder.order.operatorOpenid, 'staff-1')
 assert.strictEqual(opOrder.order.operatorName, '小李')
-assert.ok(opOrder.order.records.every(function (item) {
-  return item.operatorOpenid === 'staff-1' && item.operatorName === '小李'
+// 经手人是整单共享字段，只在单头一份，不重复进每一行
+assert.strictEqual(opOrder.order.lines.length, 2)
+assert.ok(opOrder.order.lines.every(function (item) {
+  return !Object.prototype.hasOwnProperty.call(item, 'operatorOpenid')
+    && !Object.prototype.hasOwnProperty.call(item, 'operatorName')
 }))
-const groupedOp = inv.groupRecords(opOrder.records)
-const groupedSale = groupedOp.find(function (item) {
-  return item.orderId === 'order-op'
-})
-assert.ok(groupedSale)
-assert.ok(!Object.prototype.hasOwnProperty.call(groupedSale, 'operatorOpenid'))
-assert.ok(!Object.prototype.hasOwnProperty.call(groupedSale, 'operatorName'))
 
 const opKept = inv.updateRecord(opSale.products, opSale.records, {
   id: 'r-op',
@@ -1300,20 +1359,19 @@ assert.strictEqual(opRenamed.record.operatorOpenid, 'staff-1')
 assert.strictEqual(opRenamed.record.operatorName, '只改称呼')
 
 const opItemsEdit = inv.updateRecord(opOrder.products, opOrder.records, {
-  id: opOrder.order.records[0].id,
+  id: 'order-op',
   items: [
-    { id: opOrder.order.records[0].id, qty: 1, unitPrice: 2 },
-    { id: opOrder.order.records[1].id, qty: 1, unitPrice: 2 }
+    { id: opOrder.order.lines[0].lineId, qty: 1, unitPrice: 2 },
+    { id: opOrder.order.lines[1].lineId, qty: 1, unitPrice: 2 }
   ],
   operatorOpenid: 'boss',
   operatorName: '老板'
 }, 30060, [])
-assert.ok(opItemsEdit.records.filter(function (item) {
-  return item.orderId === 'order-op'
-}).every(function (item) {
-  return item.operatorOpenid === 'boss' && item.operatorName === '老板'
-}))
-assert.strictEqual(inv.buildSaleOrder(opItemsEdit.records, opItemsEdit.record).operatorName, '老板')
+assert.strictEqual(opItemsEdit.record.operatorOpenid, 'boss')
+assert.strictEqual(opItemsEdit.record.operatorName, '老板')
+assert.strictEqual(opItemsEdit.records.find(function (item) {
+  return item.id === 'order-op'
+}).operatorName, '老板')
 
 // —— 部分付款 ——
 // 以前只有「全付」和「全欠」两种，现在实收可以落在中间。下面三段分别盯住
@@ -1328,7 +1386,7 @@ const partialTee = inv.createProduct({
 }, 40000, 'p-partial')
 
 // 1）欠款计算：卖 100 只收 40，欠款就是 60。
-const partialSale = inv.applySale([partialTee], [], {
+const partialSale = sale([partialTee], [], {
   productId: 'p-partial',
   qty: 4,
   unitPrice: 25,
@@ -1345,7 +1403,7 @@ assert.strictEqual(inv.getTotalReceivable(partialSale.records), 60)
 assert.strictEqual(inv.summarizeAllCustomerAccounts(partialSale.records)['c-partial'].receivable, 60)
 
 // 收满不欠、一分不收全欠，两头也要对。
-const paidInFull = inv.applySale([partialTee], [], {
+const paidInFull = sale([partialTee], [], {
   productId: 'p-partial',
   qty: 4,
   unitPrice: 25,
@@ -1354,7 +1412,7 @@ const paidInFull = inv.applySale([partialTee], [], {
   paidAmount: 100
 }, 40110, 'r-paid-full')
 assert.strictEqual(inv.summarizeCustomerAccount(paidInFull.records, 'c-full').receivable, 0)
-const paidNone = inv.applySale([partialTee], [], {
+const paidNone = sale([partialTee], [], {
   productId: 'p-partial',
   qty: 4,
   unitPrice: 25,
@@ -1366,7 +1424,7 @@ assert.strictEqual(inv.summarizeCustomerAccount(paidNone.records, 'c-none').rece
 
 // 有欠款就必须挂到客户名下，散客不能欠钱。
 assert.throws(function () {
-  inv.applySale([partialTee], [], {
+  sale([partialTee], [], {
     productId: 'p-partial',
     qty: 4,
     unitPrice: 25,
@@ -1384,27 +1442,190 @@ assert.strictEqual(inv.summarizeCustomerAccount(partialPay.records, 'c-partial')
 
 // 2）退货：退的钱先冲这张单没收到的部分，冲不掉的才算退现金。
 const partialReturn = inv.applyReturn(partialSale.products, partialSale.records, {
-  saleRecordId: 'r-partial',
+  saleOrderId: 'r-partial',
+  saleLineId: 'r-partial-l1',
   qty: 1
 }, 40200, 'r-partial-return', partialSale.skus)
 assert.strictEqual(inv.summarizeCustomerAccount(partialReturn.records, 'c-partial').receivable, 35)
+// 送货单要按单据时刻截断算欠款：退货的冲抵挂在退货单自己的时间点上，
+// 不能倒回去改销售单当时的欠款。
+assert.strictEqual(inv.receivableAt(partialReturn.records, 'c-partial', 40100), 60)
+assert.strictEqual(inv.receivableAt(partialReturn.records, 'c-partial', 40200), 35)
 // 再退两件（累计退 75 > 欠款 60）：欠款冲到 0 就停，不会做成负数。
 const partialReturnMore = inv.applyReturn(partialReturn.products, partialReturn.records, {
-  saleRecordId: 'r-partial',
+  saleOrderId: 'r-partial',
+  saleLineId: 'r-partial-l1',
   qty: 2
 }, 40300, 'r-partial-return-2', partialReturn.skus)
 assert.strictEqual(inv.summarizeCustomerAccount(partialReturnMore.records, 'c-partial').receivable, 0)
 // 全额收讫的单退货不产生欠款；一分未收的单退货全额冲欠款（和改造前一致）。
 const fullPaidReturn = inv.applyReturn(paidInFull.products, paidInFull.records, {
-  saleRecordId: 'r-paid-full',
+  saleOrderId: 'r-paid-full',
+  saleLineId: 'r-paid-full-l1',
   qty: 2
 }, 40310, 'r-full-return', paidInFull.skus)
 assert.strictEqual(inv.summarizeCustomerAccount(fullPaidReturn.records, 'c-full').receivable, 0)
 const nonePaidReturn = inv.applyReturn(paidNone.products, paidNone.records, {
-  saleRecordId: 'r-paid-none',
+  saleOrderId: 'r-paid-none',
+  saleLineId: 'r-paid-none-l1',
   qty: 2
 }, 40320, 'r-none-return', paidNone.skus)
 assert.strictEqual(inv.summarizeCustomerAccount(nonePaidReturn.records, 'c-none').receivable, 50)
+
+// —— 退货拆分的三条守卫（第一轮漏掉的三条静默算错欠款的路径）——
+
+// 场景 1：有退货的单改金额（实收不变），且累计退货额已经跨过欠款线
+// （退 75 > 欠款 60 —— 先记的那张退货单头上冻结的现金退款额是 0、后记的是 15）。
+// 第一轮会静默把欠款算成 100（main #47 读时口径是 85），现在拦下来。
+assert.throws(function () {
+  inv.updateRecord(partialReturnMore.products, partialReturnMore.records, {
+    id: 'r-partial',
+    items: [{ id: 'r-partial-l1', qty: 8, unitPrice: 25 }],
+    paidAmount: 40,
+    customerId: 'c-partial',
+    customerName: '半款客户'
+  }, 40400, partialReturnMore.skus, null)
+}, /这张单有退货/)
+
+// 反过来，累计退货额还盖在欠款里面（退 25 ≤ 欠款 60）时，每张退货单的现金
+// 退款额恒为 0，改销售单不牵动它们，**必须放行** —— 而且逐值等于 main #47 的
+// 读时口径 max(0, 200 − 40 − 25) = 135。这条是防止守卫被收紧成一刀切的钉子。
+const partialScaled = inv.updateRecord(partialReturn.products, partialReturn.records, {
+  id: 'r-partial',
+  items: [{ id: 'r-partial-l1', qty: 8, unitPrice: 25 }],
+  paidAmount: 40,
+  customerId: 'c-partial',
+  customerName: '半款客户'
+}, 40405, partialReturn.skus, null)
+assert.strictEqual(inv.summarizeCustomerAccount(partialScaled.records, 'c-partial').receivable, 135)
+
+// 有退货的单改单价：会挪动「已退货值」这个基准，将来再退货时 othersReturned
+// 会算错、把欠款静默算大。部分收款的单一律不许改单价。
+assert.throws(function () {
+  inv.updateRecord(partialReturn.products, partialReturn.records, {
+    id: 'r-partial',
+    items: [{ id: 'r-partial-l1', qty: 4, unitPrice: 70 }],
+    paidAmount: 40,
+    customerId: 'c-partial',
+    customerName: '半款客户'
+  }, 40415, partialReturn.skus, null)
+}, /这张单有退货/)
+
+// 一分未收的单也不例外：改已退货行的单价会让「已退货值」和实际退货额分岔，
+// 这张单以后一旦收了钱（改实收是放行的），分岔就会把将来那笔退货的冲抵算小、
+// 欠款算大。所以「有退货就不许改单价」不看收没收钱。
+assert.throws(function () {
+  inv.updateRecord(nonePaidReturn.products, nonePaidReturn.records, {
+    id: 'r-paid-none',
+    items: [{ id: 'r-paid-none-l1', qty: 4, unitPrice: 30 }],
+    paidAmount: 0,
+    customerId: 'c-none',
+    customerName: '全欠客户'
+  }, 40370, nonePaidReturn.skus, null)
+}, /这张单有退货/)
+
+// 全款单也不例外：把有退货那行的单价改成 0（赠品）会把「已退货值」压成 0，
+// 这张单以后一旦变成部分收款，档② 就会拿着这个被压小的基准把欠款静默算大。
+// 0 元行是这个 app 的一等公民（赠品走销售、售价填 0），不是构造出来的极端值。
+assert.throws(function () {
+  inv.updateRecord(fullPaidReturn.products, fullPaidReturn.records, {
+    id: 'r-paid-full',
+    items: [{ id: 'r-paid-full-l1', qty: 4, unitPrice: 0 }],
+    paidAmount: 0,
+    customerId: 'c-full',
+    customerName: '付清客户'
+  }, 40380, fullPaidReturn.skus, null)
+}, /这张单有退货/)
+
+// 必须放行：全款单有退货，涨数量并且把钱收满 —— 已退货值没变、改前改后都一分
+// 不欠，冻结值不受影响。这条钉住「全款单改数量并收满」这条日常路径（档① 与
+// 档③ 共同覆盖：档① 加上「已退货值没变」之后恒被档③ 包含），别让它被收紧掉。
+const fullPaidGrown = inv.updateRecord(fullPaidReturn.products, fullPaidReturn.records, {
+  id: 'r-paid-full',
+  items: [{ id: 'r-paid-full-l1', qty: 8, unitPrice: 25 }],
+  paidAmount: 200,
+  customerId: 'c-full',
+  customerName: '付清客户'
+}, 40390, fullPaidReturn.skus, null)
+assert.strictEqual(inv.summarizeCustomerAccount(fullPaidGrown.records, 'c-full').receivable, 0)
+
+// 档③ 必须放行：Σ退货已经超过欠款（档② 在这里不成立）、但改动后欠款一分没变
+// —— 只改客户名这类。这条钉住档③，它现在没有任何用例守着。
+// 期望值按 main #47 口径 max(0, 应收 − 实收 − Σ退货额) 手工复算：Σ退货额是
+// r-partial-return(25) + r-partial-return-2(50) = 75，max(0, 100 − 40 − 75) = 0；
+// 与实测一致（不是 25 —— 这张单欠款早已被两次退货冲光，见 partialReturnMore 的
+// receivable 断言）。
+const moreReturnRenamed = inv.updateRecord(partialReturnMore.products, partialReturnMore.records, {
+  id: 'r-partial',
+  items: partialReturnMore.records.find(function (item) {
+    return item.id === 'r-partial'
+  }).lines.map(function (line) {
+    return { id: line.lineId, qty: inv.toNumber(line.qty), unitPrice: inv.toNumber(line.unitPrice) }
+  }),
+  paidAmount: 40,
+  customerId: 'c-partial',
+  customerName: '半款客户改名'
+}, 40395, partialReturnMore.skus, null)
+assert.strictEqual(inv.summarizeCustomerAccount(moreReturnRenamed.records, 'c-partial').receivable, 0)
+
+// 但「数量和实收一起改、欠款正好不变」不该被误伤：冻结值本来就还对。
+const partialGrown = inv.updateRecord(partialReturn.products, partialReturn.records, {
+  id: 'r-partial',
+  items: [{ id: 'r-partial-l1', qty: 8, unitPrice: 25 }],
+  paidAmount: 140,
+  customerId: 'c-partial',
+  customerName: '半款客户'
+}, 40410, partialReturn.skus, null)
+assert.strictEqual(partialGrown.record.amount, 200)
+assert.strictEqual(inv.summarizeCustomerAccount(partialGrown.records, 'c-partial').receivable, 35)
+
+// 场景 2：同一张销售单有两张退货单时，改先记的那张。第一轮会静默算成 40。
+assert.throws(function () {
+  inv.updateRecord(partialReturnMore.products, partialReturnMore.records, {
+    id: 'r-partial-return',
+    items: [{ id: 'r-partial-return-1', qty: 2 }]
+  }, 40420, partialReturnMore.skus, null)
+}, /后面还有别的退货单/)
+
+// 最后一张仍然改得动，改完欠款按「先冲欠款」重算：累计退 50 < 欠款 60 → 欠 10。
+const lastReturnEdited = inv.updateRecord(partialReturnMore.products, partialReturnMore.records, {
+  id: 'r-partial-return-2',
+  items: [{ id: 'r-partial-return-2-1', qty: 1 }]
+}, 40430, partialReturnMore.skus, null)
+assert.strictEqual(inv.summarizeCustomerAccount(lastReturnEdited.records, 'c-partial').receivable, 10)
+
+// 场景 3：删先记的那张。第一轮会静默算成 50。
+assert.throws(function () {
+  inv.deleteRecord(partialReturnMore.products, partialReturnMore.records,
+    'r-partial-return', 40440, partialReturnMore.skus, null)
+}, /后面还有别的退货单/)
+
+// 删最后一张仍然删得掉：只剩退 25，欠 100 − 40 − 25 = 35。
+const lastReturnDeleted = inv.deleteRecord(partialReturnMore.products, partialReturnMore.records,
+  'r-partial-return-2', 40450, partialReturnMore.skus, null)
+assert.strictEqual(inv.summarizeCustomerAccount(lastReturnDeleted.records, 'c-partial').receivable, 35)
+
+// —— 不许误伤：全赊单和全款单退两次，删先记的那张必须放行 ——
+
+// 全赊：欠款盖得住全部退货，每张退货单的现金退款额恒为 0，互不牵连。
+const nonePaidReturn2 = inv.applyReturn(nonePaidReturn.products, nonePaidReturn.records, {
+  saleOrderId: 'r-paid-none',
+  saleLineId: 'r-paid-none-l1',
+  qty: 1
+}, 40330, 'r-none-return-2', nonePaidReturn.skus)
+const nonePaidFirstGone = inv.deleteRecord(nonePaidReturn2.products, nonePaidReturn2.records,
+  'r-none-return', 40340, nonePaidReturn2.skus, null)
+assert.strictEqual(inv.summarizeCustomerAccount(nonePaidFirstGone.records, 'c-none').receivable, 75)
+
+// 全款：一分不欠，每张退货单都是纯退现金，也互不牵连。
+const fullPaidReturn2 = inv.applyReturn(fullPaidReturn.products, fullPaidReturn.records, {
+  saleOrderId: 'r-paid-full',
+  saleLineId: 'r-paid-full-l1',
+  qty: 1
+}, 40350, 'r-full-return-2', fullPaidReturn.skus)
+const fullPaidFirstGone = inv.deleteRecord(fullPaidReturn2.products, fullPaidReturn2.records,
+  'r-full-return', 40360, fullPaidReturn2.skus, null)
+assert.strictEqual(inv.summarizeCustomerAccount(fullPaidFirstGone.records, 'c-full').receivable, 0)
 
 // 3）改流水：整单实收按各行金额摊回去，合计等于填进去的实收。
 const partialBread = inv.createProduct({
@@ -1423,27 +1644,23 @@ const partialOrder = inv.applySaleOrder([partialTee, partialBread], [], {
   customerName: '半款客户二',
   paidAmount: 30
 }, 40400, 'order-partial', idFactory(), [])
-assert.strictEqual(partialOrder.order.amount, 100)
-assert.strictEqual(partialOrder.order.paidAmount, 30)
-assert.strictEqual(partialOrder.order.debtAmount, 70)
-assert.strictEqual(partialOrder.order.records[0].paidAmount, 15)
-assert.strictEqual(partialOrder.order.records[1].paidAmount, 15)
+assert.strictEqual(partialOrder.record.amount, 100)
+assert.strictEqual(partialOrder.record.paidAmount, 30)
+assert.strictEqual(inv.round2(partialOrder.record.amount - partialOrder.record.paidAmount), 70)
 assert.strictEqual(inv.summarizeCustomerAccount(partialOrder.records, 'c-partial-order').receivable, 70)
 
 const partialEdit = inv.updateRecord(partialOrder.products, partialOrder.records, {
-  id: partialOrder.order.records[0].id,
+  id: 'order-partial',
   items: [
-    { id: partialOrder.order.records[0].id, qty: 2, unitPrice: 25 },
-    { id: partialOrder.order.records[1].id, qty: 5, unitPrice: 10 }
+    { id: partialOrder.record.lines[0].lineId, qty: 2, unitPrice: 25 },
+    { id: partialOrder.record.lines[1].lineId, qty: 5, unitPrice: 10 }
   ],
   paidAmount: 80,
   customerId: 'c-partial-order',
   customerName: '半款客户二'
 }, 40500, [])
-const partialEdited = inv.buildSaleOrder(partialEdit.records, partialEdit.record)
-assert.strictEqual(partialEdited.amount, 100)
-assert.strictEqual(partialEdited.paidAmount, 80)
-assert.strictEqual(partialEdited.debtAmount, 20)
+assert.strictEqual(partialEdit.record.amount, 100)
+assert.strictEqual(partialEdit.record.paidAmount, 80)
 assert.strictEqual(inv.summarizeCustomerAccount(partialEdit.records, 'c-partial-order').receivable, 20)
 
 // 改数量把应收压到实收以下：实收自动收口到新的应收，不会记成负欠款。
@@ -1461,10 +1678,10 @@ assert.strictEqual(inv.summarizeCustomerAccount(shrunk.records, 'c-full').receiv
 // 实收不能超过应收，改流水也一样。
 assert.throws(function () {
   inv.updateRecord(partialOrder.products, partialOrder.records, {
-    id: partialOrder.order.records[0].id,
+    id: 'order-partial',
     items: [
-      { id: partialOrder.order.records[0].id, qty: 2, unitPrice: 25 },
-      { id: partialOrder.order.records[1].id, qty: 5, unitPrice: 10 }
+      { id: partialOrder.record.lines[0].lineId, qty: 2, unitPrice: 25 },
+      { id: partialOrder.record.lines[1].lineId, qty: 5, unitPrice: 10 }
     ],
     paidAmount: 120,
     customerId: 'c-partial-order',
@@ -1473,3 +1690,143 @@ assert.throws(function () {
 }, /实收不能超过应收/)
 
 console.log('inventory tests passed')
+
+// —— 拆分不变量 fuzzer（常驻守门员）——
+//
+// 手写用例只能钉住想得到的那几条路径。「改单价埋下的分岔要等到后来改实收才
+// 发作」这种跨两步的洞，第 3 轮是随机漫步抓出来的，所以收编成常驻。
+//
+// 不变量：任何一次**被放行**的写入之后，客户欠款必须逐分等于 main #47 的读时
+// 口径 max(0, 应收 − 实收 − Σ退货额)。这条恒等式就是【拆分不变量】的外部表现
+// （Σ(r−c) == min(D, Σr) ⟺ 欠款 == max(0, D − Σr)），比逐条断言冻结值更难写错。
+//
+// 只造一张多行销售单：跨退货单的分配耦合全部发生在同一张销售单内部；多客户、
+// 收款、期初这些线性项由上面的手写用例覆盖。500 局 × 14 步，本机约 0.2 秒。
+function splitFuzzRandom(seed) {
+  let a = seed
+  return function () {
+    a = (a + 0x6D2B79F5) | 0
+    let t = Math.imul(a ^ (a >>> 15), 1 | a)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
+const fuzzRnd = splitFuzzRandom(777)
+function fuzzPick(list) {
+  return list[Math.floor(fuzzRnd() * list.length)]
+}
+// 放行次数的下限。守卫一旦被收紧成一刀切，不变量会永远成立而这个数会塌下来 ——
+// 「全拦住」和「全算对」在断言上长得一模一样，必须另外钉住功能还在。当前 6112。
+const FUZZ_MIN_ALLOWED = 5500
+const FUZZ_EXPECTED_ERRORS = /这张单有退货|后面还有别的退货单|退货不能超过可退数量|改完后收款会超过赊账|数量不能小于已退货|销售数量必须大于|退货数量必须大于|实收不能超过应收|售价不能为负数/
+let fuzzAllowed = 0
+for (let trial = 0; trial < 500; trial++) {
+  let fuzzSeq = 0
+  const nextFuzzId = function () {
+    fuzzSeq += 1
+    return 'fz' + trial + '-' + fuzzSeq
+  }
+  const in1 = inv.applyPurchase([
+    { id: 'fp1', name: '甲货', stock: 0, costPrice: 0, price: 25, specs: null },
+    { id: 'fp2', name: '乙货', stock: 0, costPrice: 0, price: 9, specs: null }
+  ], [], { productId: 'fp1', qty: 9999, unitPrice: 1 }, 1000, 'fi1-' + trial, [])
+  const in2 = inv.applyPurchase(in1.products, in1.records,
+    { productId: 'fp2', qty: 9999, unitPrice: 1 }, 1001, 'fi2-' + trial, in1.skus)
+  const fuzzItems = [
+    { productId: 'fp1', qty: 1 + Math.floor(fuzzRnd() * 5), unitPrice: fuzzPick([10, 25, 12.5, 0]) },
+    { productId: 'fp2', qty: 1 + Math.floor(fuzzRnd() * 5), unitPrice: fuzzPick([9, 7.77, 20, 0]) }
+  ]
+  const fuzzDue = inv.round2(fuzzItems.reduce(function (sum, item) {
+    return sum + item.qty * item.unitPrice
+  }, 0))
+  const started = inv.applySaleOrder(in2.products, in2.records, {
+    items: fuzzItems,
+    customerId: 'fc1',
+    customerName: '随机客户',
+    paidAmount: fuzzPick([0, fuzzDue, inv.round2(fuzzDue * fuzzRnd())])
+  }, 2000, 'fs' + trial, nextFuzzId, in2.skus)
+  let cur = { products: started.products, records: started.records, skus: started.skus }
+  const fuzzSaleId = started.record.id
+  const fuzzLineIds = started.record.lines.map(function (line) { return line.lineId })
+  let fuzzTs = 3000
+  for (let step = 0; step < 14; step++) {
+    fuzzTs += 100
+    const saleNow = cur.records.find(function (item) { return item.id === fuzzSaleId })
+    if (!saleNow) break
+    const retsNow = cur.records.filter(function (item) { return item.type === 'return' })
+    const op = fuzzPick(['addReturn', 'editReturn', 'delReturn', 'editSale', 'editSale'])
+    let done = null
+    try {
+      if (op === 'addReturn') {
+        const target = saleNow.lines[Math.floor(fuzzRnd() * saleNow.lines.length)]
+        const remain = inv.returnableQty(target)
+        if (remain <= 0) continue
+        done = inv.applyReturnOrder(cur.products, cur.records, {
+          items: [{
+            saleOrderId: fuzzSaleId,
+            saleLineId: target.lineId,
+            qty: 1 + Math.floor(fuzzRnd() * remain)
+          }]
+        }, fuzzTs, nextFuzzId, cur.skus, null)
+      } else if (op === 'editReturn' && retsNow.length) {
+        const target = fuzzPick(retsNow)
+        done = inv.updateRecord(cur.products, cur.records, {
+          id: target.id,
+          items: target.lines.map(function (line) {
+            return { id: line.lineId, qty: 1 + Math.floor(fuzzRnd() * 4) }
+          })
+        }, fuzzTs, cur.skus, null)
+      } else if (op === 'delReturn' && retsNow.length) {
+        done = inv.deleteRecord(cur.products, cur.records, fuzzPick(retsNow).id,
+          fuzzTs, cur.skus, null)
+      } else {
+        const nextItems = saleNow.lines.map(function (line, at) {
+          return {
+            id: fuzzLineIds[at],
+            qty: Math.max(inv.round2(inv.toNumber(line.returnedQty)), 1) + Math.floor(fuzzRnd() * 4),
+            unitPrice: fuzzPick([
+              inv.toNumber(line.unitPrice),
+              inv.round2(inv.toNumber(line.unitPrice) * (0.3 + fuzzRnd() * 2)),
+              0
+            ])
+          }
+        })
+        const due = inv.round2(nextItems.reduce(function (sum, item) {
+          return sum + item.qty * item.unitPrice
+        }, 0))
+        done = inv.updateRecord(cur.products, cur.records, {
+          id: fuzzSaleId,
+          items: nextItems,
+          paidAmount: Math.min(fuzzPick([0, due, inv.round2(due * fuzzRnd()),
+            inv.toNumber(saleNow.paidAmount)]), due),
+          customerId: 'fc1',
+          customerName: '随机客户'
+        }, fuzzTs, cur.skus, null)
+      }
+    } catch (error) {
+      // 拦下来是允许的结果，但不许拦出一条没人认识的错
+      assert.ok(FUZZ_EXPECTED_ERRORS.test(error.message),
+        '拆分 fuzzer 撞到意料之外的错误：' + error.message)
+      continue
+    }
+    if (!done) continue
+    fuzzAllowed += 1
+    cur = { products: done.products, records: done.records, skus: done.skus }
+    const after = cur.records.find(function (item) { return item.id === fuzzSaleId })
+    if (!after) continue
+    const returnedSum = inv.round2(cur.records.filter(function (item) {
+      return item.type === 'return'
+    }).reduce(function (sum, item) {
+      return sum + inv.toNumber(item.amount)
+    }, 0))
+    const mainWay = Math.max(0, inv.round2(
+      inv.toNumber(after.amount) - inv.settledAmount(after) - returnedSum))
+    const got = inv.round2(inv.summarizeCustomerAccount(cur.records, 'fc1').receivable)
+    assert.strictEqual(got, mainWay, '拆分不变量被破坏（trial ' + trial
+      + ' step ' + step + ' ' + op + '）：算出 ' + got + '，main #47 口径 ' + mainWay)
+  }
+}
+assert.ok(fuzzAllowed >= FUZZ_MIN_ALLOWED, '拆分 fuzzer 放行次数塌到 ' + fuzzAllowed
+  + '（下限 ' + FUZZ_MIN_ALLOWED + '）：守卫可能被收紧成一刀切，不变量恒成立但功能没了')
+console.log('拆分不变量 fuzzer：500 局 × 14 步，放行 ' + fuzzAllowed
+  + ' 次，全部与 main #47 口径逐分一致')

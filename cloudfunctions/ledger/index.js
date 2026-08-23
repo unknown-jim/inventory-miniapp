@@ -16,8 +16,20 @@ function cloneData(data) {
   return copy
 }
 
+// 流水集合的句柄。传 db 就是事务外读，传 transaction 就是事务内读写。
+// ledger-records.js 只认这两个字段，不认整个 db 对象。
+function recordsCtx(scope) {
+  return {
+    collection: scope.collection('ledger_records'),
+    command: _
+  }
+}
+
 function createDb() {
   return {
+    recordsCtx() {
+      return recordsCtx(db)
+    },
     async listMembersByOpenid(openid) {
       const res = await db.collection('members').where({ openid: openid }).limit(100).get()
       return res.data || []
@@ -43,6 +55,9 @@ function createDb() {
       try {
         return await db.runTransaction(async function (transaction) {
           const tx = {
+            recordsCtx() {
+              return recordsCtx(transaction)
+            },
             async getLedger(shopId) {
               try {
                 const res = await transaction.collection('ledgers').doc(shopId).get()
@@ -133,6 +148,9 @@ exports.main = async function (event) {
       openid: openid,
       action: event && event.action,
       shopId: event && event.shopId,
+      // 小程序必须带 apiVersion：老客户端拿到不带流水的回传会把缓存清空，
+      // 下一张送货单印 0.00 的前欠。门在 ledger-core.js 的 dispatch 顶部。
+      apiVersion: event && event.apiVersion,
       payload: (event && event.payload) || {},
       db: createDb()
     })

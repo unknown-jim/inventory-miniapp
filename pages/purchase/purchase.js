@@ -210,9 +210,10 @@ Page({
         remark: this.data.remark
       })
       this.data.skus = store.getSkus()
-      const latest = store.getProduct(record.productId)
+      const recordLine = inventory.firstLine(record)
+      const latest = store.getProduct(recordLine.productId)
       const blank = latest && inventory.isBlankProcess(latest) ? inventory.findBlankSku(this.data.skus, latest.id) : null
-      const sku = record.skuId && !blank ? store.getSku(record.skuId) : null
+      const sku = recordLine.skuId && !blank ? store.getSku(recordLine.skuId) : null
       this.setData({
         skus: this.data.skus,
         qty: '',

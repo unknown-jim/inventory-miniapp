@@ -17,6 +17,10 @@ Page({
     receivableText: '0.00',
     hasDebt: false,
     ledger: [],
+    ledgerCursor: '',
+    ledgerHasMore: false,
+    ledgerLoading: false,
+    ledgerUnavailable: false,
     showPay: false,
     payAmount: '',
     payRemark: '',
@@ -47,8 +51,15 @@ Page({
       wx.showToast({ title: '客户不存在', icon: 'none' })
       return
     }
-    const summary = inventory.summarizeCustomerAccount(store.getRecords(), id)
-    const hasDebt = summary.receivable > 0
+    // 金额三项（累计销售笔数 / 累计销售额 / 当前欠款）一律用服务端权威的
+    // customers[].account，不要拿流水缓存现算：submitPay / submitOpening 直接调
+    // 这里，**不经过 store.ready() 的门**，缓存这时可能还没补齐（delta 条数对不上
+    // 且重拉又失败），现算出来会是一个偏小的欠款。account 的字段口径与
+    // summarizeCustomerAccount 逐字段相等，见 tests/ledger-terms.test.js。
+    const account = customer.account || inventory.accountOf(null)
+    const hasDebt = account.receivable > 0
+    // fillCustomer 保持**同步**：submitPay / submitOpening 记完账直接调它，
+    // 金额必须当场就对。往来明细是分页取的，异步跟在后面，取不到也只影响明细。
     this.setData({
       id: customer.id,
       isEdit: true,
@@ -56,18 +67,79 @@ Page({
       phone: customer.phone,
       address: customer.address,
       remark: customer.remark,
-      saleCount: summary.count,
-      saleAmountText: util.money(summary.amount),
-      receivable: summary.receivable,
-      receivableText: util.money(summary.receivable),
-      hasDebt: hasDebt,
-      ledger: inventory.groupRecords(summary.ledger).slice(0, 20).map(util.withRecordView)
+      saleCount: account.count,
+      saleAmountText: util.money(account.amount),
+      receivable: account.receivable,
+      receivableText: util.money(account.receivable),
+      hasDebt: hasDebt
     }, () => {
       if (this.openPayAfter) {
         this.openPayAfter = false
         if (hasDebt) this.openPay()
       }
     })
+    // 返回 promise 只为可测：金额那几项在上面已经**同步**设好了，
+    // tests/store.test.js 正是先断言金额、再 await 这个 promise 断言明细。
+    return this.reloadLedger()
+  },
+
+  // 往来明细：listRecords({customerId}) 触底加载。
+  // 口径和 summarizeCustomerAccount(...).ledger 相等 —— 只有 out / pay /
+  // return / opening 四种记录带 customerId，而 isCustomerAccountRecord 恰好
+  // 就是这四种，由 tests/ledger-records.test.js 的 T-A4 钉住。
+  reloadLedger() {
+    this.ledgerToken = (this.ledgerToken || 0) + 1
+    this.ledgerLock = false
+    this.setData({
+      ledger: [],
+      ledgerCursor: '',
+      ledgerHasMore: false,
+      ledgerUnavailable: false
+    })
+    return this.loadLedgerPage(true)
+  },
+
+  async loadLedgerPage(isFirst) {
+    if (!this.data.id) return
+    // 实例级的锁，不能用 data.ledgerLoading：setData 异步，触底连发会重复请求
+    if (this.ledgerLock) return
+    if (!isFirst && !this.data.ledgerHasMore) return
+    this.ledgerLock = true
+    const token = this.ledgerToken
+    this.setData({ ledgerLoading: true })
+    try {
+      const res = await store.listRecords({
+        customerId: this.data.id,
+        cursor: isFirst ? '' : this.data.ledgerCursor,
+        limit: 20
+      })
+      if (token !== this.ledgerToken) return
+      this.setData({
+        ledger: this.data.ledger.concat(res.records.map(util.withRecordView)),
+        // 空页时服务端回 ''，直接赋值会把游标冲回开头
+        ledgerCursor: res.cursor || this.data.ledgerCursor,
+        ledgerHasMore: res.hasMore,
+        ledgerUnavailable: false
+      })
+    } catch (error) {
+      // 明细拿不到就明确标成不可用 —— 直接给空数组会被界面说成
+      // 「还没有往来记录」，那是在撒谎。上面的金额来自服务端权威值，仍然是准的。
+      if (token === this.ledgerToken) this.setData({ ledgerUnavailable: true })
+    } finally {
+      if (token === this.ledgerToken) {
+        this.ledgerLock = false
+        this.setData({ ledgerLoading: false })
+      }
+    }
+  },
+
+  // 返回 promise 只为可测（tests/store.test.js），小程序不看返回值
+  onReachBottom() {
+    return this.loadLedgerPage(false)
+  },
+
+  retryLedger() {
+    return this.reloadLedger()
   },
 
   goRecord(e) {

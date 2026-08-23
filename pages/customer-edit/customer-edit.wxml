@@ -56,7 +56,10 @@
         </view>
       </view>
     </view>
+    <view wx:elif="{{ledgerUnavailable}}" class="card quiet">往来明细没取到。上面的欠款和累计销售来自服务端，是准的。<text class="link" bindtap="retryLedger">重试</text></view>
+    <view wx:elif="{{ledgerLoading}}" class="card quiet">正在加载…</view>
     <view wx:else class="card quiet">还没有往来记录</view>
+    <view wx:if="{{ledger.length && ledgerLoading}}" class="card quiet">正在加载…</view>
   </block>
 
   <button class="btn-primary save-btn" bindtap="save" hidden="{{showPay || showOpening}}">保存</button>

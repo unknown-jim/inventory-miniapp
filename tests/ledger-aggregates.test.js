@@ -1,6 +1,7 @@
 const assert = require('assert')
 const inv = require('../utils/inventory')
 const apply = require('../utils/ledger-apply')
+const MemoryBook = require('./memory-db').MemoryBook
 
 function idFactory() {
   let n = 0
@@ -18,7 +19,8 @@ function rec(overrides) {
     payType: 'cash',
     amount: 0,
     profit: 0,
-    orderId: ''
+    createdAt: 0,
+    lines: []
   }, overrides)
 }
 
@@ -26,27 +28,100 @@ function rec(overrides) {
 // 1) summarizeAllCustomerAccounts 与 summarizeCustomerAccount 逐字段一致
 // ---------------------------------------------------------------------------
 
+function outLine(overrides) {
+  return Object.assign({
+    lineId: '',
+    productId: 'p',
+    productName: '货',
+    qty: 1,
+    unitPrice: 0,
+    costPrice: 0,
+    amount: 0,
+    profit: 0,
+    allocations: [],
+    returnedQty: 0
+  }, overrides)
+}
+
 const mixedRecords = [
-  // 客户 c1：一笔赊账两行（同一 orderId，应按订单去重计数）+ 一笔现结 + 部分退货(赊账) + 部分收款 + 期初欠款
-  rec({ id: 'o1', type: 'out', customerId: 'c1', payType: 'credit', amount: 100, profit: 30, orderId: 'o1' }),
-  rec({ id: 'o1-2', type: 'out', customerId: 'c1', payType: 'credit', amount: 50, profit: 10, orderId: 'o1' }),
-  rec({ id: 'o2', type: 'out', customerId: 'c1', payType: 'cash', amount: 40, profit: 8, orderId: 'o2' }),
-  rec({ id: 'ret1', type: 'return', customerId: 'c1', payType: 'credit', amount: 20, profit: -6, orderId: 'o1', saleRecordId: 'o1' }),
+  // 客户 c1：一笔赊账两行（一张单一条记录）+ 一笔现结 + 部分退货(赊账) + 部分收款 + 期初欠款
+  rec({
+    id: 'o1',
+    type: 'out',
+    customerId: 'c1',
+    payType: 'credit',
+    amount: 150,
+    profit: 40,
+    lines: [
+      outLine({ lineId: 'o1-l1', amount: 100, profit: 30, returnedQty: 1 }),
+      outLine({ lineId: 'o1-l2', amount: 50, profit: 10 })
+    ]
+  }),
+  rec({
+    id: 'o2',
+    type: 'out',
+    customerId: 'c1',
+    payType: 'cash',
+    amount: 40,
+    profit: 8,
+    lines: [outLine({ lineId: 'o2-l1', amount: 40, profit: 8 })]
+  }),
+  rec({
+    id: 'ret1',
+    type: 'return',
+    customerId: 'c1',
+    payType: 'credit',
+    amount: 20,
+    profit: -6,
+    lines: [outLine({ lineId: 'ret1-l1', amount: 20, profit: -6, saleOrderId: 'o1', saleLineId: 'o1-l1' })]
+  }),
   rec({ id: 'pay1', type: 'pay', customerId: 'c1', amount: 30 }),
   rec({ id: 'open1', type: 'opening', customerId: 'c1', amount: 15 }),
 
   // 客户 c2：现结整单退货 + 小额收款（本无欠款，收款会让 receivable 变负，用来检验字段独立不互相污染）
-  rec({ id: 'o3', type: 'out', customerId: 'c2', payType: 'cash', amount: 60, profit: 12, orderId: 'o3' }),
-  rec({ id: 'ret2', type: 'return', customerId: 'c2', payType: 'cash', amount: 60, profit: -12, orderId: 'o3', saleRecordId: 'o3' }),
+  rec({
+    id: 'o3',
+    type: 'out',
+    customerId: 'c2',
+    payType: 'cash',
+    amount: 60,
+    profit: 12,
+    lines: [outLine({ lineId: 'o3-l1', amount: 60, profit: 12, returnedQty: 1 })]
+  }),
+  rec({
+    id: 'ret2',
+    type: 'return',
+    customerId: 'c2',
+    payType: 'cash',
+    amount: 60,
+    profit: -12,
+    lines: [outLine({ lineId: 'ret2-l1', amount: 60, profit: -12, saleOrderId: 'o3', saleLineId: 'o3-l1' })]
+  }),
   rec({ id: 'pay2', type: 'pay', customerId: 'c2', amount: 5 }),
 
   // 客户 c3：只有一笔赊账，无退货无收款
-  rec({ id: 'o4', type: 'out', customerId: 'c3', payType: 'credit', amount: 200, profit: 50, orderId: 'o4' }),
+  rec({
+    id: 'o4',
+    type: 'out',
+    customerId: 'c3',
+    payType: 'credit',
+    amount: 200,
+    profit: 50,
+    lines: [outLine({ lineId: 'o4-l1', amount: 200, profit: 50 })]
+  }),
 
   // 与客户账无关的记录：进货、库存调整、无客户的销售（应计入 computeTotals 但不计入任何客户账）
-  rec({ id: 'p1', type: 'in', amount: 500, profit: 0 }),
-  rec({ id: 'adj1', type: 'adjust_in', amount: 0, profit: 0 }),
-  rec({ id: 'noCust', type: 'out', customerId: '', payType: 'cash', amount: 999, profit: 999, orderId: 'noCust' })
+  rec({ id: 'p1', type: 'in', amount: 500, profit: 0, lines: [outLine({ lineId: 'p1-l1', amount: 500 })] }),
+  rec({ id: 'adj1', type: 'adjust_in', amount: 0, profit: 0, lines: [outLine({ lineId: 'adj1-l1' })] }),
+  rec({
+    id: 'noCust',
+    type: 'out',
+    customerId: '',
+    payType: 'cash',
+    amount: 999,
+    profit: 999,
+    lines: [outLine({ lineId: 'noCust-l1', amount: 999, profit: 999 })]
+  })
 ]
 
 const allAccounts = inv.summarizeAllCustomerAccounts(mixedRecords);
@@ -61,7 +136,7 @@ const allAccounts = inv.summarizeAllCustomerAccounts(mixedRecords);
   }, '客户 ' + customerId + ' 的聚合结果应与逐个计算完全一致')
 })
 
-// 去重计数：c1 的 o1 两行同一订单只算 1 单，加上 o2 共 2 单
+// 一张单一条记录：c1 的 o1（两行）算 1 单，加上 o2 共 2 单
 assert.strictEqual(allAccounts.c1.count, 2)
 // 无客户的销售不进入任何客户账
 assert.ok(!Object.prototype.hasOwnProperty.call(allAccounts, ''), '空 customerId 不应生成账户条目')
@@ -80,13 +155,13 @@ assert.deepStrictEqual(inv.computeTotals([]), inv.summarizeRecords([]))
 
 const nextId = idFactory()
 let now = 1000
-let ledger = apply.emptyLedger()
+// 2b-1 起流水不在账本文档里：记账要先把牵连到的那几条从流水仓捞出来。
+// MemoryBook 的记账主体和 ledger-core.js 的事务体一样，只是同步、不鉴权。
+const book = new MemoryBook({ shopId: 'agg-shop', nextId: nextId })
 
 function mut(action, payload) {
   now += 10
-  const res = apply.applyMutation(ledger, action, payload, now, nextId)
-  ledger = res.ledger
-  return res.result
+  return book.mutate(action, payload, now)
 }
 
 const product = mut('saveProduct', {
@@ -107,7 +182,7 @@ const orderA = mut('addSale', {
   payType: 'credit',
   items: [{ productId: product.id, qty: 3, unitPrice: 20 }]
 }).order
-const saleRecordIdA = orderA.records[0].id
+const saleLineIdA = orderA.lines[0].lineId
 
 mut('addSale', {
   customerId: custB.id,
@@ -119,11 +194,12 @@ mut('addSale', {
 mut('addPayment', { customerId: custA.id, amount: 20 })
 
 mut('addReturn', {
-  items: [{ saleRecordId: saleRecordIdA, qty: 1 }]
+  items: [{ saleOrderId: orderA.id, saleLineId: saleLineIdA, qty: 1 }]
 })
 
-ledger.customers.forEach(function (customer) {
-  const expected = inv.summarizeCustomerAccount(ledger.records, customer.id)
+const bookRecords = book.records()
+book.ledger.customers.forEach(function (customer) {
+  const expected = inv.summarizeCustomerAccount(bookRecords, customer.id)
   assert.strictEqual(customer.account.receivable, expected.receivable,
     '客户 ' + customer.name + ' 的落库 receivable 应与现算一致')
   assert.deepStrictEqual(customer.account, {
@@ -134,7 +210,7 @@ ledger.customers.forEach(function (customer) {
     receivable: expected.receivable
   })
 })
-assert.strictEqual(ledger.totals.receivable, inv.getTotalReceivable(ledger.records))
+assert.strictEqual(book.ledger.totals.receivable, inv.getTotalReceivable(bookRecords))
 
 // ---------------------------------------------------------------------------
 // 4) 边界：空账本 totals/账户全 0；全额收款后 receivable 为 0 而非负数或 NaN
@@ -163,7 +239,7 @@ assert.deepStrictEqual(blankCustomer.account, {
 
 // custB 目前欠 40（赊账 2 件 x 20），补齐全款后应精确归零
 mut('addPayment', { customerId: custB.id, amount: 40 })
-const custBAfterPayoff = ledger.customers.find(function (item) {
+const custBAfterPayoff = book.ledger.customers.find(function (item) {
   return item.id === custB.id
 })
 assert.strictEqual(custBAfterPayoff.account.receivable, 0)
@@ -208,15 +284,15 @@ const partialOrder = mut('addSale', {
 }).order
 assert.strictEqual(partialOrder.amount, 100)
 assert.strictEqual(partialOrder.paidAmount, 30)
-assert.strictEqual(partialOrder.debtAmount, 70)
-const custAPartial = ledger.customers.find(function (item) {
+assert.strictEqual(inv.round2(partialOrder.amount - partialOrder.paidAmount), 70)
+const custAPartial = book.ledger.customers.find(function (item) {
   return item.id === custA.id
 })
 assert.strictEqual(
   custAPartial.account.receivable,
-  inv.summarizeCustomerAccount(ledger.records, custA.id).receivable
+  inv.summarizeCustomerAccount(book.records(), custA.id).receivable
 )
-assert.strictEqual(ledger.totals.receivable, inv.getTotalReceivable(ledger.records))
+assert.strictEqual(book.ledger.totals.receivable, inv.getTotalReceivable(book.records()))
 // 老客户端只会送 payType，云函数仍要认：赊账 = 一分未收。
 const legacyOrder = mut('addSale', {
   customerId: custB.id,
@@ -225,6 +301,6 @@ const legacyOrder = mut('addSale', {
   items: [{ productId: product.id, qty: 1, unitPrice: 20 }]
 }).order
 assert.strictEqual(legacyOrder.paidAmount, 0)
-assert.strictEqual(legacyOrder.debtAmount, 20)
+assert.strictEqual(inv.round2(legacyOrder.amount - legacyOrder.paidAmount), 20)
 
 console.log('ledger aggregates tests passed')

@@ -31,7 +31,7 @@ function formatDocNo(record, prefix) {
   const d = new Date(record.createdAt)
   const ymd = String(d.getFullYear()) + pad(d.getMonth() + 1) + pad(d.getDate())
   const kind = prefix || (record.type === 'in' ? 'RK' : 'CK')
-  const tail = String(record.orderId || record.id || '').slice(-4).toUpperCase()
+  const tail = String(record.id || '').slice(-4).toUpperCase()
   return kind + ymd + '-' + tail
 }
 
@@ -44,38 +44,34 @@ function productById(products) {
 }
 
 function withSlipView(order, receivable, products, shopName) {
-  const records = order.records && order.records.length ? order.records : [order]
-  const first = records[0]
+  const lines = inventory.recordLines(order)
   const amount = order.amount != null
     ? inventory.toNumber(order.amount)
-    : inventory.round2(records.reduce(function (sum, item) {
+    : inventory.round2(lines.reduce(function (sum, item) {
       return sum + inventory.toNumber(item.amount)
     }, 0))
-  const paidAmount = order.paidAmount != null
-    ? inventory.toNumber(order.paidAmount)
-    : inventory.round2(records.reduce(function (sum, item) {
-      return sum + inventory.salePaidAmount(item)
-    }, 0))
+  // amount 允许从 lines[] 求和补出来，settledAmount 却按 record.amount 收口；
+  // 不把补出来的 amount 递给它，缺 amount 的单据实收会被夹成 0，送货单印错。
+  const paidAmount = inventory.settledAmount(Object.assign({}, order, { amount: amount }))
   const thisDebt = inventory.round2(amount - paidAmount)
   const totalDebt = inventory.toNumber(receivable)
   const prevDebt = inventory.round2(totalDebt - thisDebt)
   const productsMap = productById(products)
-  const operatorName = String(order.operatorName || first.operatorName || '').trim()
+  const operatorName = String(order.operatorName || '').trim()
   return {
     docNo: formatDocNo({
-      createdAt: order.createdAt || first.createdAt,
+      createdAt: order.createdAt,
       type: 'out',
-      id: order.id || first.id,
-      orderId: order.id || first.orderId
+      id: order.id
     }, 'SH'),
-    timeText: formatDateTime(order.createdAt || first.createdAt),
+    timeText: formatDateTime(order.createdAt),
     shopName: String(shopName || '').trim(),
     operatorName: operatorName,
     operatorText: operatorName || '—',
-    lines: records.map(function (item) {
+    lines: lines.map(function (item) {
       const parts = inventory.specParts(item, productsMap[item.productId])
       return {
-        id: item.id,
+        id: item.lineId,
         productName: item.productName,
         specParts: parts,
         specText: inventory.specLabelText(parts),
@@ -89,11 +85,11 @@ function withSlipView(order, receivable, products, shopName) {
     // 应收恒等于货物总额；实收是开单时填的那个数，欠款是两者之差。
     dueText: money(amount),
     paidText: money(paidAmount),
-    remark: order.remark || first.remark || '',
-    hasCustomer: !!(order.customerName || first.customerName),
-    customerName: order.customerName || first.customerName || '',
-    customerPhone: order.customerPhone || first.customerPhone || '',
-    customerAddress: order.customerAddress || first.customerAddress || '',
+    remark: order.remark || '',
+    hasCustomer: !!order.customerName,
+    customerName: order.customerName || '',
+    customerPhone: order.customerPhone || '',
+    customerAddress: order.customerAddress || '',
     isCredit: thisDebt > 0,
     prevDebtText: money(prevDebt),
     thisDebtText: money(thisDebt),
@@ -102,10 +98,11 @@ function withSlipView(order, receivable, products, shopName) {
   }
 }
 
-function withSlipViewFromRecord(records, record, products, shopName) {
-  const order = inventory.buildSaleOrder(records, record)
-  return withSlipView(order, inventory.receivableAt(records, order.customerId, order.createdAt), products, shopName)
-}
+// 2b-2b 删掉了 withSlipViewFromRecord。
+// 「截断到某张老单据时刻的欠款」现在唯一的算法在服务端 getSlip：客户端没有
+// 流水全集，也就没有任何现算钱的路径 —— 由 tests/no-client-cloud-db.test.js
+// 的结构禁令保证，不再靠运行时守卫。页面拿到 { record, receivable } 之后
+// 直接调 withSlipView。
 
 function pad(n) {
   return n < 10 ? '0' + n : '' + n
@@ -142,13 +139,19 @@ function withRecordView(record) {
   const isReturn = record.type === 'return'
   const isConvert = record.type === 'convert'
   const isAdjust = inventory.isAdjust(record)
-  const paidAmount = isOut ? inventory.salePaidAmount(record) : 0
+  const paidAmount = isOut ? inventory.settledAmount(record) : 0
   const debtAmount = isOut ? inventory.round2(inventory.toNumber(record.amount) - paidAmount) : 0
   const isCredit = debtAmount > 0
-  const lineCount = record.lineCount || 1
-  const isMulti = isOut && lineCount > 1
-  const spec = inventory.specText(record.color, record.size)
-  const fromSpec = inventory.specText(record.fromColor, record.fromSize)
+  const lines = inventory.recordLines(record)
+  const line = lines[0] || {}
+  const single = lines.length === 1
+  const lineCount = lines.length || 1
+  const isMulti = lines.length > 1
+  const qty = inventory.round2(lines.reduce(function (sum, item) {
+    return sum + inventory.toNumber(item.qty)
+  }, 0))
+  const spec = single ? inventory.specText(line.color, line.size) : ''
+  const fromSpec = single ? inventory.specText(line.fromColor, line.fromSize) : ''
   let typeText = '销售'
   if (isIn) typeText = '进货'
   else if (isPay) typeText = '收款'
@@ -159,8 +162,22 @@ function withRecordView(record) {
   else if (isCredit) typeText = '赊账'
   let specText = spec
   if (isConvert) specText = fromSpec + ' → ' + spec
-  if ((isIn || isAdjust) && !spec && record.skuId) specText = inventory.blankStockLabel()
-  return Object.assign({}, record, {
+  if ((isIn || isAdjust) && !spec && line.skuId) specText = inventory.blankStockLabel()
+  let productName = ''
+  if (isPay) productName = '收款'
+  else if (isOpening) productName = '期初欠款'
+  else if (isOut || isReturn) productName = inventory.orderProductTitle(lines)
+  else productName = line.productName || ''
+  const view = Object.assign({}, record, {
+    productName: productName,
+    sku: single ? (line.sku || '') : '',
+    skuId: single ? (line.skuId || '') : '',
+    color: single ? (line.color || '') : '',
+    size: single ? (line.size || '') : '',
+    qty: qty,
+    unitPrice: single ? inventory.toNumber(line.unitPrice) : 0,
+    costPrice: inventory.toNumber(line.costPrice),
+    reason: line.reason || '',
     isIn: isIn,
     isOut: isOut,
     isPay: isPay,
@@ -182,13 +199,17 @@ function withRecordView(record) {
     paidText: money(paidAmount),
     debtText: money(debtAmount),
     hasDebt: debtAmount > 0,
-    priceText: money(record.unitPrice),
+    priceText: money(single ? line.unitPrice : 0),
     profitText: money(record.profit),
-    qtyText: isPay || isOpening ? '' : String(record.qty),
+    qtyText: isPay || isOpening ? '' : String(qty),
     customerText: record.customerName || '',
     specText: specText,
     hasSpec: !!specText
   })
+  // 列表只渲染单头，明细和 openid 不必进 setData
+  delete view.lines
+  delete view.operatorOpenid
+  return view
 }
 
 function withCustomerView(customer, summary) {
@@ -224,6 +245,5 @@ module.exports = {
   withRecordView: withRecordView,
   withCustomerView: withCustomerView,
   withSlipView: withSlipView,
-  withSlipViewFromRecord: withSlipViewFromRecord,
   showError: showError
 }

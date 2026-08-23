@@ -4,6 +4,7 @@ const inventory = require('../../utils/inventory')
 
 Page({
   data: {
+    orderId: '',
     customerName: '',
     timeText: '',
     remark: '',
@@ -12,24 +13,30 @@ Page({
 
   async onLoad(query) {
     if (!(await store.ready())) return
-    const record = store.getRecord(query.id)
+    // 分页之后缓存里不一定有这条销售单，一律按 id 去服务端取
+    let record = null
+    try {
+      record = await store.fetchRecord(query.id)
+    } catch (error) {
+      util.showError(error)
+      return
+    }
     if (!record || record.type !== 'out') {
       wx.showToast({ title: '销售流水不存在', icon: 'none' })
       return
     }
-    const records = store.getRecords()
-    const order = inventory.buildSaleOrder(records, record)
     this.setData({
-      customerName: order.customerName || '散客',
-      timeText: util.formatDateTime(order.createdAt),
-      lines: order.records.map(function (item) {
-        const remain = inventory.returnableQty(records, item)
+      orderId: record.id,
+      customerName: record.customerName || '散客',
+      timeText: util.formatDateTime(record.createdAt),
+      lines: inventory.recordLines(record).map(function (item) {
+        const remain = inventory.returnableQty(item)
         return {
-          id: item.id,
+          id: item.lineId,
           productName: item.productName,
           specText: inventory.specText(item.color, item.size),
           soldText: String(item.qty),
-          returnedText: String(inventory.saleReturnQty(records, item.id)),
+          returnedText: String(inventory.round2(item.returnedQty)),
           remainText: String(remain),
           remain: remain,
           qty: remain > 0 ? String(remain) : '0'
@@ -53,8 +60,9 @@ Page({
 
   async submit() {
     try {
+      const orderId = this.data.orderId
       const items = this.data.lines.map(function (item) {
-        return { saleRecordId: item.id, qty: item.qty }
+        return { saleOrderId: orderId, saleLineId: item.id, qty: item.qty }
       })
       await store.addReturn({
         items: items,
