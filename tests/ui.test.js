@@ -252,17 +252,12 @@ async function tap(page, selector) {
 // 挂了能报出等的是哪个元素 / 哪个数据条件，而不是无限等。
 const WAIT_TIMEOUT = Number(process.env.WECHAT_UI_WAIT_TIMEOUT || 15000)
 
-async function waitFor(page, target, label) {
-  const deadline = Date.now() + WAIT_TIMEOUT
-  for (;;) {
-    const list = await page.$$(target)
-    if (list.length > 0) return list
-    if (Date.now() >= deadline) {
-      throw new Error('等待元素超时（' + (label || target) + '，选择器 ' + target + '，' + WAIT_TIMEOUT + 'ms）')
-    }
-    await sleep(300)
-  }
-}
+// waitFor 不在这里重复定义：上面那份（委托 automator 原生 page.waitFor 再套
+// withTimeout）契约更宽 —— target 可以是选择器、毫秒数或条件函数，而本文件里
+// 大量调用点传的正是**条件函数**。曾经在这里另写过一份只吃选择器的 waitFor，
+// 函数声明提升会让后面这份静默盖掉前面那份，于是 page.$$(函数) 把函数序列化成
+// 空选择器，报 querySelectorAll 'The provided selector is empty'，整轮跑不动。
+// 下面两个是原生没有的能力，才留在这里。
 
 async function waitForGone(page, target, label) {
   const deadline = Date.now() + WAIT_TIMEOUT
