@@ -383,15 +383,19 @@ const migratedLoose = migrated.find(function (item) {
 })
 assert.strictEqual(migratedLoose.lines.length, 1)
 assert.strictEqual(migratedLoose.lines[0].lineId, 'oc')
+assert.strictEqual(migratedLoose.lines[0].returnedAmount, 0, '迁移后 out 行带 returnedAmount: 0')
 
-// 退货指回销售行；销售行的 returnedQty 回填
+// 退货指回销售行；销售行的 returnedQty / returnedAmount 回填（金额用退货行自己的
+// amount，让「已退货值」由构造恒等于 Σ退货额）
 const migratedReturn = migrated.find(function (item) {
   return item.id === 'ret1'
 })
 assert.strictEqual(migratedReturn.lines[0].saleOrderId, 'order-1')
 assert.strictEqual(migratedReturn.lines[0].saleLineId, 'oa')
 assert.strictEqual(migratedOrder.lines[0].returnedQty, 1)
+assert.strictEqual(migratedOrder.lines[0].returnedAmount, 50)
 assert.strictEqual(migratedOrder.lines[1].returnedQty, 0)
+assert.strictEqual(migratedOrder.lines[1].returnedAmount, 0)
 assert.strictEqual(inv.returnableQty(migratedOrder.lines[0]), 1)
 
 // 收款 / 期初没有商品，lines 为空，金额留在单头
