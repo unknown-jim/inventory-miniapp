@@ -1537,6 +1537,11 @@ function totalStock(skus, productId) {
       records: v6Corpus
     })
   let v6Move = null
+  // 搬家路是运维 action（2b-4 起平台运营方白名单门），调用者得先在名单里，
+  // 否则这条测的是「被门拒」而不是「两条路口径一致」。
+  v6MoveShop.db.platformAdmins[v6MoveShop.openid] = {
+    _id: v6MoveShop.openid, openid: v6MoveShop.openid, note: '测试运营方', createdAt: 1
+  }
   for (let i = 0; i < 20; i++) {
     v6Move = await v6MoveShop.call('migrateRecords', i === 0 ? {} : { restart: false, newBook: false })
     if (v6Move.state === 'done' || v6Move.state === 'failed') break

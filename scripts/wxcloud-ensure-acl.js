@@ -5,7 +5,8 @@ const indexes = require('./wxcloud-ensure-indexes')
 const root = path.join(__dirname, '..')
 
 // 与 docs/cloud-ledger.md 必须一致。ADMINONLY = 仅管理端可读写。
-const COLLECTIONS = ['shops', 'members', 'ledgers', 'ledger_records', 'ledger_clears']
+// platform_admins 是运维白名单（_id = openid），漏设 ADMINONLY 等于把名单暴露给客户端。
+const COLLECTIONS = ['shops', 'members', 'ledgers', 'ledger_records', 'ledger_clears', 'platform_admins']
 const ACL_TAG = 'ADMINONLY'
 
 function collectionsNeedingAcl(currentByName, wanted, tag) {

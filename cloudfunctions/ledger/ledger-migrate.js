@@ -8,7 +8,8 @@ const recordsModule = require('./ledger-records')
 // utils/inventory.js 和 utils/ledger-apply.js。这里有 IO（读集合、开事务），
 // 放进 utils/ 会破坏那两个文件「零 IO、零数据库句柄」的结构保证。
 //
-// 三个 action，全部 owner-gated、全部过 apiVersion 门、全部不走 applyMutation：
+// 三个 action，全部走平台运营方白名单（ledger-core.js 的 requirePlatformAdmin，
+// 名单在集合 platform_admins）、全部过 apiVersion 门、全部不走 applyMutation：
 //   checkAggregates      只读预检。核心是纯函数 checkLedger(ledger)，只吃一份
 //                        ledgers 文档 —— 所以**不部署也能跑**（控制台导出 JSON +
 //                        scripts/check-ledger-export.js），这解开了「必须先部署

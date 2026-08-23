@@ -70,6 +70,12 @@ Shop.prototype.open = async function (name) {
     now: this.clock
   })
   this.shopId = res.shop.id
+  // 2b-4 起运维 action（账本升级三动作）走平台运营方白名单（requirePlatformAdmin）。
+  // 本文件除 M12 外测的是迁移机器本身、不是那道门 —— 开店时把调用者顺手登记
+  // 进白名单，免得几十个迁移调用点每处手动补。M12 自己把登记撤掉，从空名单钉门。
+  this.db.platformAdmins[this.openid] = {
+    _id: this.openid, openid: this.openid, note: '测试运营方', createdAt: 1
+  }
   return this
 }
 
@@ -1464,9 +1470,13 @@ function receivableOf(accounts, customerId) {
   }, /超出一次能扫完的范围/)
 
   // =========================================================================
-  // M12 权限与门
+  // M12 权限与门（2b-4 起换成平台运营方白名单，不再是 owner-gated）
   // =========================================================================
   const m12 = await openLegacyShop('m12')
+  // Shop.open 顺手登记的运营方身份在这里撤掉：M12 要从**空名单**开始钉门。
+  delete m12.db.platformAdmins[m12.openid]
+  const admin = new Shop({ db: m12.db, ids: idFactory('m12adm'), openid: 'ops-admin' })
+  admin.shopId = m12.shopId
   const outsider = new Shop({ db: m12.db, ids: idFactory('m12o'), openid: 'stranger' })
   outsider.shopId = m12.shopId
   const staff = new Shop({ db: m12.db, ids: idFactory('m12s'), openid: 'staff-1' })
@@ -1475,18 +1485,94 @@ function receivableOf(accounts, customerId) {
   ;['checkAggregates', 'migrateRecords', 'recomputeAggregates'].forEach(function (action) {
     assert.ok(migrate.OPS_ACTIONS.indexOf(action) >= 0)
   })
+  // 白名单还是空的：店主（user-a 是这家店的 owner）、店员、陌生 openid 一律拒绝。
+  // 这是 fail-closed 的直接后果 —— 集合没建 / 名单空了 / openid 没插进去，
+  // 三个运维动作对**所有人**关闭，包括店主。旧模型里店主是能过的，这里钉死新模型。
   for (let i = 0; i < migrate.OPS_ACTIONS.length; i++) {
     const action = migrate.OPS_ACTIONS[i]
     await rejects(function () {
+      return m12.call(action, {})
+    }, /只能由平台运营方执行/, 'M12：店主（owner）不在名单里，' + action + ' 必须拒绝')
+    await rejects(function () {
       return outsider.call(action, {})
-    }, /不是该店成员/)
+    }, /只能由平台运营方执行/, 'M12：陌生 openid ' + action + ' 必须拒绝')
     await rejects(function () {
       return staff.call(action, {})
-    }, /只有店主能做账本升级/)
+    }, /只能由平台运营方执行/, 'M12：普通店员 ' + action + ' 必须拒绝')
     await rejects(function () {
       return m12.callRaw(action, {}, null, 1)
     }, /请更新小程序到最新版本/)
   }
+  // 运营方进名单：他不是任何一家店的成员（members 里查无此人），照样放行 ——
+  // 门换成了白名单，成员身份无关。三个动作都要真的跑通，不只是过门：
+  // checkAggregates 只读；migrateRecords 循环到 done；recomputeAggregates
+  // 要求已迁完，排在迁移之后。
+  m12.db.platformAdmins['ops-admin'] = {
+    _id: 'ops-admin', openid: 'ops-admin', note: '运营方', createdAt: 1787500000000
+  }
+  const precheck = await admin.call('checkAggregates', {})
+  assert.ok(precheck, 'M12：名单里的运营方（非任何店的成员）调 checkAggregates 放行')
+  const migratedByAdmin = await admin.runMigration({ limit: 50 })
+  assert.strictEqual(migratedByAdmin.state, 'done', 'M12：运营方跑 migrateRecords 到 done')
+  const recomputedByAdmin = await admin.call('recomputeAggregates', {})
+  assert.strictEqual(recomputedByAdmin.bookId, m12.doc().bookId,
+    'M12：运营方跑 recomputeAggregates 真的执行了（回包带 bookId）')
+  // 「读失败」也必须拒绝（fail-closed）：真云上 index.js 的 getPlatformAdmin 把
+  // 一切异常吞成 null，这里把替身换成同样的形态 —— 返回 null 绝不许当成放行。
+  const m12GetAdmin = m12.db.getPlatformAdmin
+  m12.db.getPlatformAdmin = async function () {
+    return null
+  }
+  try {
+    await rejects(function () {
+      return admin.call('checkAggregates', {})
+    }, /只能由平台运营方执行/, 'M12：getPlatformAdmin 返回 null（读失败被折成 null）必须拒绝')
+  } finally {
+    m12.db.getPlatformAdmin = m12GetAdmin
+  }
+  // 「适配层根本没有 getPlatformAdmin 这个方法」是第三种失败模式，和上面那条
+  // 「返回 null」不是一回事：null 是查询结果（文档不存在 / 读失败被折成 null），
+  // 缺方法是 db.getPlatformAdmin === undefined —— 重构 index.js 的 createDb() 时
+  // 把它弄丢了就是这个形状，requirePlatformAdmin 的 `? : null` 短路成 null，必须
+  // 照样拒绝。生产适配层本机加载不了（cloudfunctions/ledger/ 没有 node_modules，
+  // require('wx-server-sdk') 就失败），这层兜底只能钉在替身上。
+  // 夹具坑：替身把方法定义在 MemoryDb.prototype 上，上面两条用例又在实例上留了
+  // own 副本，两处都得删才算「缺」—— 只删实例那份，原型上的会顶上来，
+  // 这条用例就会在未变异的代码上变红（假失败，不是护栏）。
+  const m12ProtoAdmin = MemoryDb.prototype.getPlatformAdmin
+  try {
+    delete m12.db.getPlatformAdmin
+    delete MemoryDb.prototype.getPlatformAdmin
+    for (let i = 0; i < migrate.OPS_ACTIONS.length; i++) {
+      const action = migrate.OPS_ACTIONS[i]
+      await rejects(function () {
+        return admin.call(action, {})
+      }, /只能由平台运营方执行/,
+        'M12：适配层缺 getPlatformAdmin 方法时 ' + action + ' 必须拒绝（fail-closed）')
+    }
+  } finally {
+    MemoryDb.prototype.getPlatformAdmin = m12ProtoAdmin
+    m12.db.getPlatformAdmin = m12ProtoAdmin
+  }
+  // 替身直接抛错也一样：dispatch 不许把一次抛错吞成放行。
+  m12.db.getPlatformAdmin = async function () {
+    throw new Error('platform_admins 读失败')
+  }
+  try {
+    await rejects(function () {
+      return admin.call('checkAggregates', {})
+    }, /platform_admins 读失败/, 'M12：getPlatformAdmin 抛错必须拒绝，不许吞成放行')
+  } finally {
+    m12.db.getPlatformAdmin = m12GetAdmin
+  }
+  // deleteShop 保持 owner-gated，不跟着换成白名单：那是租户对自己店的操作，
+  // 不是平台运维。运营方（非成员）拒；店主自己照旧放行。
+  await rejects(function () {
+    return admin.call('deleteShop', {})
+  }, /不是该店成员/, 'M12：运营方不是该店成员，deleteShop 必须拒绝')
+  const m12del = await new Shop({ db: m12.db, ids: idFactory('m12del') }).open('待删店')
+  await m12del.call('deleteShop', {})
+  assert.ok(!m12del.db.shops[m12del.shopId], 'M12：店主自己删店照旧放行')
   // 三个动作都不进 MUTATIONS：它们改的是迁移状态和聚合本身，不是一笔账
   migrate.OPS_ACTIONS.forEach(function (action) {
     assert.ok(apply.MUTATIONS.indexOf(action) < 0,
