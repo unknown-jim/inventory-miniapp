@@ -124,9 +124,9 @@ Page({
         }
       })
     }
-    // 改之前的每行已退情况，给保存前那句提示用（见 utils/reprice-hint.js）。
-    // data.lines 会被编辑改掉，所以要在这里另存一份。
-    this.saleReturned = view.isOut ? repriceHintView.savedReturnsOf(recordLines) : {}
+    // 改之前这张单长什么样，给保存前那句提示用（见 utils/reprice-hint.js）。
+    // data.lines 和实收都会被编辑改掉，所以要在这里另存一份。
+    this.saleBefore = view.isOut ? repriceHintView.savedSaleOf(record) : null
     this.repriceConfirmed = false
     if (view.isOut) {
       canReturn = recordLines.some(function (item) {
@@ -480,7 +480,8 @@ Page({
           wx.showToast({ title: '实收比应收多，请改实收', icon: 'none' })
           return
         }
-        const hint = repriceHintView.repriceHint(this.saleReturned, this.data.lines)
+        const hint = repriceHintView.repriceHint(
+          this.saleBefore, this.data.lines, this.data.paidAmount)
         if (hint && !this.repriceConfirmed) {
           wx.showModal({
             title: '这张单有退货',
@@ -540,6 +541,9 @@ Page({
         wx.navigateBack()
       }, 400)
     } catch (error) {
+      // 保存失败（比如「数量不能小于已退货」）后还停在编辑态，店主会接着改。
+      // 不复位的话同一页里再改一次单价就不再提示了。
+      this.repriceConfirmed = false
       util.showError(error)
     }
   },
