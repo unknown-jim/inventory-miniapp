@@ -53,5 +53,5 @@
 - 改 `utils/inventory.js` 或 `utils/ledger-apply.js` 后运行 `npm run sync:ledger-inventory`，保持云函数副本一致。
 - 流水是「一单一记录」，明细在 `lines[]`；`allocations` 逐行保留，已退数量和金额记在销售行的 `returnedQty` / `returnedAmount` 上。欠款和汇总一律由当前流水现算，不要加冻结字段。详见 [docs/cloud-ledger.md](docs/cloud-ledger.md)。
 - 流水**字段**换形状时读的一端兜底、写的一端抹掉老字段，不写迁移脚本（例：`settledAmount` 按老 `payType` 回推实收）。这条管字段，不管**搬家**：流水搬进 `ledger_records` 是一次显式的迁移动作，两件事不要互相套用。详见 [docs/cloud-ledger.md](docs/cloud-ledger.md)。
-- 搬家是三个 owner-gated 的运维 action：`checkAggregates`（只读预检，核心是纯函数，**控制台导出 `ledgers` 就能在本机跑** `node scripts/check-ledger-export.js`，不用先部署）、`migrateRecords`（搬家，带 `rollback` / `dropLegacy` 两个模式）、`recomputeAggregates`（聚合漂了按集合现状重折叠，**它不修错账**）。客户端一个入口都没有，只从开发者工具 Console 调。详见 [docs/cloud-ledger.md](docs/cloud-ledger.md) 的「账本升级」。
+- 搬家是三个 owner-gated 的运维 action：`checkAggregates`（只读预检，核心是纯函数，**控制台导出 `ledgers` 就能在本机跑** `node scripts/check-ledger-export.js`，不用先部署）、`migrateRecords`（搬家，带 `rollback` / `dropLegacy` / `snapshots` 三个模式，`snapshots` 把升级前存的清空快照也转过来，不跑那几家店的「恢复清空前数据」会永久报错）、`recomputeAggregates`（聚合漂了按集合现状重折叠，**它不修错账**）。客户端一个入口都没有，只从开发者工具 Console 调。详见 [docs/cloud-ledger.md](docs/cloud-ledger.md) 的「账本升级」。
 - `app.json` 的 `lazyCodeLoading` 仍须保留；`cloudfunctions/` 不进小程序包。详见 [docs/cloud-ledger.md](docs/cloud-ledger.md)。

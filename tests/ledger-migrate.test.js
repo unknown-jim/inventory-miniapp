@@ -187,6 +187,28 @@ function legacyCorpus() {
   ]
 }
 
+// 同一家店的多份快照必须落到**不同**账套。用同一份语料测不出这件事：记录 id 相同，
+// 账套号写死的话三份会互相覆盖成一本，而 countAll 仍然等于 6，撞号被藏住。
+// 给每份加 tag（记录 id 和单号都带上），撞号就会变成「一本账套里 18 条」而被校验抓住。
+function taggedCorpus(tag) {
+  return legacyCorpus().map(function (record) {
+    const copy = Object.assign({}, record)
+    copy.id = tag + '-' + copy.id
+    if (copy.orderId) copy.orderId = tag + '-' + copy.orderId
+    if (copy.saleRecordId) copy.saleRecordId = tag + '-' + copy.saleRecordId
+    if (Array.isArray(copy.lines)) {
+      copy.lines = copy.lines.map(function (line) {
+        const l = Object.assign({}, line)
+        if (l.lineId) l.lineId = tag + '-' + l.lineId
+        if (l.saleOrderId) l.saleOrderId = tag + '-' + l.saleOrderId
+        if (l.saleLineId) l.saleLineId = tag + '-' + l.saleLineId
+        return l
+      })
+    }
+    return copy
+  })
+}
+
 function corpusLists() {
   return {
     products: [
@@ -221,6 +243,51 @@ async function openLegacyShop(prefix, records) {
   const shop = await new Shop({ ids: idFactory(prefix) }).open(prefix + ' 店')
   installLegacy(shop, records)
   return shop
+}
+
+// 升级前存下来的清空快照，**老 clearDoc 的形状**（2b-1 之前那一版）：流水装在
+// records 数组里，没有 bookId / accounts / aggregate。真实导出里的三份就长这样
+// （keys = _id,id,shopId,savedAt,products,skus,records,customers,categories）。
+function legacyClearDoc(shopId, id, savedAt, records, lists) {
+  const use = lists || corpusLists()
+  return {
+    _id: id,
+    id: id,
+    shopId: shopId,
+    savedAt: savedAt,
+    products: clone(use.products),
+    skus: clone(use.skus),
+    records: clone(records || []),
+    customers: clone(use.customers),
+    categories: clone(use.categories)
+  }
+}
+
+// 带外把老快照塞进 ledger_clears + 账本的 clearSnapshots 元数据
+//（旧云函数存的就是这个样子，新云函数没有任何路径能造出它来）
+function installLegacyClears(shop, docs) {
+  docs.forEach(function (doc) {
+    shop.db.clears[doc._id] = clone(doc)
+  })
+  shop.patchDoc({
+    clearSnapshots: docs.map(function (doc) {
+      return { id: doc.id, savedAt: doc.savedAt }
+    }),
+    lastRestoredClearAt: 0
+  })
+  return shop
+}
+
+// 循环调 mode:'snapshots' 到 done，返回每一次调用的返回包
+Shop.prototype.runSnapshots = async function (payload, maxCalls) {
+  const cap = maxCalls == null ? 100 : maxCalls
+  const calls = []
+  for (let i = 0; i < cap; i++) {
+    const res = await this.call('migrateRecords', Object.assign({}, payload || {}, { mode: 'snapshots' }))
+    calls.push(res)
+    if (res.state === 'done') return calls
+  }
+  throw new Error('mode:"snapshots" 调了 ' + cap + ' 次还没收敛：' + JSON.stringify(calls[calls.length - 1]))
 }
 
 function receivableOf(accounts, customerId) {
@@ -497,8 +564,8 @@ function receivableOf(accounts, customerId) {
     { clears: [{ _id: 'cs-2', shopId: 's-p11', savedAt: 20, bookId: 'bk-9' }] }
   )
   assert.strictEqual(p11ok.clearSnapshots.latestHasBookId, true)
-  // 文案不能再说「请先完成账本升级再恢复」：升级（migrateRecords）**不转换老快照**，
-  // 跑完之后那句话就是一句谎话，店主照做也没用。
+  // 文案要指出**能走通**的那条路：没有 bookId 只说明这份快照还没转换过，
+  // 转换是 migrateRecords 的 mode:'snapshots'。「请联系开发者」是条死路。
   assert.throws(function () {
     apply.applyMutation(
       { clearSnapshots: [{ id: 'cs-1', savedAt: 10 }], lastRestoredClearAt: 0, records: [] },
@@ -506,7 +573,7 @@ function receivableOf(accounts, customerId) {
       { snapshot: { id: 'cs-1', savedAt: 10, products: [] } },
       100, function () { return 'x' }, null
     )
-  }, /暂时恢复不了，请联系开发者/, 'M4/P11：升级前的快照要说实话，不许指一条走不通的路')
+  }, /mode:"snapshots"/, 'M4/P11：升级前的快照要指一条走得通的路')
 
   // =========================================================================
   // M5 迁移不改变已印出的单据。**最强的一条端到端断言**：
@@ -984,10 +1051,297 @@ function receivableOf(accounts, customerId) {
   assert.strictEqual(orphanDone.state, 'done', '有孤儿退货也要能迁完')
   assert.strictEqual(orphanDone.report.orphanReturnsTotal, 60, '迁完的报告里要带孤儿清单')
 
+  // =========================================================================
+  // S1–S8 老清空快照转换（mode:'snapshots'）
+  //
+  // 目的**不是**「三个字段补上了」，是「恢复清空前数据这条路真的能走通」——
+  // S3 是这一组的判据，其余几条围着它。
+  // =========================================================================
+
+  // ---- S5 前置条件：活账套没迁完就调，要明确报错 -------------------------
+  const s5 = await openLegacyShop('s5')
+  installLegacyClears(s5, [legacyClearDoc(s5.shopId, 's5-c1', 3000, legacyCorpus())])
+  await rejects(function () {
+    return s5.call('migrateRecords', { mode: 'snapshots' })
+  }, /活账套还没完成流水升级/)
+  assert.strictEqual(s5.db.clears['s5-c1'].bookId, undefined,
+    'S5：报错的那次不许偷偷改快照')
+  // 迁完活账套之后同一句调用就能过
+  await s5.runMigration({ limit: 50 })
+  const s5Ok = await s5.call('migrateRecords', { mode: 'snapshots' })
+  assert.strictEqual(s5Ok.state, 'done')
+  assert.strictEqual(s5Ok.converted, 1)
+
+  // ---- S1 转换后三个字段都在，且等于对 merged 的全量折叠 -----------------
+  const s1 = await openLegacyShop('s1')
+  const s1Legacy = legacyCorpus()
+  installLegacyClears(s1, [legacyClearDoc(s1.shopId, 's1-c1', 3000, s1Legacy)])
+  await s1.runMigration({ limit: 50 })
+  const s1Res = await s1.call('migrateRecords', { mode: 'snapshots' })
+  assert.strictEqual(s1Res.state, 'done')
+  assert.deepStrictEqual(
+    { converted: s1Res.converted, skipped: s1Res.skipped, failed: s1Res.failed, remaining: s1Res.remaining, total: s1Res.total },
+    { converted: 1, skipped: 0, failed: 0, remaining: 0, total: 1 }, 'S1：一份转过来，没有跳过也没有失败')
+  const s1Merged = apply.legacyRecordsOf({ records: clone(s1Legacy) })
+  const s1Book = migrate.snapshotBookId('s1-c1')
+  const s1Doc = s1.db.clears['s1-c1']
+  assert.strictEqual(s1Doc.bookId, s1Book, 'S1：快照发到了自己的账套')
+  assert.notStrictEqual(s1Doc.bookId, s1.doc().bookId, 'S1：快照账套不能和活账套是同一本')
+  assert.deepStrictEqual(s1Doc.accounts, inv.foldAccountTerms(s1Merged),
+    'S1：accounts == 对 merged 的全量折叠')
+  assert.deepStrictEqual(s1Doc.aggregate, inv.foldTotalTerms(s1Merged),
+    'S1：aggregate == 对 merged 的全量折叠')
+  assert.strictEqual(s1.docsOfBook(s1Book).length, s1Merged.length,
+    'S1：集合里有这份快照的流水')
+  assert.deepStrictEqual(s1.collectionAll(s1Book), migrate.sortDesc(s1Merged),
+    'S1：落库的流水逐条等于归并 + 重算的结果')
+  assert.deepStrictEqual(s1Doc.records, s1Legacy,
+    'S1：records 数组**保留不删** —— 和 ledgers.records 同一个理由，那是回滚路')
+  assert.deepStrictEqual(s1Res.report.map(function (item) { return item.status }), ['converted'])
+
+  // ---- S2 幂等：再跑一次 converted === 0，快照文档逐字段不变 -------------
+  const s2Before = clone(s1.db.clears['s1-c1'])
+  const s2DocsBefore = clone(s1.docsOfBook(s1Book))
+  const s2Res = await s1.call('migrateRecords', { mode: 'snapshots' })
+  assert.strictEqual(s2Res.state, 'done')
+  assert.deepStrictEqual(
+    { converted: s2Res.converted, skipped: s2Res.skipped, failed: s2Res.failed },
+    { converted: 0, skipped: 1, failed: 0 }, 'S2：第二次全是跳过')
+  assert.deepStrictEqual(s1.db.clears['s1-c1'], s2Before, 'S2：快照文档逐字段不变')
+  assert.deepStrictEqual(s1.docsOfBook(s1Book), s2DocsBefore, 'S2：集合里的文档也逐字段不变')
+
+  // ---- S3 端到端：转换之后 restoreCleared 真的能成功 ---------------------
+  // 「清空之前」那本账：流水语料和活账套一样（所以每个数都能对回同一张手算表），
+  // 但商品库存和客户名单是清空那一刻的样子 —— 这样才验得出「回来的是快照自己
+  // 的东西」，而不是「现在这本账本来就长这样」。
+  const s3 = await openLegacyShop('s3')
+  const s3Lists = corpusLists()
+  s3Lists.products = s3Lists.products.map(function (item, at) {
+    return Object.assign({}, item, { stock: 100 + at })
+  })
+  s3Lists.customers = s3Lists.customers.concat([{ id: 'gone', name: '清空前才有的客户' }])
+  const s3Legacy = legacyCorpus()
+  installLegacyClears(s3, [legacyClearDoc(s3.shopId, 's3-c1', 3000, s3Legacy, s3Lists)])
+  const s3Merged = apply.legacyRecordsOf({ records: clone(s3Legacy) })
+  const s3WantAccounts = inv.foldAccountTerms(s3Merged)
+  const s3WantAggregate = inv.foldTotalTerms(s3Merged)
+  await s3.runMigration({ limit: 50 })
+  // 迁完之后再记一笔账，让「现在」和「清空之前」不一样，否则下面的相等是假绿
+  const s3Sale = await s3.call('addSale', {
+    paidAmount: 0, customerId: 'nc1', items: [{ productId: 'p1', qty: 1, unitPrice: 30 }]
+  })
+  const s3SaleId = s3Sale.result.order.id
+  const s3Now = (await s3.call('getLedger', {})).ledger
+  assert.strictEqual(s3Now.totals.receivable, 240, 'S3 自检：现在欠 240（210 + 新卖的 30）')
+  assert.strictEqual(s3Now.hasClearedBackup, true, 'S3 自检：「恢复清空前数据」按钮此刻能点')
+  // 转换之前恢复要报错，而且要指出能走通的那条路
+  await rejects(function () {
+    return s3.call('restoreCleared', {})
+  }, /mode:"snapshots"/)
+  assert.strictEqual(s3.doc().bookId, s3Now.bookId, 'S3：恢复失败之后账套不许被动过')
+  // 转换 -> 恢复
+  const s3Conv = await s3.call('migrateRecords', { mode: 'snapshots' })
+  assert.strictEqual(s3Conv.converted, 1)
+  await s3.call('restoreCleared', {})
+  const s3Doc = s3.doc()
+  const s3After = (await s3.call('getLedger', {})).ledger
+  assert.strictEqual(s3Doc.bookId, migrate.snapshotBookId('s3-c1'),
+    'S3：账本的指针换到了快照那本账套')
+  assert.deepStrictEqual(s3Doc.products, s3Lists.products, 'S3：商品和库存等于清空之前')
+  // 账本文档里的 customers 带着 withAggregates 挂上去的 account 投影，比 id / 名字
+  assert.deepStrictEqual(s3Doc.customers.map(function (item) {
+    return { id: item.id, name: item.name }
+  }), s3Lists.customers, 'S3：客户名单等于清空之前')
+  assert.deepStrictEqual(s3Doc.accounts, s3WantAccounts, 'S3：每个客户的欠款等于清空之前')
+  assert.deepStrictEqual(s3Doc.aggregate, s3WantAggregate, 'S3：全店汇总等于清空之前')
+  const s3Records = await s3.pagedAll()
+  assert.deepStrictEqual(s3Records, migrate.sortDesc(s3Merged), 'S3：流水逐条等于清空之前')
+  assert.ok(!s3Records.some(function (item) { return item.id === s3SaleId }),
+    'S3：清空之后记的那笔账不许出现在恢复出来的账套里')
+  assert.strictEqual(s3After.totals.receivable, 210, 'S3：全店欠款回到 210（修复后的口径）')
+  assert.strictEqual(receivableOf(s3Doc.accounts, 'nc1'), 50, 'S3：nc1 = (100 − 30) − 20')
+  assert.strictEqual(receivableOf(s3Doc.accounts, 'nc2'), 100, 'S3：nc2 = 200 − 40 − 60')
+  assert.strictEqual(receivableOf(s3Doc.accounts, 'nc3'), 60, 'S3：nc3 = 80 − 20')
+  assert.ok(!Object.prototype.hasOwnProperty.call(s3Doc.accounts, 'oldc'),
+    'S3：恢复出来的账里也不许有 B2 留下的负账户')
+  assert.ok(!s3After.aggregatesStale, 'S3：恢复之后聚合和集合不许有漂')
+  assert.strictEqual(s3After.hasClearedBackup, false, 'S3：恢复之后按钮消失')
+  // 恢复出来的账仍然能记账（它是一本正常的、已迁移的账套）
+  const s3Again = await s3.call('addSale', {
+    paidAmount: 0, customerId: 'nc1', items: [{ productId: 'p1', qty: 1, unitPrice: 30 }]
+  })
+  assert.ok(s3Again.result.order, 'S3：恢复出来的账套写路径是通的')
+
+  // ---- S4 空 records 的快照走 stamp-only --------------------------------
+  const s4 = await openLegacyShop('s4')
+  installLegacyClears(s4, [legacyClearDoc(s4.shopId, 's4-c1', 3000, [])])
+  await s4.runMigration({ limit: 50 })
+  const s4Res = await s4.call('migrateRecords', { mode: 'snapshots' })
+  assert.strictEqual(s4Res.converted, 1, 'S4：stamp-only 也算转过来了')
+  assert.deepStrictEqual(s4Res.report.map(function (item) { return item.status }), ['stamped'])
+  const s4Book = migrate.snapshotBookId('s4-c1')
+  const s4Doc = s4.db.clears['s4-c1']
+  assert.strictEqual(s4Doc.bookId, s4Book)
+  assert.deepStrictEqual(s4Doc.accounts, {}, 'S4：空账套的 accounts 是空的')
+  assert.deepStrictEqual(s4Doc.aggregate, inv.emptyTerms(), 'S4：空账套的 aggregate 是空累加器')
+  assert.strictEqual(s4.docsOfBook(s4Book).length, 0, 'S4：一条流水都不写')
+  // 恢复出来就是一本空账，不是报错
+  await s4.call('restoreCleared', {})
+  const s4After = (await s4.call('getLedger', {})).ledger
+  assert.strictEqual(s4After.bookId, s4Book)
+  assert.strictEqual(s4After.totals.receivable, 0)
+  assert.deepStrictEqual(await s4.pagedAll(), [], 'S4：恢复出来的空账套翻不出流水')
+
+  // ---- S6 一份坏数据不影响其他份 ----------------------------------------
+  // 第二份的元数据指着一份 ledger_clears 里根本不存在的快照（悬空引用）。
+  const s6 = await openLegacyShop('s6')
+  const s6Docs = [
+    legacyClearDoc(s6.shopId, 's6-c1', 3000, legacyCorpus()),
+    legacyClearDoc(s6.shopId, 's6-c2', 4000, legacyCorpus()),
+    legacyClearDoc(s6.shopId, 's6-c3', 5000, legacyCorpus())
+  ]
+  installLegacyClears(s6, s6Docs)
+  delete s6.db.clears['s6-c2']
+  await s6.runMigration({ limit: 50 })
+  const s6Res = await s6.call('migrateRecords', { mode: 'snapshots' })
+  assert.strictEqual(s6Res.state, 'done', 'S6：一份坏的不许让整轮卡住不收敛')
+  assert.deepStrictEqual(
+    { converted: s6Res.converted, skipped: s6Res.skipped, failed: s6Res.failed, remaining: s6Res.remaining },
+    { converted: 2, skipped: 0, failed: 1, remaining: 0 }, 'S6：坏的记一笔 failed，其余照转')
+  assert.deepStrictEqual(s6Res.report.map(function (item) { return item.id + ':' + item.status }),
+    ['s6-c1:converted', 's6-c2:failed', 's6-c3:converted'], 'S6：坏的那份要进 report')
+  assert.ok(/找不到/.test(s6Res.report[1].reason), 'S6：report 要说清坏在哪')
+  const s6Merged = apply.legacyRecordsOf({ records: legacyCorpus() })
+  assert.strictEqual(s6.db.clears['s6-c1'].bookId, migrate.snapshotBookId('s6-c1'))
+  assert.strictEqual(s6.db.clears['s6-c3'].bookId, migrate.snapshotBookId('s6-c3'))
+  assert.strictEqual(s6.docsOfBook(migrate.snapshotBookId('s6-c1')).length, s6Merged.length)
+  assert.strictEqual(s6.docsOfBook(migrate.snapshotBookId('s6-c3')).length, s6Merged.length)
+  // 最近一份（s6-c3）转好了，所以这家店的「恢复清空前数据」照样能用
+  await s6.call('restoreCleared', {})
+  assert.strictEqual(s6.doc().bookId, migrate.snapshotBookId('s6-c3'),
+    'S6：坏掉的那份不许把还能恢复的那份也拖下水')
+  // 坏数据 + 小 limit：失败**不许吃预算**，否则一份修不好的快照会把预算吃光，
+  // remaining 永远归不了零，循环调不收敛（runSnapshots 会撞上 100 次上限报错）。
+  const s6b = await openLegacyShop('s6b')
+  installLegacyClears(s6b, [
+    legacyClearDoc(s6b.shopId, 's6b-c1', 3000, legacyCorpus()),
+    legacyClearDoc(s6b.shopId, 's6b-c2', 4000, legacyCorpus()),
+    legacyClearDoc(s6b.shopId, 's6b-c3', 5000, legacyCorpus())
+  ])
+  delete s6b.db.clears['s6b-c2']
+  await s6b.runMigration({ limit: 50 })
+  const s6bCalls = await s6b.runSnapshots({ limit: 1 })
+  assert.strictEqual(s6bCalls.length, 2, 'S6：坏的那份不吃预算，两次调用就收敛')
+  assert.strictEqual(s6bCalls[s6bCalls.length - 1].failed, 1, 'S6：收敛之后仍然如实报 failed')
+  assert.strictEqual(s6b.db.clears['s6b-c3'].bookId, migrate.snapshotBookId('s6b-c3'),
+    'S6：坏的那份后面的快照照样转得到')
+
+  // ---- S7 limit 分批：最终状态与一次性跑相同 -----------------------------
+  async function threeSnapshotShop(prefix) {
+    const shop = await openLegacyShop(prefix)
+    installLegacyClears(shop, [
+      // 三份语料**内容各不相同**（见 taggedCorpus 的注释）：账套号写死的话它们会
+      // 挤进同一本账套，countAll 立刻对不上。用同一份语料这条就测不出来。
+      legacyClearDoc(shop.shopId, prefix + '-c1', 3000, taggedCorpus('t1')),
+      legacyClearDoc(shop.shopId, prefix + '-c2', 4000, taggedCorpus('t2')),
+      legacyClearDoc(shop.shopId, prefix + '-c3', 5000, taggedCorpus('t3'))
+    ])
+    await shop.runMigration({ limit: 50 })
+    return shop
+  }
+  function snapshotStateOf(shop, ids) {
+    return ids.map(function (id) {
+      const doc = shop.db.clears[id]
+      return {
+        bookId: doc.bookId,
+        accounts: doc.accounts,
+        aggregate: doc.aggregate,
+        legacyRecords: doc.records,
+        // 集合内容用 fromRecordDoc 比：_id / bookId / shopId / sortKey 是派生字段，
+        // 两家店本来就不一样，比它们只会比出「不是同一家店」
+        records: shop.collectionAll(doc.bookId)
+      }
+    })
+  }
+  const s7a = await threeSnapshotShop('s7a')
+  const s7b = await threeSnapshotShop('s7b')
+  const s7Calls = await s7a.runSnapshots({ limit: 1 })
+  assert.strictEqual(s7Calls.length, 3, 'S7：limit:1 三份要三次调用')
+  assert.deepStrictEqual(s7Calls.map(function (item) {
+    return item.converted + '/' + item.skipped + '/' + item.remaining
+  }), ['1/0/2', '1/1/1', '1/2/0'], 'S7：逐份推进，已转好的下一次白跳过')
+  assert.deepStrictEqual(s7Calls.map(function (item) { return item.state }),
+    ['running', 'running', 'done'])
+  const s7One = await s7b.call('migrateRecords', { mode: 'snapshots' })
+  assert.strictEqual(s7One.converted, 3, 'S7 自检：一次性跑一次就转完三份')
+  assert.deepStrictEqual(
+    snapshotStateOf(s7a, ['s7a-c1', 's7a-c2', 's7a-c3']).map(function (item, at) {
+      return Object.assign({}, item, { bookId: item.bookId.replace('s7a-c' + (at + 1), 'X') })
+    }),
+    snapshotStateOf(s7b, ['s7b-c1', 's7b-c2', 's7b-c3']).map(function (item, at) {
+      return Object.assign({}, item, { bookId: item.bookId.replace('s7b-c' + (at + 1), 'X') })
+    }),
+    'S7：分批跑完的最终状态和一次性跑完的相同'
+  )
+
+  // 三份必须落到三本**不同**的账套，各自只装自己那 6 条。账套号写死的话它们会挤
+  // 进同一本，这两条断言当场红。
+  const s7Books = ['s7a-c1', 's7a-c2', 's7a-c3'].map(function (id) {
+    return s7a.db.clears[id].bookId
+  })
+  assert.strictEqual(new Set(s7Books).size, 3, 'S7：三份快照的账套号必须互不相同')
+  s7Books.forEach(function (bookId, at) {
+    const docs = Object.keys(s7a.db.records).filter(function (key) {
+      return s7a.db.records[key].bookId === bookId
+    })
+    const tag = 't' + (at + 1)
+    // 条数从语料算出来，不写死：归并会把同 orderId 的销售行并成一单
+    const expected = apply.legacyRecordsOf({ records: taggedCorpus(tag) }).length
+    assert.strictEqual(docs.length, expected,
+      'S7：账套 ' + bookId + ' 只该装自己那 ' + expected + ' 条，装了 ' + docs.length + ' 条')
+    docs.forEach(function (key) {
+      assert.ok(String(s7a.db.records[key].id).indexOf(tag + '-') === 0,
+        'S7：账套 ' + bookId + ' 里混进了别份快照的流水 ' + s7a.db.records[key].id)
+    })
+  })
+
+  // ---- S8 转换后的快照流水也吃到了份额重算 -------------------------------
+  // 「退货 payType 与销售过期」：赊账卖 100，退 30，退货单的 payType 还停在
+  // 改档之前的 cash。不重算 -> 退货一分不冲欠款，恢复出来欠 100（错账）。
+  const s8 = await openLegacyShop('s8')
+  const s8Legacy = [
+    { id: 'st-s', type: 'out', orderId: 'st-s', productId: 'p1', productName: '货', qty: 2, unitPrice: 50, costPrice: 30, amount: 100, profit: 40, payType: 'credit', customerId: 'c1', customerName: '甲', customerPhone: '', customerAddress: '', createdAt: 1000 },
+    { id: 'st-r', type: 'return', saleRecordId: 'st-s', productId: 'p1', productName: '货', qty: 1, unitPrice: 30, costPrice: 20, amount: 30, profit: -10, payType: 'cash', customerId: 'c1', customerName: '甲', customerPhone: '', customerAddress: '', createdAt: 2000 }
+  ]
+  const s8Lists = corpusLists()
+  s8Lists.customers = [{ id: 'c1', name: '甲' }]
+  installLegacyClears(s8, [legacyClearDoc(s8.shopId, 's8-c1', 3000, s8Legacy, s8Lists)])
+  // 自检：不重算的话这份快照折出来是 100，重算之后才是 70
+  assert.strictEqual(
+    receivableOf(inv.foldAccountTerms(migrate.mergeOnly(clone(s8Legacy))), 'c1'), 100,
+    'S8 自检：只归并不重算，欠款是错的 100'
+  )
+  await s8.runMigration({ limit: 50 })
+  const s8Res = await s8.call('migrateRecords', { mode: 'snapshots' })
+  assert.strictEqual(s8Res.converted, 1)
+  assert.strictEqual(receivableOf(s8.db.clears['s8-c1'].accounts, 'c1'), 70,
+    'S8：快照的 accounts 是重算之后的 70')
+  await s8.call('restoreCleared', {})
+  const s8After = (await s8.call('getLedger', {})).ledger
+  assert.strictEqual(s8After.totals.receivable, 70, 'S8：恢复出来的欠款是修好的值')
+  assert.strictEqual(
+    (await s8.pagedAll()).find(function (item) { return item.id === 'st-r' }).paidAmount, 0,
+    'S8：退货单落库时的现金退款额是重算出来的 0，不是回推的 30'
+  )
+  assert.deepStrictEqual(migrate.auditRecords(await s8.pagedAll()).splitViolations, [],
+    'S8：恢复出来的账套里拆分不变量成立')
+
   console.log('ledger-migrate tests passed')
   console.log('M3 纯函数 V4–V12 逐项隔离、M4 三代混合预检 P1–P13、M5 送货单前后逐张相等、'
     + 'M6/M14 端到端、M7 解冻、M8 幂等重发 ×3、M9 校验不过不切开关、'
     + 'M10 restart/newBook/rollback、M11 重算与上限、M12 权限与版本门、M15 三个特例、M16 dropLegacy')
+  console.log('老清空快照转换 S1 三字段与集合、S2 幂等、S3 端到端恢复（商品/库存/流水/欠款回到清空之前）、'
+    + 'S4 stamp-only、S5 前置条件、S6 一份坏的不拖累其他份、S7 limit 分批、S8 份额重算')
 })().catch(function (error) {
   console.error(error && error.stack ? error.stack : error)
   process.exit(1)

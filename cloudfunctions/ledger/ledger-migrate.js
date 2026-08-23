@@ -530,9 +530,9 @@ function movingChangesOf(before, after, raw) {
   return out
 }
 
-// P11：升级前存下来的清空快照。没有 bookId 的那些，迁移之后「恢复清空前数据」
-// 永久报错 —— 只报数不转换（转换要为每份老快照发账套 + 逐条写集合，是第二个
-// 无界写循环，见方案 §六-(e)）。clears 可选：控制台另导一份 ledger_clears 才有。
+// P11：升级前存下来的清空快照。没有 bookId 的那些，在跑 mode:'snapshots' 之前
+// 「恢复清空前数据」会报错 —— 这里报数，转换由 migrateRecords 的 mode:'snapshots'
+// 做（活账套迁完之后紧接着的一步）。clears 可选：控制台另导一份 ledger_clears 才有。
 function clearSnapshotsOf(ledger, clears) {
   const metas = (ledger && ledger.clearSnapshots) || []
   const byId = Object.create(null)
@@ -878,11 +878,16 @@ async function checkAggregates(db, shopId, payload) {
 // 店里看到的和失败前一模一样（仍是停摆态，不是错账）；重来 → restart: true
 //（同账套重写）或 newBook: true（新账套，老半成品不可达，O(1) 回滚）；
 // 已 done 后发现问题 → mode:'rollback'。
+//
+// 活账套迁完之后还有一步：mode:'snapshots' 把升级前存的清空快照也转过来
+//（见下面 convertSnapshots 上方那段）。不跑它，那几家店的「恢复清空前数据」
+// 就从能点变成永久报错。
 async function migrateRecords(db, shopId, payload, now, nextId) {
   payload = payload || {}
   const mode = String(payload.mode || 'run')
   if (mode === 'rollback') return rollbackMigration(db, shopId, now)
   if (mode === 'dropLegacy') return dropLegacy(db, shopId, now)
+  if (mode === 'snapshots') return convertSnapshots(db, shopId, payload, now)
   if (mode !== 'run') {
     throw new Error('未知的升级模式：' + mode)
   }
@@ -1187,6 +1192,195 @@ function describeProblems(problems) {
   }).join('；') + ((problems || []).length > 5 ? '（共 ' + problems.length + ' 项）' : '')
 }
 
+// ---------------------------------------------------------------------------
+// mode:'snapshots' —— 把升级前存下来的清空快照转过来。
+//
+// 为什么必须做：restoreCleared（ledger-apply.js）要快照带 bookId / accounts /
+// aggregate 三样东西，而升级前存的快照把流水装在 records 数组里、三样都没有。
+// 不转换 = 那几家店的「恢复清空前数据」按钮**从能点变成永久报错**，是对活店
+// 的真实功能损失（阶段 0 的真实导出：3 家店里 2 家中招，共 3 份老快照）。
+//
+// 前置条件：本店活账套必须已经迁完（recordsMigratedAt 已写）。快照转换是加分项，
+// **不能挡住关键路径**；而且它和活账套走的是同一套 legacyRecordsOf（归并 +
+// 退货份额整体重算），先在活账上跑通再来转快照更安全。
+//
+// 账套号 = 'clr-' + 快照 id，**故意不发新号**（对比 migrateRecords 的 newBook）。
+// 发号会逼出一个两头不讨好的选择：把号先写进快照文档再写流水，崩在中间就恢复出
+// 一本空账（products 回来了、流水没了，静默错账）；先写流水再写号，崩在中间就
+// 留下一批孤儿文档、下次重试又换一个号（那一头只是存储泄漏，不算错钱，两头的代价
+// 不同级）。号由快照自己决定，两头都不用付：同一份
+// 快照重跑写的是同一批 _id，set() 幂等，countAll 永远只数这一份，且没有任何
+// 需要跨调用持久化的状态。'clr-' 前缀保证不会撞上现有账套（现有账套号要么是
+// shopId、要么是 nextId() 出来的 base36 串）。
+//
+// 幂等：bookId 非空即跳过，整个 mode 可以反复调。
+// 单份失败不影响其他份：快照之间互相独立，一份坏数据不该让其他份也恢复不了。
+// ---------------------------------------------------------------------------
+function snapshotBookId(snapshotId) {
+  return 'clr-' + String(snapshotId || '')
+}
+
+function errorText(error) {
+  return String((error && (error.message || error.errMsg)) || error || '未知错误')
+}
+
+// 一份快照。**不抛**（除非是程序错误）：失败原样记进 report 由调用方继续下一份。
+async function convertOneSnapshot(db, shopId, meta) {
+  const snapshotId = String((meta && meta.id) || '')
+  const entry = { id: snapshotId, savedAt: inventory.toNumber(meta && meta.savedAt) }
+  if (!snapshotId) {
+    entry.status = 'failed'
+    entry.reason = '账本里这条清空记录没有 id'
+    return entry
+  }
+  let doc = null
+  try {
+    doc = await db.getClearSnapshot(snapshotId)
+  } catch (error) {
+    entry.status = 'failed'
+    entry.reason = '读快照失败：' + errorText(error)
+    return entry
+  }
+  if (!doc) {
+    entry.status = 'failed'
+    entry.reason = '账本里记着这份快照，ledger_clears 里却找不到它'
+    return entry
+  }
+  const legacy = (doc.records || [])
+  entry.legacyCount = legacy.length
+  if (doc.bookId) {
+    // 幂等：已经转过了。**不重算、不重写**，否则反复调会白涨版本。
+    entry.status = 'skipped'
+    entry.bookId = String(doc.bookId)
+    return entry
+  }
+  const bookId = snapshotBookId(snapshotId)
+  entry.bookId = bookId
+  let merged = []
+  try {
+    // 和活账套**完全同一套处理**：归并 + repairReturnSplits 份额整体重算。
+    // 快照里的流水同样可能是任意一代形状，同样会带着 B1 / B2 的错值。
+    merged = legacy.length ? apply.legacyRecordsOf({ records: legacy }) : []
+  } catch (error) {
+    entry.status = 'failed'
+    entry.reason = '归并/重算这份快照的流水时出错：' + errorText(error)
+    return entry
+  }
+  entry.recordCount = merged.length
+  const store = recordsModule.recordStore(db.recordsCtx(), bookId, shopId)
+  try {
+    // 事务外逐条写。_id = bookId_recordId 是确定的，set() 幂等。
+    for (let i = 0; i < merged.length; i++) {
+      await store.set(merged[i])
+    }
+  } catch (error) {
+    entry.status = 'failed'
+    entry.reason = '把这份快照的流水写进集合时出错：' + errorText(error)
+    return entry
+  }
+  let count = 0
+  try {
+    count = await store.countAll()
+  } catch (error) {
+    entry.status = 'failed'
+    entry.reason = '数这份快照的流水条数时出错：' + errorText(error)
+    return entry
+  }
+  entry.collectionCount = count
+  if (count !== merged.length) {
+    // 没写全（或者账套里有别的东西）就不许给它盖 bookId：盖了就等于宣布
+    // 「这份快照可以恢复」，恢复出来却是半本账。
+    entry.status = 'failed'
+    entry.reason = '写完之后条数对不上（应为 ' + merged.length + '，实为 ' + count + '），没有给这份快照盖 bookId'
+    return entry
+  }
+  const accounts = inventory.foldAccountTerms(merged)
+  const aggregate = inventory.foldTotalTerms(merged)
+  try {
+    const outcome = await db.runTransaction(async function (tx) {
+      const cur = await tx.getClearSnapshot(snapshotId)
+      if (!cur) {
+        throw new Error('快照文档在转换过程中不见了')
+      }
+      if (cur.bookId) {
+        // 另一次调用抢先转好了。集合里那批是同样的 _id、同样的内容，不用清理。
+        return { raced: true, bookId: String(cur.bookId) }
+      }
+      // records 数组**保留不删** —— 和 ledgers.records 同一个理由：那是回滚路，
+      // 清掉就退不回旧云函数了。
+      await tx.putClearSnapshot(snapshotId, Object.assign({}, cur, {
+        bookId: bookId,
+        accounts: accounts,
+        aggregate: aggregate
+      }))
+      return { raced: false }
+    })
+    if (outcome && outcome.raced) {
+      entry.status = 'skipped'
+      entry.bookId = String(outcome.bookId)
+      entry.reason = '另一次调用抢先转好了'
+      return entry
+    }
+  } catch (error) {
+    entry.status = 'failed'
+    entry.reason = '写回快照文档时出错：' + errorText(error)
+    return entry
+  }
+  // 空 records 的快照走 stamp-only：只补 bookId + 空 accounts / aggregate。
+  // 上面那条路径原样把它做完了（merged 为空 -> 一条都不写、折出空累加器），
+  // 这里只是给报告一个能看懂的名字。
+  entry.status = merged.length ? 'converted' : 'stamped'
+  return entry
+}
+
+async function convertSnapshots(db, shopId, payload, now) {
+  const limit = clampChunk(payload.limit)
+  const ledger = await db.getLedger(shopId)
+  if (!ledger) {
+    throw new Error('店铺账本不存在')
+  }
+  if (!ledger.recordsMigratedAt) {
+    throw new Error('本店活账套还没完成流水升级，先把它迁完（不带 mode 调 migrateRecords）再来转换老快照')
+  }
+  const metas = (ledger.clearSnapshots || [])
+  const report = []
+  let converted = 0
+  let skipped = 0
+  let failed = 0
+  // 预算只由**转成功的份数**消耗：跳过是白拿的（一次读就完），失败也不消耗，
+  // 否则一份修不好的坏数据会把预算吃光、remaining 永远归不了零，循环调不收敛。
+  let budget = limit
+  let index = 0
+  for (; index < metas.length; index++) {
+    if (budget <= 0) break
+    const entry = await convertOneSnapshot(db, shopId, metas[index])
+    report.push(entry)
+    if (entry.status === 'skipped') {
+      skipped += 1
+    } else if (entry.status === 'failed') {
+      failed += 1
+    } else {
+      converted += 1
+      budget -= 1
+    }
+  }
+  // remaining = 这次**没看过**的份数。失败的那几份不算 remaining（算了就永远
+  // 收敛不了），要看 report 里的 reason 人工处理，修好之后再调一次就会重试。
+  const remaining = metas.length - index
+  return {
+    state: remaining ? 'running' : 'done',
+    mode: 'snapshots',
+    total: metas.length,
+    converted: converted,
+    skipped: skipped,
+    failed: failed,
+    remaining: remaining,
+    updatedAt: now,
+    report: report.slice(0, REPORT_LIST_LIMIT),
+    reportTotal: report.length
+  }
+}
+
 // mode:'rollback' —— 只清 recordsMigratedAt 和 migration，老数组还在，
 // 读写立刻退回老路径。**这是显式动作**，不要让人去控制台手改生产文档。
 async function rollbackMigration(db, shopId, now) {
@@ -1301,6 +1495,7 @@ module.exports = {
   REPORT_LIST_LIMIT: REPORT_LIST_LIMIT,
   OPS_ACTIONS: ['checkAggregates', 'migrateRecords', 'recomputeAggregates'],
   stableEqual: stableEqual,
+  snapshotBookId: snapshotBookId,
   mergeOnly: mergeOnly,
   sortDesc: sortDesc,
   auditRecords: auditRecords,

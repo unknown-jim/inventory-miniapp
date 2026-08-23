@@ -149,12 +149,21 @@ function printReport(report, limit) {
     say('      归并结构不守恒：' + JSON.stringify(report.mergeProblems))
   }
   const clears = report.clearSnapshots
+  const unconverted = (clears.snapshots || []).filter(function (item) {
+    return item.hasBookId === false
+  })
   say('P11 清空快照 ' + clears.count + ' 份'
     + (clears.count === 0
       ? '（这家店没清过，不会撞上「恢复清空前数据」那条路）'
       : '，最近一份 hasBookId='
         + (clears.latestHasBookId == null ? '没导 ledger_clears，用 --clears 补' : clears.latestHasBookId)
-        + (clears.latestHasBookId === false ? '  ← 这家店迁移后「恢复清空前数据」永久报错' : '')))
+        + (unconverted.length
+          ? '  ← 有 ' + unconverted.length + ' 份还没转，迁完这家店要跑 migrateRecords 的 mode:"snapshots"，'
+            + '不跑「恢复清空前数据」就会报错'
+          : '')))
+  head(unconverted, limit).forEach(function (item) {
+    say('      待转换 ' + item.id + ' savedAt=' + item.savedAt + ' 流水 ' + item.legacyRecordCount + ' 条')
+  })
   say(report.blocking.length
     ? '阻塞项 ' + report.blocking.length + ' 类：' + report.blocking.map(function (item) {
       return item.check + '(' + item.count + ')'

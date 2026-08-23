@@ -98,7 +98,7 @@ node scripts/check-ledger-export.js <ledgers 导出文件> [--clears <ledger_cle
 
 ```
 payload: { limit?: 50, restart?: false, newBook?: false,
-           mode?: 'run' | 'rollback' | 'dropLegacy' }
+           mode?: 'run' | 'rollback' | 'dropLegacy' | 'snapshots' }
 返回:    { state, phase, bookId, cursor, written, total, verified, report?, error?, problems? }
 ```
 
@@ -133,10 +133,35 @@ do {
 - **`mode:'dropLegacy'`**：要求已 `done`，一个事务把 `ledgers.records` 置空。**跑完就没有 O(1) 回滚了**，默认不跑，只在账本文档逼近 5 MB（P12）时当晚跑。迁移**不会**让账本文档变小，5 MB 墙仍在。
 - **两个特例**：`records` 为空且没有 `recordsMigratedAt`（建了没用过的店）走 **stamp-only**，只补 `recordsMigratedAt` 和 `bookId`，**不写 `accounts`/`aggregate`**（那本账可能已有活流水和正确聚合）；已经有 `recordsMigratedAt` 的一律报错。
 - **`ledgers.records` 迁完之后故意留着**，`applyMutation` 每次记账都把它原样带过去。它是 O(1) 回滚路的全部依仗，`tests/ledger-records.test.js` 钉着这一条。
+  - **两个动作会把它清空，从而废掉这家店的回滚路**：`dropLegacy`（明说了），以及**「恢复清空前数据」**（`restoreCleared` 里 `next.records = []`，既有行为）。所以「整体不对就部署存档的旧函数包」这条深层退路，对**跑过 `dropLegacy` 的店**和**用过「恢复清空前数据」的店**都不成立——旧包在这些店上会读出一本空账。数据本身没丢（还在 `ledger_records` 里），但旧包看不见它。当晚谁点过恢复要记下来。
 
 **迁移会改动某些店当前显示的欠款。** 只有三类会动：B2（退货单头挂着改客户之前的旧 `customerId`）、`payType` 过期（改过销售单结算档，退货没跟着改）、缺两个结算字段的退货单。**这三类今天在线上就是错的**，所以这是修，不是引入——但阶段 0 的报告要逐店把差异清单给店主过一遍。
 
-**升级前存的清空快照转不过来。** 那些快照把流水装在数组里、没有 `bookId`，恢复要为每份快照发一个账套 + 逐条写集合，是第二个无界写循环，这一期不做。`restoreCleared` 对它们报「暂时恢复不了，请联系开发者」——**不要写成「请先完成账本升级再恢复」**，升级并不转换它们，那是句谎话。预检 P11 报出哪几家店会撞上。
+### `mode:'snapshots'` —— 把升级前存的清空快照也转过来
+
+```
+payload: { mode: 'snapshots', limit?: 50 }
+返回:    { state, converted, skipped, failed, remaining, total, report[] }
+         report[] 每项 { id, savedAt, status, bookId?, legacyCount?, recordCount?, reason? }
+         status ∈ converted | stamped | skipped | failed（stamped 计进 converted）
+```
+
+**为什么必须跑。** `restoreCleared` 要快照带 `bookId` / `accounts` / `aggregate` 三样东西，而升级前存的快照把流水装在 `records` 数组里、三样都没有。不转换 = 那几家店的「恢复清空前数据」**从能点变成永久报错**，是对活店的真实功能损失（阶段 0 的真实导出：3 家店里 2 家中招，共 3 份老快照）。`clearDoc` 早就把这三个字段预留好并原样保留老 `records` 数组，就是在等这一步。
+
+**前置条件：本店活账套必须已经迁完**（`recordsMigratedAt` 已写），没迁完调它明确报错。快照转换是加分项，**不能挡住关键路径**；而且它和活账套走的是同一套 `legacyRecordsOf`（归并 + 退货份额整体重算），先在活账上跑通再来转快照更安全。
+
+**逐份处理**账本 `clearSnapshots` 里的每一条元数据：`bookId` 非空就跳过（幂等）；`records` 为空走 stamp-only（只补 `bookId` + 空 `accounts`/`aggregate`）；否则 `legacyRecordsOf` 归并 + 重算 → 事务外逐条 `set()` 写进 `ledger_records` → `countAll` 必须等于归并条数 → **一个事务**写回快照文档的 `bookId`/`accounts`/`aggregate`。**`records` 数组保留不删**，和 `ledgers.records` 同一个理由：那是回滚路。代价是同一批流水在库里存了两份（快照数组一份、集合一份），**目前没人给这个双份定终止时间**——`dropLegacy` 只清 `ledgers.records`，不管快照里的。2b-3 清理清单要把它一起算上。
+
+- **账套号 = `'clr-' + 快照 id`，故意不发新号**（对比 `newBook`）。发号会逼出一个两头不讨好的选择：先把号写进快照文档再写流水，崩在中间就恢复出一本空账（商品回来了、流水没了，**静默错账**）；先写流水再写号，崩在中间只是留下一批孤儿文档、下次重试换一个号（**是存储泄漏，不算错钱**——两头的代价不同级，别把它当成和上一条一样危险）。号由快照自己决定，两头都不用付：同一份快照重跑写的是同一批 `_id`，`set()` 幂等，`countAll` 永远只数这一份，且没有任何需要跨调用持久化的状态。`clr-` 前缀保证不会撞上现有账套。
+- **单份失败不影响其他份。** 快照之间互相独立，一份坏数据不该让其他份也恢复不了。失败的记进 `report[]`（带 `reason`）继续下一份。**失败不吃 `limit` 预算**，否则一份修不好的快照会把预算吃光、`remaining` 永远归不了零，循环调不收敛。所以 `state` 只有 `running` / `done` 两种，`failed > 0` 也会收敛到 `done` —— 收敛不等于全好，**要看 `failed` 和 `report`**。
+- **转全部快照，不只是最近一份。** 小程序只恢复最近一次，但更早的留在云端（见「清空和恢复」）。只转最近一份会留下混合状态，将来做付费恢复时是个雷。
+- **幂等**：`bookId` 非空即跳过，整个 mode 可以反复调。`limit` 控制每次调用最多转几份，`remaining` 是这次没看过的份数。
+
+跑完之前 `restoreCleared` 报「这份备份是账本升级前存的，请让开发者先跑 mode:"snapshots" 转换」——**文案要指出这条走得通的路**，不要写成「请联系开发者」。
+
+哪几家店还有没转的快照，**只有本地预检脚本带 `--clears` 才报得出**（P11）：云上的 `checkAggregates` 读不到 `ledger_clears`，P11 一律回 `known: false`。所以云端确认「转完了」的唯一依据是 `mode:'snapshots'` 自己返回的 `state === 'done' && failed === 0`——**`done` 不等于全好，必须同时看 `failed` 和 `report`**。事后还有一道守门员：恢复之后 `getLedger` 的 `aggregatesStale` 会在条数对不上时叫。
+
+另一个漏网口：只有 `ledgers.clearedBackup`、`clearSnapshots` 还是空的店（老的单份备份格式，还没被 `adoptLegacyBackup` 转成快照），`mode:'snapshots'` 会报 `total: 0` 什么都不做；等下一次记账把它转成快照之后，恢复又会报错，**得再跑一次**。真实导出里三家店的 `clearedBackup` 都是空的，但换一批数据要留意。
 
 ### 上线清单
 
@@ -144,7 +169,7 @@ do {
 
 **阶段 1（T−1 天）**：确认集合 `ledger_records` 存在且权限为「仅管理端可读写」→ 建 **6 条复合索引**（字段顺序和升降序逐条核对，漏一条会退化成全表扫）→ 确认操作者 openid 是**每一家**店的 owner → 新建测试店灌一份导出副本走完整流程，**顺便验一下当晚要用的调用方式能不能调通**（控制台云函数测试面板里 `getWXContext().OPENID` 可能为空，那就只能走开发者工具 Console，别留到当晚才发现）。
 
-**阶段 2（T 日打烊后，从第 2 步起所有店一起停摆）**：`npm test` 绿 → `npm run sync:ledger-inventory` → `node scripts/wxcloud-deploy-ledger.js` → 开发者工具打开新版源码、店主登录 → 逐店：`checkAggregates`（`mergedCount` 与阶段 0 报告**一致**、`collectionCount === 0`）→ 记下 2–3 张老送货单的 `getSlip` 结果 → 循环 `migrateRecords` 到 `done` → `getLedger` 核对 `totals` 和两个客户（等于报告里的 `after`、**无 `aggregatesStale`**）→ **重跑那几张 `getSlip`，必须逐张相等** → 记一笔 1 元测试销售确认写路径解冻、再删掉 → 账本文档 > 3 MB 的店跑 `dropLegacy` → 全部绿了再发布小程序并逐店真机确认已更新。
+**阶段 2（T 日打烊后，从第 2 步起所有店一起停摆）**：`npm test` 绿 → `npm run sync:ledger-inventory` → `node scripts/wxcloud-deploy-ledger.js` → 开发者工具打开新版源码、店主登录 → 逐店：`checkAggregates`（`mergedCount` 与阶段 0 报告**一致**、`collectionCount === 0`）→ 记下 2–3 张老送货单的 `getSlip` 结果 → 循环 `migrateRecords` 到 `done` → `getLedger` 核对 `totals` 和两个客户（等于报告里的 `after`、**无 `aggregatesStale`**）→ **重跑那几张 `getSlip`，必须逐张相等** → **预检 P11 报了有没转的快照的店，跑 `migrateRecords` 的 `mode:'snapshots'` 到 `state === 'done'` 且 `failed === 0`**（漏跑 = 这家店的「恢复清空前数据」从能点变成永久报错）→ 记一笔 1 元测试销售确认写路径解冻、再删掉 → 账本文档 > 3 MB 的店跑 `dropLegacy` → 全部绿了再发布小程序并逐店真机确认已更新。
 
 **回滚**：某店 `failed` → 不动，该店停摆，无错账；某店 `done` 后发现不对 → `mode:'rollback'`（O(1)，集合文档留着重跑时覆盖）；整体不对 → 部署阶段 0 存档的旧函数包（已跑过 `dropLegacy` 的店回不去）；聚合漂了 → `recomputeAggregates`。
 
@@ -155,6 +180,8 @@ do {
 ## 清空和恢复
 
 店铺页「清空数据」只清当前店的商品、SKU、流水、客户、种类，店铺和成员还在。每一次清空都会在集合 `ledger_clears` 里追加一份完整快照，**不会覆盖更早的记录**。小程序免费只恢复**最近一次**；恢复后按钮消失，直到再次清空。更早的快照留在云端，以后可以做成付费恢复，这一期不接支付、也不在界面里列出历史。`getLedger` 只回 `hasClearedBackup` / `archivedClearCount`，不把快照正文传给客户端。
+
+快照存的是四张有界的表 + 聚合累加器 + 账套号，**不复制流水**：老账套原地不动，清空只是把指针换到新账套（O(1)）。所以恢复要快照带 `bookId`，账本升级前存的快照没有它 —— 转换见上面「账本升级」的 `mode:'snapshots'`，**每家店的每一份快照都要转**（只转最近一份会留下混合状态，将来做付费恢复时是个雷）。
 
 ## 删除店铺
 
@@ -182,5 +209,7 @@ do {
 - 记账之后再顺手拉一次流水。提交之后每多一次可能失败的请求，就多一次「账记上了却报失败」的机会；标脏就够了。
 - 改销售单或退货单时只改单条、不整体重算同单其余退货单的 `paidAmount`。份额是一组按记账顺序分出来的，漏拨会静默算错欠款；整体重算内置在 `updateRecord` / `deleteRecord` 里，别绕开它们直改集合。
 - 拿 `recomputeAggregates` 去修错账。它按集合现状重折叠，错值会被忠实地再算一遍。
+- 转换老清空快照时先把 `bookId` 写进快照文档、再写流水。崩在中间就恢复出一本空账：商品和客户回来了、流水没了，**而且看不出来**。顺序必须是「写流水 → 数条数 → 才盖 `bookId`」，账套号由快照 id 决定（`clr-` 前缀）所以不需要先占号。
+- 活账套还没迁完就去跑 `mode:'snapshots'`。快照转换是加分项，不能挡住关键路径，服务端直接拒绝。
 - 为账本升级再加一个冻结开关。`assertRecordsReady` 已经在挡未迁移账本的每一条写，两个冻结口径迟早会打架。
 - 把 `settledAmount` 对「退货缺两个结算字段」的回推改成 0。会折出负欠款，一个负账户就让这家店从此退不了货、改不了单、删不了单。
