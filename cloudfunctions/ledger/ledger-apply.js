@@ -302,6 +302,18 @@ function listsOf(ledger) {
 //   2. 不修一半。窗口期内 getSlip 走 receivableAt(legacy)、客户页走
 //      foldAccountTerms(legacy)，只修一条路会出现「送货单印 200、客户页显示 0」。
 //   3. 一份定义，五个调用点零改动。
+//
+// **不要**在这里顺手把缺失的 returnedAmount materialize 掉（按 returnedQty × 单价
+// 落成显式值）。三条理由，一条比一条硬：
+//   a. 它会改**未迁移账本读路径上的数字**，而预检的 P4「无法归类的改动」正是拿
+//      before/after 差分算出来的 —— 一批本来干净的店会被推进 P4，阶段 0 卡在那里。
+//   b. P8（缺 returnedAmount）**单独出现时兜底值等于真值**：那行的每一张退货都是
+//      按销售行当时的价开的，Σ退货额 就是 returnedQty × 单价。无害。
+//   c. 真正危险的是 P8 × P14 的交集（缺字段 + 退货行另挂一套价），它被**阶段 0
+//      预检**（checkLedger -> blockingOf）列为阻塞项。注意 blockingOf 只在
+//      checkLedger / checkAggregates 里跑，**migrateRecords 的 V4-V12 不查它** ——
+//      漏跑阶段 0，这一类会一路迁进集合，之后不再报错，只是安静地把钱算错。
+// 收益不抵风险。
 function legacyRecordsOf(ledger) {
   const records = cloneList(ledger && ledger.records)
   const merged = inventory.needsRecordMigration(records)
@@ -363,6 +375,32 @@ function snapshotLists(ledger, now) {
 function latestClearMeta(ledger) {
   const snaps = (ledger && ledger.clearSnapshots) || []
   return snaps.length ? snaps[snaps.length - 1] : null
+}
+
+// 快照封存那一刻账本里有多少条流水 ——「恢复清空前数据」弹窗给店主看的数。
+// 判据按「这本账的流水住在哪」分流：recordsMigratedAt 非空 = 流水在集合里，
+// aggregate.count 就是那本账套的流水数（增量维护的权威值，restoreCleared 也是
+// 原样取回它）；否则流水还在 records 数组里，按行数报。老数组的行数**不等于**
+// 恢复出来的条数（归并会把同一 orderId 的行并成一张单），差多少由
+// migrateRecords 的 mode:'snapshots' 在转换时回填修正成归并条数 —— 老快照
+// 元数据里没有 recordCount，弹窗退化成只带日期，见 latestClearView 的消费端。
+function snapshotRecordCount(ledger) {
+  if (ledger && ledger.recordsMigratedAt) {
+    return inventory.toNumber(ledger && ledger.aggregate && ledger.aggregate.count)
+  }
+  return ((ledger && ledger.records) || []).length
+}
+
+// getLedger 回传的 latestClear 投影：{ savedAt, recordCount }，没有快照时为
+// null，元数据缺 recordCount（升级前的老快照）回 null 不猜数。云上的
+// publicListsOf 和小程序内存模式的 memoryPublicLists 共用这一份，抄两份必漂。
+function latestClearView(ledger) {
+  const latest = latestClearMeta(ledger)
+  if (!latest) return null
+  return {
+    savedAt: inventory.toNumber(latest.savedAt),
+    recordCount: latest.recordCount == null ? null : inventory.toNumber(latest.recordCount)
+  }
 }
 
 function hasClearedBackup(ledger) {
@@ -545,6 +583,19 @@ function applyMutation(ledger, action, payload, now, nextId, loaded) {
   //   2b-3 观察一周后连同这行一起删。
   // - recordsMigratedAt：清掉它就回老路径，所以它必须活过每一次记账。
   // - importing：分片导入中途有人记了一笔账，不能把没收完的批次弄丢。
+  // - migration：这本账**是怎么迁过来的**那份记录（条数、校验进度、孤儿退货数、
+  //   起止时间）。它和 recordsMigratedAt 是同一次 putLedger 写进去的，是同一件事的
+  //   两半，没有理由一半活过记账、另一半被第一笔销售抹掉。2b-1b 审计 A6 就是这么
+  //   炸的：上线清单让人迁完先记一笔 1 元测试账，那一笔就把它抹了。
+  //   **能流到这里的只有 phase:'done' 那一种形状**（未迁完的账本被
+  //   assertRecordsReady 冻着，applyMutation 根本进不来），而 done 已经把
+  //   verifyAccounts / verifyAggregate 清空了 —— **约 370 字节，而且和账本条数
+  //   无关**（实测随 bookId 长度和条数位数漂十几字节：8 条 363 B、301 条 373 B、
+  //   3000 条 378 B），对 5MB 的文档上限无感。
+  //   只传引用，不复制，O(1)。writing / verifying 形状会大（verifyAccounts 每个
+  //   客户一项），但那两种状态下账本被冻着，这里进不来。
+  //   注意它是**历史记录不是当前状态**：clearAll / loadSeed 换过账套之后
+  //   migration.bookId 会和 ledger.bookId 不一样，那是对的。
   next.records = (ledger && ledger.records) || []
   if (ledger && ledger.recordsMigratedAt) {
     next.recordsMigratedAt = ledger.recordsMigratedAt
@@ -554,6 +605,9 @@ function applyMutation(ledger, action, payload, now, nextId, loaded) {
   }
   if (ledger && ledger.importing) {
     next.importing = ledger.importing
+  }
+  if (ledger && ledger.migration) {
+    next.migration = ledger.migration
   }
   const result = {}
   let recordWrites = []
@@ -835,7 +889,8 @@ function applyMutation(ledger, action, payload, now, nextId, loaded) {
       result.clearSnapshot = snapshot
       next.clearSnapshots = next.clearSnapshots.concat([{
         id: snapshot.id,
-        savedAt: snapshot.savedAt
+        savedAt: snapshot.savedAt,
+        recordCount: snapshotRecordCount(ledger)
       }])
     }
     next.products = []
@@ -911,6 +966,8 @@ module.exports = {
   recordsPending: recordsPending,
   snapshotLists: snapshotLists,
   latestClearMeta: latestClearMeta,
+  latestClearView: latestClearView,
+  snapshotRecordCount: snapshotRecordCount,
   hasClearedBackup: hasClearedBackup,
   makeSortKey: makeSortKey,
   recordDocId: recordDocId,

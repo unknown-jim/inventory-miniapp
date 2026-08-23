@@ -1114,12 +1114,24 @@ function recomputeSaleReturns(records, saleRecord) {
 // 只拨 unitPrice，**不碰 costPrice**：退货行的 costPrice 是 restockLine 当时把成本
 // 放回哪一格的依据，事后改它而不重跑一遍入库，库存成本就和流水对不上了。
 //
-// saleLines = 已经改好的销售行（updateRecord 里的 nextLines）。它们的
-// returnedAmount 必须已经落成显式值：老流水缺这个字段时要按 returnedQty ×
-// **改价前**的单价回推，那一步只有调用方做得了，所以留在 updateRecord 里。
+// saleLines = 已经改好的销售行（updateRecord 里的 nextLines）。
 // 返回 { records, lines, changes }：lines 是回填了新 returnedAmount 的销售行，
-// 保住「returnedAmount ≡ Σ退货额」；changes = [{before, after}] 只含真的变了的
-// 退货单，供 assertAccountsAfterAll 的欠款校验和 ledger-apply 的写入 diff 用。
+// changes = [{before, after}] 只含真的变了的退货单，供 assertAccountsAfterAll 的
+// 欠款校验和 ledger-apply 的写入 diff 用。
+//
+// **returnedAmount 由构造直接取 Σ退货额，不再依赖改价前的原值。**
+// 老写法是「原值 + 拨价差额」，它有一个前提：原值本身就是真值。而缺 returnedAmount
+// 的老流水恰恰不满足这个前提 —— 那时读的一端按 returnedQty × **销售行当前单价**
+// 回推，只有「这行的每一张退货都按销售行当时的价开」才等于真值。同一条销售行
+// 既缺 returnedAmount、退货行又挂着另一套价（预检 P8 × P14 的交集）时回推值就是
+// 错的，而「原值 + 差额」会把这个错值一路加下去、固化进记录。所以这里改成遍历时
+// 直接把每张退货行的**最终** amount 累进 totalOf，最后整个覆盖 —— 拨过价的和
+// 没拨价的都要累计，否则总额就少了没拨那几张。
+//
+// 于是「有匹配退货行、但价格已经一致」也不能早退：那一趟正好把缺失的
+// returnedAmount materialize 成真值（Σ退货额），是这条路上唯一一次免费的修复。
+// 早退只发生在**一条匹配的退货行都没有**时（孤儿、或退货单没被加载进来）——
+// 那时 Σ 无从算起，returnedAmount 保持原样，**不要写 0**。
 function repriceSaleReturns(records, saleId, saleLines) {
   const orderId = String(saleId || '')
   const changes = []
@@ -1131,7 +1143,7 @@ function repriceSaleReturns(records, saleId, saleLines) {
     const lineId = String(line.lineId || '')
     if (lineId) priceOf[lineId] = round2(toNumber(line.unitPrice))
   })
-  const deltaOf = Object.create(null)
+  const totalOf = Object.create(null)
   const rewritten = (records || []).map(function (item) {
     if (!item || item.type !== 'return') return item
     if (String((recordLines(item)[0] || {}).saleOrderId || '') !== orderId) return item
@@ -1140,11 +1152,15 @@ function repriceSaleReturns(records, saleId, saleLines) {
       const lineId = String(line.saleLineId || '')
       if (!Object.prototype.hasOwnProperty.call(priceOf, lineId)) return line
       const unitPrice = priceOf[lineId]
-      if (round2(toNumber(line.unitPrice)) === unitPrice) return line
+      // 累计必须在分支**外**：没拨价的那几张也是 Σ退货额的一部分
+      if (round2(toNumber(line.unitPrice)) === unitPrice) {
+        totalOf[lineId] = round2(toNumber(totalOf[lineId]) + round2(toNumber(line.amount)))
+        return line
+      }
       touched = true
       const qty = round2(toNumber(line.qty))
       const amount = round2(qty * unitPrice)
-      deltaOf[lineId] = round2(toNumber(deltaOf[lineId]) + round2(amount - toNumber(line.amount)))
+      totalOf[lineId] = round2(toNumber(totalOf[lineId]) + amount)
       return Object.assign({}, line, {
         unitPrice: unitPrice,
         amount: amount,
@@ -1160,17 +1176,21 @@ function repriceSaleReturns(records, saleId, saleLines) {
     changes.push({ before: item, after: after })
     return after
   })
-  if (!changes.length) {
+  const hit = Object.keys(totalOf)
+  if (!hit.length) {
     return { records: records, lines: saleLines, changes: changes }
   }
   return {
-    records: rewritten,
+    // 一条都没拨价时 rewritten 逐项引用相等，返回入参本身省掉一次分配
+    records: changes.length ? rewritten : records,
     lines: (saleLines || []).map(function (line) {
-      const delta = deltaOf[String(line.lineId || '')]
-      if (!delta) return line
-      return Object.assign({}, line, {
-        returnedAmount: round2(toNumber(line.returnedAmount) + delta)
-      })
+      const lineId = String(line.lineId || '')
+      if (!Object.prototype.hasOwnProperty.call(totalOf, lineId)) return line
+      if (round2(toNumber(line.returnedAmount)) === totalOf[lineId]
+        && line.returnedAmount != null && line.returnedAmount !== '') {
+        return line
+      }
+      return Object.assign({}, line, { returnedAmount: totalOf[lineId] })
     }),
     changes: changes
   }
@@ -2066,6 +2086,15 @@ function applyReturnOrder(products, records, payload, now, nextId, skus, ctx) {
     lines: lines
   }
   // 被退销售单此刻的 returnedQty 已经包含本单，减掉本单才是「除本单以外已退的」
+  //
+  // **不要**为了躲开 returnedAmountOfSale 的兜底，改成在这里把同单全部退货单
+  // 加载进来现算 othersReturned。理由是代价不对等：repriceSaleReturns 现在按
+  // Σ退货额 覆盖 returnedAmount（不再是「原值 + 差额」），凡是改过一次单的老单
+  // 都会就地 materialize 成真值，而没改过的老单里 P8（缺 returnedAmount）单独出现
+  // 时兜底值本来就等于真值 —— 危险的只有 P8 × P14 那个交集，它由**阶段 0 预检**
+  // （checkLedger -> blockingOf）列为阻塞项；blockingOf 不在 migrateRecords 的
+  // V4-V12 里跑，所以这条路是「预检拦住的」不是「迁移拦住的」。为这条路，在 addReturn
+  // 这条最热的写路径上多加一次 returnsOfSale 查询，事务写放大和查询次数都要涨。
   const patchedSale = nextRecords.find(function (item) {
     return item.id === saleOrderId
   })
@@ -2520,13 +2549,11 @@ function updateRecord(products, records, payload, now, skus, ctx) {
         throw new Error('数量不能小于已退货 ' + returned)
       }
       const nextLine = Object.assign({}, line)
-      // 老流水没有 returnedAmount，读的时候按 returnedQty × 单价 兜底。这个回推
-      // 只在**改价前**的单价上成立，所以在改价之前就把它落成显式值；
-      // 后面 repriceSaleReturns 才能只做加减。（写的一端 materialize、读的一端
-      // 兜底，和 settledAmount 同一套做法，见 docs/cloud-ledger.md。）
-      if (nextLine.returnedAmount == null || nextLine.returnedAmount === '') {
-        nextLine.returnedAmount = round2(toNumber(line.returnedQty) * toNumber(line.unitPrice))
-      }
+      // 这里**不**预先 materialize 缺失的 returnedAmount。老写法按 returnedQty ×
+      // 改价前单价回推一个显式值，好让 repriceSaleReturns 只做加减 —— 但那个回推
+      // 只在「这行的退货全按销售行当时的价开」时才等于真值，两套价的老单上它就是
+      // 个错值，而落成显式值等于把错值固化进记录（P8 × P14）。
+      // repriceSaleReturns 现在直接按 Σ退货额 覆盖，不需要原值，这一步是纯负担。
       if (line.allocations && line.allocations.length) {
         const released = releaseSaleLine(nextProducts, nextSkus, line, now)
         nextProducts = released.products
@@ -2709,10 +2736,23 @@ function updateRecord(products, records, payload, now, skus, ctx) {
   // 已经先拨过一次价（repriceSaleReturns），两段变化首尾相接：原状 → 拨完价 →
   // 分完份额，applyTermsDelta 按序套下来正好等于原状 → 末态。改进货 / 收款 /
   // 期初 / 改规格 / 调整不碰退货拆分，splitChanges 恒为空。
+  //
+  // **两支都必须 concat，不能覆盖。** 前置 delta（拨价）和份额重算的 delta 是
+  // 首尾相接的两段，覆盖掉前一段，assertAccountsAfterAll 的欠款校验就会静默漏掉
+  // 中间那一截。今天退货那一支的 repriceChanges 恒为空（拨价只在 existing.type
+  // === 'out' 时发生，而记录 type 改不了），所以覆盖和拼接同值 —— 但那是巧合，
+  // 不是不变量：谁以后让改退货单也产生前置 delta，覆盖就当场变成错账。
+  //
+  // 重算的门必须和拨价**同源**：拨过价就一定要重算份额（欠款基准 D 和 Σ退货额
+  // 两头都动了）。不能只看销售行的 returnedQty —— 那个字段本身可能是不准的
+  //（预检 P8 returnedMismatch：销售行谎报或漏记 returnedQty），而拨价是按
+  // 「退货行的 saleLineId 命中销售行」触发的。两者不同步时只拨价不重算，退货单的
+  // amount 被拨走、paidAmount 留在原地，拆分不变量当场破裂。P8 是阻塞项，迁移
+  // 那一刻拦得住，但迁移之后没有任何一处再查它。
   let splitChanges = repriceChanges
-  if (next.type === 'out' && recordLines(next).some(function (line) {
+  if (next.type === 'out' && (repriceChanges.length || recordLines(next).some(function (line) {
     return toNumber(line.returnedQty) > 0
-  })) {
+  }))) {
     const recomputed = recomputeSaleReturns(nextRecords, next)
     nextRecords = recomputed.records
     splitChanges = splitChanges.concat(recomputed.changes)
@@ -2721,7 +2761,7 @@ function updateRecord(products, records, payload, now, skus, ctx) {
     if (sale) {
       const recomputed = recomputeSaleReturns(nextRecords, sale)
       nextRecords = recomputed.records
-      splitChanges = recomputed.changes
+      splitChanges = splitChanges.concat(recomputed.changes)
     }
   }
 

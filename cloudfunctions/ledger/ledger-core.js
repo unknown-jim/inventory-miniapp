@@ -32,6 +32,16 @@ function publicListsOf(shopId, doc, opts) {
   const lists = apply.listsOf(withBookId(source, shopId))
   lists.hasClearedBackup = apply.hasClearedBackup(source)
   lists.archivedClearCount = ((source && source.clearSnapshots) || []).length
+  // 最近一份清空快照的元信息。「恢复清空前数据」的弹窗要说清恢复的是哪一天、
+  // 多少条，光警告「清空之后新记的账会丢掉」不够。recordCount 缺失（升级前存的
+  // 老快照，元数据只有 {id, savedAt}）回 null，客户端退化成只带日期；
+  // mode:'snapshots' 转换时会把归并条数补进元数据。
+  // 投影本身在 ledger-apply 的 latestClearView（内存模式的 memoryPublicLists
+  // 用同一份，形状才不会两头漂）。
+  const latestClear = apply.latestClearView(source)
+  if (latestClear) {
+    lists.latestClear = latestClear
+  }
   if (apply.recordsPending(source)) {
     // 还没迁移：流水仍在账本文档的数组里，读时自愈之后只当**本地语料**用 ——
     // 2b-2b 起 `ledger.records` 在线上彻底消失（含未迁移的店），流水一律走
@@ -75,11 +85,28 @@ async function attachRecent(db, shopId, lists, dayStart, recentLimit) {
   lists.today = got.today
   lists.todayComplete = got.todayComplete
   const claimed = (lists.aggregate && lists.aggregate.count) || 0
-  const total = await store.countAll()
-  if (total !== claimed) {
+  // countAll() 对「resolve 出非有限 total」的 count() 会抛（见 ledger-records.js），
+  // 在这里必须接住：读路径的哨兵**只报告不阻断**（docs/cloud-ledger.md「怎么发现
+  // 漂移」第 ② 条）。数不出来就当「数出来的值和 aggregate.count 对不上」处理 ——
+  // 标脏、告警、照常回传。这和 countAll 改成抛错之前的语义在 claimed 非 0 时等价
+  //（那时数不出来被吞成 0，0 对不上同样标脏）；唯一的差别在空账：claimed 为 0 时
+  // 老代码 0===0 不报，现在数不出来也标脏 —— 多报一次是安全侧，和 countAll 改抛
+  // 是同一个理由（数不出来是信号，不是 0）。**运维路径上的调用点故意不一样**：
+  // ledger-migrate.js 的 checkAggregates / initMigration / verifyPhase 都不接，
+  // 数不出来在那边要响亮失败；这一处是 countAll 全部调用点里唯一落在主读路径上
+  // 的，抛出去店主首页就打不开。
+  let total = null
+  let countError = null
+  try {
+    total = await store.countAll()
+  } catch (error) {
+    countError = error
+  }
+  if (countError || total !== claimed) {
     lists.aggregatesStale = true
     console.warn('[ledger] aggregate drift shop=' + shopId + ' book=' + lists.bookId
-      + ' count=' + total + ' aggregate=' + claimed)
+      + ' count=' + (countError ? '数不出来：' + ((countError && countError.message) || countError) : total)
+      + ' aggregate=' + claimed)
   }
   return lists
 }
@@ -126,7 +153,10 @@ function adoptLegacyBackup(ledger, nextId, now) {
   const next = Object.assign({}, ledger)
   next.clearSnapshots = (ledger.clearSnapshots || []).concat([{
     id: snapshot.id,
-    savedAt: snapshot.savedAt
+    savedAt: snapshot.savedAt,
+    // clearedBackup 是升级前的老格式，流水在 records 数组里，按行数报；
+    // mode:'snapshots' 转换时会回填成归并条数（见 convertSnapshots）
+    recordCount: apply.snapshotRecordCount(ledger.clearedBackup)
   }])
   next.clearedBackup = null
   return { ledger: next, snapshot: snapshot }
@@ -266,14 +296,29 @@ function ledgerHasData(ledger) {
 }
 
 // 分片上传时退货单必须和它的被退销售单落在同一片里。
-// legacyLine() 对老退货行写死 saleOrderId = ''，只有 backfillReturnedQty 在
-// **同一批**里找到被退销售单才补得上。分处两片就会留下一张 saleOrderId 为空的
-// 退货单，它的可退上限从此没有着落（见 2b-1a 审计阻塞 2 的可达性分析）。
+//
+// 判据是「**本片里找得到 saleOrderId 指向的那张销售单**」，不是「saleOrderId 非空」。
+// 非空只拦得住代 A：legacyLine() 对老退货行写死 saleOrderId = ''，只有
+// backfillReturnedQty 在**同一批**里找到被退销售单才补得上，切开就是空的。
+// 而代 B / 代 C 的退货单**本来就带 saleOrderId**，切两片照样非空、照样放行。
+//
+// 放行的代价：repairReturnSplits 按 lines[0].saleOrderId 分组，销售单不在同一片
+// 就当孤儿跳过，份额一分都不重算。实测代 B 单（销售 100 实收 40、退货 30，
+// 退货单头既无 paidAmount 也无 payType）——
+//   同片上传：退货 paidAmount 补成 0，欠款 30（正确）
+//   切两片：  不报错，paidAmount 缺字段落库，settledAmount 读时保守回推成
+//             「整笔退现金」，欠款 60
+// 而且事后修不了：recomputeAggregates 按集合现状重折叠，实测 changed = false。
 function assertReturnsPaired(shard) {
+  const saleIds = Object.create(null)
+  ;(shard || []).forEach(function (record) {
+    if (record && record.type === 'out') saleIds[String(record.id || '')] = true
+  })
   ;(shard || []).forEach(function (record) {
     if (!record || record.type !== 'return') return
     inventory.recordLines(record).forEach(function (line) {
-      if (!String((line && line.saleOrderId) || '')) {
+      const saleId = String((line && line.saleOrderId) || '')
+      if (!saleId || !saleIds[saleId]) {
         throw new Error('退货单和它的销售单必须在同一片里上传，请重新上传')
       }
     })
@@ -296,6 +341,13 @@ function isMutation(action) {
 // 的回传会把本地流水缓存清成空数组，下一张送货单就会印一个 0.00 的前欠。
 const API_VERSION = 2
 const VERSIONED_READS = ['getLedger', 'getSlip', 'migrateLocal', 'listRecords', 'getRecord']
+// 版本门的第二条理由，和上面那条（会不会回传账本）**不是一回事**：deleteShop 是
+// 不可逆动作（shops / members / ledgers / ledger_clears 全删，只留查不回 bookId 的
+// 孤儿 ledger_records），冻结窗口里店主到处撞「请更新小程序到最新版本」、最容易
+// 乱点的时候，删店按钮就在同一个店铺页上。可逆的读写撞门还能重试，不可逆的
+// 动作不许由老客户端在冻结窗口里发起。单列一个数组而不是并进 VERSIONED_READS，
+// 就是为了让这两条理由各管各的名单。
+const VERSIONED_DESTRUCTIVE = ['deleteShop']
 // 账本升级的三个运维动作（2b-1b）。同样过版本门 —— 它们回传的是账本内部形状，
 // 老客户端拿去解释只会更糟。三个都**不进 MUTATIONS**、不走 applyMutation：
 // 它们改的是账本的迁移状态和聚合本身，不是一笔账。
@@ -303,7 +355,8 @@ function isOpsAction(action) {
   return migrate.OPS_ACTIONS.indexOf(action) >= 0
 }
 function needsApiVersion(action) {
-  return VERSIONED_READS.indexOf(action) >= 0 || isOpsAction(action) || isMutation(action)
+  return VERSIONED_READS.indexOf(action) >= 0 || VERSIONED_DESTRUCTIVE.indexOf(action) >= 0
+    || isOpsAction(action) || isMutation(action)
 }
 
 async function membersOfShop(db, tx, shopId) {
@@ -332,8 +385,10 @@ async function dispatch(input) {
 
   // 老客户端（已发布那一版）拿到不带 records 的回传，会把本地流水缓存清成空数组，
   // 下一张送货单就会印一个 0.00 的前欠。**静默印错钱不可接受，所以直接挡住。**
-  // 只挡会回传账本的 action：whoami / listShops / createShop / listMembers 放行，
-  // 否则老客户端连店都列不出来，报错会误导成「不是该店成员」。
+  // 放行的是不会回传账本的 action：whoami / listShops / createShop / listMembers /
+  // addMember / updateMember / removeMember —— 否则老客户端连店都列不出来、加不了人，
+  // 报错会误导成「不是该店成员」。deleteShop 虽然也不回传账本，但它是不可逆动作，
+  // 单独列在 VERSIONED_DESTRUCTIVE 里照样挡（理由见那里的注释）。
   const apiVersion = Number((input && input.apiVersion) || 0)
   if (needsApiVersion(action) && apiVersion < API_VERSION) {
     throw new Error('请更新小程序到最新版本')
@@ -761,6 +816,36 @@ async function dispatch(input) {
 //
 // R-4：客户端必须**全部片成功之后**才 markMigrated()。顺序反了会在中途失败时
 // 删掉本机唯一的原始数据。见 utils/store.js 的 migrateLocal。
+//
+// **这条路和 migrateRecords 走的是同一个 apply.legacyRecordsOf**（归并 + 退货
+// 份额整体重算），也就是说它**会改钱**：同一份数据落库时的欠款可以和本机看到的
+// 不一样。所以它必须过和搬家路同一套 migrate.recordFailures（V4/V5/V6/V8/
+// V9/V10/V12，见那里的注释）。从前只有 assertRecordsReady + ledgerHasData +
+// assertReturnsPaired 三道门，于是同一份数据 migrateRecords 报 failed（V6 负账户）、
+// migrateLocal 直接放行。落库之后 assertAccountsValid 是**全账户扫描**，实测一个
+// 客户欠 −100 的后果：
+//   · 全店**任何客户**的退货 / 改单 / 删销售单一律报「改完后收款会超过赊账，
+//     请先改收款记录」——连和它毫无关系的另一个客户都退不了货、删不了单
+//   · 负账户那个客户还收不了款（applyPayment 自己那条「收款不能超过当前欠款」）
+//   · 能把它拨回来的只剩「删掉那张退货单」或「删掉那笔收款单」（删完欠款回到
+//     非负所以放行）——等于让店主拿删真账换解冻
+// 而客户端上传成功即 markMigrated()、本机原件已删，退不回去。
+//
+// 这里没有 V1 / V2 / V3 / V7：那四项比的是「集合里的文档 vs 内存里的 merged」，
+// 上传是往一个空账套里写，没有集合可比。
+//
+// 逐片跑的那几项和 assertReturnsPaired 要求的是同一件事——一张销售单和它的
+// 全部退货单必须同片——所以它们不额外收紧合法切法（实测：一份 in,out,return,
+// pay,out 的干净本机账本，四种两刀切法里合法的三种全部通过、落库欠款都等于整本
+// 折叠的 3，只有把销售单和它的退货切开的那一种被拒）。只是**哪一片先报错**取决于
+// 切法：销售单那一片先撞 V4（销售行记着 returnedQty，本片里却一条退货都没有），
+// 退货单那一片撞 assertReturnsPaired。
+//
+// V6 单独摆在最后一片上判（deferNegativeAccounts）：一片就是一段时间切片，
+// 「A 片赊销、B 片收款」是合法切法，单片折出来的负欠款是切片假象。累计的
+// state.accounts 才是这本账的全量，拿 migrate.negativeAccountsOf 扫它。
+// 不带 token 的一次性上传只有一片、isFinal 恒为真，所以那道门对客户端就是全量的
+//（utils/store.js 的 migrateLocal() 从不带 token）。
 async function migrateLocalShard(db, shopId, openid, payload, now, nextId) {
   const token = String(payload.token || '')
   const incoming = payload.ledger || payload
@@ -797,9 +882,17 @@ async function migrateLocalShard(db, shopId, openid, payload, now, nextId) {
     // 归并成「一单一条」：原样复用 2a 的 migrateRecordShape，一行不要改。
     // 分片时客户端不能把同一张销售单的行拆到两片里，否则这一步会把它拆成两单。
     const shard = apply.legacyRecordsOf({ records: rawRecords })
-    // 一次性上传（不带 token）只有一片，空 saleOrderId 只可能是「被退销售单本来
-    // 就不在这份本机账本里」，不是分片切坏的，拦了反而让这家店永远传不上来。
+    // 一次性上传（不带 token）只有一片，找不到被退销售单只可能是「它本来就不在
+    // 这份本机账本里」，不是分片切坏的，拦了反而让这家店永远传不上来。
     if (token) assertReturnsPaired(shard)
+    // 这一批流水本身有没有病。**文案必须说清「本机数据没有删」**：utils/store.js
+    // 的 migrateLocal() 只在云函数成功返回之后才 markMigrated()，抛错时本机原件
+    // 确实还在，店主不该以为数据没了。
+    const failures = migrate.recordFailures(rawRecords, shard, { deferNegativeAccounts: true })
+    if (failures.length) {
+      throw new Error('本机账本有问题，没有上传：' + migrate.describeProblems(failures)
+        + '。本机数据没有删，修好再传。')
+    }
     let state = {
       accounts: (resuming && importing.accounts) || {},
       aggregate: (resuming && importing.aggregate) || inventory.emptyTerms()
@@ -831,6 +924,17 @@ async function migrateLocalShard(db, shopId, openid, payload, now, nextId) {
       })
       await tx.putLedger(shopId, staged)
       return { staged: true, importing: staged.importing, lists: null }
+    }
+
+    // V6 在**累计** accounts 上判：负账户可能是跨片才显现的（A 片赊销、B 片收款
+    // 各自都不负，合起来才负），而单片折出来的负欠款又只是切片假象。判据和搬家路
+    // 同一个 negativeAccountsOf。一次性上传走的也是这里（isFinal 恒为真）。
+    const negative = migrate.negativeAccountsOf(state.accounts).map(function (item) {
+      return Object.assign({ check: 'V6' }, item)
+    })
+    if (negative.length) {
+      throw new Error('本机账本有问题，没有上传：' + migrate.describeProblems(negative)
+        + '。本机数据没有删，修好再传。')
     }
 
     const next = apply.listsOf({

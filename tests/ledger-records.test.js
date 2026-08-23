@@ -15,6 +15,7 @@ const inv = require('../utils/inventory')
 const apply = require('../utils/ledger-apply')
 const core = require('../cloudfunctions/ledger/ledger-core')
 const recordsModule = require('../cloudfunctions/ledger/ledger-records')
+const migrate = require('../cloudfunctions/ledger/ledger-migrate')
 const memory = require('./memory-db')
 
 const MemoryDb = memory.MemoryDb
@@ -571,6 +572,28 @@ function totalStock(skus, productId) {
   shop.db.records[victim._id] = victim
   const healthy = await shop.ledger()
   assert.ok(!healthy.aggregatesStale)
+
+  // 哨兵的第二面：count() resolve 出非有限 total（{} / {total:NaN}）时 countAll()
+  // 会抛（ledger-records.js）。attachRecent 是 countAll 全部调用点里唯一落在主读
+  // 路径上的，必须接住：getLedger 照常成功、照旧标 aggregatesStale —— 「只报告
+  // 不阻断」对形状怪异的回包同样成立，不然一次瞬时故障就是店主首页打不开。
+  // 拆掉 attachRecent 里那个 try/catch，这一段当场变红。
+  {
+    const queryProto = Object.getPrototypeOf(shop.db.recordsCtx().collection.where({}))
+    const realCount = queryProto.count
+    queryProto.count = async function () { return {} }
+    console.log('（下面那行 count 数不出来的 aggregate drift 警告也是哨兵测试故意触发的）')
+    try {
+      const stillFine = await shop.ledger()
+      assert.ok(Array.isArray(stillFine.recent), 'count() 回非有限 total 时 getLedger 必须仍然成功返回')
+      assert.strictEqual(stillFine.aggregatesStale, true,
+        'count() 回非有限 total 必须按「数不出来」标脏，不许外抛')
+    } finally {
+      queryProto.count = realCount
+    }
+    const back = await shop.ledger()
+    assert.ok(!back.aggregatesStale, 'count 恢复之后哨兵要回到干净')
+  }
 
   // -------------------------------------------------------------------------
   // 2) 四条记账不变量原样重跑
@@ -1448,6 +1471,199 @@ function totalStock(skus, productId) {
   assert.deepStrictEqual(m13ShardedLedger.aggregate, inv.foldTotalTerms(m13ShardedLedger.records))
 
   // -------------------------------------------------------------------------
+  // 10c) migrateLocal 的三道门，逐条钉住（拆掉哪道门，对应用例必须红）：
+  //        门 1  legacyRecordsOf 之后那道 recordFailures（V4/V5/V8/V9/V10/V12，
+  //              V6 用 deferNegativeAccounts 单独交给门 2）
+  //        门 2  收完最后一片时在**累计** accounts 上判的 V6（migrateRecords 的
+  //              verify 路同一份 recordFailures 不 defer，两条路口径必须一致）
+  //        门 3  assertReturnsPaired 的「本片里找得到 saleOrderId 指向的销售单」
+  //      每份语料都先自检「只踩目标检查项、别的项干净」，否则拆掉一道门后
+  //      被另一道抢先拦下，测试还绿着，等于没钉住。
+  // -------------------------------------------------------------------------
+  const gateLists = {
+    products: [{ id: 'vp1', name: '对账货', costPrice: 60, salePrice: 100, stock: 10, alertQty: 2, colors: [], sizes: [] }],
+    skus: [],
+    customers: [{ id: 'vc1', name: '对账客户' }],
+    categories: []
+  }
+
+  // (a) 门 2（累计 V6）＋ 两条路口径一致。语料：代 A 扁平赊销 300 ＋ 退货 100
+  //     （既无 paidAmount 也无 payType，saleRecordId 指向那张销售行）＋ 收款 300。
+  //     本机未修复口径把这笔退货当「整笔退现金」，欠款是 0 —— 那笔收款当时
+  //     合法；legacyRecordsOf 的份额重算把它拨成冲欠款，欠款变成 −100。
+  const v6Corpus = [
+    { id: 'v6-pay', type: 'pay', amount: 300, remark: '', customerId: 'vc1', customerName: '对账客户', createdAt: 4000 },
+    { id: 'v6-r1', type: 'return', saleRecordId: 'v6-l1', productId: 'vp1', productName: '对账货', qty: 1, unitPrice: 100, costPrice: 60, amount: 100, profit: -40, customerId: 'vc1', customerName: '对账客户', createdAt: 3000 },
+    { id: 'v6-l1', type: 'out', orderId: 'v6-ord', productId: 'vp1', productName: '对账货', qty: 3, unitPrice: 100, costPrice: 60, amount: 300, profit: 120, payType: 'credit', customerId: 'vc1', customerName: '对账客户', createdAt: 2000 }
+  ]
+  // 自检①：这份语料讲的是「重算才显形」的病，本机口径欠款 0
+  assert.strictEqual(inv.accountOf(inv.foldAccountTerms(v6Corpus).vc1).receivable, 0,
+    '10c-V6 自检：本机口径欠款 0（退货被当整笔退现金，收款 300 当时合法）')
+  const v6Merged = apply.legacyRecordsOf({ records: v6Corpus })
+  // 自检②：除 V6 外哪项都不踩 —— 门 1 在这份语料上必须干净，否则门 2 拆了
+  // 测试也绿。deferNegativeAccounts 就是 migrateLocalShard 传的那个口径。
+  assert.deepStrictEqual(migrate.recordFailures(v6Corpus, v6Merged, { deferNegativeAccounts: true }), [],
+    '10c-V6 自检：语料只踩 V6，门 1 的其他检查项必须干净')
+  // 自检③只钉 receivable 的值和条数：negativeAccountsOf 的返回**字段集合**不是
+  // 这里要钉的契约（往里加客户名之类的字段是无害调整），deepStrictEqual 整个
+  // 对象会把那种调整也无谓判红。
+  const v6Negatives = migrate.negativeAccountsOf(inv.foldAccountTerms(v6Merged))
+  assert.strictEqual(v6Negatives.length, 1, '10c-V6 自检：份额重算出一个负账户')
+  assert.strictEqual(v6Negatives[0].receivable, -100,
+    '10c-V6 自检：份额重算把退货拨成冲欠款，欠款 −100')
+
+  // 一次性上传（不带 token）必须被门 2 拦下；错误文案必须同时带 V6 和
+  // 「本机数据没有删」—— 后半句是给店主的契约（markMigrated 只在云函数
+  // 成功返回之后才跑），不许被人顺手删掉
+  const v6Shop = await new Shop({ ids: idFactory('v6') }).open('负欠款上传店')
+  await rejects(function () {
+    return v6Shop.call('migrateLocal', {
+      ledger: Object.assign({}, gateLists, { records: v6Corpus })
+    })
+  }, /V6[\s\S]*本机数据没有删/)
+
+  // 同一份数据走搬家路必须 failed 且报 V6。这条钉的是「两条路口径一致」本身：
+  // 将来谁只改一边（判据、defer 口径、文案任一），这条会红。
+  const v6MoveShop = await new Shop({ ids: idFactory('vm') }).open('负欠款搬家店')
+  v6MoveShop.db.ledgers[v6MoveShop.shopId] = Object.assign(
+    {}, v6MoveShop.db.ledgers[v6MoveShop.shopId], {
+      recordsMigratedAt: 0,
+      accounts: {},
+      aggregate: inv.emptyTerms(),
+      products: gateLists.products,
+      skus: [],
+      customers: gateLists.customers,
+      categories: [],
+      records: v6Corpus
+    })
+  let v6Move = null
+  for (let i = 0; i < 20; i++) {
+    v6Move = await v6MoveShop.call('migrateRecords', i === 0 ? {} : { restart: false, newBook: false })
+    if (v6Move.state === 'done' || v6Move.state === 'failed') break
+  }
+  assert.strictEqual(v6Move.state, 'failed', '10c-V6：同一份数据搬家路必须 failed，不能 done')
+  assert.ok(v6Move.problems.some(function (item) { return item && item.check === 'V6' }),
+    '10c-V6：搬家路 problems 里必须有 check === \'V6\'（两条路口径一致）')
+
+  // (b) 门 1（recordFailures）：V4 但账户不负 —— 门 2 接不住，只有这条钉得住
+  //     门 1；反过来 (a) 那份纯 V6 语料即使拆掉门 1 也被门 2 接住。两道门
+  //     覆盖面不同，必须各测各的。语料：代 A 扁平赊销 300 ＋ 带 lines 的退货
+  //     100（saleOrderId 直接指归并后的销售单）＋ 收款 100。lines 退货不参与
+  //     backfill（backfillReturnedQty 只扫 converted 的扁平退货），销售行
+  //     returnedQty 记 0、退货实退 1，V4 必炸；重算后欠款 300 − 100 − 100
+  //     = 100，不负。
+  //     覆盖分工（别以为这条盖住了整道门 1）：门 1 管 V4/V5/V8/V9/V10/V12，
+  //     这份语料只踩 V4 这一片。其余项各有各的钉法——ledger-migrate.test.js
+  //     的 M3 对 auditRecords 逐项隔离（recordFailures 的判据来源），M9b 走
+  //     完整迁移断言 problems 里报出的 check 项；本条钉的是「migrateLocal
+  //     这条路确实调了门 1」和它文案里「本机数据没有删」那半句（(a) 钉的是
+  //     门 2 那半句，两处是同一份契约）。
+  const v4Corpus = [
+    { id: 'v4-pay', type: 'pay', amount: 100, remark: '', customerId: 'vc1', customerName: '对账客户', createdAt: 4000 },
+    {
+      id: 'v4-r1', type: 'return', amount: 100, profit: -40, remark: '', createdAt: 3000,
+      customerId: 'vc1', customerName: '对账客户',
+      lines: [{ lineId: 'v4-r1-l1', productId: 'vp1', productName: '对账货', sku: '', skuId: '', color: '', size: '', qty: 1, unitPrice: 100, costPrice: 60, amount: 100, profit: -40, saleOrderId: 'v4-ord', saleLineId: 'v4-l1' }]
+    },
+    { id: 'v4-l1', type: 'out', orderId: 'v4-ord', productId: 'vp1', productName: '对账货', qty: 3, unitPrice: 100, costPrice: 60, amount: 300, profit: 120, payType: 'credit', customerId: 'vc1', customerName: '对账客户', createdAt: 2000 }
+  ]
+  const v4Merged = apply.legacyRecordsOf({ records: v4Corpus })
+  const v4Failures = migrate.recordFailures(v4Corpus, v4Merged, { deferNegativeAccounts: true })
+  assert.ok(v4Failures.length && v4Failures.every(function (item) { return item.check === 'V4' }),
+    '10c-门1 自检：语料踩 V4 且只踩 V4')
+  assert.deepStrictEqual(migrate.negativeAccountsOf(inv.foldAccountTerms(v4Merged)), [],
+    '10c-门1 自检：欠款不负，累计 V6 门接不住这份语料')
+  const v4Shop = await new Shop({ ids: idFactory('rf') }).open('V4 上传店')
+  // 正则要连「本机数据没有删」一起钉住：这半句是给店主的契约（见上面门 1 抛错
+  // 文案那段注释），只有 /V4/ 的话把它删掉测试照样绿。门 2 那半句由 (a) 钉着。
+  await rejects(function () {
+    return v4Shop.call('migrateLocal', {
+      ledger: Object.assign({}, gateLists, { records: v4Corpus })
+    })
+  }, /V4[\s\S]*本机数据没有删/)
+
+  // (c) 门 3（assertReturnsPaired）的新判据。老判据只查 saleOrderId 非空，而
+  //     代 B / 代 C 的退货单本来就带 saleOrderId，切两片照样非空、照样放行，
+  //     落库后份额一分都不重算（repairReturnSplits 按 saleOrderId 分组，销售单
+  //     不在就当孤儿跳过）。所以语料必须 saleOrderId 非空但指错：片 0 一条
+  //     进货，片 1 一条退货指向不在本片的销售单。上面 splitShop 那条喂的是
+  //     扁平退货（归并后 saleOrderId 恒空），老判据也拦得住，对新判据没有鉴别力。
+  const orphanLists = {
+    products: [{ id: 'op1', name: '孤儿货', costPrice: 60, salePrice: 100, stock: 10, alertQty: 2, colors: [], sizes: [] }],
+    skus: [],
+    customers: [{ id: 'oc1', name: '孤儿客户' }],
+    categories: []
+  }
+  const orphanShard0 = [
+    { id: 'or-in', type: 'in', productId: 'op1', productName: '孤儿货', qty: 5, unitPrice: 20, costPrice: 20, amount: 100, profit: 0, createdAt: 1000 }
+  ]
+  const orphanShard1 = [
+    {
+      id: 'or-r1', type: 'return', amount: 100, profit: -40, remark: '', createdAt: 3000,
+      customerId: 'oc1', customerName: '孤儿客户',
+      lines: [{ lineId: 'or-r1-l1', productId: 'op1', productName: '孤儿货', sku: '', skuId: '', color: '', size: '', qty: 1, unitPrice: 100, costPrice: 60, amount: 100, profit: -40, saleOrderId: 'gone', saleLineId: 'gone-l1' }]
+    }
+  ]
+  // 自检：归并后 saleOrderId 仍非空（指错才留得住非空），老判据拦不住它
+  const orphanMerged = apply.legacyRecordsOf({ records: orphanShard1 })
+  assert.strictEqual(String((inv.recordLines(orphanMerged[0])[0] || {}).saleOrderId || ''), 'gone',
+    '10c-同片 自检：退货 saleOrderId 非空，只有「本片里找得到销售单」的新判据能拦')
+  const orphanShop = await new Shop({ ids: idFactory('orp') }).open('孤儿退货店')
+  await orphanShop.call('migrateLocal', {
+    token: 'tok-orphan', seq: 0, ledger: orphanLists, records: orphanShard0
+  })
+  await rejects(function () {
+    return orphanShop.call('migrateLocal', {
+      token: 'tok-orphan', seq: 1, final: true, records: orphanShard1
+    })
+  }, /退货单和它的销售单必须在同一片里上传/)
+
+  // (d) 绿侧：三道门不许把干净账本拦死。一份自洽的本机账本（进货、现结、
+  //     代 A 赊销＋退货＋收款、代 C lines 单＋收款）一次性上传必须成功，且
+  //     落库 accounts 与**本地折叠**逐字段相等 —— 加校验最常见的失败不是
+  //     漏拦，是把功能拦死：那会让一家新店永远传不上本机数据，报错还说得
+  //     像数据有问题。
+  const cleanLists = {
+    products: [
+      { id: 'cp1', name: '牛奶', costPrice: 20, salePrice: 100, stock: 10, alertQty: 2, colors: [], sizes: [] },
+      { id: 'cp2', name: '鸡蛋', costPrice: 15, salePrice: 20, stock: 10, alertQty: 2, colors: [], sizes: [] }
+    ],
+    skus: [],
+    customers: [{ id: 'cc1', name: '甲' }, { id: 'cc2', name: '乙' }, { id: 'cc3', name: '丙' }],
+    categories: []
+  }
+  const cleanCorpus = [
+    { id: 'cl-cpay', type: 'pay', amount: 60, remark: '', customerId: 'cc3', customerName: '丙', createdAt: 8000 },
+    {
+      id: 'cl-cr', type: 'return', amount: 20, profit: -5, remark: '', createdAt: 7000, paidAmount: 0,
+      customerId: 'cc3', customerName: '丙',
+      lines: [{ lineId: 'cl-cr-l1', productId: 'cp2', productName: '鸡蛋', sku: '', skuId: '', color: '', size: '', qty: 1, unitPrice: 20, costPrice: 15, amount: 20, profit: -5, saleOrderId: 'cl-cs', saleLineId: 'cl-cs-l1' }]
+    },
+    {
+      id: 'cl-cs', type: 'out', amount: 80, profit: 20, remark: '', createdAt: 6000, paidAmount: 0,
+      customerId: 'cc3', customerName: '丙',
+      lines: [{ lineId: 'cl-cs-l1', productId: 'cp2', productName: '鸡蛋', sku: '', skuId: '', color: '', size: '', qty: 4, unitPrice: 20, costPrice: 15, amount: 80, profit: 20, allocations: [], returnedQty: 1, returnedAmount: 20 }]
+    },
+    { id: 'cl-pay', type: 'pay', amount: 100, remark: '', customerId: 'cc2', customerName: '乙', createdAt: 5000 },
+    { id: 'cl-r1', type: 'return', saleRecordId: 'cl-l1', productId: 'cp1', productName: '牛奶', qty: 1, unitPrice: 100, costPrice: 20, amount: 100, profit: -80, customerId: 'cc2', customerName: '乙', createdAt: 4000 },
+    { id: 'cl-l1', type: 'out', orderId: 'cl-credit', productId: 'cp1', productName: '牛奶', qty: 3, unitPrice: 100, costPrice: 20, amount: 300, profit: 240, payType: 'credit', customerId: 'cc2', customerName: '乙', createdAt: 3000 },
+    { id: 'cl-l2', type: 'out', orderId: 'cl-cash', productId: 'cp1', productName: '牛奶', qty: 1, unitPrice: 50, costPrice: 20, amount: 50, profit: 30, payType: 'cash', customerId: 'cc1', customerName: '甲', createdAt: 2000 },
+    { id: 'cl-in', type: 'in', productId: 'cp1', productName: '牛奶', qty: 5, unitPrice: 20, costPrice: 20, amount: 100, profit: 0, createdAt: 1000 }
+  ]
+  const cleanMerged = apply.legacyRecordsOf({ records: cleanCorpus })
+  const cleanShop = await new Shop({ ids: idFactory('cl') }).open('干净上传店')
+  const cleanRes = await cleanShop.call('migrateLocal', {
+    ledger: Object.assign({}, cleanLists, { records: cleanCorpus })
+  })
+  assert.ok(cleanRes.ledger, '10c-绿侧：干净账本一次性上传必须成功')
+  assert.deepStrictEqual(cleanRes.ledger.accounts, inv.foldAccountTerms(cleanMerged),
+    '10c-绿侧：上传后的 accounts 必须等于本地折叠 foldAccountTerms(归并后的记录)，逐字段相等')
+  assert.strictEqual(inv.accountOf(inv.foldAccountTerms(cleanMerged).cc2).receivable, 100,
+    '10c-绿侧：赊销 300 − 退货冲抵 100 − 收款 100 = 100（钉住语料语义）')
+  assert.strictEqual((await cleanShop.pagedAll()).length, cleanMerged.length,
+    '10c-绿侧：八条流水一条不少地落库')
+
+  // -------------------------------------------------------------------------
   // 11) recordStore 的查询层：分页游标、按类型 / 按客户过滤、count。
   //     这几条查询各自对应索引清单里的一条，走的是和云上同一份代码。
   // -------------------------------------------------------------------------
@@ -2202,6 +2418,95 @@ function totalStock(skus, productId) {
   await rejects(function () {
     return winCall('addPayment', { customerId: 'c1', amount: 1 })
   }, /本店账本还没完成流水升级/)
+
+  // -------------------------------------------------------------------------
+  // 20) 阶段 3 补口：查询层与边界的几个「失败方向 / 跨界」断言
+  // -------------------------------------------------------------------------
+  // 跨账套：byId 用**另一本账套**的流水 id 必须取不到。_id 里编着账套号，
+  // 真云按 _id 取天然取不到；MemoryDb 也按 _id，但这条断言钉的是
+  // rawById 读回之后那道 bookId 复核 —— 它防的是「_id 生成规则变了 /
+  // 集合里混进了别家的文档」那一种静默串账。
+  const xbBag = {}
+  function xbPut(bookId, rec) {
+    const doc = apply.toRecordDoc(rec, bookId, 'xb-shop')
+    xbBag[doc._id] = doc
+  }
+  xbPut('book-a', taRec('xb-a', 'out', 1000, 10, 4))
+  xbPut('book-b', taRec('xb-b', 'return', 1000, 5, -2))
+  const xbStoreA = recordsModule.recordStore(memory.memRecordsCtx(xbBag), 'book-a', 'xb-shop')
+  const xbStoreB = recordsModule.recordStore(memory.memRecordsCtx(xbBag), 'book-b', 'xb-shop')
+  assert.ok((await xbStoreA.byId('xb-a')) && (await xbStoreB.byId('xb-b')),
+    '自检：两本账套各自的流水自己都取得到')
+  assert.strictEqual(await xbStoreA.byId('xb-b'), null, 'byId 跨账套必须回 null')
+  assert.strictEqual((await xbStoreA.saleOrder('xb-a')).id, 'xb-a',
+    '自检：销售单 id 走 saleOrder 取得到')
+  assert.strictEqual(await xbStoreB.saleOrder('xb-b'), null,
+    'saleOrder 拿退货单 id 必须回 null —— 退货单不是销售单')
+
+  // today 卡边：ta-out-0 的 createdAt **恰好等于** dayStart，后面还有 129 条同日
+  // 流水。todayTotals 的边界是 createdAt >= dayStart（含等于），上面的等价断言
+  // 两侧用的是同一个函数、杀不了边界变异，这里换成手算值。
+  assert.deepStrictEqual(a5Valid.today, { salesAmount: 700, profit: 280, inAmount: 240 },
+    'today 手算：80×10 − 20×5 = 700；80×4 − 20×2 = 280；30×8 = 240'
+    + '（恰好落在 dayStart 上的那条也必须算进「今天」）')
+
+  // 今日流水超过 TODAY_MAX_RECORDS 且翻不到边界：必须报算不出来，today 给
+  // null —— 首页要显示「—」，绝不能给一个只翻了前 2000 条的偏小数。
+  const mxBag = {}
+  for (let i = 0; i < recordsModule.TODAY_MAX_RECORDS + 1; i++) {
+    const doc = apply.toRecordDoc(taRec('mx-' + i, 'out', 900000 + i, 1, 0), 'mxbook', 'mx-shop')
+    mxBag[doc._id] = doc
+  }
+  const mxStore = recordsModule.recordStore(memory.memRecordsCtx(mxBag), 'mxbook', 'mx-shop')
+  const mxRes = await recordsModule.recentAndToday(mxStore, 900000, 10)
+  assert.strictEqual(mxRes.todayComplete, false,
+    'TODAY_MAX_RECORDS+1 条今日流水翻不到边界，必须 todayComplete: false')
+  assert.strictEqual(mxRes.today, null, '算不出来就给 null，不是偏小的数')
+  assert.strictEqual(mxRes.recent.length, 10, 'recent 那一页照常给')
+
+  // withBookId：账本文档的 bookId 字段被删掉（控制台手改 / 旧数据），
+  // 回传必须回落到 shopId，不许给页面一个空账套号。
+  const wbShop = await new Shop({ ids: idFactory('wb') }).open('缺账套号店')
+  await wbShop.call('saveProduct', { name: '货', costPrice: 1, salePrice: 2, stock: 5, alertQty: 1 })
+  assert.ok((await wbShop.call('getLedger', {})).ledger.bookId, '自检：正常时 bookId 非空')
+  wbShop.db.ledgers[wbShop.shopId] = Object.assign({}, wbShop.db.ledgers[wbShop.shopId])
+  delete wbShop.db.ledgers[wbShop.shopId].bookId
+  assert.strictEqual((await wbShop.call('getLedger', {})).ledger.bookId, wbShop.shopId,
+    'bookId 字段丢了要回落到 shopId')
+
+  // restoreCleared 重放：同一份快照恢复过一次（lastRestoredClearAt 已记下
+  // savedAt）之后，再恢复一次必须拒绝 —— 两次恢复会把中间记的账悄悄丢掉。
+  await rejects(function () {
+    return swShop.call('restoreCleared', {})
+  }, /没有可恢复的数据/)
+
+  // 负实收：addSale 传 paidAmount: -50 必须在门口拦下。
+  const negShop = await new Shop({ ids: idFactory('neg') }).open('负实收店')
+  await negShop.call('saveProduct', { name: '货', costPrice: 1, salePrice: 2, stock: 5, alertQty: 1 })
+  const negProduct = (await negShop.call('getLedger', {})).ledger.products[0]
+  await rejects(function () {
+    return negShop.call('addSale', {
+      paidAmount: -50, items: [{ productId: negProduct.id, qty: 1, unitPrice: 2 }]
+    })
+  }, /实收不能为负数/)
+
+  // clearAll 清老数组：迁移后的账本 records **故意留着**（O(1) 回滚路的依仗，
+  // M6 钉过不许迁移清）。clearAll 换账套时必须把它清掉 —— 不清的话它会挂在
+  // 新账套上，把 listsHaveData / ledgerHasData 一路带成 true。
+  const caShop = await new Shop({ ids: idFactory('ca') }).open('清老数组店')
+  await caShop.call('saveProduct', { name: '货', costPrice: 1, salePrice: 2, stock: 5, alertQty: 1 })
+  const caLegacy = [taRec('ca-r1', 'out', 1000, 3, 1)]
+  const caMerged = apply.legacyRecordsOf({ records: caLegacy })
+  caShop.db.ledgers[caShop.shopId] = Object.assign({}, caShop.db.ledgers[caShop.shopId], {
+    bookId: 'ca-book-1',
+    recordsMigratedAt: 9000,
+    records: caLegacy,
+    accounts: inv.foldAccountTerms(caMerged),
+    aggregate: inv.foldTotalTerms(caMerged)
+  })
+  await caShop.call('clearAll', {})
+  assert.deepStrictEqual(caShop.db.ledgers[caShop.shopId].records, [],
+    'clearAll 换账套必须把迁移前留下的老数组清掉')
 
   console.log('ledger records tests passed')
 })().catch(function (error) {

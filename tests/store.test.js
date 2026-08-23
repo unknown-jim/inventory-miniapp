@@ -12,7 +12,8 @@
 //    2 正好整页倍数：空页 cursor='' 不许把游标冲回开头（F6/F7）
 //    3 切类型重置列表
 //    4 在飞的旧响应必须丢弃（没写 reqToken 保护时必挂）
-//    5 onReachBottom 连发只发一次（实例级锁，不能用 data.loading）
+//    5 onReachBottom 连发只发一次（实例级锁，不能用 data.loading）；
+//      手动「加载更多」（onLoadMore / onLoadMoreLedger）连点走同一套锁
 //    6 dataVersion 语义：读不涨、记账涨、页面据此决定要不要重来
 //    7 记账之后不再重拉整本（recordDelta / refillRecords 都已删）
 //    8 customer-edit：明细取不到时金额仍是服务端权威值（2b-1a 的 B1 回归）
@@ -525,6 +526,50 @@ require.cache[require.resolve('../utils/cloud-config')].exports = {
   }
 
   // -------------------------------------------------------------------------
+  // 5b) 手动「加载更多」按钮（onLoadMore）。触底在真机上到底会不会触发没实测
+  //     过，这个按钮是列表翻页的兜底出路，连点行为必须和触底同一套：
+  //     只发一次请求、列表不重、游标不回退。锁在 loadPage 里，这里钉的是它
+  //     对手动按钮同样成立。
+  // -------------------------------------------------------------------------
+  {
+    const h = newHarness({ ids: idFactory('m') })
+    await openShop(h)
+    seedRecords(h, PAGE_SIZE * 3, { prefix: 'ml' })
+    const store = loadStore(h)
+    await store.ready()
+
+    const page = mountPage(loadPage(RECORDS_PATH))
+    await page.onShow()
+    const before = countCalls(h, 'listRecords')
+
+    // 连点三次「加载更多」，中间一次 await 都不给
+    const burst = [page.onLoadMore(), page.onLoadMore(), page.onLoadMore()]
+    await Promise.all(burst)
+    assert.strictEqual(countCalls(h, 'listRecords'), before + 1,
+      '手动加载连点三次只该发一次请求，实际 ' + (countCalls(h, 'listRecords') - before) + ' 次')
+    assert.strictEqual(page.data.list.length, PAGE_SIZE * 2, '连点只翻一页')
+    assert.strictEqual(
+      new Set(page.data.list.map(function (item) { return item.id })).size,
+      PAGE_SIZE * 2,
+      '连点之后列表里不许有重复'
+    )
+
+    // 翻满第三整页，再一次点到空页：游标必须保住、不许再发请求
+    await page.onLoadMore()
+    assert.strictEqual(page.data.list.length, PAGE_SIZE * 3)
+    assert.strictEqual(page.data.hasMore, true, '第三页也是整页，hasMore 仍为真')
+    const cursorAfterThird = page.data.cursor
+    await page.onLoadMore()
+    assert.strictEqual(page.data.list.length, PAGE_SIZE * 3, '空页不该往列表里加东西')
+    assert.strictEqual(page.data.hasMore, false)
+    assert.strictEqual(page.data.cursor, cursorAfterThird,
+      '空页回 cursor 空串，直接赋值会把游标冲回开头、从第一页重来')
+    const beforeEnd = countCalls(h, 'listRecords')
+    await page.onLoadMore()
+    assert.strictEqual(countCalls(h, 'listRecords'), beforeEnd, '没有更多了就不该再发请求')
+  }
+
+  // -------------------------------------------------------------------------
   // 6) dataVersion 在页面这一层的语义：
   //    翻到第 3 页 -> 点进详情 -> 返回（onShow），列表**不该**被清回第 1 页；
   //    但改过账之后 onShow **必须**重来 —— 删掉的那条不能还留在列表里。
@@ -755,6 +800,43 @@ require.cache[require.resolve('../utils/cloud-config')].exports = {
       seeded.slice().reverse().map(function (item) { return item.id }),
       '明细按 sortKey 倒序'
     )
+  }
+
+  // -------------------------------------------------------------------------
+  // 8c) customer-edit 的手动「加载更多」（onLoadMoreLedger）：连点走和触底
+  //     同一套锁，不重复加载；翻到部分页之后游标不回退、不再发请求。
+  // -------------------------------------------------------------------------
+  {
+    const h = newHarness({ ids: idFactory('cm') })
+    await openShop(h)
+    seedRecords(h, 45, { prefix: 'cmr', customerId: 'cm-1' })
+    const store = loadStore(h)
+    await store.ready()
+
+    const page = mountPage(loadPage(CUSTOMER_EDIT_PATH), { id: 'cm-1', isEdit: true })
+    await page.fillCustomer('cm-1')
+    assert.strictEqual(page.data.ledger.length, 20, '明细第一页 20 条')
+    const before = countCalls(h, 'listRecords')
+
+    // 连点两次，中间一次 await 都不给
+    const burst = [page.onLoadMoreLedger(), page.onLoadMoreLedger()]
+    await Promise.all(burst)
+    assert.strictEqual(countCalls(h, 'listRecords'), before + 1,
+      '手动加载连点只该发一次请求，实际 ' + (countCalls(h, 'listRecords') - before) + ' 次')
+    assert.strictEqual(page.data.ledger.length, 40, '连点只翻一页')
+    assert.strictEqual(
+      new Set(page.data.ledger.map(function (item) { return item.id })).size, 40,
+      '连点之后明细里不许有重复'
+    )
+
+    // 第三页只剩 5 条：翻完 hasMore 落 false，游标停在最后一个 sortKey 上不回退
+    await page.onLoadMoreLedger()
+    assert.strictEqual(page.data.ledger.length, 45, '翻完全部')
+    assert.strictEqual(page.data.ledgerHasMore, false)
+    assert.ok(page.data.ledgerCursor, '部分页的服务端游标非空，客户端要原样保住')
+    const beforeEnd = countCalls(h, 'listRecords')
+    await page.onLoadMoreLedger()
+    assert.strictEqual(countCalls(h, 'listRecords'), beforeEnd, '没有更多了就不该再发请求')
   }
 
   // -------------------------------------------------------------------------
@@ -1053,6 +1135,75 @@ require.cache[require.resolve('../utils/cloud-config')].exports = {
     assert.strictEqual(after.todayAvailable, true, '恢复后今日三项要能算出来')
     assert.strictEqual(after.todaySalesAmount, 0, '新账套里今天还没卖过东西')
     assert.deepStrictEqual(store.getRecentRecords(), [], '新账套里也确实没有流水')
+  }
+
+  // -------------------------------------------------------------------------
+  // 13) 聚合漂移哨兵（aggregatesStale）和 latestClear 的客户端落点
+  //
+  //     attachRecent 的哨兵此前只落在云函数日志里，没人盯等于没有；latestClear
+  //     是「恢复清空前数据」弹窗的依据。两条都要从 getLedger 回包落进 store
+  //     缓存、被页面读得到，才算有消费者（阶段 4 的 B3 / B1）。
+  //     recordCount 缺失回 null 的退化分支钉在 tests/ledger.test.js（latestClear）。
+  // -------------------------------------------------------------------------
+  {
+    // a) 云模式：服务端报 aggregatesStale，store 要收下、首页/流水页要亮提示条；
+    //    下一次干净的 getLedger 把它压回去
+    const h = newHarness({ ids: idFactory('s13') })
+    let drift = true
+    h.rewrite = function (data, result) {
+      if (data.action !== 'getLedger' || !result || !result.ledger) return result
+      return Object.assign({}, result, {
+        ledger: Object.assign({}, result.ledger, { aggregatesStale: drift })
+      })
+    }
+    const store = loadStore(h)
+    await openShop(h, '哨兵店')
+    assert.strictEqual(store.getAggregatesStale(), false, '没拉过账本时哨兵是关的')
+    // saveProduct 内部会走 ensureReady -> fetchLedger，那是第一次拉账本，
+    // rewrite 从这一次起就把漂移塞进回包
+    await store.saveProduct({ name: '货', costPrice: 3, salePrice: 5, stock: 10, alertQty: 1 })
+    const product = store.getProducts()[0]
+    await store.ready()
+    assert.strictEqual(store.getAggregatesStale(), true, 'getLedger 报漂移，store 要收下')
+
+    const home = mountPage(loadPage(INDEX_PATH))
+    await home.onShow()
+    assert.strictEqual(home.data.aggregatesStale, true, '首页要亮「账目正在核对中」提示条')
+    const recordsPage = mountPage(loadPage(RECORDS_PATH))
+    recordsPage.onLoad({})
+    await recordsPage.onShow()
+    assert.strictEqual(recordsPage.data.aggregatesStale, true, '流水页也要亮（汇总四项都来自 totals 投影）')
+
+    drift = false
+    await store.addSale({ payType: 'cash', items: [{ productId: product.id, qty: 1, unitPrice: 5 }] })
+    const fetched = await store.refreshIfStale()
+    assert.ok(fetched, '前提：记过账之后 refreshIfStale 真的重取了')
+    assert.strictEqual(store.getAggregatesStale(), false, '下一次干净的 getLedger 要把哨兵压回去')
+    await home.onShow()
+    assert.strictEqual(home.data.aggregatesStale, false, '提示条要跟着消失')
+
+    // b) 云模式：clearAll 之后 latestClear 带日期和条数（弹窗文案的依据）
+    await store.clearAll()
+    const latest = store.getLatestClear()
+    assert.ok(latest && latest.savedAt > 0, 'latestClear 带快照时间')
+    assert.strictEqual(latest.recordCount, 1, '清空前那本账有 1 条销售，条数要报得出')
+
+    // c) 内存模式：memoryPublicLists 和云上的 publicListsOf 同源（latestClearView
+    //    一份定义），清空/恢复之后弹窗照样拿得到
+    const hm = newHarness({ ids: idFactory('s13m') })
+    hm.storage['inv_test_memory_ledger'] = true
+    const memStore = loadStore(hm)
+    await memStore.ready()
+    await memStore.loadSeed()
+    const memCount = memStore.getTotals().count
+    await memStore.clearAll()
+    const memLatest = memStore.getLatestClear()
+    assert.ok(memLatest && memLatest.savedAt > 0, '内存模式清空之后也有 latestClear')
+    assert.strictEqual(memLatest.recordCount, memCount,
+      '条数 = 清空前那本账的流水数（aggregate.count）')
+    await memStore.restoreCleared()
+    assert.strictEqual(memStore.getLatestClear().recordCount, memCount,
+      '恢复之后 latestClear 还在（元数据不动）')
   }
 
   console.log('store.test.js ok')

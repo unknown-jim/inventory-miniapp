@@ -223,9 +223,18 @@ Page({
   },
 
   restoreCleared() {
+    // 弹窗要说清恢复的是**哪一份**：哪天存的、多少条流水。光警告「清空之后新记
+    // 的账会丢掉」，店主还是不知道按下去会回到什么状态。recordCount 缺失（升级前
+    // 存的老快照，还没被 mode:'snapshots' 转换过）退化成只带日期。
+    const latest = store.getLatestClear()
+    let which = '最近一次清空前的账本'
+    if (latest && latest.savedAt) {
+      which = util.formatDate(latest.savedAt) + ' 存的那份账本'
+        + (latest.recordCount != null ? '（' + latest.recordCount + ' 条流水）' : '')
+    }
     wx.showModal({
       title: '恢复清空前数据',
-      content: '将恢复到最近一次清空前的账本。清空之后新记的账会丢掉。更早的清空记录仍保存在云端。',
+      content: '将恢复到 ' + which + '。清空之后新记的账会全部丢掉。更早的清空记录仍保存在云端。',
       confirmColor: '#0F766E',
       success: async (res) => {
         if (!res.confirm) return

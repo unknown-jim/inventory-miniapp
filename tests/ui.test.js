@@ -224,6 +224,47 @@ async function tap(page, selector) {
   await el.tap()
 }
 
+// automator 原生的 page.waitFor 没有超时：选择器一过期就静默挂死、不报错，
+// 整轮 UI 测试卡在那里。**本文件新增的等待一律走这三个带超时的封装**，
+// 挂了能报出等的是哪个元素 / 哪个数据条件，而不是无限等。
+const WAIT_TIMEOUT = Number(process.env.WECHAT_UI_WAIT_TIMEOUT || 15000)
+
+async function waitFor(page, target, label) {
+  const deadline = Date.now() + WAIT_TIMEOUT
+  for (;;) {
+    const list = await page.$$(target)
+    if (list.length > 0) return list
+    if (Date.now() >= deadline) {
+      throw new Error('等待元素超时（' + (label || target) + '，选择器 ' + target + '，' + WAIT_TIMEOUT + 'ms）')
+    }
+    await sleep(300)
+  }
+}
+
+async function waitForGone(page, target, label) {
+  const deadline = Date.now() + WAIT_TIMEOUT
+  for (;;) {
+    const list = await page.$$(target)
+    if (list.length === 0) return
+    if (Date.now() >= deadline) {
+      throw new Error('等元素消失超时（' + (label || target) + '，选择器 ' + target + '，' + WAIT_TIMEOUT + 'ms）')
+    }
+    await sleep(300)
+  }
+}
+
+async function waitForData(page, predicate, label) {
+  const deadline = Date.now() + WAIT_TIMEOUT
+  for (;;) {
+    const data = await page.data()
+    if (predicate(data)) return data
+    if (Date.now() >= deadline) {
+      throw new Error('等待页面数据超时（' + label + '，' + WAIT_TIMEOUT + 'ms）')
+    }
+    await sleep(300)
+  }
+}
+
 async function tapWhen(page, selector) {
   await page.waitFor(selector)
   await tap(page, selector)
@@ -438,6 +479,158 @@ async function runPaySheet(miniProgram) {
   await waitGone(edit, '.js-pay-sheet')
 }
 
+// 造超过一页（> 20 条）的收款流水，写进内存模式的流水仓（inv_record_docs）。
+// 文档形状和 toRecordDoc 一致（_id = bookId_id、sortKey = pad13(createdAt)_id），
+// bookId 取当前账套号，不然 memoryRecordStore 的 rows() 按 bookId 过滤看不见。
+// tag 用来给两批注水错开 id / _id（存储里不去重，撞了 _id 列表里就是两条）。
+async function seedExtraPayDocs(miniProgram, count, customerId, tag) {
+  await miniProgram.evaluate(function (count, customerId, tag) {
+    const bookId = wx.getStorageSync('inv_book_id') || wx.getStorageSync('inv_shop_id') || 'ui-test-shop'
+    const existing = wx.getStorageSync('inv_record_docs') || []
+    const docs = []
+    for (let i = 0; i < count; i++) {
+      const id = 'ui-' + tag + '-' + String(i)
+      let pad = String(1700000000000 + i * 60000)
+      while (pad.length < 13) pad = '0' + pad
+      docs.push({
+        id: id, type: 'pay', amount: 10, profit: 0, remark: '',
+        createdAt: 1700000000000 + i * 60000,
+        customerId: customerId || '',
+        _id: bookId + '_' + id,
+        bookId: bookId,
+        shopId: 'ui-test-shop',
+        sortKey: pad + '_' + id
+      })
+    }
+    wx.setStorageSync('inv_record_docs', existing.concat(docs))
+  }, count, customerId || '', tag || 'more')
+}
+
+async function countMemoryDocs(miniProgram) {
+  return await miniProgram.evaluate(function () {
+    const bookId = wx.getStorageSync('inv_book_id') || wx.getStorageSync('inv_shop_id') || 'ui-test-shop'
+    return ((wx.getStorageSync('inv_record_docs') || []).filter(function (doc) {
+      return String(doc.bookId || '') === String(bookId)
+    })).length
+  })
+}
+
+// 触底加载的分层验证（docs/cloud-ledger.md 的 V4 兜底就是为「onReachBottom
+// 不触发」准备的）。这里能验到哪一层就如实记哪一层：
+//   第一层：真实滚动 —— wx.pageScrollTo 把页面滚到底，看列表有没有自己长出第二页。
+//           这是「小程序会调 onReachBottom」的实证；scrollTop 前后对比证明滚动
+//           真的发生了，避免「没滚所以没触发」的假阴性。
+//   第二层：手动「加载更多」按钮 —— 触底不触发时的兜底出路，必须真的能用。
+// page.callMethod('onReachBottom') 只能证明方法本身好使，证明不了小程序会调它，
+// 所以不拿它冒充触底验证；只在滚动没验到时用它确认方法接线没断。
+let bottomReachedByScroll = null
+
+async function runRecordsLoadMore(miniProgram) {
+  step('流水页：超过一页时首屏只有一页，滚到底触发 onReachBottom，手动「加载更多」兜底')
+  const TOTAL = 45
+  await seedExtraPayDocs(miniProgram, TOTAL, '', 'rec')
+  const expectedTotal = await countMemoryDocs(miniProgram)
+  assert.ok(expectedTotal > 20, '前提：当前账套的流水超过一页（实为 ' + expectedTotal + ' 条）')
+
+  await backToTabRoot(miniProgram)
+  const records = await miniProgram.navigateTo('/pages/records/records')
+  await waitForData(records, function (data) { return data.loaded }, '流水页首屏加载完成')
+  const first = await records.data()
+  assert.strictEqual(first.list.length, 20, '首屏只给一页 20 条，不多给')
+  assert.strictEqual(first.hasMore, true, '还有下一页')
+  await waitFor(records, '.js-load-more', '手动「加载更多」按钮（还有下一页时要出现）')
+  await waitForGone(records, '.js-aggregates-stale', '聚合漂移提示条不应误报')
+
+  // ---- 第一层：真实滚动 -------------------------------------------------
+  // 滚了之后看列表会不会自己长出第二页。scrollTop 前后读一次是为了排除
+  // 「压根没滚动所以没触发」的假阴性；读不到（前后都是 0）就只把结论记成
+  // 「无法验证」，不冒充。
+  const before = await records.scrollTop()
+  await miniProgram.pageScrollTo(10000000)
+  await sleep(800)
+  let scrolled = null
+  try {
+    scrolled = await waitForData(records, function (data) {
+      return data.list.length > 20
+    }, '滚到底之后 onReachBottom 触发、第二页追加')
+  } catch (error) {
+    const after = await records.scrollTop()
+    if (after > before) {
+      bottomReachedByScroll = false
+      step('页面滚下去了（scrollTop ' + before + ' -> ' + after + '）但 onReachBottom 没触发：'
+        + '模拟器里触底不可靠，手动按钮就是为这个准备的兜底')
+    } else {
+      bottomReachedByScroll = null
+      step('滚动没法确认（scrollTop ' + before + ' -> ' + after + '，可能读不到）：'
+        + '模拟器里没验到真实触底，只验了方法本身（下一行）')
+      await records.callMethod('onReachBottom')
+      await waitForData(records, function (data) {
+        return data.list.length > 20
+      }, 'callMethod 直调 onReachBottom（只证明方法接线，不证明小程序会调它）')
+    }
+  }
+  if (scrolled) {
+    bottomReachedByScroll = true
+    step('滚到底后 onReachBottom 触发了：列表 ' + scrolled.list.length + ' 条')
+  }
+
+  // ---- 第二层：手动按钮翻到头 -------------------------------------------
+  let guard = 0
+  for (;;) {
+    const data = await records.data()
+    if (!data.hasMore) break
+    await tap(records, '.js-load-more')
+    await waitForData(records, function (d) {
+      return d.list.length > data.list.length
+    }, '点「加载更多」之后第二页追加（上一次 ' + data.list.length + ' 条）')
+    guard += 1
+    if (guard > 10) throw new Error('点了 10 次还没翻完，不对劲')
+  }
+  const finalData = await records.data()
+  assert.strictEqual(finalData.list.length, expectedTotal,
+    '翻完正好全量 ' + expectedTotal + ' 条，不重不漏')
+  const ids = {}
+  finalData.list.forEach(function (item) {
+    assert.ok(!ids[item.id], '列表里有重复：' + item.id)
+    ids[item.id] = true
+  })
+  await waitForGone(records, '.js-load-more', '翻完之后「加载更多」按钮要消失')
+  await miniProgram.navigateBack()
+}
+
+async function runCustomerLedgerLoadMore(miniProgram) {
+  step('客户页：往来记录超过一页时手动「加载更多」兜底')
+  const customerId = await miniProgram.evaluate(function () {
+    const list = wx.getStorageSync('inv_customers') || []
+    return list.length ? list[0].id : ''
+  })
+  assert.ok(customerId, '前提：示例数据里有客户')
+  await seedExtraPayDocs(miniProgram, 30, customerId, 'cust')
+  const edit = await miniProgram.navigateTo('/pages/customer-edit/customer-edit?id=' + customerId)
+  await waitForData(edit, function (data) { return data.ledger.length === 20 }, '往来记录首屏一页 20 条')
+  await waitFor(edit, '.js-ledger-more', '往来记录的「加载更多」按钮')
+  let guard = 0
+  for (;;) {
+    const data = await edit.data()
+    if (!data.ledgerHasMore) break
+    await tap(edit, '.js-ledger-more')
+    await waitForData(edit, function (d) {
+      return d.ledger.length > data.ledger.length
+    }, '客户往来点「加载更多」之后下一页追加（上一次 ' + data.ledger.length + ' 条）')
+    guard += 1
+    if (guard > 10) throw new Error('点了 10 次还没翻完，不对劲')
+  }
+  const after = await edit.data()
+  assert.ok(after.ledger.length > 20, '翻完超过一页（实为 ' + after.ledger.length + ' 条）')
+  const seen = {}
+  after.ledger.forEach(function (item) {
+    assert.ok(!seen[item.id], '往来记录里有重复：' + item.id)
+    seen[item.id] = true
+  })
+  await waitForGone(edit, '.js-ledger-more', '翻完之后按钮要消失')
+  await miniProgram.navigateBack()
+}
+
 async function runNativeClearModal(miniProgram) {
   step('店铺页：点清空（原生弹窗用 mock 自动确认）')
   // 上一步停在 customer-edit，直接 reLaunch 会超时，见 backToTabRoot。
@@ -487,7 +680,17 @@ async function run() {
     await runRecordSlipExport(miniProgram)
     await runOpeningSheet(miniProgram)
     await runPaySheet(miniProgram)
+    await runRecordsLoadMore(miniProgram)
+    await runCustomerLedgerLoadMore(miniProgram)
     await runNativeClearModal(miniProgram)
+    // 触底加载验到了哪一层，最后一行说清楚，别让人翻日志猜
+    if (bottomReachedByScroll === true) {
+      step('触底加载结论：模拟器里 wx.pageScrollTo 滚到底后 onReachBottom 真的触发了')
+    } else if (bottomReachedByScroll === false) {
+      step('触底加载结论：滚动真的发生了但 onReachBottom 没触发 —— 手动「加载更多」是必要的兜底，真机还要再验')
+    } else {
+      step('触底加载结论：模拟器里没验到真实触底（滚动无法确认），只验了 onReachBottom 方法本身和手动按钮')
+    }
     console.log('ui tests passed')
   } finally {
     // 关掉这次自己开的那个工具窗口，端口跟着释放；不关的话下一次跑会往上顺延端口、

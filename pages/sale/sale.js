@@ -608,17 +608,46 @@ Page({
       })
       // 记账刚成功，服务端回传的 customers[].account.receivable 就是这笔销售之后
       // 该客户的欠款。改完这条打单路径**不再依赖流水缓存**。
-      const receivable = order.customerId
-        ? ((store.getCustomer(order.customerId) || {}).account || {}).receivable || 0
-        : 0
+      // 口径和 store.getSlip 对齐（「挑剔到 typeof、绝不默认成 0」）：null / 缺字段
+      // 走 Number() 都会变成 0，而 0.00 的前欠会被当成「这个客户不欠钱」印在单据上。
+      // 实际构造不出取不到值的路径 —— customerSnapshot 会先抛「客户不存在」，
+      // withAggregates 给每个客户都挂了 account —— 这是口径对齐，不是修 bug；
+      // 万一哪天投影缺了字段，宁可打不出单，不印错数。
+      let receivable = 0
+      let receivableBroken = false
+      if (order.customerId) {
+        const account = (store.getCustomer(order.customerId) || {}).account || {}
+        if (typeof account.receivable !== 'number' || !isFinite(account.receivable)) {
+          receivableBroken = true
+        } else {
+          receivable = account.receivable
+        }
+      }
       const skus = store.getSkus()
       this.data.skus = skus
       const product = this.data.productId ? store.getProduct(this.data.productId) : null
       const sku = this.currentSku(product)
-      const slipView = util.withSlipView(order, receivable, store.getProducts(), store.getShopName())
       this.slipImagePath = ''
       // 下一单重新默认收满，别把上一单填的实收留在框里。
       this.data.paidTouched = false
+      if (receivableBroken) {
+        // 走到这里时**账已经记上了**，只是打不出单。必须按成功路径把购物车清掉
+        // 再报错：留着「报错 + 满车」，店员最可能的动作是再点一次保存 ——
+        // 同一笔账就记两遍。文案也要说清「已记上、别再按保存」；送货单不缺出路，
+        // 到流水页打开这张单可以重打（record-edit 的 getSlip 自己按当时欠款算）。
+        this.setData(Object.assign({
+          skus: skus,
+          cart: [],
+          qty: '',
+          remark: '',
+          paidTouched: false
+        }, this.stockPatch(product, sku, []), this.totals([], 0)))
+        if (this.data.customerId) {
+          this.selectCustomer(this.data.customerId)
+        }
+        throw new Error('这笔账已记上，只是打不出单：别再按保存（会记两笔），送货单到流水里重打')
+      }
+      const slipView = util.withSlipView(order, receivable, store.getProducts(), store.getShopName())
       this.setData(Object.assign({
         skus: skus,
         cart: [],

@@ -1,7 +1,8 @@
 const store = require('../../utils/store')
 const util = require('../../utils/util')
 
-// 一页 20 条 = RECORD_PAGE_DEFAULT。服务端会把 limit 钳到 [1,100]。
+// 一页 20 条 = RECORD_PAGE_DEFAULT。limit 不传 / 非法（NaN、0、负数）时服务端
+// 一律给缺省 20，超过上限才钳到 100（apply.clampPageLimit）。
 const PAGE_SIZE = 20
 
 Page({
@@ -16,7 +17,9 @@ Page({
     purchaseAmount: '0.00',
     profit: '0.00',
     receivable: '0.00',
-    count: 0
+    count: 0,
+    // 聚合漂移哨兵：汇总四项都来自服务端 totals 投影，漂了这四项都可疑。
+    aggregatesStale: false
   },
 
   onLoad(options) {
@@ -45,7 +48,8 @@ Page({
       purchaseAmount: util.money(totals ? totals.purchaseAmount : 0),
       profit: util.money(totals ? totals.profit : 0),
       receivable: util.money(totals ? totals.receivable : 0),
-      count: (totals && totals.count) || 0
+      count: (totals && totals.count) || 0,
+      aggregatesStale: store.getAggregatesStale()
     })
   },
 
@@ -96,6 +100,13 @@ Page({
   // 这两个都把 promise 返回出去：小程序不看返回值，但 tests/store.test.js
   // 要靠它 await 到这一轮请求结束（触底连发、在飞响应丢弃两组用例）
   onReachBottom() {
+    return this.loadPage(false)
+  },
+
+  // 手动「加载更多」：和 onReachBottom 走**同一个** loadPage(false)，不复制逻辑。
+  // 触底加载在真机上到底会不会触发只有代码层面的推断，从没实测过；万一不触发，
+  // 这个按钮是列表翻页的唯一出路。锁和 hasMore 判断都在 loadPage 里，连点安全。
+  onLoadMore() {
     return this.loadPage(false)
   },
 

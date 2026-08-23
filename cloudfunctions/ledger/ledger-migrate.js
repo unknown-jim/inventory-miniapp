@@ -41,6 +41,16 @@ const REPORT_LIST_LIMIT = 50
 
 const PAGE_LIMIT = recordsModule.PAGE_LIMIT
 
+// 回滚守卫翻多少条。取 PAGE_LIMIT（= apply.clampPageLimit 的上限 100）：写成更大的
+// 数会被 clampPageLimit 静默钳回 100，于是这个常量就在**说谎** —— 它读起来像
+// 「探针看 500 条」，实际只看 100。
+// **不要**把理由写成「会让 foreignMore 的判据和实际取到的条数脱节」：那个风险已经
+// 被结构消掉了 —— pageDocs 返回的是**钳后**的 limit，foreignMore 比的就是它。
+// 实测把这个常量改成 500，M10g 的 foreignMore: true 照样成立、整个测试集 EXIT=0。
+const ROLLBACK_PROBE_LIMIT = PAGE_LIMIT
+// 错误文案和回包里最多点名几条「不在老数组里」的记录。
+const ROLLBACK_FOREIGN_SAMPLE = 5
+
 // ---------------------------------------------------------------------------
 // 纯函数层：预检和迁移校验共用同一份定义。
 // 「预检说没问题、迁移却出问题」在结构上不可能 —— 因为是同一个函数。
@@ -374,6 +384,52 @@ function mixedPriceOf(records) {
   return bad
 }
 
+// P8 × P14 的交集：同一条销售行**既缺 returnedAmount、名下退货行又挂着另一套价**。
+//
+// 为什么两条单独出现都放行、撞在一起就必须拦：
+//   · P8 单独出现（缺 returnedAmount，退货行和销售行同价）：读时按
+//     returnedQty × 销售行单价回推，那正好等于 Σ退货额，兜底值就是真值，无害。
+//   · P14 单独出现（两套价，但 returnedAmount 记着）：既有的数据损伤，迁移既不
+//     制造也不加重它，改一次单就会被拨回一致。
+//   · 撞在一起，回推的前提（「这行的退货都按销售行当前价开」）当场不成立，兜底值
+//     就是错的 —— 而写路径会把它固化：店主打开这张单一个字不改直接保存，
+//     repriceSaleReturns 把退货行拨到现价、returnedAmount 落成 Σ退货额，
+//     于是账上的已退货值从「当初真退的货值」跳到「已退件数 × 现价」。之后一次
+//     寻常退货就按这个抬高（或压低）的基准算冲抵，柜台多退现金、客户页还挂着欠款，
+//     同一笔钱客户付两次。
+//
+// 所以它是**阻塞项**：迁移前在 app 里还改得动（老云函数还在跑），迁移之后写路径
+// 被 assertRecordsReady 冻结，只能去控制台手改生产文档。
+function mixedPriceMissingAmountOf(missingReturnedAmount, mixedPrice) {
+  const missing = Object.create(null)
+  ;(missingReturnedAmount || []).forEach(function (item) {
+    missing[String((item && item.saleId) || '') + KEY_SEP + String((item && item.lineId) || '')] = item
+  })
+  const seen = Object.create(null)
+  const out = []
+  ;(mixedPrice || []).forEach(function (item) {
+    const saleId = String((item && item.saleId) || '')
+    const lineId = String((item && item.lineId) || '')
+    const key = saleId + KEY_SEP + lineId
+    if (!Object.prototype.hasOwnProperty.call(missing, key)) return
+    if (!seen[key]) {
+      seen[key] = {
+        saleId: saleId,
+        lineId: lineId,
+        salePrice: item.salePrice,
+        // 退货行实际累加出来的货值 —— 就是回推值该等于、而实际不等于的那个数
+        fromReturns: missing[key].fromReturns,
+        returnIds: [],
+        returnPrices: []
+      }
+      out.push(seen[key])
+    }
+    seen[key].returnIds.push(String((item && item.returnId) || ''))
+    seen[key].returnPrices.push(item.returnPrice)
+  })
+  return out
+}
+
 // V5 / P7：【拆分不变量】Σ(rᵢ − settledAmount(rᵢ)) == min(D, Σrᵢ)。
 // **B1 的直接判据** —— 只比条数抓不住它。
 function splitViolationsOf(records) {
@@ -460,6 +516,7 @@ function auditRecords(records) {
     returnedMismatch: returned.returnedMismatch,
     missingReturnedAmount: returned.missingReturnedAmount,
     mixedPrice: mixedPrice,
+    mixedPriceMissingAmount: mixedPriceMissingAmountOf(returned.missingReturnedAmount, mixedPrice),
     splitViolations: splitViolationsOf(list),
     subCent: subCentOf(list),
     multiLineOrders: multiLineOrdersOf(list),
@@ -499,6 +556,60 @@ function mergeShapeChecks(legacy, merged) {
     problems.push({ check: 'V9', reason: '归并前后行数不等', before: lineBefore, after: lineAfter })
   }
   return { problems: problems, lineBefore: lineBefore, lineAfter: lineAfter, drop: drop, outDrop: outDrop }
+}
+
+// 「这批归并后的流水**本身**有没有病」——只吃内存里的记录，不碰数据库。
+//
+// 为什么要抽出来：搬进 ledger_records 有两条路，`migrateRecords`（搬家）和
+// `migrateLocal`（把本机账本上传到当前店），**两条路跑的是同一个
+// apply.legacyRecordsOf**（归并 + 退货份额整体重算，它就是来改钱的），
+// 从前却只有搬家路跑 V1–V12。同一份数据一条路报 failed、另一条路直接放行，
+// 而落库之后一个负账户会让**全店任何客户**都退不了货、改不了单、删不了销售单
+//（见上面 negativeAccountsOf 的注释和 ledger-core.migrateLocalShard 的实测清单）。
+// 所以这里给出**唯一一份定义**，两条路都调它，将来加检查不会只加一边。
+//
+// 选进来的是 V4..V12 里**不依赖集合往返**的那几项：
+//   V4  returnedQty / returnedAmount 跨文档一致
+//   V5  拆分不变量
+//   V6  负账户
+//   V8  重复 / 空 id
+//   V9 / V10 归并结构守恒（行数守恒、非 out 一条没被并掉）
+//   V12 所有金额都是 round2() 的输出
+// **不含 V1 / V2 / V3 / V7**：那四项比的是「集合里的文档 vs 内存里的 merged」，
+// 只有搬家路径有集合可比。V11 孤儿退货是**非阻塞**的（份额无从算起，报数人工
+// 确认，保持保守回推值），不进 failures。
+//
+// opts.deferNegativeAccounts —— 把 V6 交给调用方在**累计** accounts 上判。
+// 分片上传时一片就是一段时间切片，「A 片赊销、B 片收款」是完全合法的切法，
+// 单片折出来的负欠款是切片假象、不是错账（实测：一份干净本机账本按时间切成
+// `in,out,return` + `pay,out` 两片，后一片单独折叠 receivable = −5，而整本
+// 折叠 receivable = 3）。所以分片路把 V6 挪到收完最后一片时的累计 accounts 上
+// 判，判据仍是同一个 negativeAccountsOf，只是判的对象换成了全量。
+function recordFailures(sourceRecords, merged, opts) {
+  const audit = auditRecords(merged)
+  const shape = mergeShapeChecks(sourceRecords || [], merged)
+  let failures = [].concat(shape.problems)
+  failures = failures.concat(audit.returnedMismatch.map(function (item) {
+    return Object.assign({ check: 'V4' }, item)
+  }))
+  failures = failures.concat(audit.splitViolations.map(function (item) {
+    return Object.assign({ check: 'V5' }, item)
+  }))
+  if (!(opts && opts.deferNegativeAccounts)) {
+    failures = failures.concat(audit.negativeAccounts.map(function (item) {
+      return Object.assign({ check: 'V6' }, item)
+    }))
+  }
+  failures = failures.concat(audit.duplicateIds.map(function (id) {
+    return { check: 'V8', reason: '重复 id', id: id }
+  }))
+  if (audit.emptyIds) {
+    failures.push({ check: 'V8', reason: '空 id', count: audit.emptyIds })
+  }
+  failures = failures.concat(audit.subCent.map(function (item) {
+    return Object.assign({ check: 'V12' }, item)
+  }))
+  return failures
 }
 
 function termsDiff(before, after, scope, customerId) {
@@ -668,6 +779,8 @@ function checkLedger(ledger, options) {
     returnedMismatch: auditAfter.returnedMismatch,
     mixedPrice: auditAfter.mixedPrice,
     missingReturnedAmount: auditAfter.missingReturnedAmount,
+    // P8×P14：两条单独非阻塞，交集阻塞（见 mixedPriceMissingAmountOf）
+    mixedPriceMissingAmount: auditAfter.mixedPriceMissingAmount,
     duplicateIds: auditAfter.duplicateIds,
     emptyIds: auditAfter.emptyIds,
     // P10
@@ -682,8 +795,10 @@ function checkLedger(ledger, options) {
   return report
 }
 
-// 阻塞项：不为空就停下来。孤儿退货（P6）和 missingReturnedAmount 是**非阻塞**的，
-// 逐条人工确认即可。
+// 阻塞项：不为空就停下来。孤儿退货（P6）、missingReturnedAmount（P8 的缺字段那半）
+// 和两套价（P14）单独出现都是**非阻塞**的，逐条人工确认即可 —— 但
+// **P8 × P14 的交集是阻塞的**，理由见 mixedPriceMissingAmountOf 上方那段：
+// 两条单独出现都无害，撞在同一条销售行上，兜底回推值就是错的，而写路径会把它固化。
 function blockingOf(report) {
   const out = []
   function add(name, list) {
@@ -696,6 +811,7 @@ function blockingOf(report) {
   add('P5 迁移后仍有负账户', report.negativeAfter)
   add('P7 拆分不变量仍被破坏', report.splitViolationsAfter)
   add('P8 returnedQty/Amount 跨行不一致', report.returnedMismatch)
+  add('P8×P14 缺已退金额且退货行两套价', report.mixedPriceMissingAmount)
   add('P9 重复 id', report.duplicateIds)
   add('P9 空 id', report.emptyIds)
   add('V9/V10 归并结构不守恒', report.mergeProblems)
@@ -797,8 +913,8 @@ function clampReportLimit(limit) {
 const REPORT_LISTS = [
   'subCent', 'subCentRaw', 'diffs', 'movingChanges', 'unexplainedChanges', 'negativeBefore',
   'negativeAfter', 'orphanReturns', 'splitViolationsBefore', 'splitViolationsAfter',
-  'returnedMismatch', 'missingReturnedAmount', 'mixedPrice', 'duplicateIds', 'multiLineOrders',
-  'mergeProblems', 'blocking'
+  'returnedMismatch', 'missingReturnedAmount', 'mixedPrice', 'mixedPriceMissingAmount',
+  'duplicateIds', 'multiLineOrders', 'mergeProblems', 'blocking'
 ]
 function truncateReport(report, limit) {
   const out = Object.assign({}, report)
@@ -849,7 +965,22 @@ async function checkAggregates(db, shopId, payload) {
     // 操作者在阶段 0 看不到、要到当晚才撞上。
     report.collectionCount = await store.countAll()
     if (report.collectionCount) {
-      report.blocking.push({
+      // 「残骸」不是唯一解释。集合条数**超过**归并条数时，多出来的那些多半不是
+      // 上次尝试写了一半，而是**迁移之后记的真账** —— 这本账迁完过、后来被
+      // mode:'rollback' 退回了老路径，中间正常营业记的流水都只在集合里。
+      // 对这一类无条件推荐 newBook 会把那些真账留在一本再也没人指向的账套里，
+      // 永久不可达。所以按差额分流。
+      const mergedCount = inventory.toNumber(report.mergedCount)
+      const extra = report.collectionCount - mergedCount
+      report.blocking.push(extra > 0 ? {
+        key: 'P13',
+        label: '目标账套里已有 ' + report.collectionCount + ' 条流水，比老数组归并后的 '
+          + mergedCount + ' 条还多 ' + extra + ' 条 —— 多出来的很可能是迁移后记的账'
+          + '（这本账迁完过、又被 rollback 退回了老路径）',
+        count: report.collectionCount,
+        hint: '**不要**直接 newBook：那会把这 ' + extra + ' 条永久留在旧账套里、再也读不到。'
+          + '先用 listRecords 把集合里的流水翻一遍，确认这几条是不是真账，再决定怎么办'
+      } : {
         key: 'P13',
         label: '目标账套里已有 ' + report.collectionCount + ' 条流水（上次尝试的残骸）',
         count: report.collectionCount,
@@ -888,6 +1019,7 @@ async function checkAggregates(db, shopId, payload) {
     returnedMismatch: audit.returnedMismatch,
     mixedPrice: audit.mixedPrice,
     missingReturnedAmount: audit.missingReturnedAmount,
+    mixedPriceMissingAmount: audit.mixedPriceMissingAmount,
     duplicateIds: audit.duplicateIds,
     emptyIds: audit.emptyIds,
     multiLineOrders: audit.multiLineOrders,
@@ -903,6 +1035,7 @@ async function checkAggregates(db, shopId, payload) {
     splitViolationsAfter: report.splitViolationsAfter,
     returnedMismatch: report.returnedMismatch,
     mixedPrice: report.mixedPrice,
+    mixedPriceMissingAmount: report.mixedPriceMissingAmount,
     duplicateIds: report.duplicateIds,
     emptyIds: report.emptyIds,
     mergeProblems: []
@@ -936,7 +1069,7 @@ async function checkAggregates(db, shopId, payload) {
 async function migrateRecords(db, shopId, payload, now, nextId) {
   payload = payload || {}
   const mode = String(payload.mode || 'run')
-  if (mode === 'rollback') return rollbackMigration(db, shopId, now)
+  if (mode === 'rollback') return rollbackMigration(db, shopId, now, payload)
   if (mode === 'dropLegacy') return dropLegacy(db, shopId, now)
   if (mode === 'snapshots') return convertSnapshots(db, shopId, payload, now)
   if (mode !== 'run') {
@@ -951,8 +1084,33 @@ async function migrateRecords(db, shopId, payload, now, nextId) {
   if (ledger.recordsMigratedAt) {
     throw new Error('本店账本已经完成流水升级，要退回老路径请用 mode: "rollback"')
   }
-  const fresh = !!payload.restart || !!payload.newBook
-  const state = fresh ? null : (ledger.migration || null)
+  // restart / newBook 是**一次性**的：谁点的、被哪一次尝试消化掉了，记在
+  // migration.freshBy 上。判据是「这个标志还没被当前这次尝试消化过」，不是
+  // 「payload 里有没有这个标志」。
+  //
+  // 为什么必须这样：文档给的循环示例把 payload 写在循环体里，操作者要 restart 时
+  // 最自然的改法就是加进那个 payload，于是**每一次调用**都带着它。按「有标志就重来」
+  // 判，每次调用都重新 initMigration —— 8 次调用全是
+  // {"state":"running","phase":"writing","written":0,"cursor":0}，永远不前进、
+  // 也永远不出现 failed，循环条件不退出。newBook 更糟：每次还发一个新账套号
+  //（实测 5 次调用发出 gen1..gen5，集合里一条都没写）。而这发生在所有店一起停摆
+  // 的窗口里。
+  //
+  // 「一条都还没写才算幂等」同样不收敛：写完第一个 chunk 之后 cursor 就不是 0 了，
+  // 下一次调用又会重新 init，在 init 和 write 之间原地打转。所以判据只能是
+  // freshBy，与进度无关。
+  //
+  // 代价：一次由 restart 起的尝试进行到一半时，再带 restart 不会真的重来。可以接受 ——
+  // restart 的语义是「同账套 cursor 拨回 0 重写一遍」，而 set() 幂等、merged 逐条
+  // 相同、源数组变了会被 writePhase 的 total 比对判掉，所以那一趟重写和接着写的
+  // 末态一模一样。真正需要重来的两种状态（failed / done 但没有 recordsMigratedAt）
+  // 都不算「消化过」，照样重来；换账套用 newBook（标志不同，一定重来）。
+  const want = payload.newBook ? 'newBook' : (payload.restart ? 'restart' : '')
+  let state = ledger.migration || null
+  const live = !!(state && (String(state.phase || '') === 'writing'
+    || String(state.phase || '') === 'verifying'))
+  const consumed = !!(want && live && String(state.freshBy || '') === want)
+  if (want && !consumed) state = null
   if (!state) {
     return initMigration(db, shopId, ledger, payload, now, nextId)
   }
@@ -979,7 +1137,9 @@ function stateOf(state, extra) {
     total: inventory.toNumber(state.total),
     cursor: inventory.toNumber(state.cursor),
     written: inventory.toNumber(state.written),
-    verified: inventory.toNumber(state.verified)
+    verified: inventory.toNumber(state.verified),
+    // 回给循环调用者看：它带的 restart / newBook 被认下了、而且只认这一次
+    freshBy: String(state.freshBy || '')
   }, extra || {})
 }
 
@@ -1030,6 +1190,9 @@ async function initMigration(db, shopId, ledger, payload, now, nextId) {
     bookId: bookId,
     total: merged.length,
     phase: 'writing',
+    // 哪个标志起的这一次尝试。migrateRecords 靠它把 restart / newBook 变成
+    // 一次性的，循环调用者原样重发同一个 payload 才能收敛。
+    freshBy: newBook ? 'newBook' : (restart ? 'restart' : ''),
     cursor: 0,
     written: 0,
     verified: 0,
@@ -1055,7 +1218,7 @@ async function initMigration(db, shopId, ledger, payload, now, nextId) {
 
 async function stampOnly(db, shopId, bookId, now) {
   const migration = {
-    bookId: bookId, total: 0, phase: 'done', cursor: 0, written: 0, verified: 0,
+    bookId: bookId, total: 0, phase: 'done', freshBy: '', cursor: 0, written: 0, verified: 0,
     verifyCursor: '', verifyAccounts: {}, verifyAggregate: inventory.emptyTerms(),
     startedAt: now, updatedAt: now, error: '', stampOnly: true
   }
@@ -1174,27 +1337,10 @@ async function verifyPhase(db, shopId, ledger, state, limit, now) {
     aggregate: inventory.foldTotalTerms(merged)
   }))
   const audit = auditRecords(merged)
-  const shape = mergeShapeChecks(ledger.records || [], merged)
-  failures = failures.concat(shape.problems)
-  failures = failures.concat(audit.returnedMismatch.map(function (item) {
-    return Object.assign({ check: 'V4' }, item)
-  }))
-  failures = failures.concat(audit.splitViolations.map(function (item) {
-    return Object.assign({ check: 'V5' }, item)
-  }))
-  failures = failures.concat(audit.negativeAccounts.map(function (item) {
-    return Object.assign({ check: 'V6' }, item)
-  }))
-  failures = failures.concat(audit.duplicateIds.map(function (id) {
-    return { check: 'V8', reason: '重复 id', id: id }
-  }))
-  if (audit.emptyIds) {
-    failures.push({ check: 'V8', reason: '空 id', count: audit.emptyIds })
-  }
-  failures = failures.concat(audit.subCent.map(function (item) {
-    return Object.assign({ check: 'V12' }, item)
-  }))
-  // V11 孤儿退货是**非阻塞**的：份额无从算起，报数人工确认，不拦迁移
+  // V4..V12 里不依赖集合往返的那几项**只有一份定义**，migrateLocal 走的是同一个
+  // （见 recordFailures 的注释）。V1 / V3 留在这里：只有搬家路有集合可比。
+  // V11 孤儿退货是**非阻塞**的：份额无从算起，报数人工确认，不拦迁移。
+  failures = failures.concat(recordFailures(ledger.records || [], merged))
   if (failures.length) {
     return failMigration(db, shopId, state, '校验没过：' + describeProblems(failures), now, failures)
   }
@@ -1273,6 +1419,14 @@ function snapshotBookId(snapshotId) {
 
 function errorText(error) {
   return String((error && (error.message || error.errMsg)) || error || '未知错误')
+}
+
+// 回滚守卫的错误文案里点名几条外来记录。id/类型/时间三样，够操作者拿 getRecord 去看。
+function describeForeign(list) {
+  const head = (list || []).slice(0, ROLLBACK_FOREIGN_SAMPLE).map(function (item) {
+    return item.id + '（' + item.type + '，createdAt=' + item.createdAt + '）'
+  }).join('、')
+  return (list || []).length > ROLLBACK_FOREIGN_SAMPLE ? head + ' 等' : head
 }
 
 // 一份快照。**不抛**（除非是程序错误）：失败原样记进 report 由调用方继续下一份。
@@ -1364,6 +1518,23 @@ async function convertOneSnapshot(db, shopId, meta) {
         accounts: accounts,
         aggregate: aggregate
       }))
+      // 顺手把归并条数回填进账本 clearSnapshots 的元数据（「恢复清空前数据」
+      // 弹窗要报的数）。老元数据只有 {id, savedAt}，records 数组按行数又**不等于**
+      // 恢复出来的条数（同 orderId 的行会归并成一张单）—— 转换这里是全店唯一
+      // 一个拿得到归并结果的地方。这次回填和上面盖 bookId 的 putClearSnapshot
+      // 在**同一个事务**里：回填抛错会把盖号那半场一起回滚，整份按 failed 报
+      //（下面 catch 的「写回快照文档时出错」），不会留下「盖了号却没回填条数」
+      // 的中间态。重试是安全的：事务外那批集合写入 _id 确定、set() 幂等，
+      // 事务重跑一遍就收敛。账本里找不到这条元数据（带外删过）就只跳过回填，
+      // 盖号那半场照常提交。
+      const ledgerCur = await tx.getLedger(shopId)
+      if (ledgerCur && (ledgerCur.clearSnapshots || []).length) {
+        const metas = (ledgerCur.clearSnapshots || []).map(function (meta) {
+          if (String((meta && meta.id) || '') !== snapshotId) return meta
+          return Object.assign({}, meta, { recordCount: merged.length })
+        })
+        await tx.putLedger(shopId, Object.assign({}, ledgerCur, { clearSnapshots: metas }))
+      }
       return { raced: false }
     })
     if (outcome && outcome.raced) {
@@ -1433,47 +1604,380 @@ async function convertSnapshots(db, shopId, payload, now) {
 }
 
 // mode:'rollback' —— 只清 recordsMigratedAt 和 migration，老数组还在，
-// 读写立刻退回老路径。**这是显式动作**，不要让人去控制台手改生产文档。
-async function rollbackMigration(db, shopId, now) {
+// **读**立刻退回老路径；**写是冻着的**：recordsPending 重新为真，assertRecordsReady
+// 照旧拦下每一条写（实测回滚后记账和删单都报「本店账本还没完成流水升级，暂时
+// 不能记账」）——回滚不是重新开张，是回到停摆态。这也是回滚彩排（docs 阶段 1）
+// 最后一步只能 newBook 的原因之一：彩排记的那条账留在集合里删不掉。
+// **这是显式动作**，不要让人去控制台手改生产文档。
+//
+// **回滚只对「迁完之后一条新账都没记」成立。** 迁完之后店是解冻的，新流水只进
+// ledger_records；ledgers.records 那份老数组一条都不涨（applyMutation 把它原样
+// 带过去，那是 O(1) 回滚路的依仗）。所以回滚是把读路径整个切回一个**过期的真子集**
+// —— 迁移之后记的账在老路径上一条都看不见，欠款和流水数当场跌回迁移那一刻。
+//
+// 靠哨兵发现不了：回滚后 recordsPending 为真，getLedger 不走 attachRecent，
+// 那次 count() 比对根本不会发生，aggregatesStale 恒为 false。所以只能在这里挡。
+//
+// 守卫是**两个独立信号**：
+//
+//   ① 事务内、精确、判「有没有」：翻集合最新一页，逐条看 doc.id 在不在老数组
+//      归并出来的那一份里。不在 = 这条账只存在于集合里，回滚就把它从读路径抹掉。
+//      **只用 pageDocs**（where().orderBy().limit().get()）。这条 API 链在事务里
+//      **已经有在跑的调用点**（ledger-core.js 记账事务里的 apply.prepareMutation）：
+//        · 改或删一张进货单 -> latestPurchases
+//          where({bookId,type,productId,skuId}).orderBy('sortKey','desc').limit(2).get()
+//        · 改或删一张退货单、改一张有退货的销售单 -> returnsOfSale
+//          where({bookId,saleOrderId}).orderBy('sortKey','asc').limit(201).get()
+//      **新增那三条一次都不发**（实测：addPurchase / addSale / addReturn 在事务里
+//      发出的 where 查询数都是 0，addReturn 只发一次 doc().get() 捞被退销售单）——
+//      recordsNeeded 只在 updateRecord / deleteRecord 上返回非空的 purchases /
+//      saleReturns。所以正确的说法是：这条形状在事务里不可用时，**改单和删单一笔
+//      都做不了**，不是「一笔进货都记不了」。阶段 1 的测试店必须**改或删一张进货
+//      单**、**改或删一张退货单**才算把它验过，光记进货和退货验不到
+//      （docs/cloud-ledger.md 阶段 1 清单已按这条改写）。
+//      **绝对不要在事务里调 countAll()**：上面两条是「已经在事务里跑的同一条 API
+//      链」，而 transaction.collection().where().count() 在这个仓里一次都没跑过。
+//      把一个未实测的量放在全店停摆窗口里唯一的紧急出路上，是拿退路去赌。
+//      这条是 docs/cloud-ledger.md「不去依赖一个未实测的量」的第三条，别再改回去。
+//      ①**抓得到②抓不到的那一类**：迁完之后删了 3 条老账、又记了 3 笔新账 ——
+//      条数一模一样，②看不出来，①一眼看出那 3 个 id 不在老数组里（M10e/M10e2）。
+//      ①**只翻一页**，靠的是一条排序性质：sortKey = pad13(createdAt) + '_' + id，
+//      倒序 = (createdAt 倒序, id 倒序)，而 createdAt 服务端给、updateRecord 改不了，
+//      老数组里每一条都在迁移之前创建 —— 所以迁移后记的账是倒序序列的一个**前缀**
+//      （和 recentAndToday 判「今天取全了没有」同一条性质）。这条性质不成立时
+//      （时钟回拨、带外塞老日期文档）由②兜底。
+//
+//   ② 事务外、有毫秒级竞态、判「有多少」：countAll() 数整本账套，和归并条数比。
+//      这是当晚**已经有实证**的那一份 —— 每家店迁移前跑的 checkAggregates 第一件事
+//      就是它（本文件 checkMigrated 里的 store.countAll()，同一条形状、同一家店、
+//      几分钟前刚成功过）。
+//      ②**抓得到①抓不到的那一类**：残骸埋在最新一页之外（这本账迁过、被 force
+//      回滚过、又重迁过，上一轮的文档 sortKey 排在老数组后面）。**M10h 钉的就是
+//      这一类**：拆掉②之后 M10h 必须变红，那是②有牙的验收标准。
+//      竞态两个方向都有：窗口里新记账 -> 数**偏小**（可能放过一次该拦的），窗口里
+//      删记录 -> 数**偏大**（可能误拦一次合法的，安全侧，force 可恢复）。偏小那个
+//      方向恰好是①的强项：窗口里新记的账 createdAt 最大，一定在最新一页最前面。
+//      **所以②是提醒不是保险箱，回包里的数才是最终账。**
+//
+// 两个信号的失效面**重叠得很窄，但不是零**。同时弄瞎两个需要：带外删掉 k 条已迁
+// 文档 + 带外塞进 k 条 createdAt 排在最新一页之外的文档 —— 条数被抹平（②瞎）而且
+// 外来文档不在最新一页（①瞎）。app 内没有任何路径能塞一条 createdAt 比老数组还早
+// 的文档，所以现实里做不出来；但**别把这句写回「失效模式互不重叠」**，那句是假的。
+//
+// **force: true 绕过的是整道守卫，包括探针本身。** 探针读不到数（云端不支持、
+// 超时、账套号中途变了、事务外那次读账本没读到）时：不带 force 一律拒绝并在错误里
+// 点名 force；带 force 照常回滚，把读不到数的原因原样写进回包。
+// **守卫可以失灵，这条出路不许失灵。**
+//
+// 这条合同在结构上由两件事保证，改这段的人两件都要维持：
+//   a. 事务外那半场收在 preCountProbe 里，**它不抛**；
+//   b. 事务内那半场收在 rollbackGuard 里，**它也不抛**。
+// 但「从入口到 tx.putLedger 之间会抛的语句只有两条、都是『要不要回滚』这个决定
+// 本身的一部分」**不是一句干净的保证**——两条各有一处必须照实说的缺口：
+//   · 缺口一（`if (!cur)`，回滚和 dropLegacy 的事务体各有一条）：它测的不是
+//     「账本在不在」，是「账本在不在 **或者** 事务里这次读失败了」——真云的
+//     tx.getLedger（index.js 的事务适配器）和 db.getLedger 一样**把一切异常吞成
+//     null**。后一种情形带 force 也出不去，**这是有意的**：cur 都没读到，往下唯一
+//     安全的动作就是什么都别写（putLedger 是整文档 set()，拿一份读不到原件的
+//     文档往下走就是毁账本），拒绝是对的。代价是「这条出路不许失灵」在这条路上
+//     失效：force 无效、只能重试——所以那句错误文案必须把两种可能都点到、并给出
+//     「再调一次」的指引，不能断言「账本不存在」（M10j 的第四个零件钉着这一条）。
+//   · 缺口二（bookOf(cur, shopId)）：它也在 force 之外。真实数据上 String() 对
+//     任何 JSON 值都不抛、实际够不着它，但它确实是一条没被 force 覆盖的语句——
+//     别把这里的说法简化回「只剩两条」。
+// 2b-1b 审计阻塞 1 就是事务外那次 db.getLedger 漏在 try 外面：真云的 getLedger
+// **把一切异常吞成 null**（index.js 的 createDb），于是一次瞬时读失败在这里不是抛
+// 超时、而是走到 `if (!pre) throw new Error('店铺账本不存在')` —— 带不带 force
+// 都报同一句，紧急出路当场没了，而且那句文案会让凌晨两点的人以为账本真的丢了。
+
+// 信号②的事务外半场。**任何情况下都不抛**：算不出来就把原因写进 countError。
+// 返回的 bookId 是「事务外那次数的是哪一本」，交给事务内比对。
+async function preCountProbe(db, shopId) {
+  const out = { known: false, bookId: '', count: null, countError: '' }
+  let pre = null
+  try {
+    pre = await db.getLedger(shopId)
+  } catch (error) {
+    out.countError = '事务外读账本失败：' + errorText(error)
+    return out
+  }
+  if (!pre) {
+    // 真云的 getLedger 把读失败也吞成 null，所以这里既可能是「真没这份文档」、
+    // 也可能是一次瞬时读失败。两种都只该弄瞎②；判「账本在不在」的是事务里那次读。
+    out.countError = '事务外没读到账本文档（真云的 getLedger 把读失败也吞成 null），'
+      + '拿不到账套号，数不了集合条数'
+    return out
+  }
+  out.known = true
+  out.bookId = bookOf(pre, shopId)
+  try {
+    out.count = await recordsModule.recordStore(db.recordsCtx(), out.bookId, shopId).countAll()
+  } catch (error) {
+    out.countError = errorText(error)
+  }
+  return out
+}
+
+// 回滚守卫的事务内半场 + 两个信号的合并。**任何情况下都不抛**（上面的 b）：
+// 算不出来就把原因写进 probeError / countError，回一个「什么都不知道」的结论，
+// 由调用方按 force 决定是拒绝还是照常回滚。
+// 连 apply.legacyRecordsOf 也包在里面：它是纯函数，但 records 不是数组时会抛
+//（实测 records 传字符串 -> "(list || []).map is not a function"），
+// 而它只服务于守卫，不该有能力把 force 一起带走。
+async function rollbackGuard(tx, cur, shopId, bookId, pre) {
+  const guard = {
+    mergedCount: null,
+    collectionCount: pre.count,
+    countError: pre.countError,
+    foreign: [],
+    foreignMore: false,
+    probeError: ''
+  }
+  if (pre.known && bookId !== pre.bookId) {
+    // 事务外那一次数的是另一本账（中途有人 clearAll / loadSeed 换了账套），作废。
+    guard.collectionCount = null
+    guard.countError = '账套号在读数和事务之间变了（' + pre.bookId + ' → ' + bookId + '），'
+      + '事务外数出来的条数不能用；再调一次就好'
+  }
+
+  // merged 在事务内从 cur 现算：老数组只可能被 clearAll / loadSeed / dropLegacy 改，
+  // 那三条都会把它清空、调用方已经拦掉。纯函数、不发号、不读时钟，放在事务里安全。
+  let mergedIds = null
+  try {
+    const merged = apply.legacyRecordsOf(cur)
+    guard.mergedCount = merged.length
+    mergedIds = Object.create(null)
+    for (let i = 0; i < merged.length; i++) {
+      mergedIds[String((merged[i] && merged[i].id) || '')] = true
+    }
+  } catch (error) {
+    // 归并失败**同时**弄瞎两个信号：①要 id 集合，②要归并条数才算得出 extra。
+    const why = '老数组归并失败，两个信号都用不了：' + errorText(error)
+    guard.probeError = why
+    guard.countError = why
+    return guard
+  }
+
+  // —— 信号①：事务**内**翻最新一页，逐条比 id
+  try {
+    const store = recordsModule.recordStore(tx.recordsCtx(), bookId, shopId)
+    const got = await store.pageDocs({ cursor: '', limit: ROLLBACK_PROBE_LIMIT })
+    const docs = got.docs
+    for (let i = 0; i < docs.length; i++) {
+      const id = String((docs[i] && docs[i].id) || '')
+      if (mergedIds[id]) continue
+      guard.foreign.push({
+        id: id,
+        type: String((docs[i] && docs[i].type) || ''),
+        createdAt: inventory.toNumber(docs[i] && docs[i].createdAt)
+      })
+    }
+    // 判**条数**不判页数（样板见 ledger-records.js 的 SUFFIX_MAX_RECORDS）：
+    // 整页都是外来的，说明这一页装不下，后面还有。
+    guard.foreignMore = guard.foreign.length >= got.limit
+  } catch (error) {
+    guard.probeError = errorText(error)
+    guard.foreign = []
+    guard.foreignMore = false
+  }
+  return guard
+}
+
+async function rollbackMigration(db, shopId, now, payload) {
+  payload = payload || {}
+  const force = !!payload.force
+
+  const pre = await preCountProbe(db, shopId)
+
   const outcome = await db.runTransaction(async function (tx) {
     const cur = await tx.getLedger(shopId)
     if (!cur) {
-      throw new Error('店铺账本不存在')
+      // 两种可能在这里分不开（真云的 tx.getLedger 把读失败也吞成 null），但有一条
+      // 是确定的：回滚一个字都没写。文案必须给出重试指引而不是断言「账本不存在」，
+      // 理由见上方「这条合同」那段注释的缺口一。
+      throw new Error('事务里没读到这家店的账本。云端的 getLedger 把「文档不存在」和「这次读失败了」'
+        + '都返回 null，所以这两种情况在这里分不开。回滚一个字都没写。'
+        + '如果店还在，多半是一次瞬时失败 —— 再调一次就好；反复如此再去控制台确认文档还在不在。')
     }
     if (!((cur.records || []).length)) {
-      throw new Error('没有可回滚的老流水（老数组是空的，可能已经跑过 dropLegacy）')
+      // 三种来路都会把 ledgers.records 清空，别只报第一种：
+      throw new Error('没有可回滚的老流水（老数组是空的）。三种来路：跑过 mode:"dropLegacy"；'
+        + '店主点过「清空数据」（clearAll）；店主点过「恢复清空前数据」（restoreCleared）。'
+        + '后两种在 ledger_clears 的快照文档里还留着老数组的副本')
     }
-    const next = Object.assign({}, cur, {
+    const bookId = bookOf(cur, shopId)
+
+    const guard = await rollbackGuard(tx, cur, shopId, bookId, pre)
+    const extra = (guard.collectionCount == null || guard.mergedCount == null)
+      ? null
+      : Math.max(0, guard.collectionCount - guard.mergedCount)
+    // discarded = 这次回滚从读路径上抹掉的条数的**下界**（两个信号取大的）。
+    // 两个都是下界，取 max 仍然只是下界：页内 2 条 + 页外 4 条 + 带外删 4 条时
+    // extra=2、foreign=2，回包写 2、实际抹掉 6。**两个都瞎的时候回 null**，
+    // 不回 0 —— 0 读起来像「什么都没丢」，而这时候我们什么都不知道。
+    const blind = !!guard.probeError && !!guard.countError
+    const discarded = blind ? null : Math.max(extra || 0, guard.foreign.length)
+
+    if (!force) {
+      if (guard.probeError || guard.countError) {
+        throw new Error('回滚守卫读不到数，判断不了这次回滚会不会丢账：'
+          + [guard.probeError && ('翻最新一页失败：' + guard.probeError),
+            guard.countError && ('数集合条数失败：' + guard.countError)].filter(Boolean).join('；')
+          + '。请先用 listRecords 把集合翻一遍，确认里面没有迁移之后记的账'
+          + '（或者已经另行备份），再带 force: true')
+      }
+      if (guard.foreign.length || extra) {
+        throw new Error('这本账迁完之后动过，回滚会丢账：集合最新一页里有 '
+          + guard.foreign.length + (guard.foreignMore ? '+' : '') + ' 条不在老数组里'
+          + (guard.foreign.length ? '（' + describeForeign(guard.foreign) + '）' : '')
+          + '；集合共 ' + guard.collectionCount + ' 条、老数组归并后 ' + guard.mergedCount
+          + ' 条，多 ' + extra + ' 条。这些账只在 ledger_records 里，'
+          + '老数组一条都不涨，回滚之后老路径上一条都看不见，aggregatesStale 哨兵也看不见。'
+          + '确认它们已经另行备份、仍要回滚，请带 force: true')
+      }
+    }
+
+    await tx.putLedger(shopId, Object.assign({}, cur, {
       recordsMigratedAt: 0,
       migration: null,
       revision: inventory.toNumber(cur.revision) + 1
-    })
-    await tx.putLedger(shopId, next)
-    return { legacyCount: (cur.records || []).length }
+    }))
+    return {
+      legacyCount: (cur.records || []).length,
+      mergedCount: guard.mergedCount,
+      collectionCount: guard.collectionCount,
+      countError: guard.countError,
+      foreignCount: guard.foreign.length,
+      foreignMore: guard.foreignMore,
+      foreignSample: guard.foreign.slice(0, ROLLBACK_FOREIGN_SAMPLE),
+      probeError: guard.probeError,
+      discarded: discarded
+    }
   })
-  return { state: 'rolledBack', phase: '', legacyCount: outcome.legacyCount, updatedAt: now }
+  return {
+    state: 'rolledBack',
+    phase: '',
+    // legacyCount 仍是**老数组原始条数**（按行），mergedCount 才是和 collectionCount
+    // 可比的那个量。两个都回，当晚核对时不用再猜是哪一个。归并失败时 mergedCount 为 null。
+    legacyCount: outcome.legacyCount,
+    mergedCount: outcome.mergedCount,
+    // 事务**外**数的，有毫秒级竞态；数不到时为 null，原因在 countError 里
+    collectionCount: outcome.collectionCount,
+    countError: outcome.countError,
+    // 事务**内**数的，精确：最新一页里有几条不在老数组
+    foreignCount: outcome.foreignCount,
+    foreignMore: outcome.foreignMore,
+    foreignSample: outcome.foreignSample,
+    probeError: outcome.probeError,
+    forced: force,
+    // 抹掉条数的**下界**（两个信号取大的）。两个探针都瞎时为 null = 「不知道」，
+    // 不是 0 = 「什么都没丢」。
+    discarded: outcome.discarded,
+    updatedAt: now
+  }
 }
 
 // mode:'dropLegacy' —— 把 ledgers.records 置空。**跑完就没有 O(1) 回滚了**，
 // 默认不跑，只在 P12 逼近 5MB 时当晚跑。
+//
+// 前置条件只有两条，两条都**直接**回答「删了会不会把唯一一份副本删掉」：
+//
+//   ① recordsMigratedAt 非空。它是写路径的解冻开关（assertRecordsReady）：
+//      写着它，新账就只进集合，老数组不再是活数据。
+//   ② 集合里数得出条数，而且**不是空的**（老数组非空时）。这一条是新加的，
+//      它挡的是「recordsMigratedAt 写着、集合却是另一本 / 空的」——
+//      那种时候老数组是**唯一**副本，删了就真的没了。
+//
+// **不再看 migration.phase === 'done'**（2b-1b 审计 A6）。三条理由：
+//   a. 它和 recordsMigratedAt 是在**同一个事务**里写进去的（verifyPhase 收尾那一次
+//      putLedger），所以作为前置条件它从来说不出 recordsMigratedAt 说不出的话。
+//   b. 它**活不过一笔账**：applyMutation 只把 records / recordsMigratedAt /
+//      migratedFromLocal / importing 带过 listsOf。而上线清单的顺序恰好是
+//      「迁完 -> 记一笔 1 元测试账确认写路径解冻 -> 再删掉 -> 跑 dropLegacy」，
+//      于是需要 dropLegacy 的那家店必然卡死，app 内没有出路。
+//      （2b-1c 起 applyMutation 也把 migration 带过去了，但前置条件不该靠它 ——
+//      1b 那一版已经上过的店，migration 是补不回来的，见测试 M16e。）
+//   c. 它一旦触发，文案是**误导性的**：recordsMigratedAt 明明写着、迁移明明成功了，
+//      报的却是「还没完成流水升级」，凌晨两点看到这句会以为迁移失败要重来。
+//
+// ② 的条数在**事务外**数（和回滚守卫的信号②同一条路、同一个理由）：
+// transaction.collection().where().count() 在这个仓里一次都没跑过，不许把它放到
+// 一条不可逆的破坏性操作的前置条件上。事务外的 countAll() 是有实证的那一份 ——
+// 同一家店几分钟前跑 checkAggregates 时刚成功过。
+//
+// **故意不给 force**：和 rollback 不同，dropLegacy 是优化不是出路。数不着就报错、
+// 让人再调一次，什么都没坏；给它一个「绕过检查照样删」的开关，等于给一条不可逆
+// 操作配一把能关掉唯一一道闸的钥匙。
+//
+// 判据是「集合空不空」而**不是**「集合条数 >= 归并条数」：迁完之后正常营业一周，
+// 店主删掉几张单是常态（deleteRecord 从集合里删、老数组一条不动），拿条数当硬闸
+// 会在最需要 dropLegacy 的那家店上误伤。差多少照样回在 shortfall 里给人看。
 async function dropLegacy(db, shopId, now) {
+  const pre = await preCountProbe(db, shopId)
   const outcome = await db.runTransaction(async function (tx) {
     const cur = await tx.getLedger(shopId)
     if (!cur) {
-      throw new Error('店铺账本不存在')
+      // 和 rollbackMigration 事务体里那句同一口径：两种可能分不开、一条都没删、
+      // 给出重试指引。这一条同样没有 force 可绕（见 rollbackMigration 上方注释）。
+      throw new Error('事务里没读到这家店的账本。云端的 getLedger 把「文档不存在」和「这次读失败了」'
+        + '都返回 null，所以这两种情况在这里分不开。老流水一条都没删。'
+        + '如果店还在，多半是一次瞬时失败 —— 再调一次就好；反复如此再去控制台确认文档还在不在。')
     }
-    const state = cur.migration || null
-    if (!cur.recordsMigratedAt || !state || String(state.phase || '') !== 'done') {
-      throw new Error('本店账本还没完成流水升级，不能删老流水')
+    if (!cur.recordsMigratedAt) {
+      throw new Error('本店账本还没完成流水升级（recordsMigratedAt 是空的），不能删老流水。'
+        + '先不带 mode 调 migrateRecords 把它迁完')
     }
     const dropped = (cur.records || []).length
+    const bookId = bookOf(cur, shopId)
+    let mergedCount = null
+    try {
+      mergedCount = apply.legacyRecordsOf(cur).length
+    } catch (error) {
+      throw new Error('老数组归并不出来，判断不了集合里那份全不全：' + errorText(error))
+    }
+    if (mergedCount) {
+      if (pre.known && bookId !== pre.bookId) {
+        throw new Error('账套号在数条数和事务之间变了（' + pre.bookId + ' → ' + bookId + '），'
+          + '事务外数出来的条数不能用；再调一次就好')
+      }
+      if (pre.countError || pre.count == null) {
+        throw new Error('删老流水前要先数一遍集合，确认流水真的在里面，但这次没数着：'
+          + (pre.countError || '没拿到条数')
+          + '。事务外的 countAll 是有实证的那一份（几分钟前跑 checkAggregates 时刚成功过），'
+          + '所以这多半是一次瞬时失败，过一会儿再调一次')
+      }
+      if (!pre.count) {
+        throw new Error('账套 ' + bookId + ' 的集合里一条流水都没有，而老数组归并后有 '
+          + mergedCount + ' 条 —— 老数组现在是这 ' + mergedCount + ' 条的**唯一**副本，删了就没了。'
+          + '先跑 checkAggregates 看这本账套对不对（多半是 newBook 换过账套、或者 bookId 被改过），'
+          + '真要退回老路径请用 mode: "rollback"')
+      }
+    }
     await tx.putLedger(shopId, Object.assign({}, cur, {
       records: [],
       revision: inventory.toNumber(cur.revision) + 1
     }))
-    return { dropped: dropped }
+    return {
+      dropped: dropped,
+      bookId: bookId,
+      mergedCount: mergedCount,
+      collectionCount: pre.count,
+      // 集合比归并少几条 = 迁完之后删掉的单数（正常营业会有），只报不拦
+      shortfall: (pre.count == null || mergedCount == null)
+        ? null
+        : Math.max(0, mergedCount - pre.count)
+    }
   })
-  return { state: 'dropped', phase: 'done', dropped: outcome.dropped, updatedAt: now }
+  return {
+    state: 'dropped',
+    phase: 'done',
+    dropped: outcome.dropped,
+    bookId: outcome.bookId,
+    mergedCount: outcome.mergedCount,
+    collectionCount: outcome.collectionCount,
+    shortfall: outcome.shortfall,
+    updatedAt: now
+  }
 }
 
 // 3.3 recomputeAggregates —— 漂移修复入口。
@@ -1554,6 +2058,11 @@ module.exports = {
   verifyChunk: verifyChunk,
   verifyMigrated: verifyMigrated,
   mergeShapeChecks: mergeShapeChecks,
+  // 下面三个给 ledger-core 的 migrateLocalShard 用：本机上传要跑同一套校验、
+  // 用同一个负账户判据、报同一种人话
+  recordFailures: recordFailures,
+  negativeAccountsOf: negativeAccountsOf,
+  describeProblems: describeProblems,
   movingChangesOf: movingChangesOf,
   accountsDiff: accountsDiff,
   termsDiff: termsDiff,

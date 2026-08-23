@@ -146,6 +146,18 @@ function printReport(report, limit) {
     say('      销售单 ' + item.saleId + ' 行 ' + item.lineId + ' 销售价 ' + money(item.salePrice)
       + ' / 退货单 ' + item.returnId + ' 退货价 ' + money(item.returnPrice))
   })
+  // P8 和 P14 各自非阻塞，交集阻塞：缺 returnedAmount 时读时按「returnedQty ×
+  // 销售行单价」回推，只有退货全按销售行当前价开才等于真值；退货行另挂一套价
+  // 时回推值就是错的，而迁移之后店主打开这张单保存一次就会把错值固化。
+  say('P8×P14 缺已退金额且退货行两套价 ' + report.mixedPriceMissingAmount.length + ' 条销售行'
+    + (report.mixedPriceMissingAmount.length
+      ? '  ← 阻塞：迁移前在 app 里改一下这几张单（保存会把退货行拨回一致），迁移后写路径冻结就只能去控制台手改'
+      : ''))
+  head(report.mixedPriceMissingAmount, limit).forEach(function (item) {
+    say('      销售单 ' + item.saleId + ' 行 ' + item.lineId + ' 销售价 ' + money(item.salePrice)
+      + '，退货行实际货值 ' + money(item.fromReturns)
+      + '，退货单 ' + item.returnIds.join('/') + ' 退货价 ' + item.returnPrices.map(money).join('/'))
+  })
   say('P9  重复 id ' + report.duplicateIds.length + ' 个 / 空 id ' + report.emptyIds + ' 个')
   say('P10 多行单 ' + report.multiLineOrders.length + ' 张，抽样：')
   head(report.multiLineOrders, Math.min(limit, 20)).forEach(function (item) {

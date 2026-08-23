@@ -345,6 +345,12 @@ async function rejects(promise, re) {
     stock: 3
   })
   const undoProduct = (await call(dbUndo, undoIds, 'user-a', 'getLedger', undoShop)).ledger.products[0]
+  // 记一笔销售再清空：latestClear 要能告诉「恢复清空前数据」的弹窗恢复的是
+  // 哪一天、多少条流水（pages/shop/shop.js 的弹窗文案）。
+  await call(dbUndo, undoIds, 'user-a', 'addSale', undoShop, {
+    payType: 'cash',
+    items: [{ productId: undoProduct.id, qty: 1, unitPrice: 20 }]
+  })
   await call(dbUndo, undoIds, 'user-a', 'clearAll', undoShop)
   const cleared = await call(dbUndo, undoIds, 'user-a', 'getLedger', undoShop)
   assert.strictEqual(cleared.ledger.products.length, 0)
@@ -352,6 +358,16 @@ async function rejects(promise, re) {
   assert.strictEqual(cleared.ledger.archivedClearCount, 1)
   assert.ok(!cleared.ledger.clearedBackup, 'getLedger must not send backup payload')
   assert.ok(!cleared.ledger.clearSnapshots, 'getLedger must not send snapshot list')
+  assert.deepStrictEqual(cleared.ledger.latestClear, { savedAt: 1000, recordCount: 1 },
+    'latestClear 带快照日期和条数（清空前那本账有 1 条销售）')
+  // 升级前的老元数据只有 {id, savedAt}：recordCount 回 null，弹窗退化成只带日期。
+  // 转换（mode:"snapshots"）会把它回填成归并条数，见 tests/ledger-migrate.test.js 的 S1/S3。
+  dbUndo.ledgers[undoShop].clearSnapshots = dbUndo.ledgers[undoShop].clearSnapshots.map(function (meta) {
+    return { id: meta.id, savedAt: meta.savedAt }
+  })
+  const legacyMeta = await call(dbUndo, undoIds, 'user-a', 'getLedger', undoShop)
+  assert.strictEqual(legacyMeta.ledger.latestClear.recordCount, null,
+    '老元数据缺 recordCount 时回 null，不猜一个数')
   await call(dbUndo, undoIds, 'user-a', 'saveProduct', undoShop, {
     name: '清空后新货',
     costPrice: 1,
@@ -374,7 +390,8 @@ async function rejects(promise, re) {
     return item.products && item.products[0] && item.products[0].id === undoProduct.id
   })
   assert.ok(firstArchive, 'older clear snapshot must stay on server')
-  assert.strictEqual(firstArchive.products[0].stock, 3)
+  // 3 − 1：上面为了给 latestClear 造出非零条数，清空前记了一笔卖 1 件的销售
+  assert.strictEqual(firstArchive.products[0].stock, 2)
   await rejects(
     call(dbUndo, undoIds, 'user-a', 'restoreCleared', undoShop),
     /没有可恢复的数据/

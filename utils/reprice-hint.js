@@ -32,19 +32,26 @@ function cashRefundOf(amount, settled, returnedAmount) {
 // 进入编辑**之前**的销售单快照。必须在改之前建：页面上的行会被改掉，这里要的
 // 是改之前的样子。returnedAmount 缺失的是老流水，按 returnedQty × 当时单价回推，
 // 和数据层（returnedAmountOfSale）同一条兜底口径。
+//
+// **正因为同口径，缺字段时下面 repriceHint 的 mixed 判据恒为假** —— 它比的是
+// |returnedAmount − returnedQty × unitPrice|，而缺字段时这里补出来的正是
+// returnedQty × unitPrice，差值恒为 0。所以缺失必须单独立一个
+// returnedAmountMissing 标记，靠它兜住，不能指望 mixed 顺带抓到。
 function savedSaleOf(record) {
   const lines = {}
   let returnedAmount = 0
   inventory.recordLines(record).forEach(function (line) {
     const unitPrice = inventory.round2(inventory.toNumber(line.unitPrice))
     const returnedQty = inventory.round2(inventory.toNumber(line.returnedQty))
-    const amount = (line.returnedAmount == null || line.returnedAmount === '')
+    const missing = (line.returnedAmount == null || line.returnedAmount === '')
+    const amount = missing
       ? inventory.round2(returnedQty * unitPrice)
       : inventory.round2(line.returnedAmount)
     lines[String(line.lineId || '')] = {
       unitPrice: unitPrice,
       returnedQty: returnedQty,
-      returnedAmount: amount
+      returnedAmount: amount,
+      returnedAmountMissing: missing
     }
     returnedAmount = inventory.round2(returnedAmount + amount)
   })
@@ -66,12 +73,19 @@ function savedSaleOf(record) {
 //   · 账上记多了（降价那头）：账上多算了一笔没出去的现金，欠款被记多了，
 //     补记一笔同额收款正好冲平 —— docs/accounting-vs-policy.md 的
 //     「事后补记一笔收款就对上」只在这一头成立。
-function cashHint(saved, oldReturned, newReturned, nextAmount, paidAmount) {
+// 保存之后账上的退款现金。newReturned 由构造是准的：repriceSaleReturns 会把这张
+// 销售单名下**每一条**匹配的退货行都拨到销售行当前单价，所以落库的 Σ退货额
+// 就是「已退件数 × 现价」（小数件数下逐张 round2 最多差 1 分，见下方）。
+function cashAfterOf(nextAmount, paidAmount, savedSettled, newReturned) {
   const paid = (paidAmount == null || String(paidAmount).trim() === '')
-    ? saved.settled : inventory.round2(paidAmount)
-  const before = cashRefundOf(saved.amount, saved.settled, oldReturned)
-  const after = cashRefundOf(nextAmount,
+    ? savedSettled : inventory.round2(paidAmount)
+  return cashRefundOf(nextAmount,
     inventory.settledAmount({ amount: nextAmount, paidAmount: paid }), newReturned)
+}
+
+function cashHint(saved, oldReturned, newReturned, nextAmount, paidAmount) {
+  const before = cashRefundOf(saved.amount, saved.settled, oldReturned)
+  const after = cashAfterOf(nextAmount, paidAmount, saved.settled, newReturned)
   const diff = inventory.round2(before - after)
   if (diff === 0) return '销售额、毛利、欠款跟着变，账上的退款现金不变。'
   const moved = '账上的退款现金 ¥' + util.money(before) + ' → ¥' + util.money(after)
@@ -85,16 +99,22 @@ function cashHint(saved, oldReturned, newReturned, nextAmount, paidAmount) {
 // saved 见 savedSaleOf；lines = 页面上正在编辑的行（{ id, qty, unitPrice }）；
 // paidAmount = 页面上填的实收（新的欠款基准要用它）。
 //
-// 两种情况出文案：
+// 三种情况出文案：
 //   1. 有退货的行**这次改了单价** —— 保存会按新价重算同单退货。
 //   2. 单价一个字没改，但退货行本来就和销售行不是一个价 —— main 上被改出两套价
 //      的老单，保存会被静默拨回一致。方向是对的（是修复），但账上的退款现金
 //      一样会动，不说一声店主毫无预期。
+//   3. 有退货的行**根本没记 returnedAmount**（老流水）。这一类躲得过第 2 条：
+//      快照缺字段时按 returnedQty × unitPrice 补，而第 2 条比的正是这条公式，
+//      差值恒为 0。所以它得靠 savedSaleOf 打的 returnedAmountMissing 标记单独兜。
+//      保存一样会动钱：同单退货行被拨到现价、returnedAmount 落成 Σ退货额，
+//      而账上此刻显示的那个回推值本来就不一定等于当初真退的货值。
 function repriceHint(saved, lines, paidAmount) {
   const snapshot = saved || {}
   const before = snapshot.lines || {}
   let changed = false
   let mixed = false
+  let missing = false
   let qty = 0
   let oldReturned = 0
   let newReturned = 0
@@ -114,19 +134,33 @@ function repriceHint(saved, lines, paidAmount) {
     newReturned = inventory.round2(newReturned
       + inventory.round2(prev.returnedQty * unitPrice))
     if (unitPrice !== prev.unitPrice) changed = true
+    if (prev.returnedAmountMissing) missing = true
     // 容差 1 分：小数件数下 returnedAmount（逐张 round2 累加）和
     // round2(合计 × 单价) 本来就可能差半分，不能把它当成两套价。
     if (Math.abs(inventory.round2(prev.returnedAmount
       - inventory.round2(prev.returnedQty * prev.unitPrice))) > 0.01) mixed = true
   })
-  if (!changed && !mixed) return ''
-  const head = changed
-    ? '这张单退过 ' + qty + ' 件，退货额按新价从 ¥' + util.money(oldReturned)
+  if (!changed && !mixed && !missing) return ''
+  if (changed) {
+    return '这张单退过 ' + qty + ' 件，退货额按新价从 ¥' + util.money(oldReturned)
       + ' 重算成 ¥' + util.money(newReturned) + '。'
-    : '这张单退过 ' + qty + ' 件，退货行挂着旧单价（历史遗留，不是这次改的）。'
-      + '保存会按现在的价补齐：¥' + util.money(oldReturned)
-      + ' → ¥' + util.money(newReturned) + '。'
-  return head + cashHint(snapshot, oldReturned, newReturned, nextAmount, paidAmount)
+      + cashHint(snapshot, oldReturned, newReturned, nextAmount, paidAmount)
+  }
+  // 缺 returnedAmount 时**不能**套用上面那套「改前 → 改后」的说法：改前那一头
+  // 账上压根没记，页面拿到的只是按现价回推的估值，而这张单只 fetch 了它自己、
+  // 看不到那几张退货单的实际金额。所以这里只说保存后的两个准数（Σ退货额由构造
+  // 等于「已退件数 × 现价」，退款现金跟着它现算），改前那一头如实说看不出来 ——
+  // 报一个可能是错的「改前 ¥X」比不报更糟。
+  if (missing) {
+    return '这张单退过 ' + qty + ' 件，账上没记当时的退货金额（老单据）。保存会按现在的价'
+      + '把退货额记成 ¥' + util.money(newReturned) + '、账上的退款现金记成 ¥'
+      + util.money(cashAfterOf(nextAmount, paidAmount, snapshot.settled, newReturned))
+      + '；当初那几张退货单开的是什么价、真退出去多少现金，这张单上看不出来。'
+  }
+  return '这张单退过 ' + qty + ' 件，退货行挂着旧单价（历史遗留，不是这次改的）。'
+    + '保存会按现在的价补齐：¥' + util.money(oldReturned)
+    + ' → ¥' + util.money(newReturned) + '。'
+    + cashHint(snapshot, oldReturned, newReturned, nextAmount, paidAmount)
 }
 
 module.exports = {

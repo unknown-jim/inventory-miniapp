@@ -987,4 +987,22 @@ console.log('退货份额整体重算：M1 ' + (m1Cases.length + 3) + ' 组语�
   + '（修复前 ' + m1bBrokenBefore + ' 组破坏拆分不变量、' + m1bNegativeBefore + ' 组折出负账户）'
   + '、M1c 恒等 600 组，全部通过')
 
+// 阶段 3 补口：非客户账记录（in / convert / adjust）不许折进任何客户 ——
+// 哪怕单头挂着 customerId。折进去会把一笔进货算成客户的「已付」，
+// 欠款凭空少一截。
+assert.deepStrictEqual(
+  inv.foldAccountTerms([
+    { id: 'nc-in', type: 'in', amount: 15, profit: 0, remark: '', customerId: 'c1', createdAt: 1, lines: [] }
+  ]),
+  {},
+  'foldAccountTerms：非客户账记录不进任何客户的账户（结果连键都不该有）'
+);
+assert.strictEqual(
+  inv.accountOf(inv.foldAccountTerms([
+    { id: 'nc-out', type: 'out', amount: 15, profit: 0, remark: '', customerId: 'c1', paidAmount: 0, createdAt: 1, lines: [] }
+  ]).c1).receivable,
+  15,
+  '自检：out 带 customerId 正常折进 c1（paidAmount: 0 赊销 15）—— 上一条不是「怎么折都是空」的假绿'
+);
+
 console.log('ledger terms tests passed')
