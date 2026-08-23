@@ -154,7 +154,8 @@ async function main() {
   const tag = (db && db.instanceId) || ENV_ID
   // ledger_records 漏了就是**上线路径直接断掉**：集合不存在，部署完每一次流水
   // 查询（listRecords / getSlip / getRecord / 记账）都报错。
-  // 表建完后补 ledger_records 的 6 条索引（幂等），见 scripts/wxcloud-ensure-indexes.js。
+  // 表建完后补 ledger_records 的 6 条索引，并把五张业务表权限设成 ADMINONLY
+  // （幂等），见 scripts/wxcloud-ensure-indexes.js、scripts/wxcloud-ensure-acl.js。
   const names = ['shops', 'members', 'ledgers', 'ledger_records', 'ledger_clears']
   let tables = []
   try {
@@ -182,6 +183,8 @@ async function main() {
   }
   const indexes = require('./wxcloud-ensure-indexes')
   await indexes.ensureIndexes(wx.api, { region: region, tag: tag })
+  const acl = require('./wxcloud-ensure-acl')
+  await acl.ensureAcl(wx.api, { envId: ENV_ID })
 }
 
 main().catch(function (error) {
