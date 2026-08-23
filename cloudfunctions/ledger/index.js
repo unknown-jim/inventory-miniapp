@@ -51,6 +51,18 @@ function createDb() {
         return null
       }
     },
+    // 平台运营方白名单。_id 就是 openid，所以是一次 doc().get()，不用索引。
+    // **失败一律当「不是运营方」**：文档不存在会抛，读失败也会抛，两种都返回 null。
+    // 这是有意的 fail-closed —— 读不出来就拒绝，比读不出来就放行安全得多；
+    // 代价是一次瞬时读失败会让运维动作暂时不可用，重试即可。
+    async getPlatformAdmin(openid) {
+      try {
+        const res = await db.collection('platform_admins').doc(String(openid || '')).get()
+        return res.data || null
+      } catch (error) {
+        return null
+      }
+    },
     // 事务外读一份清空快照。只有账本升级的 mode:'snapshots' 用得上：它要先在
     // 事务外把快照里的流水逐条写进集合（写完再开事务盖 bookId），所以得先能
     // 在事务外看见这份文档。记账路径读快照仍然只走事务里的 tx.getClearSnapshot。

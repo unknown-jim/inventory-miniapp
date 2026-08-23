@@ -243,6 +243,23 @@ function requireOwner(members, shopId, openid) {
   return member
 }
 
+// 运维动作（账本升级那三个）的门。**不是 owner-gated**：
+//
+// 这套系统按会员费卖给多家店，平台运营方要给每一家跑迁移，而运营方通常不是任何一家店的
+// 成员；反过来，店主能跑 dropLegacy / rollback / recomputeAggregates 才是真正的风险——
+// dropLegacy 跑完就没有 O(1) 回滚了，rollback 会把迁移后记的账从读路径抹掉，而后果由平台方兜。
+// 所以判据换成「是不是平台运营方」，对运营方放行、对所有租户关死。
+//
+// 名单在集合 platform_admins，_id 就是 openid，所以这里是一次 doc().get()，不用索引。
+// **fail-closed**：db.getPlatformAdmin 把「文档不存在」和「读失败」都返回 null，两种都拒绝。
+async function requirePlatformAdmin(db, openid) {
+  const admin = db.getPlatformAdmin ? await db.getPlatformAdmin(openid) : null
+  if (!admin) {
+    throw new Error('账本升级只能由平台运营方执行')
+  }
+  return admin
+}
+
 function memberDocId(shopId, openid) {
   return String(shopId) + '_' + String(openid)
 }
@@ -594,16 +611,11 @@ async function dispatch(input) {
     })
   }
 
-  // 账本升级的三个运维动作。owner-gated：照抄 deleteShop 的内联写法，
-  // **不复用 requireOwner** —— 它的文案是「只有店主能改成员」，用在这里会误导。
-  // 客户端一个入口都没有（方案 §六-(f)）：从开发者工具 Console 直接
+  // 账本升级的三个运维动作。**平台运营方白名单**，不是 owner-gated（理由见
+  // requirePlatformAdmin 上方）。客户端一个入口都没有：从开发者工具 Console 直接
   // wx.cloud.callFunction 调。加个隐藏按钮就等于把「一键重写全店流水」发到线上。
   if (isOpsAction(action)) {
-    const members = await db.listMembersByShop(shopId)
-    const member = requireMember(members, shopId, openid)
-    if (member.role !== 'owner') {
-      throw new Error('只有店主能做账本升级')
-    }
+    await requirePlatformAdmin(db, openid)
     if (action === 'checkAggregates') {
       return migrate.checkAggregates(db, shopId, payload)
     }

@@ -55,11 +55,11 @@
 
 ### 云开发
 
-- 业务库只允许云函数 `ledger` 读写。小程序禁止 `wx.cloud.database()` 访问 `shops` / `members` / `ledgers` / `ledger_records` / `ledger_clears`。
+- 业务库只允许云函数 `ledger` 读写。小程序禁止 `wx.cloud.database()` 访问 `shops` / `members` / `ledgers` / `ledger_records` / `ledger_clears` / `platform_admins`。
 - `utils/cloud-config.js` 必须有明确的环境 ID 才记账；填开发者工具「云开发」里的 ID，不要填腾讯云控制台另一套环境，也不要依赖「第一个云环境」。
-- 部署 `ledger` 用微信云托管 CLI；密钥只放环境变量 `WXCLOUD_PRIVATE_KEY`，步骤见 [`.cursor/skills/wxcloud-cli/SKILL.md`](.cursor/skills/wxcloud-cli/SKILL.md)。不要用腾讯云账号的 `tcb` 管微信侧环境。`ledger_records` 的索引用 `node scripts/wxcloud-ensure-indexes.js` 建；五张业务表权限用 `node scripts/wxcloud-ensure-acl.js` 设成 `ADMINONLY`。都不要在控制台手点。
+- 部署 `ledger` 用微信云托管 CLI；密钥只放环境变量 `WXCLOUD_PRIVATE_KEY`，步骤见 [`.cursor/skills/wxcloud-cli/SKILL.md`](.cursor/skills/wxcloud-cli/SKILL.md)。不要用腾讯云账号的 `tcb` 管微信侧环境。`ledger_records` 的索引用 `node scripts/wxcloud-ensure-indexes.js` 建；六张业务表权限用 `node scripts/wxcloud-ensure-acl.js` 设成 `ADMINONLY`。都不要在控制台手点。
 - 改 `utils/inventory.js` 或 `utils/ledger-apply.js` 后运行 `npm run sync:ledger-inventory`，保持云函数副本一致。
 - 流水是「一单一记录」，明细在 `lines[]`；`allocations` 逐行保留，已退数量和金额记在销售行的 `returnedQty` / `returnedAmount` 上。欠款和汇总一律由当前流水现算，不要加冻结字段。详见 [docs/cloud-ledger.md](docs/cloud-ledger.md)。
 - 流水**字段**换形状时读的一端兜底、写的一端抹掉老字段，不写迁移脚本（例：`settledAmount` 按老 `payType` 回推实收）。这条管字段，不管**搬家**：流水搬进 `ledger_records` 是一次显式的迁移动作，两件事不要互相套用。详见 [docs/cloud-ledger.md](docs/cloud-ledger.md)。
-- 搬家是三个 owner-gated 的运维 action：`checkAggregates`（只读预检，核心是纯函数，**控制台导出 `ledgers` 就能在本机跑** `node scripts/check-ledger-export.js`，不用先部署）、`migrateRecords`（搬家，带 `rollback` / `dropLegacy` / `snapshots` 三个模式，`snapshots` 把升级前存的清空快照也转过来，不跑那几家店的「恢复清空前数据」会永久报错）、`recomputeAggregates`（聚合漂了按集合现状重折叠，**它不修错账**）。客户端一个入口都没有，只从开发者工具 Console 调。详见 [docs/cloud-ledger.md](docs/cloud-ledger.md) 的「账本升级」。
+- 搬家是三个走**平台运营方白名单**（集合 `platform_admins`，`_id` = openid，fail-closed）的运维 action：`checkAggregates`（只读预检，核心是纯函数，**控制台导出 `ledgers` 就能在本机跑** `node scripts/check-ledger-export.js`，不用先部署）、`migrateRecords`（搬家，带 `rollback` / `dropLegacy` / `snapshots` 三个模式，`snapshots` 把升级前存的清空快照也转过来，不跑那几家店的「恢复清空前数据」会永久报错）、`recomputeAggregates`（聚合漂了按集合现状重折叠，**它不修错账**）。客户端一个入口都没有，只从开发者工具 Console 调；`deleteShop` 保持 owner-gated，不跟着换。详见 [docs/cloud-ledger.md](docs/cloud-ledger.md) 的「账本升级」。
 - `app.json` 的 `lazyCodeLoading` 仍须保留；`cloudfunctions/` 不进小程序包。详见 [docs/cloud-ledger.md](docs/cloud-ledger.md)。

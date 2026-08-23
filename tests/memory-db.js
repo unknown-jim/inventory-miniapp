@@ -139,6 +139,9 @@ function MemoryDb(options) {
   this.ledgers = {}
   this.clears = {}
   this.records = {}
+  // 平台运营方白名单（platform_admins 的替身）。**不进 snapshot() / 事务**：
+  // 它不参与事务，是事务外的只读白名单，运维动作的门直接读 db.getPlatformAdmin。
+  this.platformAdmins = {}
   this._rev = 0
   this.hooks = (options && options.hooks) || {}
 }
@@ -191,6 +194,14 @@ MemoryDb.prototype.listMembersByShop = async function (shopId) {
 
 MemoryDb.prototype.getLedger = async function (shopId) {
   return this.ledgers[shopId] ? clone(this.ledgers[shopId]) : null
+}
+
+// 平台运营方白名单（index.js 的 createDb() 同名方法）。和 getClearSnapshot 一样：
+// 查不到就返回 null，不抛 —— 「文档不存在」和「读失败」在真云上都被折成 null，
+// requirePlatformAdmin 对两种一律拒绝（fail-closed）。
+MemoryDb.prototype.getPlatformAdmin = async function (openid) {
+  const key = String(openid || '')
+  return this.platformAdmins[key] ? clone(this.platformAdmins[key]) : null
 }
 
 // 事务外读一份清空快照（账本升级的 mode:'snapshots' 用）。和 index.js 的

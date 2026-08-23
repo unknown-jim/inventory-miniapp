@@ -48,7 +48,7 @@
   - **没有「逐店冻结窗口」这回事。** `apiVersion` 门是全局的：部署云函数那一瞬间**所有**店的老客户端一起被挡住，不是迁一家停一家。冻结窗口 = 从部署到发布小程序之间的**整段**时间，排期要按这个算。
 - 扣账内核只有一份。云函数不能 `require('../../utils/inventory')`，用 `npm run sync:ledger-inventory` 复制到 `cloudfunctions/ledger/`。`npm test` 会在两份不一致时失败。
 - 环境 ID 写在 [`utils/cloud-config.js`](../utils/cloud-config.js) 的 `CLOUD_ENV_ID`，必须等于开发者工具「云开发 → 设置」里的那一串（微信侧）。腾讯云控制台里另一套环境填进来会报 Environment not found。空着不能记账，也不要用客户端 `DYNAMIC_CURRENT_ENV` 代替填写。
-- 集合：`shops`、`members`、`ledgers`、`ledger_records`、`ledger_clears`。前四张是当前店账；`ledger_clears` 保存每一次清空的完整快照，不回传给小程序。
+- 集合：`shops`、`members`、`ledgers`、`ledger_records`、`ledger_clears`、`platform_admins`。前四张是当前店账；`ledger_clears` 保存每一次清空的完整快照，不回传给小程序；`platform_admins` 是**平台运营方白名单**（账本升级三个运维 action 的门，见下面「账本升级」），文档形状 `{ _id: openid, openid, note, createdAt }` —— `_id` 就是 openid，查询是一次 `doc(openid).get()`，**不需要索引**，权限同样是仅管理端可读写。
   - `ledger_records` 是 2b-1 从 `ledgers.records` 数组里拆出来的**当前流水表**，一单一条文档，`_id` = `bookId_recordId`，排序键 `sortKey` = `pad13(createdAt)_id`。账本文档里的 `records` 数组只剩没迁移的老店在用，迁完就是空的。
   - 它需要 **6 条索引**，定义和用途写在 [`cloudfunctions/ledger/ledger-records.js`](../cloudfunctions/ledger/ledger-records.js) 顶部注释里，和这里必须一致。#1–#5 全部避开数组字段；#6 是另一回事：
     1. `bookId` ASC, `sortKey` DESC —— `page` / `recentAndToday`
@@ -63,8 +63,8 @@
 ## 上线前要做的事
 
 1. 开通云开发，把**开发者工具云开发面板里的**环境 ID 填进 `utils/cloud-config.js`。
-2. 建集合 `shops`、`members`、`ledgers`、`ledger_records`、`ledger_clears`。`node scripts/wxcloud-deploy-ledger.js` 会自动建这五张表（缺 `ledger_records` 就是部署完每一次流水查询都报错，所以它必须在那个数组里），补 `ledger_records` 的 6 条索引，并把五张表权限设成仅管理端可读写。
-3. 给这五张业务表设权限为 **仅管理端可读写**（`ADMINONLY`）。**不是可选的**：小程序禁止直连业务库，权限必须把客户端挡在外面。控制台新建的表常常是 `PRIVATE`（仅创建者可读写），比设计松。CLI 新建的表默认已是 `ADMINONLY`。
+2. 建集合 `shops`、`members`、`ledgers`、`ledger_records`、`ledger_clears`、`platform_admins`。`node scripts/wxcloud-deploy-ledger.js` 会自动建这六张表（缺 `ledger_records` 就是部署完每一次流水查询都报错，所以它必须在那个数组里），补 `ledger_records` 的 6 条索引，并把六张表权限设成仅管理端可读写。**但 `platform_admins` 不能等部署脚本去建**：脚本是先更新函数代码、后建表，而门是 fail-closed 的——新代码上线那一刻读不到名单，三个运维 action 对所有人拒绝。正确顺序见「账本升级」一节的上线硬依赖（`node scripts/wxcloud-ensure-platform-admin.js <运营方 openid>`）。
+3. 给这六张业务表设权限为 **仅管理端可读写**（`ADMINONLY`）。**不是可选的**：小程序禁止直连业务库，权限必须把客户端挡在外面。控制台新建的表常常是 `PRIVATE`（仅创建者可读写），比设计松。CLI 新建的表默认已是 `ADMINONLY`。
 
    不要在控制台手点。用微信云托管 CLI：
 
@@ -105,7 +105,13 @@
 
 2b-1 之前流水存在 `ledgers.records` 数组里。搬家是**一次显式的运维动作**，不是「读时兜底」——那条规矩管**字段**换形状，不管搬家，两件事不要互相套用。
 
-三个 action 都是 **owner-gated**、都过 `apiVersion` 门、都**不进 `MUTATIONS`**（不走 `applyMutation`）。**客户端一个入口都没有**：从开发者工具 Console 直接 `wx.cloud.callFunction({ name:'ledger', data:{ action, shopId, apiVersion:2, payload } })` 调。不要加隐藏按钮——那等于把「一键重写全店流水」发到线上。实现在 [`cloudfunctions/ledger/ledger-migrate.js`](../cloudfunctions/ledger/ledger-migrate.js)（**不参与 sync**，它有 IO）。
+三个 action 都走**平台运营方白名单**（`ledger-core.js` 的 `requirePlatformAdmin`，名单在集合 `platform_admins`，`_id` 就是 openid）、都过 `apiVersion` 门、都**不进 `MUTATIONS`**（不走 `applyMutation`）。**客户端一个入口都没有**：从开发者工具 Console 直接 `wx.cloud.callFunction({ name:'ledger', data:{ action, shopId, apiVersion:2, payload } })` 调。不要加隐藏按钮——那等于把「一键重写全店流水」发到线上。实现在 [`cloudfunctions/ledger/ledger-migrate.js`](../cloudfunctions/ledger/ledger-migrate.js)（**不参与 sync**，它有 IO）。
+
+**为什么不是 owner-gated**（2b-4 之前是，改掉的理由）：owner 门守错了对象。它拦住平台运营方——这套系统按会员费卖给多家店，运营方要给每一家跑迁移，而运营方通常不是任何一家店的成员，挨个切店主微信号不可扩展，也不可能让交了会员费的店主自己打开开发者工具敲 Console；它却放行每一个店主——`dropLegacy` 跑完就没有 O(1) 回滚、`mode:'rollback'` 会把迁移后记的账从读路径抹掉、`recomputeAggregates` 按集合现状重折叠，而后果由平台方兜。白名单两头同时变对：**对运营方放行、对所有租户关死**。门是 **fail-closed** 的：`getPlatformAdmin` 把「文档不存在」和「读失败」都折成 `null`，两种一律拒绝——读不出来就拒绝，比读不出来就放行安全得多；代价是一次瞬时读失败让运维动作暂时不可用，重试即可。
+
+**上线硬依赖：`platform_admins` 必须在部署新云函数之前建好并写入运营方 openid。** 顺序反了的后果：新代码一上线，三个运维 action 对**所有人**拒绝（fail-closed 的必然结果），而那正是要用它们迁移的时刻——全店已经因为 `apiVersion` 门停摆，却谁也跑不了迁移。正确顺序：① 运营方在开发者工具 Console 调 `whoami` 拿到自己的 openid（这个 action 在线上老版本就有、且免版本门，现在就能做）→ ② 一条命令把建集合、写文档、核对权限做完：`node scripts/wxcloud-ensure-platform-admin.js <openid>`（照 `wxcloud-ensure-indexes.js` 的形状写的幂等脚本，内部是 `@wxcloud/cli` 的 `flexdbCreateTable` / `flexdbPutItem` / ACL 那套；`tag` 的推导 `databases[0].instanceId || ENV_ID` 复用 `wxcloud-ensure-indexes.js` 导出的 `resolveDb`，全仓只有这一份定义）→ ③ 才部署新云函数。`deleteShop` **保持 owner-gated 不变**：那是租户对自己店的操作，不是平台运维。
+
+**恢复路**：万一 `platform_admins` 空了 / 被删了导致锁死，重跑同一条命令 `node scripts/wxcloud-ensure-platform-admin.js <openid>` 把那条文档插回去即可，**不需要重新部署云函数**——门每次调用都现读集合，读到就放行。
 
 ### `checkAggregates` —— 只读预检
 
@@ -220,9 +226,21 @@ payload: { mode: 'snapshots', limit?: 50 }
 
 **阶段 0（T−7 天，不部署、不影响营业）**：控制台导出 `ledgers` 全表（另导 `ledger_clears` 的 `_id`/`shopId`/`savedAt`/`bookId`/**`records`**——漏了 `records`，P11 明细里每份快照的「流水 N 条」就全是 0，看不出哪份需要转换）→ `node scripts/check-ledger-export.js <文件> --json > 预检报告.json` → 逐店过 P1–P14，阻塞项必须为空、P4 每条改动能归到三类之一 → `mergedCount` 填进排期表 → **下载存档当前线上 `ledger` 云函数代码包**（唯一的整体回滚路，事后补不回来）。任何一项不过就停在这里。
 
-**阶段 1（T−1 天）**：确认集合 `ledger_records` 存在且权限为「仅管理端可读写」→ 建 **6 条复合索引**（字段顺序和升降序逐条核对，漏一条会退化成全表扫）→ 确认操作者 openid 是**每一家**店的 owner → 新建测试店灌一份导出副本走完整流程，**顺便验一下当晚要用的调用方式能不能调通**（控制台云函数测试面板里 `getWXContext().OPENID` 可能为空，那就只能走开发者工具 Console，别留到当晚才发现）。
+**阶段 1（T−1 天）**：确认集合 `ledger_records` 存在且权限为「仅管理端可读写」→ 建 **6 条复合索引**（字段顺序和升降序逐条核对，漏一条会退化成全表扫）→ 跑 `node scripts/wxcloud-ensure-platform-admin.js <运营方 openid>`：建 `platform_admins`、写入运营方 openid、核对权限 `ADMINONLY`，一条命令幂等做完（上线硬依赖，见「账本升级」一节）→ 确认运营方 openid 在 `platform_admins` 里（脚本收尾会打印集合现状，逐条核对有这条）→ **顺便验一下当晚要用的调用方式能不能调通**（控制台云函数测试面板里 `getWXContext().OPENID` 可能为空，那就只能走开发者工具 Console，别留到当晚才发现）。
 
-→ **在测试店上把回滚彩排一遍**（本机测不到的就这一段）：`migrateRecords` 到 `done` → 在 app 里记一笔 1 元销售 → 调 `{mode:'rollback'}` **必须被拒**，错误里报得出 `foreignCount` ≥ 1 → 再调 `{mode:'rollback', force:true}` **必须成功**，回包里 `forced:true`、`discarded:1`、`probeError` 和 `countError` 都是空串 → 最后用 `{newBook:true}` 迁回去。**最后这一步不要用 `{restart:true}`**：彩排记的那笔 1 元测试账留在集合里就是残骸、又不是这次要写的那批的子集，`restart` 重写完必撞校验（那笔账 `createdAt` 最新、排在倒序最前，逐页比对整排错开——报错单以 V7 / V2 打头、V1「集合里多出这条」垫在末尾；内存替身上实测 7 项 = V7×4 + V2×2 + V1×1——店停在 `failed`、`recordsMigratedAt` 一直是 0）；而回滚之后写路径是冻着的（见上面 `mode:'rollback'` 那条），那条账在 app 里删不掉，所以只能换账套——这正是上面「**残骸来路不明就直接 `newBook`，不要试 `restart`**」那条规矩的实例。**这三步任意一步不对就停在阶段 1，不要进阶段 2**：当晚的紧急出路只有这一条，它是不是好的，只能在这里知道。
+> **阶段 1 的后半段（下面那几条彩排和真云实测）必须在部署之后做，所以它和阶段 2 是同一个晚上，不是隔一天。** 部署那一瞬间所有店一起被 `apiVersion` 门挡住（见「没有逐店冻结窗口这回事」），而彩排要验的双信号回滚守卫、`platform_admins` 白名单、事务内 `pageDocs`，旧云函数里一个都没有。**不要为此另开一个云环境**：现有规模（3 家店、十几条流水）下那个成本远大于它防的风险。正确的隔离办法是**拿运营方自己那家演示店当挡箭牌**——先在它身上把下面几条全跑绿，不绿就停在这里，此时真实店铺一个字都没动。
+>
+> **店的先后顺序**（重名的两家务必按 `shopId` 认，不要按店名认）：
+> 1. `mt33kfi77idxpw`（运营方自有演示店）——彩排和两条真云实测全在它身上跑
+> 2. `mt3231n3ixeenv`（卓祥服饰，0 条流水、1 份老快照）——第一个真实店，也是**唯一能在低风险下验 `mode:'snapshots'`** 的地方（自有演示店没有清空快照，这条它盖不到）
+> 3. `msxeubh4c6d5f9`（应收 549 万那家，2 份老快照）——**最后动**
+
+
+→ **把运营方 openid 加进当晚要迁的每家店的 `members`（`role: 'staff'`）**。为什么必须有这一步：三个运维 action 走的是 `platform_admins` 白名单，但当晚清单里 **`getSlip` 前后逐张对照、`getLedger` 核对、记 1 元测试账、删掉它** 这几步走的是 `requireMember`——而白名单的设计前提就是运营方不属于任何一家店（见上面「为什么不是 owner-gated」），不加成员这些步全报「不是该店成员」，其中 `getSlip` 逐张相等是这次迁移**唯一的正确性验证**，恰好落在被挡掉的步骤里。写法：直接往 `members` 插文档（`addMember` 要 owner，运营方加不了自己），`_id` 是 `shopId_openid`（`ledger-core.js` 的 `memberDocId`），文档 `{ _id, shopId, openid, role, createdAt }`；`role` 只有 `owner` / `staff` 两档，运营方一律 **`staff`**——`staff` 过得了 `requireMember`，而 `deleteShop` / `addMember` / `removeMember` 仍要 owner，租户边界不破。**迁完可以移除**（店主 `removeMember` 或直接删那条文档）。
+
+  已做完（记录于 2026-08-24）：运营方 openid 已写进 `msxeubh4c6d5f9`（聚友纺织，549 万应收那家）和 `mt3231n3ixeenv`（卓祥服饰），都是 `staff`；`mt33kfi77idxpw`（另一家聚友纺织）运营方本来就是 `owner`，未改动。三位店主原有的 owner 记录一条没动。
+
+→ **在测试店上把回滚彩排一遍**（本机测不到的就这一段）：`migrateRecords` 到 `done` → 在 app 里记一笔 1 元销售 → 调 `{mode:'rollback'}` **必须被拒**，错误里报得出 `foreignCount` ≥ 1 → 再调 `{mode:'rollback', force:true}` **必须成功**，回包里 `forced:true`、`discarded:1`、`probeError` 和 `countError` 都是空串 → 最后用 `{newBook:true}` 迁回去。**最后这一步不要用 `{restart:true}`**：彩排记的那笔 1 元测试账留在集合里就是残骸、又不是这次要写的那批的子集，`restart` 重写完必撞校验（那笔账 `createdAt` 最新、排在倒序最前，逐页比对整排错开——报错单以 V7 / V2 打头、V1「集合里多出这条」垫在末尾；内存替身上实测 7 项 = V7×4 + V2×2 + V1×1——店停在 `failed`、`recordsMigratedAt` 一直是 0）；而回滚之后写路径是冻着的（见上面 `mode:'rollback'` 那条），那条账在 app 里删不掉，所以只能换账套——这正是上面「**残骸来路不明就直接 `newBook`，不要试 `restart`**」那条规矩的实例。**这三步任意一步不对就停在阶段 1，不要进阶段 2**：当晚的紧急出路只有这一条，它是不是好的，只能在这里知道。**彩排还有一个它结构性看不见的失败模式**：测试店是运营方自己 `createShop` 建的，他在那家店里既是 owner 又在白名单——「运营方不是该店成员」这一段彩排怎么跑都是绿的。阶段 2 里走 `requireMember` 的那几步能不能跑，只能靠上面「把运营方加进 `members`」那一步保证，不能指望彩排发现；这个失败模式第一次现形是在 T 日打烊后、全店已因 `apiVersion` 门停摆的时候，没有第二次机会。
 
 → 测试店走完整流程时**必须包含「改一张进货单（或删掉它）」和「改一张退货单（或删掉它）」**——导出副本里没有现成的单可改（真实导出：549 万那家 0 张进货单、三家店 0 张退货单），要先在测试店里**记一笔进货、一笔销售、一笔退货**（退货必须挂在销售单上，所以销售那笔也得先记），再来改或删它们。这一步**是在验守卫的依赖，不是在验业务**，别省：事务里那两条 `where().orderBy().limit().get()`（`latestPurchases` / `returnsOfSale`）**只有 `updateRecord` / `deleteRecord` 才会发**，光记进货和退货一条都发不出来（实测 `addPurchase` / `addSale` / `addReturn` 在事务内的 `where` 查询数都是 0）。上面那次 `{mode:'rollback'}` 被拒只证明了 `pageDocs` 在**回滚事务**里能跑；这一步才证明**记账事务**里也能跑，两件事都得有。
 
@@ -232,7 +250,7 @@ payload: { mode: 'snapshots', limit?: 50 }
 
 → 顺便在测试店上把 `dropLegacy` 按**上线清单自己的顺序**跑一遍：迁完 → 记一笔 1 元销售 → 删掉 → `{mode:'dropLegacy'}` **必须成功**，验收看回包里 **`shortfall` 为 0**（也就是 `collectionCount ≥ mergedCount`）。**别要求两个条数相等**：这家测试店在最后一次迁移**之后**记的账只进集合、不进老数组——为上一条造的进货 / 销售 / 退货单只要没删掉就会留在当前账套里，`collectionCount` 偏大是正常的（实测：归并 6 条 + 3 张测试单 = 集合 9 条）。回滚彩排那笔 1 元测试账也永久留在集合里，但它记在后来被 `{newBook:true}` 换掉的旧账套里，不进这两个数。真正的闸是「集合非空」而不是条数相等（见上面 `mode:'dropLegacy'` 那条），集合里**缺**了老数组该有的账才回在 `shortfall` 里（大于 0 就停下来查）。跑完这家店就没有 O(1) 回滚了，所以**只在测试店上跑**。
 
-**阶段 2（T 日打烊后，从第 2 步起所有店一起停摆）**：`npm test` 绿 → `npm run sync:ledger-inventory` → `node scripts/wxcloud-deploy-ledger.js` → 开发者工具打开新版源码、店主登录 → 逐店：`checkAggregates`（`mergedCount` 与阶段 0 报告**一致**、`collectionCount === 0`；**零记录的店是例外**——`records` 为空且没迁过，云上走「已迁移」分支，报告形状不同、**没有 `mergedCount` 字段**、还报 `migrated: true`（其实 `recordsMigratedAt` 是 0），照清单核对时别卡在这一条）→ 记下 2–3 张老送货单的 `getSlip` 结果 → 循环 `migrateRecords` 到 `done` → `getLedger` 核对 `totals` 和两个客户（等于报告里的 `after`、**无 `aggregatesStale`**）→ **重跑那几张 `getSlip`，必须逐张相等** → **预检 P11 报了有没转的快照的店，跑 `migrateRecords` 的 `mode:'snapshots'` 到 `state === 'done'` 且 `failed === 0`**（漏跑 = 这家店的「恢复清空前数据」从能点变成永久报错）→ 记一笔 1 元测试销售确认写路径解冻、再删掉 → 账本文档 > 3 MB 的店跑 `dropLegacy` → 全部绿了再发布小程序并逐店真机确认已更新。
+**阶段 2（T 日打烊后，从第 2 步起所有店一起停摆）**：`npm test` 绿 → `npm run sync:ledger-inventory` → `node scripts/wxcloud-deploy-ledger.js` → 开发者工具打开新版源码、**运营方**（`platform_admins` 里那个 openid，阶段 1 已建好）登录——迁移夜跑这三个 action 的是运营方，不再是各家店主。**但当晚清单不是每一步都走白名单**：三个运维 action（`checkAggregates` / `migrateRecords` 各 mode / `recomputeAggregates`——最后一个在下面回滚段落里，聚合漂了才跑）过 `requirePlatformAdmin`，运营方在名单里即可；其余每一步（`getSlip`、`getLedger`、记 1 元测试账、删掉它）过的是 `requireMember`，运营方必须是**该店**成员（阶段 1 已提前加为 `staff`），不是就报「不是该店成员」。逐店步骤用〔白名单〕/〔店成员〕标注执行人。每家的 `shopId` 从阶段 0 导出的 `ledgers` 全表 `_id` 里取——`listShops` 只列调用者自己是成员的店，运营方在阶段 1 加 `members` 之前调它回 `[]`（实测），加过之后能列出这几家，但 id 一律以导出为准 → 逐店：`checkAggregates`**〔白名单〕**（`mergedCount` 与阶段 0 报告**一致**、`collectionCount === 0`；**零记录的店是例外**——`records` 为空且没迁过，云上走「已迁移」分支，报告形状不同、**没有 `mergedCount` 字段**、还报 `migrated: true`（其实 `recordsMigratedAt` 是 0），照清单核对时别卡在这一条）→ 记下 2–3 张老送货单的 `getSlip` 结果**〔店成员〕** → 循环 `migrateRecords` 到 `done`**〔白名单〕** → `getLedger` 核对 `totals` 和两个客户**〔店成员〕**（等于报告里的 `after`、**无 `aggregatesStale`**）→ **重跑那几张 `getSlip`，必须逐张相等〔店成员〕** → **预检 P11 报了有没转的快照的店，跑 `migrateRecords` 的 `mode:'snapshots'` 到 `state === 'done'` 且 `failed === 0`〔白名单〕**（漏跑 = 这家店的「恢复清空前数据」从能点变成永久报错）→ 记一笔 1 元测试销售确认写路径解冻、再删掉**〔店成员〕** → 账本文档 > 3 MB 的店跑 `dropLegacy`**〔白名单〕** → 全部绿了再发布小程序并逐店真机确认已更新。
 
 **回滚**：某店 `failed` → 不动，该店停摆，无错账；某店 `done` 后发现不对 → `mode:'rollback'`（O(1)，该店**仍停摆**——只有读退回老路径，写仍被 `assertRecordsReady` 冻着；集合里的文档留着，**重跑必须带 `restart: true`**，回滚前记过账就连 `restart` 也会撞 V7/V2、只能 `newBook: true`；**迁完之后已经记过账就会被拒绝**，那些账只在集合里，回滚看不见它们——真要回滚得先另行备份再带 `force: true`；反过来，迁完之后**只删过单**的店回滚会**放行**，被删的单在老路径上复活，守卫不管这一侧）；整体不对 → 部署阶段 0 存档的旧函数包（已跑过 `dropLegacy` / 清空 / 恢复的店回不去）；聚合漂了 → `recomputeAggregates`。
 

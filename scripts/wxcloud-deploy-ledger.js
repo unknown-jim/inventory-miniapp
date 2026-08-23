@@ -154,9 +154,13 @@ async function main() {
   const tag = (db && db.instanceId) || ENV_ID
   // ledger_records 漏了就是**上线路径直接断掉**：集合不存在，部署完每一次流水
   // 查询（listRecords / getSlip / getRecord / 记账）都报错。
-  // 表建完后补 ledger_records 的 6 条索引，并把五张业务表权限设成 ADMINONLY
+  // platform_admins 漏了同样致命但更隐蔽：门是 fail-closed 的，部署完三个运维
+  // action（checkAggregates / migrateRecords / recomputeAggregates）对**所有人**
+  // 拒绝，谁也迁不了 —— 而那一刻正是全店停摆、等着跑迁移的时刻。所以这张表
+  // 必须在建集合清单里，而且要在部署新云函数**之前**建好并写入运营方 openid。
+  // 表建完后补 ledger_records 的 6 条索引，并把六张业务表权限设成 ADMINONLY
   // （幂等），见 scripts/wxcloud-ensure-indexes.js、scripts/wxcloud-ensure-acl.js。
-  const names = ['shops', 'members', 'ledgers', 'ledger_records', 'ledger_clears']
+  const names = ['shops', 'members', 'ledgers', 'ledger_records', 'ledger_clears', 'platform_admins']
   let tables = []
   try {
     const listed = await wx.api.flexdbListTables({
