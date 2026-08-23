@@ -51,6 +51,17 @@ function createDb() {
         return null
       }
     },
+    // 事务外读一份清空快照。只有账本升级的 mode:'snapshots' 用得上：它要先在
+    // 事务外把快照里的流水逐条写进集合（写完再开事务盖 bookId），所以得先能
+    // 在事务外看见这份文档。记账路径读快照仍然只走事务里的 tx.getClearSnapshot。
+    async getClearSnapshot(id) {
+      try {
+        const res = await db.collection('ledger_clears').doc(id).get()
+        return res.data || null
+      } catch (error) {
+        return null
+      }
+    },
     async runTransaction(fn) {
       try {
         return await db.runTransaction(async function (transaction) {

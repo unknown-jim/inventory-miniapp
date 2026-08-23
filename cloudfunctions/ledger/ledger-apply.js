@@ -282,11 +282,32 @@ function listsOf(ledger) {
 
 // 迁移前的老账本：流水还在文档数组里。读时自愈成「一单一条」，
 // 和 2a 的 listsOf 行为一致，只用于兼容读和迁移动作。
+//
+// 两步，口径不同，**不能合并成一步**：
+//   ① migrateRecordShape —— 归并。「一行商品一条」变「一张单一条」，
+//      换字段不许换钱。tests/ledger-terms.test.js 有常驻断言钉着这一条。
+//   ② repairReturnSplits —— 退货份额整体重算。它就是来改钱的：修 B1（代 B 的
+//      退货单没有结算字段，被保守回推成「整笔退现金」、一分不冲欠款）和
+//      B2（改过销售单客户后，退货单头留着旧 customerId，一个客户少算另一个多算）。
+//      塞进 ① 里会让那条绿着的断言要么变红要么被稀释。
+//
+// ② 对 needsRecordMigration 真假**都要跑**：库里三代形状混着（见 inventory.js
+// 的 settledAmount 注释），代 B / B2 的记录本身已经是 lines 形状，① 会原样放行。
+// 代 C 已 materialize，重算是恒等变换、返回入参本身（引用相等），所以放在读路径
+// 上安全。
+//
+// 挂在这里（五个调用点的共同入口）而不是只挂在迁移动作上，理由有三：
+//   1. migrateLocalShard 走的就是它。本机账本可能是任意一代形状，不修就把错值
+//      永久写进 ledger_records。
+//   2. 不修一半。窗口期内 getSlip 走 receivableAt(legacy)、客户页走
+//      foldAccountTerms(legacy)，只修一条路会出现「送货单印 200、客户页显示 0」。
+//   3. 一份定义，五个调用点零改动。
 function legacyRecordsOf(ledger) {
   const records = cloneList(ledger && ledger.records)
-  return inventory.needsRecordMigration(records)
+  const merged = inventory.needsRecordMigration(records)
     ? inventory.migrateRecordShape(records)
     : records
+  return inventory.repairReturnSplits(merged)
 }
 
 // 「这本账的流水还没搬进 ledger_records」。写路径见了它必须停下来报错，
@@ -834,8 +855,18 @@ function applyMutation(ledger, action, payload, now, nextId, loaded) {
     }
     if (!snapshot.bookId) {
       // 升级前的快照把流水装在数组里，恢复要逐条写回集合，不是一次事务能做完的事。
-      // 宁可报错，也不要恢复出一本没有流水的账。迁移动作会顺带把这类快照转过来。
-      throw new Error('这份备份是账本升级前存的，请先完成账本升级再恢复')
+      // 宁可报错，也不要恢复出一本没有流水的账。
+      //
+      // 没有 bookId **只说明这份快照还没转换过**，不是「转不了」：转换是
+      // migrateRecords 的 mode:'snapshots'（活账套迁完之后紧接着的一步，
+      // 见 cloudfunctions/ledger/ledger-migrate.js 的 convertSnapshots）。
+      // 所以文案要指出这条路 —— 光说「请联系开发者」是条死路，而这件事有解。
+      // 这句会原样进 wx.showToast（pages/shop/shop.js -> util.showError），
+      // 店主看的是「找谁」、开发者看的是「跑哪个动作」，两个都要在一句话里。
+      // 哪几家店还有没转的快照，由**本地预检脚本带 --clears** 报出（P11）。
+      // 云上的 checkAggregates 拿不到 ledger_clears，P11 只会回 known:false —— 别指望
+      // 它能确认「转过了」，那一步只能看 mode:'snapshots' 自己返回的 failed === 0。
+      throw new Error('这份备份是账本升级前存的，请让开发者先跑 mode:"snapshots" 转换')
     }
     next.products = cloneList(snapshot.products)
     next.skus = cloneList(snapshot.skus)

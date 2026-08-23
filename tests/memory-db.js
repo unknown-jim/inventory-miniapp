@@ -193,6 +193,12 @@ MemoryDb.prototype.getLedger = async function (shopId) {
   return this.ledgers[shopId] ? clone(this.ledgers[shopId]) : null
 }
 
+// 事务外读一份清空快照（账本升级的 mode:'snapshots' 用）。和 index.js 的
+// createDb() 一样：找不到就返回 null，不抛。
+MemoryDb.prototype.getClearSnapshot = async function (id) {
+  return this.clears[id] ? clone(this.clears[id]) : null
+}
+
 MemoryDb.prototype.runTransaction = async function (fn) {
   const max = 8
   for (let attempt = 0; attempt < max; attempt++) {

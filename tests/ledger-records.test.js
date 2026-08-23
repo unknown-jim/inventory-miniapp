@@ -1327,6 +1327,127 @@ function totalStock(skus, productId) {
   assert.strictEqual(pairedReturn.lines[0].saleOrderId, 'ls1', '同片里 backfill 补得上 saleOrderId')
 
   // -------------------------------------------------------------------------
+  // 10b) M13：migrateLocal 也吃退货份额整体重算。
+  //
+  // 本机账本可能是任意一代形状（见 utils/inventory.js 的 settledAmount 注释）。
+  // migrateLocalShard 走的是 apply.legacyRecordsOf，重算挂在那里，所以带 B1 / B2
+  // 的本机数据**落库时就被拨对**，不会把错值永久写进 ledger_records。
+  //   B1 = 代 B 的退货单没有结算字段 -> 被保守回推成「整笔退现金」-> 欠款算大
+  //   B2 = 退货单头挂着改客户之前的旧 customerId -> 一个客户少算、另一个负欠款
+  // -------------------------------------------------------------------------
+
+  // 一张销售单上 Σ(rᵢ − settledAmount(rᵢ)) == min(D, Σrᵢ)，破坏的销售单 id 列表
+  function splitViolationsOf(records) {
+    const bad = []
+    ;(records || []).forEach(function (sale) {
+      if (!sale || sale.type !== 'out') return
+      const debt = inv.round2(inv.toNumber(sale.amount) - inv.settledAmount(sale))
+      const rets = records.filter(function (item) {
+        return item && item.type === 'return'
+          && String((inv.recordLines(item)[0] || {}).saleOrderId || '') === sale.id
+      })
+      if (!rets.length) return
+      const sumReturn = inv.round2(rets.reduce(function (acc, item) {
+        return acc + inv.toNumber(item.amount)
+      }, 0))
+      const offset = inv.round2(rets.reduce(function (acc, item) {
+        return acc + (inv.toNumber(item.amount) - inv.settledAmount(item))
+      }, 0))
+      if (offset !== Math.min(debt, sumReturn)) bad.push(sale.id)
+    })
+    return bad
+  }
+
+  // (a) 老的扁平形状 + B2：赊账卖 100 给 nc1，退 30，退货行还挂着旧客户 oldc
+  const m13Flat = [
+    { id: 'm13-ra', type: 'return', saleRecordId: 'm13-sa', productId: 'mp1', productName: '牛奶', qty: 1, unitPrice: 30, costPrice: 20, amount: 30, profit: -10, payType: 'credit', customerId: 'oldc', customerName: '旧客户', createdAt: 3000 },
+    { id: 'm13-sa', type: 'out', orderId: 'm13-oa', productId: 'mp1', productName: '牛奶', qty: 2, unitPrice: 50, costPrice: 35, amount: 100, profit: 30, payType: 'credit', customerId: 'nc1', customerName: '新客户', customerPhone: '13800000001', customerAddress: '新街 1 号', createdAt: 2000 }
+  ]
+  // (b) 新的 lines 形状 + B1：卖 200 实收 40（欠 160），退 60，退货单两个结算字段都没有
+  const m13Lines = [
+    {
+      id: 'm13-sb', type: 'out', amount: 200, profit: 60, createdAt: 4000,
+      customerId: 'nc2', customerName: '乙客户', customerPhone: '13800000002', customerAddress: '乙街 2 号',
+      paidAmount: 40,
+      lines: [{ lineId: 'm13-sb-l1', productId: 'mp2', productName: '面包', sku: '', skuId: '', color: '', size: '', qty: 4, unitPrice: 50, costPrice: 35, amount: 200, profit: 60, allocations: [], returnedQty: 1, returnedAmount: 60 }]
+    },
+    {
+      id: 'm13-rb', type: 'return', amount: 60, profit: -18, createdAt: 5000,
+      customerId: 'nc2', customerName: '乙客户', customerPhone: '13800000002', customerAddress: '乙街 2 号',
+      lines: [{ lineId: 'm13-rb-l1', productId: 'mp2', productName: '面包', sku: '', skuId: '', color: '', size: '', qty: 1, unitPrice: 60, costPrice: 35, amount: 60, profit: -18, saleOrderId: 'm13-sb', saleLineId: 'm13-sb-l1' }]
+    }
+  ]
+  const m13Lists = {
+    products: [
+      { id: 'mp1', name: '牛奶', costPrice: 35, salePrice: 50, stock: 8, alertQty: 2, colors: [], sizes: [] },
+      { id: 'mp2', name: '面包', costPrice: 35, salePrice: 50, stock: 6, alertQty: 2, colors: [], sizes: [] }
+    ],
+    skus: [],
+    customers: [
+      { id: 'nc1', name: '新客户' }, { id: 'nc2', name: '乙客户' }, { id: 'oldc', name: '旧客户' }
+    ],
+    categories: []
+  }
+
+  // 先钉住这份本机数据在修复前确实是错的 —— 否则下面的断言是假绿
+  const m13Raw = inv.migrateRecordShape(m13Flat.concat(m13Lines))
+  const m13RawAccounts = inv.summarizeAllCustomerAccounts(m13Raw)
+  assert.strictEqual(m13RawAccounts.nc1.receivable, 100, 'M13 自检：不修的话 B2 会让 nc1 欠 100（应为 70）')
+  assert.strictEqual(m13RawAccounts.oldc.receivable, -30, 'M13 自检：不修的话旧客户挂一个 −30 的负账户')
+  assert.strictEqual(m13RawAccounts.nc2.receivable, 160, 'M13 自检：不修的话 B1 会让 nc2 欠 160（应为 100）')
+  assert.deepStrictEqual(splitViolationsOf(m13Raw).sort(), ['m13-sb'], 'M13 自检：不修的话代 B 那张单破坏拆分不变量')
+
+  // 落库后必须对上的那一份：欠款、拆分不变量、退货单头的客户四字段
+  function assertM13Landed(records, label) {
+    const accounts = inv.summarizeAllCustomerAccounts(records)
+    assert.strictEqual(accounts.nc1.receivable, 70, label + '：B2 修好，新客户欠 100 − 30 = 70')
+    assert.ok(!Object.prototype.hasOwnProperty.call(accounts, 'oldc'),
+      label + '：B2 修好，旧客户从 accounts 里消失，不留负账户')
+    assert.strictEqual(accounts.nc2.receivable, 100, label + '：B1 修好，欠 160 退 60 全额冲抵 -> 100')
+    assert.deepStrictEqual(splitViolationsOf(records), [], label + '：拆分不变量必须成立')
+    assert.doesNotThrow(function () {
+      inv.assertAccountsValid(inv.foldAccountTerms(records))
+    }, label + '：落库后不许有负账户，否则这家店退不了货、改不了单、删不了单')
+    const movedReturn = records.find(function (item) {
+      return item.type === 'return' && String((inv.recordLines(item)[0] || {}).saleOrderId || '') === 'm13-oa'
+    })
+    assert.ok(movedReturn, label + '：扁平退货行 backfill 之后要指向归并出来的销售单')
+    assert.strictEqual(movedReturn.customerId, 'nc1', label + '：customerId 拨到销售单当前值')
+    assert.strictEqual(movedReturn.customerName, '新客户', label + '：客户四字段整组拨，不能只拨 id')
+    assert.strictEqual(movedReturn.customerPhone, '13800000001')
+    assert.strictEqual(movedReturn.customerAddress, '新街 1 号')
+    const b1Return = records.find(function (item) { return item.id === 'm13-rb' })
+    assert.strictEqual(b1Return.paidAmount, 0, label + '：代 B 退货单落库时补上 paidAmount = 0（全额冲欠款）')
+    assert.strictEqual(b1Return.payType, undefined, label + '：落库的流水不许留着老 payType')
+  }
+
+  // 一次性上传（不带 token）
+  const m13OneShot = await new Shop({ ids: idFactory('m13a') }).open('B1B2 一次性店')
+  await m13OneShot.call('migrateLocal', {
+    ledger: Object.assign({}, m13Lists, { records: m13Flat.concat(m13Lines) })
+  })
+  const m13OneShotLedger = await m13OneShot.ledger()
+  assertM13Landed(m13OneShotLedger.records, 'M13 一次性上传')
+  assert.deepStrictEqual(m13OneShotLedger.accounts, inv.foldAccountTerms(m13OneShotLedger.records),
+    'M13 一次性上传：攒出来的 accounts 要等于对落库记录全量折叠（修复必须走进增量维护那条路）')
+  assert.deepStrictEqual(m13OneShotLedger.aggregate, inv.foldTotalTerms(m13OneShotLedger.records))
+
+  // 分片上传：两对「销售 + 它的退货」各占一片（assertReturnsPaired 要求成对同片）
+  const m13Sharded = await new Shop({ ids: idFactory('m13b') }).open('B1B2 分片店')
+  await m13Sharded.call('migrateLocal', {
+    token: 'm13-tok', seq: 0, ledger: m13Lists, records: m13Flat
+  })
+  const m13Final = await m13Sharded.call('migrateLocal', {
+    token: 'm13-tok', seq: 1, final: true, records: m13Lines
+  })
+  assert.ok(m13Final.ledger, 'M13 分片上传：最后一片要切换成功')
+  const m13ShardedLedger = await m13Sharded.ledger()
+  assertM13Landed(m13ShardedLedger.records, 'M13 分片上传')
+  assert.deepStrictEqual(m13ShardedLedger.accounts, inv.foldAccountTerms(m13ShardedLedger.records),
+    'M13 分片上传：逐片攒出来的 accounts 要等于对落库记录全量折叠')
+  assert.deepStrictEqual(m13ShardedLedger.aggregate, inv.foldTotalTerms(m13ShardedLedger.records))
+
+  // -------------------------------------------------------------------------
   // 11) recordStore 的查询层：分页游标、按类型 / 按客户过滤、count。
   //     这几条查询各自对应索引清单里的一条，走的是和云上同一份代码。
   // -------------------------------------------------------------------------
