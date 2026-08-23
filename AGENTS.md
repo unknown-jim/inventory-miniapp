@@ -11,6 +11,7 @@
 5. [docs/blank-process.md](docs/blank-process.md)：待加工、分规格现货、退货原样入库、改规格。
 6. [docs/ui-scale.md](docs/ui-scale.md)：操作界面字号、点击区域、密度规则。
 7. [docs/cloud-ledger.md](docs/cloud-ledger.md)：云函数记账、多店隔离、环境 ID、禁止客户端直连业务库。
+8. [docs/ui-test.md](docs/ui-test.md)：UI 自动化测试怎么跑、为什么查不到自定义组件里的东西、等待为什么必须带超时。改页面 `js-` 钩子、抽组件或改 `tests/ui.test.js` 时必读。
 
 ## 硬约束（摘要）
 
@@ -44,6 +45,13 @@
 - 能不能换某一根轴、先改再卖还是当场改：现场规矩，不要写成软件限制。
 - 给操作便利（种类模板带出待选项、多规格可同价），不要给行业裁判。详见 [docs/accounting-vs-policy.md](docs/accounting-vs-policy.md)。
 - 操作界面不要写小于 `--fs-xs` 的字号、不要写小于 `--tap-sm` 的可点高度。新页面用 `app.wxss` 共用布局类，根节点 `class="page"`。送货单除外。详见 [docs/ui-scale.md](docs/ui-scale.md)。
+
+### 测试
+
+- 改 wxml 的 `js-` 钩子、或把页面里的块抽成自定义组件，必须同步检查 `tests/ui.test.js` 并跑一次 `npm run test:ui`。抽组件会让该块上的钩子在测试里全部失效。
+- 自定义组件内部的内容，页面级选择器一律查不到（`slip-overlay` / `page-loading` 都开了 `virtualHost`，`page.$$` / `>>>` / `selectComponent` 实测全是 0）。断言改成核对页面数据，别再往回写 `.js-slip` 这类选择器。
+- `tests/ui.test.js` 里新增等待一律走 `waitFor(page, target, label)`。automator 原生的 `page.waitFor` 没有超时，选择器一过期就静默挂死，不报错。
+- 以上详见 [docs/ui-test.md](docs/ui-test.md)。
 
 ### 云开发
 

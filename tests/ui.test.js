@@ -18,6 +18,8 @@ const fixedPort = Number(process.env.WECHAT_AUTOMATOR_PORT || 0)
 const basePort = 9420
 const portTimeout = Number(process.env.WECHAT_AUTOMATOR_PORT_TIMEOUT || 180000)
 const connectTimeout = Number(process.env.WECHAT_AUTOMATOR_CONNECT_TIMEOUT || 60000)
+const stepTimeout = Number(process.env.WECHAT_AUTOMATOR_STEP_TIMEOUT || 30000)
+const runTimeout = Number(process.env.WECHAT_AUTOMATOR_RUN_TIMEOUT || 900000)
 
 function resolveCliPath() {
   if (process.env.WECHAT_CLI && fs.existsSync(process.env.WECHAT_CLI)) {
@@ -216,6 +218,27 @@ async function connectMiniProgram(port, timeout) {
   throw lastError
 }
 
+// automator 的 page.waitFor 走 licia/waitUntil，而且没传超时（timeout=0 = 无限轮询）。
+// 选择器一旦过期，整个测试就静默挂死而不是报错——送货单弹层被抽成自定义组件之后，
+// 这里真的挂了二十多分钟才被发现。所以所有等待都套一层超时，并把等的是什么报出来。
+function withTimeout(promise, timeout, label) {
+  let timer = null
+  const guard = new Promise(function (resolve, reject) {
+    timer = setTimeout(function () {
+      const spent = timeout >= 1000 ? Math.round(timeout / 1000) + ' 秒' : timeout + ' 毫秒'
+      reject(new Error('等「' + label + '」超时（' + spent + '）'))
+    }, timeout)
+  })
+  return Promise.race([promise, guard]).finally(function () {
+    clearTimeout(timer)
+  })
+}
+
+// 只用来等条件和等选择器；纯 sleep（page.waitFor(800)）不必套。
+async function waitFor(page, target, label) {
+  await withTimeout(page.waitFor(target), stepTimeout, label)
+}
+
 async function tap(page, selector) {
   const el = await page.$(selector)
   if (!el) {
@@ -266,24 +289,45 @@ async function waitForData(page, predicate, label) {
 }
 
 async function tapWhen(page, selector) {
-  await page.waitFor(selector)
+  await waitFor(page, selector, '出现 ' + selector)
   await tap(page, selector)
 }
 
 async function waitGone(page, selector) {
-  await page.waitFor(async function () {
+  await waitFor(page, async function () {
     const list = await page.$$(selector)
     return list.length === 0
-  })
+  }, '消失 ' + selector)
 }
 
-async function textOf(page, selector) {
-  await page.waitFor(selector)
-  const el = await page.$(selector)
-  if (!el) {
-    throw new Error('找不到文本元素: ' + selector)
-  }
-  return el.text()
+// 送货单弹层的 wxml 在自定义组件 components/slip-overlay 里，组件还开了 virtualHost，
+// 于是页面侧压根没有它的宿主节点：page.$$('.js-slip')、'slip-overlay >>> .js-slip'、
+// 页面 selectComponent('slip-overlay') 实测全是 0。所以这里不查 DOM，改核对页面数据里
+// 的 slip —— 组件模板就是逐字段渲染这个对象的。
+// 代价：绑定写错（数据对、屏幕上不显示）这版用例查不出来，那种要靠截图看。
+async function waitSlipOpen(page, label) {
+  await waitFor(page, async function () {
+    const data = await page.data()
+    return !!(data && data.showSlip && data.slip)
+  }, label + '弹出')
+}
+
+async function closeSlip(page, label) {
+  await page.callMethod('closeSlip')
+  await waitFor(page, async function () {
+    const data = await page.data()
+    return data && data.showSlip === false
+  }, label + '关闭')
+}
+
+function assertSlip(slip, label) {
+  assert.ok(slip, label + '没有数据')
+  assert.ok(slip.lines && slip.lines.length > 0, label + '没有商品明细')
+  assert.ok(slip.lines[0].productName.length > 0, label + '没有商品名')
+  assert.ok(slip.customerName && slip.customerName.length > 0, label + '没有收货人')
+  assert.ok(slip.shopName.indexOf('测试店') >= 0, label + '没有店名: ' + slip.shopName)
+  assert.ok(slip.operatorText.indexOf('测试店主') >= 0, label + '没有经手人: ' + slip.operatorText)
+  assert.ok(slip.operatorText.indexOf('ui-test-openid') < 0, label + '不应印 openid: ' + slip.operatorText)
 }
 
 async function resetStorage(miniProgram) {
@@ -303,10 +347,10 @@ async function resetStorage(miniProgram) {
 }
 
 async function waitPageReady(page) {
-  await page.waitFor(async function () {
+  await waitFor(page, async function () {
     const data = await page.data()
     return data && data.pageLoading === false
-  })
+  }, '页面加载完成 ' + page.path)
 }
 
 // 工具 2.02.x 上，站在 navigateTo 进来的二级页调用 reLaunch，automator 会等满 10 秒报
@@ -327,12 +371,12 @@ async function seedFromHome(miniProgram) {
   await backToTabRoot(miniProgram)
   const home = await miniProgram.reLaunch('/pages/index/index')
   await waitPageReady(home)
-  await home.waitFor('.js-seed')
+  await waitFor(home, '.js-seed', '出现 .js-seed')
   await tap(home, '.js-seed')
-  await home.waitFor(async function () {
+  await waitFor(home, async function () {
     const data = await home.data()
     return data && data.isEmpty === false
-  })
+  }, '示例数据填充完成')
   return home
 }
 
@@ -340,17 +384,17 @@ async function runSalePickerAndSlip(miniProgram) {
   step('销售：点选商品、客户，一分未收出库，核对送货单')
   const sale = await miniProgram.switchTab('/pages/sale/sale')
   await waitPageReady(sale)
-  await sale.waitFor('.js-product-picker')
+  await waitFor(sale, '.js-product-picker', '出现 .js-product-picker')
 
   await tap(sale, '.js-product-picker')
-  await sale.waitFor('.js-product-item')
+  await waitFor(sale, '.js-product-item', '出现 .js-product-item')
   const products = await sale.$$('.js-product-item')
   assert.ok(products.length > 0, '商品点选列表为空')
   await products[0].tap()
   await waitGone(sale, '.js-product-item')
 
   await tapWhen(sale, '.js-customer-picker')
-  await sale.waitFor('.js-customer-item')
+  await waitFor(sale, '.js-customer-item', '出现 .js-customer-item')
   const customers = await sale.$$('.js-customer-item')
   assert.ok(customers.length > 0, '客户点选列表为空')
   await customers[0].tap()
@@ -362,10 +406,10 @@ async function runSalePickerAndSlip(miniProgram) {
   }
   await qty.input('1')
   await tapWhen(sale, '.js-add-cart')
-  await sale.waitFor(async function () {
+  await waitFor(sale, async function () {
     const data = await sale.data()
     return data && data.cart && data.cart.length > 0
-  })
+  }, '商品进购物车')
 
   // 默认实收等于应收，本单不欠钱
   const fullPaid = await sale.data()
@@ -381,30 +425,17 @@ async function runSalePickerAndSlip(miniProgram) {
   assert.strictEqual(nonePaid.debtText, nonePaid.amountText)
 
   await tapWhen(sale, '.js-sale-submit')
-  await sale.waitFor('.js-slip')
-
-  const title = await textOf(sale, '.js-slip-title')
-  assert.ok(title.indexOf('送货单') >= 0, '送货单标题不对: ' + title)
-  const productName = await textOf(sale, '.js-slip-product')
-  assert.ok(productName.length > 0, '送货单没有商品名')
-  const customerName = await textOf(sale, '.js-slip-customer')
-  assert.ok(customerName.length > 0, '送货单没有收货人')
-  const paidText = await textOf(sale, '.js-slip-paid')
-  assert.strictEqual(paidText.replace(/\s/g, ''), '¥0.00')
-  const shopName = await textOf(sale, '.js-slip-shop')
-  assert.ok(shopName.indexOf('测试店') >= 0, '送货单没有店名: ' + shopName)
-  const operator = await textOf(sale, '.js-slip-operator')
-  assert.ok(operator.indexOf('测试店主') >= 0, '送货单没有经手人: ' + operator)
-  assert.ok(operator.indexOf('ui-test-openid') < 0, '送货单不应印 openid: ' + operator)
-
-  await tap(sale, '.js-slip-close')
-  await waitGone(sale, '.js-slip')
+  await waitSlipOpen(sale, '送货单')
+  const slip = (await sale.data()).slip
+  assertSlip(slip, '送货单')
+  assert.strictEqual(slip.paidText, '0.00', '送货单实收不对: ' + slip.paidText)
+  await closeSlip(sale, '送货单')
 }
 
 async function runRecordSlipExport(miniProgram) {
   step('流水：打开销售记录，默认只读，再次打开送货单')
   const records = await miniProgram.navigateTo('/pages/records/records')
-  await records.waitFor('.js-record-out')
+  await waitFor(records, '.js-record-out', '出现 .js-record-out')
   const items = await records.$$('.js-record-out')
   assert.ok(items.length > 0, '流水里没有销售记录')
   await items[0].tap()
@@ -412,31 +443,24 @@ async function runRecordSlipExport(miniProgram) {
   await records.waitFor(800)
   const edit = await miniProgram.currentPage()
   assert.ok(edit.path.indexOf('record-edit') >= 0, '未进入流水详情: ' + edit.path)
-  await edit.waitFor('.js-edit')
+  await waitFor(edit, '.js-edit', '出现 .js-edit')
   let pageData = await edit.data()
   assert.strictEqual(pageData.editing, false, '进入详情就进入了修改')
   const saveBefore = await edit.$$('.js-save')
   assert.strictEqual(saveBefore.length, 0, '未点修改就出现了保存')
-  await edit.waitFor('.js-export-slip')
+  await waitFor(edit, '.js-export-slip', '出现 .js-export-slip')
   await tap(edit, '.js-export-slip')
-  await edit.waitFor('.js-slip')
-  const title = await textOf(edit, '.js-slip-title')
-  assert.ok(title.indexOf('送货单') >= 0, '再次导出时送货单标题不对: ' + title)
-  const shopName = await textOf(edit, '.js-slip-shop')
-  assert.ok(shopName.indexOf('测试店') >= 0, '再次导出没有店名: ' + shopName)
-  const operator = await textOf(edit, '.js-slip-operator')
-  assert.ok(operator.indexOf('测试店主') >= 0, '再次导出没有经手人: ' + operator)
-  assert.ok(operator.indexOf('ui-test-openid') < 0, '再次导出不应印 openid: ' + operator)
-  await tap(edit, '.js-slip-close')
-  await waitGone(edit, '.js-slip')
+  await waitSlipOpen(edit, '再次导出的送货单')
+  assertSlip((await edit.data()).slip, '再次导出的送货单')
+  await closeSlip(edit, '再次导出的送货单')
 
   step('流水：点修改后才能保存，取消回到详情')
   await tap(edit, '.js-edit')
-  await edit.waitFor('.js-save')
+  await waitFor(edit, '.js-save', '出现 .js-save')
   pageData = await edit.data()
   assert.strictEqual(pageData.editing, true, '点修改后仍不能改')
   await tap(edit, '.js-cancel')
-  await edit.waitFor('.js-edit')
+  await waitFor(edit, '.js-edit', '出现 .js-edit')
   pageData = await edit.data()
   assert.strictEqual(pageData.editing, false, '取消后没有回到详情')
   await miniProgram.navigateBack()
@@ -445,15 +469,15 @@ async function runRecordSlipExport(miniProgram) {
 async function runOpeningSheet(miniProgram) {
   step('客户页：记期初欠款，弹出层并确认')
   const list = await miniProgram.switchTab('/pages/customers/customers')
-  await list.waitFor('.js-customer-item')
+  await waitFor(list, '.js-customer-item', '出现 .js-customer-item')
   await tap(list, '.js-customer-item')
 
   await list.waitFor(800)
   const edit = await miniProgram.currentPage()
   assert.ok(edit.path.indexOf('customer-edit') >= 0, '未进入客户编辑页: ' + edit.path)
-  await edit.waitFor('.js-opening')
+  await waitFor(edit, '.js-opening', '出现 .js-opening')
   await tapWhen(edit, '.js-opening')
-  await edit.waitFor('.js-opening-sheet')
+  await waitFor(edit, '.js-opening-sheet', '出现 .js-opening-sheet')
   const amount = await edit.$('.js-opening-amount')
   if (!amount) {
     throw new Error('找不到期初欠款金额输入框')
@@ -468,13 +492,13 @@ async function runPaySheet(miniProgram) {
   step('客户页：点收款，弹出收款层并确认')
   const list = await miniProgram.switchTab('/pages/customers/customers')
   await waitPageReady(list)
-  await list.waitFor('.js-collect')
+  await waitFor(list, '.js-collect', '出现 .js-collect')
   await tap(list, '.js-collect')
 
   await list.waitFor(800)
   const edit = await miniProgram.currentPage()
   assert.ok(edit.path.indexOf('customer-edit') >= 0, '未进入客户编辑页: ' + edit.path)
-  await edit.waitFor('.js-pay-sheet')
+  await waitFor(edit, '.js-pay-sheet', '出现 .js-pay-sheet')
   await tapWhen(edit, '.js-pay-submit')
   await waitGone(edit, '.js-pay-sheet')
 }
@@ -637,22 +661,22 @@ async function runNativeClearModal(miniProgram) {
   await backToTabRoot(miniProgram)
   const home = await miniProgram.reLaunch('/pages/index/index')
   await waitPageReady(home)
-  await home.waitFor('.js-shop')
+  await waitFor(home, '.js-shop', '出现 .js-shop')
   await tap(home, '.js-shop')
   await home.waitFor(800)
   const shop = await miniProgram.currentPage()
   assert.ok(shop.path.indexOf('shop') >= 0, '未进入店铺页: ' + shop.path)
   await waitPageReady(shop)
-  await shop.waitFor('.js-clear')
+  await waitFor(shop, '.js-clear', '出现 .js-clear')
   await tap(shop, '.js-clear')
-  await shop.waitFor(async function () {
+  await waitFor(shop, async function () {
     const data = await shop.data()
     return data && data.isEmpty === true
-  })
+  }, '店铺数据清空')
   await miniProgram.navigateBack()
   const backHome = await miniProgram.currentPage()
   await waitPageReady(backHome)
-  await backHome.waitFor('.js-seed')
+  await waitFor(backHome, '.js-seed', '出现 .js-seed')
 }
 
 async function run() {
@@ -675,15 +699,22 @@ async function run() {
       confirm: true,
       cancel: false
     })
-    await seedFromHome(miniProgram)
-    await runSalePickerAndSlip(miniProgram)
-    await runRecordSlipExport(miniProgram)
-    await runOpeningSheet(miniProgram)
-    await runPaySheet(miniProgram)
-    await runRecordsLoadMore(miniProgram)
-    await runCustomerLedgerLoadMore(miniProgram)
-    await runNativeClearModal(miniProgram)
-    // 触底加载验到了哪一层，最后一行说清楚，别让人翻日志猜
+    // 单步超时兜不住的情形（工具收下命令再也不回、automator 的 send 本身没有超时）
+    // 再套一层整轮看门狗，保证任何情况下都会结束并把工具关掉。
+    // 新增的两个「加载更多」步骤也必须在看门狗里 —— 它们要滚页面、等列表增长，
+    // 恰好是最容易卡住不回的那一类。
+    await withTimeout((async function () {
+      await seedFromHome(miniProgram)
+      await runSalePickerAndSlip(miniProgram)
+      await runRecordSlipExport(miniProgram)
+      await runOpeningSheet(miniProgram)
+      await runPaySheet(miniProgram)
+      await runRecordsLoadMore(miniProgram)
+      await runCustomerLedgerLoadMore(miniProgram)
+      await runNativeClearModal(miniProgram)
+    })(), runTimeout, '整轮 UI 用例')
+    // 触底加载验到了哪一层，最后一行说清楚，别让人翻日志猜。
+    // 放在看门狗之外：它是报告不是用例，超时的时候本来也走不到这里。
     if (bottomReachedByScroll === true) {
       step('触底加载结论：模拟器里 wx.pageScrollTo 滚到底后 onReachBottom 真的触发了')
     } else if (bottomReachedByScroll === false) {
@@ -716,9 +747,12 @@ run().catch(function (error) {
   console.error('4. 工具要允许被 CLI 驱动：设置 → 安全设置 → 服务端口。上面若打印了 CLI 输出，以它为准')
   console.error('5. 若看到成片的「Maximum setlocal recursion level reached」，是 cli.bat 切 UTF-8 代码页后')
   console.error('   被 cmd 误解析、把注释里的 CLI 当命令又调回自己。脚本已把安装目录从子进程 PATH 摘掉')
-  console.error('6. 端口和超时可用 WECHAT_AUTOMATOR_PORT / _PORT_TIMEOUT / _CONNECT_TIMEOUT 覆盖')
+  console.error('6. 端口和超时可用 WECHAT_AUTOMATOR_PORT / _PORT_TIMEOUT / _CONNECT_TIMEOUT /')
+  console.error('   _STEP_TIMEOUT（单步，默认 30 秒）/ _RUN_TIMEOUT（整轮，默认 15 分钟）覆盖')
   console.error('7. 工具刚打开项目时 Tool.getInfo 不带 SDKVersion，automator 的版本校验会崩，')
   console.error('   脚本里已经等它出现再校验')
   console.error('8. wx.showModal 是系统弹窗，自动化点不到内部按钮，脚本里用 mockWxMethod 自动确认')
+  console.error('9. 送货单弹层在 virtualHost 自定义组件里，页面级选择器够不着（page.$$ / >>> /')
+  console.error('   selectComponent 实测都是 0），用例核对的是页面数据里的 slip，别再写回 .js-slip')
   process.exit(1)
 })

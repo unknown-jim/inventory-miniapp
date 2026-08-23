@@ -134,4 +134,5 @@
 - [ ] `ignoreDevUnusedFiles`、`ignoreUploadUnusedFiles` 为 false
 - [ ] 送货单 JS 仍在 `packOptions.include`；弹层由 `usingComponents` 引入
 - [ ] tab 页仍在主包
+- [ ] 把页面里的块抽成组件后，检查过 `tests/ui.test.js` 里该块的 `js-` 钩子并跑过 `npm run test:ui`（页面级选择器查不到组件内部，详见 [ui-test.md](ui-test.md)）
 - [ ] 准备上传时跑过代码质量扫描
