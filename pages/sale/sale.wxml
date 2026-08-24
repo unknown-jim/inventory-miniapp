@@ -135,7 +135,8 @@
           data-id="{{item.id}}"
           bindtap="onPick"
         >
-          <view>
+          <image wx:if="{{item.image && !item.imageFailed}}" class="sheet-thumb" src="{{item.image}}" mode="aspectFill" lazy-load binderror="onSheetThumbError" data-index="{{index}}" />
+          <view class="sheet-body">
             <view class="item-name">{{item.name}}</view>
             <view class="muted">
               <block wx:if="{{item.specTag}}">{{item.specTag}} · </block>货号 {{item.sku || '未填'}} · 库存 {{item.stock}}

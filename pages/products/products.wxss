@@ -27,6 +27,43 @@
   padding: 24rpx 28rpx 20rpx;
 }
 
+.goods-main {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--gap);
+}
+
+.goods-thumb {
+  width: 112rpx;
+  height: 112rpx;
+  border-radius: 8rpx;
+  flex-shrink: 0;
+  overflow: hidden;
+  background: #f3f4f6;
+}
+
+.thumb-img {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.thumb-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.thumb-text {
+  font-size: var(--fs-md);
+  color: #9ca3af;
+}
+
+.goods-info {
+  flex: 1;
+  min-width: 0;
+}
+
 .goods-top {
   display: flex;
   justify-content: space-between;

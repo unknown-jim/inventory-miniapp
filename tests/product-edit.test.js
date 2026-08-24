@@ -75,6 +75,10 @@ assert.ok(productsWxml.indexOf('rateText') < 0)
 assert.ok(productsWxml.indexOf('毛利') < 0)
 assert.ok(productsWxml.indexOf("item.sku || '未填'") < 0)
 assert.ok(productsWxml.indexOf('库存调整') < 0)
+// 商品图：卡片左缩略图，失败回落首字占位
+assert.ok(productsWxml.indexOf('goods-thumb') >= 0)
+assert.ok(productsWxml.indexOf('lazy-load') >= 0)
+assert.ok(productsWxml.indexOf('thumb-empty') >= 0)
 const productsCard = productsWxml.slice(productsWxml.indexOf('class="card goods-card"'))
 assert.ok(productsCard.indexOf('条码') < 0)
 
@@ -86,6 +90,18 @@ assert.ok(productsJs.indexOf('expandedId') >= 0)
 assert.ok(productsJs.indexOf('toggleSpecs') >= 0)
 assert.ok(productsJs.indexOf('skuListView') >= 0)
 assert.ok(productsJs.indexOf('barWidth') < 0)
+
+// 商品图：选货弹层行内缩略图，sale / purchase 同构；无图不渲染，不加占位灰块
+const saleWxml = fs.readFileSync(
+  path.join(__dirname, '../pages/sale/sale.wxml'),
+  'utf8'
+)
+const purchaseWxml = fs.readFileSync(
+  path.join(__dirname, '../pages/purchase/purchase.wxml'),
+  'utf8'
+)
+assert.ok(saleWxml.indexOf('sheet-thumb') >= 0)
+assert.ok(purchaseWxml.indexOf('sheet-thumb') >= 0)
 
 const recordsWxml = fs.readFileSync(
   path.join(__dirname, '../pages/records/records.wxml'),
