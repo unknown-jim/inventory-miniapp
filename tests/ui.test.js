@@ -704,12 +704,22 @@ const ROUTE_SETTLE = Number(process.env.WECHAT_UI_ROUTE_SETTLE || 1000)
 // 数一下真的等了几次。理由：这个次数决定了整轮多花多少秒，而它是「8 个 goto 调用点 +
 // backToTabRoot 循环里那个圈数不定的 goBackTo」算出来的，静态数调用点会数错。
 // 以前 PR 里写过一个拍出来的秒数，事后没人能核实 —— 现在跑完直接打在日志里。
+//
+// 【为什么总时长必须是量出来的，不能拿 次数 × ROUTE_SETTLE 算】审计实测过一条和钉子⑨
+// 同类、低一层的变异：把**这个函数体内**的 await 去掉（写成裸的 sleep(ROUTE_SETTLE)），
+// 位置比较照过、钉子⑦⑨全绿、保护完全失效，而当时那行按「次数 × 配置值」算的收尾日志
+// 照样打印「14 次 × 1000ms = 约 14 秒」—— 实际一秒没等，日志在说谎。
+// 改成前后 Date.now() 求差累加之后，同一条变异会让累计毫秒当场塌成接近 0，日志自己露馅。
+// 所以 settleMs 只许由下面这两行 Date.now() 产生，**永远不要**改回用 ROUTE_SETTLE 推算。
 let settleCount = 0
+let settleMs = 0
 
 async function settleBeforeRoute() {
   if (ROUTE_SETTLE > 0) {
     settleCount += 1
+    const settleAt = Date.now()
     await sleep(ROUTE_SETTLE)
+    settleMs += Date.now() - settleAt
   }
 }
 // ---------------------------------------------------------------------------
@@ -1217,8 +1227,12 @@ async function run() {
     step('触底加载结论：模拟器里没验到真实触底（滚动无法确认），只验了 onReachBottom 方法本身和手动按钮')
   }
   // 代价也报出来，别让下一个人只能从 PR 正文里抄一个没法核实的秒数。
-  step('settleBeforeRoute 本轮实际执行 ' + settleCount + ' 次 × ' + ROUTE_SETTLE
-    + 'ms = 约 ' + Math.round(settleCount * ROUTE_SETTLE / 1000) + ' 秒')
+  // 总时长是 settleBeforeRoute 里 Date.now() 前后差**实测累加**出来的，不是
+  // 次数 × ROUTE_SETTLE 算的 —— 理由见 settleBeforeRoute 上方那段（算出来的数在
+  // 「函数体内 await 被去掉」这条变异下会照样好看，量出来的会塌成接近 0）。
+  step('settleBeforeRoute 本轮实际执行 ' + settleCount + ' 次，实测累计等待 '
+    + settleMs + 'ms（约 ' + Math.round(settleMs / 1000) + ' 秒；配置 ROUTE_SETTLE='
+    + ROUTE_SETTLE + 'ms）')
   console.log('ui tests passed')
 }
 
