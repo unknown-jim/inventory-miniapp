@@ -944,8 +944,10 @@ async function dispatch(input) {
 // V6 单独摆在最后一片上判（deferNegativeAccounts）：一片就是一段时间切片，
 // 「A 片赊销、B 片收款」是合法切法，单片折出来的负欠款是切片假象。累计的
 // state.accounts 才是这本账的全量，拿 migrate.negativeAccountsOf 扫它。
-// 不带 token 的一次性上传只有一片、isFinal 恒为真，所以那道门对客户端就是全量的
-//（utils/store.js 的 migrateLocal() 从不带 token）。
+// 不带 token 的一次性上传只有一片、isFinal 恒为真，所以那道门对客户端就是全量的；
+// 分片时同理——中间各片 deferNegativeAccounts，最后一片对累计 state.accounts 判。
+// （客户端什么时候不带 token：整本只需要一片，或账里有孤儿退货，见 utils/store.js
+// 的 migrateLocal 和 utils/ledger-shard.js 的 planShards。）
 async function migrateLocalShard(db, shopId, openid, payload, now, nextId) {
   const token = String(payload.token || '')
   const incoming = payload.ledger || payload
