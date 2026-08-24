@@ -67,6 +67,8 @@ node scripts/wxcloud-ensure-acl.js
 
 **不要传 region**，一传 `Describe` 会报 `UnknownParameter`。幂等：已经是 `ADMINONLY` 的表会跳过。控制台新建的表常常是 `PRIVATE`（仅创建者可读写）。不要把密钥写进命令输出。
 
+同一条脚本现在也会把**云存储**权限设为 `READWRITE`（商品图用：所有用户可读、仅创建者可写读，`tcbGetStorageACL` / `tcbModifyStorageACL`），幂等——为什么是这个标签而不是 `ADMINONLY`，见 `docs/cloud-ledger.md` 的「商品图与云存储」。
+
 ## 白名单 platform_admins
 
 账本升级三个运维 action 的门（集合 `platform_admins`，`_id` = openid）。不要在控制台手点，也不要裸调内部接口，脚本已写好且幂等：

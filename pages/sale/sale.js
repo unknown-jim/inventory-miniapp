@@ -165,6 +165,16 @@ Page({
     this.closePicker()
   },
 
+  // 商品图加载失败就去掉缩略图占位，不删 item.image，下次打开弹层还会再试。
+  // 动态路径走「先建空对象再赋键」：对象字面量里写计算属性会被微信 babel 编成
+  // @babel/runtime helper（tests/no-babel-helpers.test.js 禁）。
+  onSheetThumbError(e) {
+    const i = e.currentTarget.dataset.index
+    const patch = {}
+    patch['filtered[' + i + '].imageFailed'] = true
+    this.setData(patch)
+  },
+
   onPickCustomer(e) {
     this.selectCustomer(e.currentTarget.dataset.id)
     this.closeCustomerPicker()

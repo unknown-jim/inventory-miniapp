@@ -46,6 +46,16 @@ assert.ok(wxml.indexOf('库存调整') >= 0)
 assert.ok(wxml.indexOf('不计入进货、不改进价') >= 0)
 assert.ok(wxml.indexOf('通过进货 / 销售变动') < 0)
 
+// 商品图：选图入口和压缩画布钉在 wxml，require 钉在 js
+assert.ok(wxml.indexOf('pickImage') >= 0)
+assert.ok(wxml.indexOf('image-canvas') >= 0)
+assert.ok(wxml.indexOf('id="imageCanvas"') >= 0)
+const editJs = fs.readFileSync(
+  path.join(__dirname, '../pages/product-edit/product-edit.js'),
+  'utf8'
+)
+assert.ok(editJs.indexOf('product-image') >= 0)
+
 const productsWxml = fs.readFileSync(
   path.join(__dirname, '../pages/products/products.wxml'),
   'utf8'
@@ -65,6 +75,10 @@ assert.ok(productsWxml.indexOf('rateText') < 0)
 assert.ok(productsWxml.indexOf('毛利') < 0)
 assert.ok(productsWxml.indexOf("item.sku || '未填'") < 0)
 assert.ok(productsWxml.indexOf('库存调整') < 0)
+// 商品图：卡片左缩略图，失败回落首字占位
+assert.ok(productsWxml.indexOf('goods-thumb') >= 0)
+assert.ok(productsWxml.indexOf('lazy-load') >= 0)
+assert.ok(productsWxml.indexOf('thumb-empty') >= 0)
 const productsCard = productsWxml.slice(productsWxml.indexOf('class="card goods-card"'))
 assert.ok(productsCard.indexOf('条码') < 0)
 
@@ -76,6 +90,18 @@ assert.ok(productsJs.indexOf('expandedId') >= 0)
 assert.ok(productsJs.indexOf('toggleSpecs') >= 0)
 assert.ok(productsJs.indexOf('skuListView') >= 0)
 assert.ok(productsJs.indexOf('barWidth') < 0)
+
+// 商品图：选货弹层行内缩略图，sale / purchase 同构；无图不渲染，不加占位灰块
+const saleWxml = fs.readFileSync(
+  path.join(__dirname, '../pages/sale/sale.wxml'),
+  'utf8'
+)
+const purchaseWxml = fs.readFileSync(
+  path.join(__dirname, '../pages/purchase/purchase.wxml'),
+  'utf8'
+)
+assert.ok(saleWxml.indexOf('sheet-thumb') >= 0)
+assert.ok(purchaseWxml.indexOf('sheet-thumb') >= 0)
 
 const recordsWxml = fs.readFileSync(
   path.join(__dirname, '../pages/records/records.wxml'),

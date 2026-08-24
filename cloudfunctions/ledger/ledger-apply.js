@@ -596,6 +596,11 @@ function applyMutation(ledger, action, payload, now, nextId, loaded) {
   //   客户一项），但那两种状态下账本被冻着，这里进不来。
   //   注意它是**历史记录不是当前状态**：clearAll / loadSeed 换过账套之后
   //   migration.bookId 会和 ledger.bookId 不一样，那是对的。
+  // - legacyDroppedAt：这家店**什么时候放弃的旧包退路**（mode:'dropLegacy' 盖的戳）。
+  //   它是 mode:'dropSnapshotLegacy' 唯一的闸（见 ledger-migrate.js）。抹掉它 =
+  //   快照里那份重复的 records 数组永远清不掉，而且下一个人会以为这家店没跑过
+  //   dropLegacy。2b-1b 审计 A6 炸的就是这一类：上线清单让人迁完先记一笔 1 元
+  //   测试账，那一笔就把没被显式带过来的字段抹了。
   next.records = (ledger && ledger.records) || []
   if (ledger && ledger.recordsMigratedAt) {
     next.recordsMigratedAt = ledger.recordsMigratedAt
@@ -608,6 +613,9 @@ function applyMutation(ledger, action, payload, now, nextId, loaded) {
   }
   if (ledger && ledger.migration) {
     next.migration = ledger.migration
+  }
+  if (ledger && ledger.legacyDroppedAt) {
+    next.legacyDroppedAt = ledger.legacyDroppedAt
   }
   const result = {}
   let recordWrites = []
@@ -638,6 +646,12 @@ function applyMutation(ledger, action, payload, now, nextId, loaded) {
     const products = next.products
     let product
     let index = -1
+    // 作废商品图（cloud:// fileID 字符串数组，空数组也要设——形状稳定，读端不用判空）。
+    // **真正的删除必须发生在事务提交之后**（ledger-core.js 的 dispatch 在
+    // runTransaction 返回后 best-effort 调 storage.deleteFiles）：事务失败会回滚，
+    // 商品上仍挂着这张图，先删就变成账本数据指向一个已删除的文件。
+    // 这里只负责「算出哪些图作废了」，自己永远不碰存储。
+    result.obsoleteImages = []
     if (payload.id) {
       index = products.findIndex(function (item) {
         return item.id === payload.id
@@ -645,8 +659,14 @@ function applyMutation(ledger, action, payload, now, nextId, loaded) {
       if (index < 0) {
         throw new Error('商品不存在')
       }
+      const oldImage = String(products[index].image || '')
       product = inventory.updateProduct(products[index], payload, now)
+      // 换图（含显式清除，image 传 ''）才作废旧图；新旧相同不动。
+      if (oldImage && oldImage !== product.image) {
+        result.obsoleteImages.push(oldImage)
+      }
     } else {
+      // 新建分支不会产生作废图
       product = inventory.createProduct(payload, now, nextId())
     }
     const applied = inventory.applyProductSkus(product, next.skus, payload.skus, now, nextId)
@@ -662,6 +682,12 @@ function applyMutation(ledger, action, payload, now, nextId, loaded) {
     result.products = products
   } else if (action === 'deleteProduct') {
     const id = payload.id
+    // 先 find 再 filter：被删商品如果挂着图，那张图随商品一起作废（同样只在
+    // 事务提交之后由服务端删，理由见 saveProduct 分支的注释）。
+    const removed = next.products.find(function (item) {
+      return item.id === id
+    }) || null
+    result.obsoleteImages = (removed && removed.image) ? [removed.image] : []
     next.products = next.products.filter(function (item) {
       return item.id !== id
     })
@@ -875,6 +901,8 @@ function applyMutation(ledger, action, payload, now, nextId, loaded) {
     next.skus = applied.skus
     commitRecords(working, applied.records)
   } else if (action === 'loadSeed') {
+    // loadSeed 不发 obsoleteImages：开发演示路径，种子数据换掉全部商品，但为它
+    // 挂一套图清理不值当；真要清也是以后的事。
     const seed = inventory.buildSeed(now, nextId)
     next.products = seed.products
     next.skus = seed.skus || []
@@ -883,6 +911,11 @@ function applyMutation(ledger, action, payload, now, nextId, loaded) {
     switchBook(seed.records)
     result.seed = seed
   } else if (action === 'clearAll') {
+    // clearAll 不发 obsoleteImages：清空走快照封存，商品**原样进了 snapshot**，
+    // 之后 restoreCleared 还要靠它们把账本整个恢复回来；这里删文件等于亲手
+    // 剪断恢复路。真正作废的时刻是恢复（restoreCleared 丢掉清空后新记的商品）
+    // 或删店（deleteShop，目前与 ledger_records 的 2b-3 清理一起留给以后，
+    // 避免 scope 膨胀）。
     if (listsHaveData(ledger)) {
       const snapshot = snapshotLists(ledger, now)
       snapshot.id = nextId()
@@ -923,6 +956,12 @@ function applyMutation(ledger, action, payload, now, nextId, loaded) {
       // 它能确认「转过了」，那一步只能看 mode:'snapshots' 自己返回的 failed === 0。
       throw new Error('这份备份是账本升级前存的，请让开发者先跑 mode:"snapshots" 转换')
     }
+    // 清空之后新记的商品（此刻的 next.products）恢复后**永久消失**，它们的图
+    // 作废（同样只在事务提交之后由服务端删，理由见 saveProduct 分支的注释）。
+    // 快照带回来的商品的图**保留**：文件一直躺在云存储里，恢复后继续指向它们。
+    result.obsoleteImages = next.products.map(function (item) {
+      return String((item && item.image) || '')
+    }).filter(Boolean)
     next.products = cloneList(snapshot.products)
     next.skus = cloneList(snapshot.skus)
     next.customers = cloneList(snapshot.customers)

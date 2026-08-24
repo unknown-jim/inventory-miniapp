@@ -45,5 +45,9 @@ const comment = fs.readFileSync(
 assert.ok(comment.indexOf('wxcloud-ensure-indexes.js') >= 0)
 assert.ok(comment.indexOf('bookId ASC, sortKey DESC') >= 0)
 assert.ok(comment.indexOf('bookId ASC, saleOrderId ASC, sortKey ASC') >= 0)
+// #6 从 2b-3 起不再是「预留」索引：注释里必须写清它服务的是哪一条查询，
+// 不然下一个人看见「当前无查询使用」会以为它可以删。
+assert.ok(comment.indexOf('shopId ASC') >= 0)
+assert.ok(comment.indexOf('purgeByShop') >= 0)
 
 console.log('wxcloud-indexes: ok')

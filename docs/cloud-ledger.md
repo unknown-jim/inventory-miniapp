@@ -31,7 +31,7 @@
   - 怎么修：`recomputeAggregates`（见下面「账本升级」一节）。它在一个事务里翻完当前账套的全部记录，重新 `foldAccountTerms` / `foldTotalTerms` 写回账本文档，有界 `RECOMPUTE_MAX_RECORDS` 5000 条、判条数不判页数，`dryRun: true` 只算不写，返回包永远带 before/after diff。
     - **它按集合的现状重折叠，所以它不修 B1。** 如果集合里某张退货单的 `paidAmount` 本身就是错的，重算会忠实地把这个错数再算一遍。退货份额的整体重算（`repairReturnSplits`）只发生在老数组搬进集合的那一刻（`migrateRecords`）；已经在集合里的错值只能靠改单据本身来修（`updateRecord` / `deleteRecord` 内置整体重算）。**不要拿 `recomputeAggregates` 去修错账。**
   - 还没迁移的老账本没有这两个字段，`cloneTerms` 只会把它补成空累加器 —— 那样全店金额和每个客户的欠款会一路回传成 0，而 `getSlip` 走 `receivableAt` 算得对，同一笔钱在送货单上印 200、在客户页显示 0。所以 `publicListsOf` 的 `recordsPending` 分支必须拿刚自愈出来的老数组现折一次（`foldAccountTerms` / `foldTotalTerms`），数组已经在内存里，零额外 IO。
-- **事务提交之后不允许有任何可能失败的 IO。** 回传要用的东西必须在事务里备齐。提交后再报一次错，客户端看到的是「记账失败」，店员会再点一次，账就记两遍。结构上靠签名保证：`publicListsOf(shopId, doc, opts)` 是纯内存函数、**签名里没有 db**（`opts` 只是 `{dayStart, recentLimit}` 这样的纯数据），记账返回处只准调它；唯一会读 `ledger_records` 的 `attachRecent(db, ...)` 只准从只读 action 调。**记账回传只有四张表 + 聚合投影，一条流水都没有**——2b-2 起也不再有 `recordDelta`：分页之后客户端每个列表都是服务端取的、每个金额都来自 `accounts` / `totals` 投影，delta 零消费者，留着一个没人用的算钱字段就是给下一个人留坑。记账之后客户端只把本地的 `dataVersion` 标脏，页面 `onShow` 时再决定要不要重取，**不在提交之后再发一次可能失败的请求**。
+- **事务提交之后不允许有任何可能失败的 IO。** 回传要用的东西必须在事务里备齐。提交后再报一次错，客户端看到的是「记账失败」，店员会再点一次，账就记两遍。结构上靠签名保证：`publicListsOf(shopId, doc, opts)` 是纯内存函数、**签名里没有 db**（`opts` 只是 `{dayStart, recentLimit}` 这样的纯数据），记账返回处只准调它；唯一会读 `ledger_records` 的 `attachRecent(db, ...)` 只准从只读 action 调。**记账回传只有四张表 + 聚合投影，一条流水都没有**——2b-2 起也不再有 `recordDelta`：分页之后客户端每个列表都是服务端取的、每个金额都来自 `accounts` / `totals` 投影，delta 零消费者，留着一个没人用的算钱字段就是给下一个人留坑。记账之后客户端只把本地的 `dataVersion` 标脏，页面 `onShow` 时再决定要不要重取，**不在提交之后再发一次可能失败的请求**。**唯一的书面例外是商品图清理**：事务提交后 best-effort 删掉作废的图，错误被吞干净、最坏只留一个孤儿文件，见下面「商品图与云存储」。
 - 分页协议（`listRecords`）：
   - 入参 `{ type?, customerId?, cursor?, limit? }`，返回 `{ records[], cursor, hasMore }`，`sortKey` 倒序。
   - `limit` 由纯函数 `apply.clampPageLimit` 收口：不传 / 非法（NaN、0、负数）**一律给缺省 20**（不是钳到 1），超过上限才钳到 100。集合查询、未迁移老账本的内存切片、小程序内存模式**三处用同一份定义** `apply.pageRecords`，等价性由 `tests/ledger-records.test.js` 的 T-A2 逐字段钉住。
@@ -43,7 +43,7 @@
 - 流水**字段**换形状时，**读的一端兜底，不写迁移脚本**。老流水缺新字段就按老字段回推，写的一端只写新字段并把老字段删掉，一条流水不留两份结算数据。例子：结算金额 `paidAmount` 缺失时按老的 `payType` 回推（现结当作全额结清、赊账当作一分没结），见 [`utils/inventory.js`](../utils/inventory.js) 的 `settledAmount`。云函数另外还接受老客户端只送 `payType` 的写入（`resolvePaidAmount`）——小程序和云函数不是同一次发布。**这条管字段，不管搬家**：流水搬进 `ledger_records` 是一次显式的迁移动作，不要拿这条给它背书，也不要拿它否掉这条。
   - 退货单缺 `paidAmount` **且**缺 `payType`（把结算改成实收金额的那一版，退货冲抵改成读时现算，退货单头从此不存任何结算字段）时，`settledAmount` 读时**保守回推成「整笔退现金」**。**不要改成 0**：会折出负欠款，而 `assertAccountsValid` 是全账户扫描，一个负账户就让这家店从此退不了货、改不了单、删不了单；方向也不对（算成退了现金可以补记一笔收款救回来，算小了要一笔负数收款，系统里没这个操作）。正确值单条记录算不出来（要被退销售单在场），由 `migrateRecords` 的整体重算给出。六格分支表和反向的负欠款断言钉在 `tests/ledger-terms.test.js`。
 - 结算口径：`paidAmount` = **这张单当场用现金结清、因而不进客户欠款的金额**。销售是客户付进来的，退货是店里退出去的现金。单据的欠款贡献一律是 `amount − paidAmount`（销售为正、退货为负）。这里的「单据」就是夹断的单位——应收、实收、已退货值一律按**整张销售单**取，不按行，口径和老账会怎么变见 [accounting-vs-policy.md](accounting-vs-policy.md)。退货单的 `paidAmount` 在**写入时**按「先冲这张销售单没收到的钱、冲不掉的才算退现金」算出来（`returnCashRefund`），**不在读的时候现算 `max(0, 应收−实收−已退)`**：夹断不可加，会同时破坏 `applyTermsDelta` 的增量维护（单条记录的贡献必须只依赖自己）和 `getSlip` 的「当前欠款 − 后缀」（后缀减不回一个被夹断的量，重印老送货单会印错）。退货单头的这一份是**按记账先后顺序**分出来的份额，判据是【拆分不变量】`Σ(退货额 − 现金退款额) == min(销售单欠款, Σ退货额)`。加一张新退货单永远维持它（新的那张就是最后一张，冲抵基准由销售行的 `returnedAmount` 现推）。**改销售单（欠款基准变了）、改/删任何一张退货单（前缀和变了）不再拦截**：事务把该销售单的**全部退货单**加载进来（`recordsNeeded` 的 `saleReturns`，走 `saleOrderId` 索引查询 `returnsOfSale`），`recomputeSaleReturns` 按记账顺序（`(createdAt, id)` 升序 = `sortKey` 升序）整体重算各单 `paidAmount`，并把退货单头过期的客户字段（id / 姓名 / 电话 / 地址，四个都继承自被退销售单，要拨就整组拨）拨到销售单当前值；多条变化由 `assertAccountsAfterAll` 一起过欠款校验。「已退货值」由销售行的 `lines[].returnedAmount` 定义（退货时按退货单实际金额累加，老流水缺失读时回退 `returnedQty × 单价`），由构造恒等于 Σ退货额——改单价、小数数量下的分位取整都不再让它和实际退货额分岔（旧口径 `round2(0.5×7.77)×2 = 7.78` vs `round2(1×7.77) = 7.77` 会差 1 分）。两条旧操作限制随之取消：不用先删后面的退货单，有退货的单也可以改单价。改单价时先由 `repriceSaleReturns` 把同单退货行的 `unitPrice` / `amount` / `profit` 拨到新价，销售行的 `returnedAmount` 同步加上差额（仍恒等于 Σ退货额），再交给 `recomputeSaleReturns` 分份额。**不拨价就是两套价**：退货行的单价是退货时从销售行复制的派生值，销售行改了它不跟，销售额就成了「新价销售额 − 旧价退货额」，误差 = 已退件数 ×（新价 − 旧价），没有上界；把一行改成 0 元赠品能算出负销售额和负的客户「累计销售」。只拨 `unitPrice`，**不动 `costPrice`**：退货行的 `costPrice` 是当时 `restockLine` 把成本放回哪一格的依据，事后改它而不重跑一遍入库，库存成本就和流水对不上。守门员是 `tests/inventory.test.js` 末尾的 fuzzer 两条不变量：欠款逐分等于 main #47 读时口径，销售额和毛利逐分等于「留在客户手上的货 × 当前单价」（第二条专抓两套价，第一条两边都用实际退货额、看不见它）。
-- 小程序调云函数**必须带 `apiVersion`**；服务端设门，版本低就报「请更新小程序到最新版本」。设门的按理由分两组：会回传账本或流水的（`getLedger` / `getSlip` / `listRecords` / `getRecord` / `migrateLocal` 和所有记账、账本升级三动作），以及**不可逆动作** `deleteShop`（`VERSIONED_DESTRUCTIVE`，单列——删店不回传账本，但冻结窗口里店主到处撞「请更新」、最容易乱点的时候，删店按钮就在同一个店铺页上，不可逆动作不许由老客户端发起）。放行的恰好 7 个：`whoami` / `listShops` / `createShop` / `listMembers` / `addMember` / `updateMember` / `removeMember` ——否则老客户端连店都列不出来、加不了人，报错会误导成「不是该店成员」；这份名单由 `tests/ledger-migrate.test.js` 的 M12c 整个钉住，改门别只改一处。
+- 小程序调云函数**必须带 `apiVersion`**；服务端设门，版本低就报「请更新小程序到最新版本」。设门的按理由分两组：会回传账本或流水的（`getLedger` / `getSlip` / `listRecords` / `getRecord` / `migrateLocal` 和所有记账、平台运营方动作——账本升级三个加 `purgeDeletedShopRecords`），以及**不可逆动作** `deleteShop`（`VERSIONED_DESTRUCTIVE`，单列——删店不回传账本，但冻结窗口里店主到处撞「请更新」、最容易乱点的时候，删店按钮就在同一个店铺页上，不可逆动作不许由老客户端发起）。放行的恰好 7 个：`whoami` / `listShops` / `createShop` / `listMembers` / `addMember` / `updateMember` / `removeMember` ——否则老客户端连店都列不出来、加不了人，报错会误导成「不是该店成员」；这份名单由 `tests/ledger-migrate.test.js` 的 M12c 整个钉住，改门别只改一处。
   - **上线顺序：先部署云函数，再发布小程序**（和 2b-1 定的相反）。理由：2b-2 之前新客户端对老云函数是前向容忍的（老云函数照旧回传整本 `ledger.records`，客户端走整份替换分支）；2b-2 之后这条容忍没了——新客户端要调 `listRecords` / `getRecord`，老云函数会回「未知操作」，流水页直接空白。保住它就得在客户端保留整本缓存 + 本地分页，而那正是这一步要删的。所以只能反过来：① 部署云函数（此刻起老客户端撞 `apiVersion` 门，报「请更新小程序到最新版本」——设计好的响亮失败）→ ② 逐店跑 `checkAggregates` → `migrateRecords` 把流水搬进 `ledger_records`（见下面「账本升级」一节）→ ③ 发布小程序新版并逐店确认已更新。②③ 之间店里是「老客户端被挡住」的状态，**必须打烊后一口气做完**。冷启动提示更新已接在 `app.js` 的 `onLaunch`（`setupUpdateManager`：`wx.getUpdateManager` 三段式，`onUpdateReady` 弹「新版本已经准备好，是否重启应用？」确认框 → `applyUpdate`，低版本基础库 `wx.canIUse` 兜底跳过）——冻结窗口的长度直接取决于店员多快更新，这段不是装饰。
   - **没有「逐店冻结窗口」这回事。** `apiVersion` 门是全局的：部署云函数那一瞬间**所有**店的老客户端一起被挡住，不是迁一家停一家。冻结窗口 = 从部署到发布小程序之间的**整段**时间，排期要按这个算。
 - 扣账内核只有一份。云函数不能 `require('../../utils/inventory')`，用 `npm run sync:ledger-inventory` 复制到 `cloudfunctions/ledger/`。`npm test` 会在两份不一致时失败。
@@ -56,7 +56,8 @@
     3. `bookId` ASC, `type` ASC, `sortKey` DESC —— `page(type)`
     4. `bookId` ASC, `saleOrderId` ASC, `sortKey` ASC —— 查一张销售单的退货（整体重算用）
     5. `bookId` ASC, `type` ASC, `productId` ASC, `skuId` ASC, `sortKey` DESC —— `latestPurchases`
-    6. `shopId` ASC —— **给 2b-3 的 `deleteShop` 清理预留，当前没有任何查询使用**（`ledger-records.js` 里除 #6 外每条查询都带 `bookId` 前缀）
+    6. `shopId` ASC —— `purgeByShop`（删店之后按 `shopId` 分批清流水，见下面「删除店铺」）。**本文件里唯一不带 `bookId` 前缀的查询**：一家店的流水可能散在好几个账套里（当前账套、`newBook` 换掉的旧账套、`mode:'snapshots'` 转出来的 `clr-` 快照账套），账本文档一删就没人拿得到那些 `bookId`，`shopId` 是唯一还认得出它们的字段
+- 商品图：图片二进制放云开发存储，商品记录只存 fileID（`shops/{shopId}/products/` 前缀），不进 `ledgers` 文档、不通过 `ledger` 云函数传输。上传、权限、前缀校验、清理边界和容量口径见下面「商品图与云存储」。
 
 建店、加成员、选店、店主删店在低频页，不进 tab，不挂全局组件。店铺页按有没有店分流：没店只展示创建和复制身份，有店后才展示本店、切换、账本和删除。tab 仍留主包。`lazyCodeLoading` 保持开启。`cloudfunctions/` 不进小程序包。
 
@@ -74,8 +75,8 @@
 
    部署 `node scripts/wxcloud-deploy-ledger.js` 末尾也会跑同一段。做法是 `@wxcloud/cli` 内部 API：`tcbDescribeDatabaseACL` 读当前标签，不是 `ADMINONLY` 再用 `tcbModifyDatabaseACL` 改。**不要传 region**，一传 `Describe` 会报 `UnknownParameter`。幂等：已经是 `ADMINONLY` 的表会跳过。
 
-   标签对照：`ADMINONLY` = 仅管理端可读写；`PRIVATE` = 仅创建者可读写；`ADMINWRITE` = 仅管理端可写；`READONLY` = 所有人可读、仅创建者可写。官方还有第三方平台 HTTP 接口 [dbmodifyacl](https://developers.weixin.qq.com/doc/oplatform/openApi/cloudbase-batch/db-mgnt/api_setpermission.html)，需要 `component_access_token`，本仓库不走那条。
-4. 给 `ledger_records` 建上面「集合」那条里列的 **6 条索引**（复合索引，字段顺序和升降序都不能改；漏一条就会退化成全表扫，条数一多就超时）。**这一步不是可选的**：#1–#5 是流水的每一次查询都要用的；#6 当前没有查询用，但是 2b-3 清理的前置，一起预建。
+   标签对照：`ADMINONLY` = 仅管理端可读写；`PRIVATE` = 仅创建者可读写；`ADMINWRITE` = 仅管理端可写；`READONLY` = 所有人可读、仅创建者可写。官方还有第三方平台 HTTP 接口 [dbmodifyacl](https://developers.weixin.qq.com/doc/oplatform/openApi/cloudbase-batch/db-mgnt/api_setpermission.html)，需要 `component_access_token`，本仓库不走那条。同一条脚本现在**也会把云存储权限设为 `READWRITE`**（商品图用：所有用户可读、仅创建者可写读，做法是 `tcbGetStorageACL` / `tcbModifyStorageACL`，同样不传 region），为什么是这个标签而不是 `ADMINONLY` 见下面「商品图与云存储」。
+4. 给 `ledger_records` 建上面「集合」那条里列的 **6 条索引**（复合索引，字段顺序和升降序都不能改；漏一条就会退化成全表扫，条数一多就超时）。**这一步不是可选的**：#1–#5 是流水的每一次查询都要用的；#6 是删店后清流水（`purgeByShop`）唯一走的那条，缺了它删店的清理会退化成全表扫。
 
    不要在控制台手点。用微信云托管 CLI 的 FlexDB 接口，脚本已写好且可重复执行：
 
@@ -98,8 +99,17 @@
 **上传（`migrateLocal`）和搬家（`migrateRecords`）跑的是同一个 `legacyRecordsOf`（归并 + 退货份额整体重算），所以它也会改钱**——同一份数据落库之后的欠款可以和店主在本机看到的不一样。因此它过**同一套** `migrate.recordFailures`：V4 `returnedQty`/`returnedAmount` 跨文档一致、V5 拆分不变量、V6 负账户、V8 重复/空 id、V9/V10 归并结构守恒、V12 亚分金额。不含 V1/V2/V3/V7——那四项比的是「集合里的文档 vs 内存里的 merged」，上传是往一个空账套里写，没有集合可比。**校验只写一份定义**（`ledger-migrate.js` 的 `recordFailures`），两条路都调它，将来加检查不会只加一边。
 
 - 少了这道门就是：同一份数据 `migrateRecords` 报 `failed`（V6 负账户）、`migrateLocal` 直接放行。落库后 `assertAccountsValid` 是**全账户扫描**，实测一个客户欠 −100 的后果是**全店任何客户**的退货 / 改单 / 删销售单一律报「改完后收款会超过赊账，请先改收款记录」（连和它毫无关系的另一个客户都退不了货、删不了单），负账户那个客户还收不了款；能把它拨回来的只剩「删掉那张退货单」或「删掉那笔收款单」（删完欠款回到非负所以放行），等于拿删真账换解冻。而客户端上传成功即 `markMigrated()`、本机原件已删，退不回去。
-- **V6 判在累计 `accounts` 上，不逐片判。** 一片就是一段时间切片，「A 片赊销、B 片收款」是合法切法，单片折出来的负欠款是切片假象不是错账。不带 `token` 的一次性上传只有一片、`isFinal` 恒为真，所以那道门对客户端就是全量的（`utils/store.js` 的 `migrateLocal()` 从不带 `token`）。
+- **V6 判在累计 `accounts` 上，不逐片判。** 一片就是一段时间切片，「A 片赊销、B 片收款」是合法切法，单片折出来的负欠款是切片假象不是错账。不带 `token` 的一次性上传只有一片、`isFinal` 恒为真，所以那道门对客户端就是全量的（分片时同理：中间各片 `deferNegativeAccounts`，最后一片对累计 `state.accounts` 判）。
 - **拒绝的文案必须说清「本机数据没有删」**：`markMigrated()` 只在云函数成功返回之后才调，抛错时本机原件确实还在，不能让店主以为数据没了。
+
+**客户端这半（`utils/store.js` 的 `migrateLocal()` + `utils/ledger-shard.js` 的 `planShards`）**：本机账本太大会撞两堵墙——请求体大小、事务生命周期（2026-08-24 实测：一个事务里写 92 条文档就被服务端丢弃，`[ResourceUnavailable.TransactionNotExist]`，云函数耗时才 12–16 秒，真实边界尚未查清）——所以先在**归并后的视图**上用并查集求「不可切开的原子组」再贪心装箱，**上传的仍然是原始（未归并）流水**，服务端照旧自己归并，V9/V10 在每一片上仍然是有效检查。要点：
+
+- 分片单位是**归并后**的条数（40，拍的：92 条实测丢事务的来路见上，留一倍余量）＋ 请求体 JSON 字符数（20 万，拍的，没实测过 `wx.cloud.callFunction` 的上限）。
+- 原子组 = 一张销售单 + 它的**全部**退货单 + 全部同 id 记录。归并和「退货 → 销售」的指向都读 `utils/inventory.js` 的 `migrateRecordShape` / `recordGroups`（`recordGroups(records)[i]` 和 `migrateRecordShape(records)[i]` 逐位对应），**只有这一份定义**，客户端不另抄一套。
+- 孤儿退货（`saleOrderId` 为空、或指向的销售单整本账里都不存在）整本退回不带 `token` 的一次性上传并 `console.warn`：带 `token` 的路上 `assertReturnsPaired` 不区分「客户端切坏的」和「源数据本来就是孤儿」，任何切法都会被拒，而一次性上传今天就放行它们——退回不是回归，改成硬报错才是。
+- 只需要一片时不带 `token`（线协议和 2b-1 完全一致），小账本零行为变化。
+- `markMigrated()` 只在**最后一片回了 `ledger`** 之后（`finishMigrate`），中途任何一片失败本机数据都在；失败重来是换一个新 `token`（不复用、不落盘），半成品账套不可达（服务端那边没切账套指针，O(1) 回滚）。
+- 片内原始记录可能被重排（退货单拉到销售单旁边）：不影响钱——`recomputeSaleReturns` 自己按 `(createdAt, id)` 升序排，`applyTermsDelta` 可加，落库按 `_id` 写。
 
 ## 账本升级（老流水搬进 `ledger_records`）
 
@@ -109,7 +119,7 @@
 
 **为什么不是 owner-gated**（2b-4 之前是，改掉的理由）：owner 门守错了对象。它拦住平台运营方——这套系统按会员费卖给多家店，运营方要给每一家跑迁移，而运营方通常不是任何一家店的成员，挨个切店主微信号不可扩展，也不可能让交了会员费的店主自己打开开发者工具敲 Console；它却放行每一个店主——`dropLegacy` 跑完就没有 O(1) 回滚、`mode:'rollback'` 会把迁移后记的账从读路径抹掉、`recomputeAggregates` 按集合现状重折叠，而后果由平台方兜。白名单两头同时变对：**对运营方放行、对所有租户关死**。门是 **fail-closed** 的：`getPlatformAdmin` 把「文档不存在」和「读失败」都折成 `null`，两种一律拒绝——读不出来就拒绝，比读不出来就放行安全得多；代价是一次瞬时读失败让运维动作暂时不可用，重试即可。
 
-**上线硬依赖：`platform_admins` 必须在部署新云函数之前建好并写入运营方 openid。** 顺序反了的后果：新代码一上线，三个运维 action 对**所有人**拒绝（fail-closed 的必然结果），而那正是要用它们迁移的时刻——全店已经因为 `apiVersion` 门停摆，却谁也跑不了迁移。正确顺序：① 运营方在开发者工具 Console 调 `whoami` 拿到自己的 openid（这个 action 在线上老版本就有、且免版本门，现在就能做）→ ② 一条命令把建集合、写文档、核对权限做完：`node scripts/wxcloud-ensure-platform-admin.js <openid>`（照 `wxcloud-ensure-indexes.js` 的形状写的幂等脚本，内部是 `@wxcloud/cli` 的 `flexdbCreateTable` / `flexdbPutItem` / ACL 那套；`tag` 的推导 `databases[0].instanceId || ENV_ID` 复用 `wxcloud-ensure-indexes.js` 导出的 `resolveDb`，全仓只有这一份定义）→ ③ 才部署新云函数。`deleteShop` **保持 owner-gated 不变**：那是租户对自己店的操作，不是平台运维。
+**上线硬依赖：`platform_admins` 必须在部署新云函数之前建好并写入运营方 openid。** 顺序反了的后果：新代码一上线，三个运维 action 对**所有人**拒绝（fail-closed 的必然结果），而那正是要用它们迁移的时刻——全店已经因为 `apiVersion` 门停摆，却谁也跑不了迁移。正确顺序：① 运营方在开发者工具 Console 调 `whoami` 拿到自己的 openid（这个 action 在线上老版本就有、且免版本门，现在就能做）→ ② 一条命令把建集合、写文档、核对权限做完：`node scripts/wxcloud-ensure-platform-admin.js <openid>`（照 `wxcloud-ensure-indexes.js` 的形状写的幂等脚本，内部是 `@wxcloud/cli` 的 `flexdbCreateTable` / `flexdbPutItem` / ACL 那套；`tag` 的推导 `databases[0].instanceId || ENV_ID` 复用 `wxcloud-ensure-indexes.js` 导出的 `resolveDb`。**注意：`resolveDb` 本身只有一份，但那行推导本体在全仓有两份**——`wxcloud-ensure-indexes.js:123` 和 `wxcloud-deploy-ledger.js:154` 各写了一次 `(db && db.instanceId) || ENV_ID`，部署脚本没走 `resolveDb`。改那行推导要**两处一起改**。（`wxcloud-ensure-acl.js` 里也有个叫 `tag` 的东西，那是 **ACL 标签** `ADMINONLY`，同名不同物，别弄混））→ ③ 才部署新云函数。`deleteShop` **保持 owner-gated 不变**：那是租户对自己店的操作，不是平台运维。
 
 **恢复路**：万一 `platform_admins` 空了 / 被删了导致锁死，重跑同一条命令 `node scripts/wxcloud-ensure-platform-admin.js <openid>` 把那条文档插回去即可，**不需要重新部署云函数**——门每次调用都现读集合，读到就放行。
 
@@ -135,7 +145,7 @@ node scripts/check-ledger-export.js <ledgers 导出文件> [--clears <ledger_cle
 
 ```
 payload: { limit?: 50, restart?: false, newBook?: false, force?: false,
-           mode?: 'run' | 'rollback' | 'dropLegacy' | 'snapshots' }
+           mode?: 'run' | 'rollback' | 'dropLegacy' | 'snapshots' | 'dropSnapshotLegacy' }
 返回:    { state, phase, bookId, cursor, written, total, verified, freshBy,
            report?, error?, problems? }
 ```
@@ -166,7 +176,7 @@ do {
 
 - **写在事务外，cursor 用事务内 CAS 推进。** 单事务写入条数上限是未实测项；写路径已经被 `assertRecordsReady` 冻结、`_id` 确定、`set()` 幂等、源数组不变，事务在这里买不到任何东西，却会把那个未知量变成真约束。
 - **`writing → verifying` 单独占一次调用。** 「事务内能否读到自己刚写的数据」同样未实测；分两次调用，校验读的一定是已提交数据。
-- **`mode:'rollback'` 的守卫，事务内只用 `where().orderBy().limit().get()`，绝不用 `count()`。** `transaction.collection().where().count()` 在这个仓里一次都没跑过；而 `where().orderBy().limit().get()` **已经有在事务里跑的调用点**：**改或删**一张进货单发 `latestPurchases`（`where({bookId,type,productId,skuId}).orderBy('sortKey','desc').limit(2).get()`），**改或删**一张退货单、以及改一张有退货的销售单发 `returnsOfSale`（`where({bookId,saleOrderId}).orderBy('sortKey','asc').limit(201).get()`）——两条都在记账事务里的 `apply.prepareMutation` 发出。**新增那三条一次都不发**（实测 `addPurchase` / `addSale` / `addReturn` 在事务内发出的 `where` 查询数都是 **0**，`addReturn` 只发一次 `doc().get()` 捞被退销售单）：`recordsNeeded` 只在 `updateRecord` / `deleteRecord` 上返回非空的 `purchases` / `saleReturns`。所以准确的说法是——这条形状在事务里不可用时，**改单和删单一笔都做不了**（不是「一笔进货都记不了」），于是阶段 1 的测试店**只有改过或删过单据才验得到它**。回滚是全店停摆窗口里唯一的紧急出路，**出路本身失效比守卫不生效更糟**，所以那里一个新的未知量都不许引入。真要数总条数就在**事务外**数（那条形状当晚已经跑过：每家店迁移前的 `checkAggregates` 第一件事就是它）。
+- **`mode:'rollback'` 的守卫，事务内只用 `where().orderBy().limit().get()`，绝不用 `count()`。** `transaction.collection().where().count()` 在这个仓里一次都没跑过；而 `where().orderBy().limit().get()` **已经有在事务里跑的调用点**：**改或删**一张进货单发 `latestPurchases`（`where({bookId,type,productId,skuId}).orderBy('sortKey','desc').limit(2).get()`），**改或删**一张退货单、以及改一张有退货的销售单发 `returnsOfSale`（`where({bookId,saleOrderId}).orderBy('sortKey','asc').limit(201).get()`）——两条都在记账事务里的 `apply.prepareMutation` 发出。**新增那三条一次都不发**（实测 `addPurchase` / `addSale` / `addReturn` 在事务内发出的 `where` 查询数都是 **0**，`addReturn` 只发一次 `doc().get()` 捞被退销售单）：`recordsNeeded` 只在 `updateRecord` / `deleteRecord` 上返回非空的 `purchases` / `saleReturns`。所以准确的说法是——这条形状在事务里不可用时，**改单和删单一笔都做不了**（不是「一笔进货都记不了」），于是阶段 1 的演示店 `mt33kfi77idxpw`**只有改过或删过单据才验得到它**。回滚是全店停摆窗口里唯一的紧急出路，**出路本身失效比守卫不生效更糟**，所以那里一个新的未知量都不许引入。真要数总条数就在**事务外**数（那条形状当晚已经跑过：每家店迁移前的 `checkAggregates` 第一件事就是它）。
 
 **不需要第二个冻结开关。** 写路径从新云函数部署那一刻起就被 `assertRecordsReady` 挡住了（`recordsPending = records.length > 0 && !recordsMigratedAt`），不要再加一个 `ledgers.migration.state`——两个冻结口径迟早会打架。
 
@@ -189,10 +199,11 @@ do {
   - 前置条件只有两条，两条都直接回答「删了会不会把唯一一份副本删掉」：① `recordsMigratedAt` 非空（写路径已解冻，新账只进集合）；② **事务外**数一遍集合，账套号没变、数得着、而且**不是空的**（老数组非空时）。②数不着就报错让人再调一次，**故意不给 `force`**——回滚是出路，堵死它等于把店锁死；`dropLegacy` 是优化，堵一次什么都没坏，给一条不可逆操作配「绕过唯一一道闸」的开关才是错的。
   - **前置条件不看 `migration.phase === 'done'`。** 它和 `recordsMigratedAt` 是同一次 `putLedger` 写进去的，说不出后者说不出的话；它一旦触发文案还是误导性的（`recordsMigratedAt` 明明写着却报「还没完成流水升级」）；而且 2b-1b 那一版里它**活不过一笔账**（`applyMutation` 不带 `migration`），恰好被上线清单「迁完 → 记一笔 1 元测试账 → 再删掉 → 跑 `dropLegacy`」的顺序踩中，需要它的那家店必然卡死、app 内没有出路。2b-1c 起 `applyMutation` 会把 `migration` 带过每一次记账，但**前置条件仍然不许依赖它**——1b 那一版已经上过的店，`migration` 是补不回来的（M16e 钉着这一条）。
   - 判据是「集合空不空」而**不是**「集合条数 ≥ 归并条数」：迁完之后正常营业，店主删掉几张单是常态（`deleteRecord` 从集合里删、老数组一条不动），拿条数当硬闸会在最需要 `dropLegacy` 的那家店上误伤。差多少照样回在 `shortfall` 里给人看。
-  - 回包带：`dropped`（清掉的老数组条数，按行）/ `bookId` / `mergedCount` / `collectionCount` / `shortfall`（`max(0, mergedCount − collectionCount)`）。
+  - 跑完会盖 `legacyDroppedAt`（**保留第一次的时间**，重跑不刷新）——那是 `mode:'dropSnapshotLegacy'` 唯一的闸。「这家店什么时候放弃的旧包退路」全店只有一个入口、可查、不含糊。`applyMutation` 把它带过每一次记账（和 `recordsMigratedAt` 同一待遇，2b-1b 审计 A6 那一类教训）。
+  - 回包带：`dropped`（清掉的老数组条数，按行）/ `bookId` / `mergedCount` / `collectionCount` / `legacyDroppedAt` / `shortfall`（`max(0, mergedCount − collectionCount)`）。
 - **两个特例**：`records` 为空且没有 `recordsMigratedAt`（建了没用过的店）走 **stamp-only**，只补 `recordsMigratedAt` 和 `bookId`，**不写 `accounts`/`aggregate`**（那本账可能已有活流水和正确聚合）；已经有 `recordsMigratedAt` 的一律报错。
 - **`ledgers.records` 迁完之后故意留着**，`applyMutation` 每次记账都把它原样带过去。它是 O(1) 回滚路的全部依仗，`tests/ledger-records.test.js` 钉着这一条。
-  - **三个动作会把它清空，从而废掉这家店的回滚路**：`dropLegacy`（明说了）、**「恢复清空前数据」**（`restoreCleared` 里 `next.records = []`，既有行为）、以及**「清空数据」**（`clearAll` → `switchBook()`，第一行就是 `next.records = []`）。「填示例数据」（`loadSeed`，开发路径）同理也走 `switchBook`。所以「整体不对就部署存档的旧函数包」这条深层退路，对**跑过 `dropLegacy` 的店**、**用过「恢复清空前数据」的店**和**点过「清空数据」的店**都不成立——旧包在这些店上会读出一本空账。数据本身没丢（还在 `ledger_records` 里；`clearAll` 存进 `ledger_clears` 的快照文档里还带着老数组的副本），但旧包读的是 `ledgers.records`，**它看不见集合里那份、也看不见快照里那份**。当晚谁点过恢复**或清空**要记下来。
+  - **三个动作会把它清空，从而废掉这家店的回滚路**：`dropLegacy`（明说了）、**「恢复清空前数据」**（`restoreCleared` 里 `next.records = []`，既有行为）、以及**「清空数据」**（`clearAll` → `switchBook()`，第一行就是 `next.records = []`）。「填示例数据」（`loadSeed`，开发路径）同理也走 `switchBook`。所以「整体不对就部署存档的旧函数包」这条深层退路，对**跑过 `dropLegacy` 的店**、**用过「恢复清空前数据」的店**和**点过「清空数据」的店**都不成立——旧包在这些店上会读出一本空账。数据本身没丢（还在 `ledger_records` 里；`clearAll` 存进 `ledger_clears` 的快照文档里还带着老数组的副本），但旧包读的是 `ledgers.records`，**它看不见集合里那份、也看不见快照里那份**。跑过 `mode:'dropSnapshotLegacy'` 之后，旧包连「恢复清空前数据」也读不到快照里的流水了（快照的 `records` 数组被删）——这正是那个动作的意思：那条退路已经终止。当晚谁点过恢复**或清空**要记下来。
 
 **迁移会改动某些店当前显示的欠款。** 只有三类会动：B2（退货单头挂着改客户之前的旧 `customerId`）、`payType` 过期（改过销售单结算档，退货没跟着改）、缺两个结算字段的退货单。**这三类今天在线上就是错的**，所以这是修，不是引入——但阶段 0 的报告要逐店把差异清单给店主过一遍。
 
@@ -209,7 +220,7 @@ payload: { mode: 'snapshots', limit?: 50 }
 
 **前置条件：本店活账套必须已经迁完**（`recordsMigratedAt` 已写），没迁完调它明确报错。快照转换是加分项，**不能挡住关键路径**；而且它和活账套走的是同一套 `legacyRecordsOf`（归并 + 退货份额整体重算），先在活账上跑通再来转快照更安全。
 
-**逐份处理**账本 `clearSnapshots` 里的每一条元数据：`bookId` 非空就跳过（幂等）；`records` 为空走 stamp-only（只补 `bookId` + 空 `accounts`/`aggregate`）；否则 `legacyRecordsOf` 归并 + 重算 → 事务外逐条 `set()` 写进 `ledger_records` → `countAll` 必须等于归并条数 → **一个事务**写回快照文档的 `bookId`/`accounts`/`aggregate`。**`records` 数组保留不删**，和 `ledgers.records` 同一个理由：那是回滚路。代价是同一批流水在库里存了两份（快照数组一份、集合一份），**目前没人给这个双份定终止时间**——`dropLegacy` 只清 `ledgers.records`，不管快照里的。2b-3 清理清单要把它一起算上。
+**逐份处理**账本 `clearSnapshots` 里的每一条元数据：`bookId` 非空就跳过（幂等）；`records` 为空走 stamp-only（只补 `bookId` + 空 `accounts`/`aggregate`）；否则 `legacyRecordsOf` 归并 + 重算 → 事务外逐条 `set()` 写进 `ledger_records` → `countAll` 必须等于归并条数 → **一个事务**写回快照文档的 `bookId`/`accounts`/`aggregate`。**`records` 数组转换时保留不删**，和 `ledgers.records` 同一个理由：那时它还是旧云函数退路的一半。代价是同一批流水在库里存了两份（快照数组一份、集合一份）。**已删掉的店不在这个问题里**：删店会把 `ledger_clears` 文档连同里面的 `records` 数组一起删掉（见下面「删除店铺」），**悬着的只有活店的快照双份**。而它**现在有终止条件了**：跑过 `mode:'dropLegacy'`（那是「这家店放弃退路」的显式决定）之后，用 `mode:'dropSnapshotLegacy'` 收掉快照里的那一半，见下。
 
 - **账套号 = `'clr-' + 快照 id`，故意不发新号**（对比 `newBook`）。发号会逼出一个两头不讨好的选择：先把号写进快照文档再写流水，崩在中间就恢复出一本空账（商品回来了、流水没了，**静默错账**）；先写流水再写号，崩在中间只是留下一批孤儿文档、下次重试换一个号（**是存储泄漏，不算错钱**——两头的代价不同级，别把它当成和上一条一样危险）。号由快照自己决定，两头都不用付：同一份快照重跑写的是同一批 `_id`，`set()` 幂等，`countAll` 永远只数这一份，且没有任何需要跨调用持久化的状态。`clr-` 前缀保证不会撞上现有账套。
 - **单份失败不影响其他份。** 快照之间互相独立，一份坏数据不该让其他份也恢复不了。失败的记进 `report[]`（带 `reason`）继续下一份。**失败不吃 `limit` 预算**，否则一份修不好的快照会把预算吃光、`remaining` 永远归不了零，循环调不收敛。所以 `state` 只有 `running` / `done` 两种，`failed > 0` 也会收敛到 `done` —— 收敛不等于全好，**要看 `failed` 和 `report`**。
@@ -222,6 +233,43 @@ payload: { mode: 'snapshots', limit?: 50 }
 
 另一个漏网口：只有 `ledgers.clearedBackup`、`clearSnapshots` 还是空的店（老的单份备份格式，还没被 `adoptLegacyBackup` 转成快照），`mode:'snapshots'` 会报 `total: 0` 什么都不做；等下一次记账把它转成快照之后，恢复又会报错，**得再跑一次**。真实导出里三家店的 `clearedBackup` 都是空的，但换一批数据要留意。
 
+### `mode:'dropSnapshotLegacy'` —— 收掉快照里那份重复的 records 数组
+
+```
+payload: { mode: 'dropSnapshotLegacy', limit?: 50 }
+返回:    { state, mode, total, dropped, skipped, failed, remaining, updatedAt, report[], reportTotal }
+         report[] 每项 { id, savedAt, status, bookId?, legacyCount?, expectedCount?, collectionCount?, reason? }
+         status ∈ dropped | skipped | failed
+```
+
+**这是 2b-3 给「同一批流水存了两份」定的终止条件。** 转换（`mode:'snapshots'`）故意把数组留着，因为那时它还是旧云函数退路的一半；这个动作就是宣布那条退路到此为止，把另一半也收掉。`state` 只有 `running` / `done` 两种，`failed > 0` 也会收敛到 `done` —— **收敛不等于全清掉了，必须同时看 `failed` 和 `report`**。
+
+**一份快照的 `records` 数组可以删，当且仅当五条同时成立：**
+
+| # | 条件 | 为什么 |
+|---|---|---|
+| ① | 本店 `ledgers.recordsMigratedAt` 非空 | 活账套没迁完就谈清理是本末倒置 |
+| ② | 本店 `ledgers.legacyDroppedAt` 非空（由 `mode:'dropLegacy'` 盖） | 「这家店放弃旧包退路」这个决定，全店只有一个入口、可查、不含糊 |
+| ③ | 这份快照的 `bookId` 非空 | 没 `bookId` = 还没转换 = 数组是它流水的**唯一**副本 |
+| ④ | 这份快照的 `bookId` **不是**本店**当前**活账套 | 那本账套还在涨（多半是被「恢复清空前数据」恢复过），快照里冻结的 `aggregate` 不再是它的权威条数，数不出可信判据 |
+| ⑤ | `countAll(bookId) === toNumber(aggregate.count)` | 删之前重新证明集合里那份是完整的 |
+
+**为什么闸是 `legacyDroppedAt` 而不是「`ledgers.records` 为空」**：后者是一个能被巧合满足的派生状态。卓祥 `mt3231n3ixeenv` 的活账套本来就是 0 条流水，它的 `ledgers.records` 天然是空的。按「数组空了就算退路已死」判，会在**恰恰是旧包退路里唯一还有意义的那份数据**（它那 1 份快照的 6 条流水）上直接放行。所以判据必须是一个**显式决定的痕迹**，不是一个能被巧合满足的派生状态。
+
+**为什么不并进 `dropLegacy`**：`dropLegacy` 的语义是「这家店的账本（`ledgers` 文档）」，一个事务、一份文档。快照是另一批文档、数量不定、要逐份事务、要逐份报告。并进去会让那个动作的语义变模糊，也让回滚粒度变粗（跑完 `dropLegacy` 还能停下来，不必连快照一起丢）。所以是**两个动作、强制顺序**：`dropLegacy`（盖戳 + 清活账套老数组）→ `dropSnapshotLegacy`（清快照里那半）。
+
+**删前校验用 `countAll === aggregate.count`，两类快照通用**：A 类（老快照被转换过来的）`aggregate = foldTotalTerms(merged)`，所以 `aggregate.count` 就是转换那一刻 `countAll` 校验过的归并条数；B 类（迁移之后、`dropLegacy` 之前点「清空数据」存的）`aggregate` 是被封存账套那一刻的增量维护值，而被封存的账套此后不再变化。**不许改成「重新归并 `records` 数组再比条数」**：B 类的数组是迁移前的过期子集（封存前记的新账在集合里、不在数组里），归并出来的条数本来就不等于集合里的条数，那么判会把 B 类全判成失败。判据是严格相等——少一条不行，多一条也不行（多出来的恰恰说明这本账套已不是快照冻结时的那本）。
+
+**一份快照一个事务，每个事务只写 1 份文档，永远不批量**；`countAll()` 在**事务外**（事务里调 `countAll()` 是本仓库明令禁止的）。2026-08-24 实测：一个事务里写 92 条文档确定性失败（`TransactionNotExist`，30 秒边界，函数耗时才 12–16 秒），真实边界未知——不可逆操作不许坐在一个未实测的量上。快照现在每份才 6 条，但设计不许假设永远这么小。
+
+**不给 `force`**，和 `dropLegacy` 同一个口径：给一条不可逆操作配「绕过唯一一道闸」的开关才是错的。⑤数不着（`countAll` 抛错）就报失败让人再调一次。
+
+**已知的保守误伤**：④是一条有意的、会误伤的保守规则——被「恢复清空前数据」恢复过、**而且那本账套此刻仍是活账套**的快照，清不掉它的数组（报「这份快照的账套现在就是本店活账套」）。判据是「是不是**此刻**的活账套」，不是「有没有被恢复过」：同一份快照之后再被「清空数据」封存一次，账套就不再是活的，⑤ 照常逐份现数证明条数，于是又清得掉。别把这条读成「恢复过的快照永远清不掉」。安全侧一律拒绝，这是取舍不是疏漏。
+
+**`restoreCleared` 不读这个数组**（只读 `bookId` / 四张表 / `accounts` / `aggregate`），所以删了不影响恢复——这条由端到端测试 D3 钉住（删完数组再恢复，商品/库存/流水/欠款逐项回到清空之前），不靠这句话。删掉的快照文档盖 `legacyRecordsDroppedAt`；`countAll` 抛错、条数对不上、账套号在数数和事务之间变了，都按 `failed` 记进 `report` 继续下一份，重调即重试。幂等：数组已删的份数报 `skipped`。
+
+哪几份还带着双份，本地预检脚本带 `--clears` 时 P11 会点名（「已转换但还带着 records 双份 N 份」）；云上的 `checkAggregates` 读不到 `ledger_clears`，和 `mode:'snapshots'` 的漏网口同一条。
+
 ### 上线清单
 
 **阶段 0（T−7 天，不部署、不影响营业）**：控制台导出 `ledgers` 全表（另导 `ledger_clears` 的 `_id`/`shopId`/`savedAt`/`bookId`/**`records`**——漏了 `records`，P11 明细里每份快照的「流水 N 条」就全是 0，看不出哪份需要转换）→ `node scripts/check-ledger-export.js <文件> --json > 预检报告.json` → 逐店过 P1–P14，阻塞项必须为空、P4 每条改动能归到三类之一 → `mergedCount` 填进排期表 → **下载存档当前线上 `ledger` 云函数代码包**（唯一的整体回滚路，事后补不回来）。任何一项不过就停在这里。
@@ -232,7 +280,7 @@ payload: { mode: 'snapshots', limit?: 50 }
 >
 > **店的先后顺序**（重名的两家务必按 `shopId` 认，不要按店名认）：
 > 1. `mt33kfi77idxpw`（运营方自有演示店）——彩排和两条真云实测全在它身上跑
-> 2. `mt3231n3ixeenv`（卓祥服饰，0 条流水、1 份老快照）——第一个真实店，也是**唯一能在低风险下验 `mode:'snapshots'`** 的地方（自有演示店没有清空快照，这条它盖不到）
+> 2. `mt3231n3ixeenv`（卓祥服饰，0 条流水、1 份老快照）——第一个真实店，也是**不额外造数据的话，唯一能在低风险下验 `mode:'snapshots'`** 的地方（自有演示店没有清空快照，这条它盖不到——要盖就得先在演示店里人造一次「清空数据」把快照造出来，那是另一份风险）
 > 3. `msxeubh4c6d5f9`（应收 549 万那家，2 份老快照）——**最后动**
 
 
@@ -240,17 +288,51 @@ payload: { mode: 'snapshots', limit?: 50 }
 
   已做完（记录于 2026-08-24）：运营方 openid 已写进 `msxeubh4c6d5f9`（聚友纺织，549 万应收那家）和 `mt3231n3ixeenv`（卓祥服饰），都是 `staff`；`mt33kfi77idxpw`（另一家聚友纺织）运营方本来就是 `owner`，未改动。三位店主原有的 owner 记录一条没动。
 
-→ **在测试店上把回滚彩排一遍**（本机测不到的就这一段）：`migrateRecords` 到 `done` → 在 app 里记一笔 1 元销售 → 调 `{mode:'rollback'}` **必须被拒**，错误里报得出 `foreignCount` ≥ 1 → 再调 `{mode:'rollback', force:true}` **必须成功**，回包里 `forced:true`、`discarded:1`、`probeError` 和 `countError` 都是空串 → 最后用 `{newBook:true}` 迁回去。**最后这一步不要用 `{restart:true}`**：彩排记的那笔 1 元测试账留在集合里就是残骸、又不是这次要写的那批的子集，`restart` 重写完必撞校验（那笔账 `createdAt` 最新、排在倒序最前，逐页比对整排错开——报错单以 V7 / V2 打头、V1「集合里多出这条」垫在末尾；内存替身上实测 7 项 = V7×4 + V2×2 + V1×1——店停在 `failed`、`recordsMigratedAt` 一直是 0）；而回滚之后写路径是冻着的（见上面 `mode:'rollback'` 那条），那条账在 app 里删不掉，所以只能换账套——这正是上面「**残骸来路不明就直接 `newBook`，不要试 `restart`**」那条规矩的实例。**这三步任意一步不对就停在阶段 1，不要进阶段 2**：当晚的紧急出路只有这一条，它是不是好的，只能在这里知道。**彩排还有一个它结构性看不见的失败模式**：测试店是运营方自己 `createShop` 建的，他在那家店里既是 owner 又在白名单——「运营方不是该店成员」这一段彩排怎么跑都是绿的。阶段 2 里走 `requireMember` 的那几步能不能跑，只能靠上面「把运营方加进 `members`」那一步保证，不能指望彩排发现；这个失败模式第一次现形是在 T 日打烊后、全店已因 `apiVersion` 门停摆的时候，没有第二次机会。
+→ **在演示店 `mt33kfi77idxpw`上把回滚彩排一遍**（本机测不到的就这一段）：`migrateRecords` 到 `done` → 在 app 里记一笔 1 元销售 → 调 `{mode:'rollback'}` **必须被拒**，错误里报得出 `foreignCount` ≥ 1 → 再调 `{mode:'rollback', force:true}` **必须成功**，回包里 `forced:true`、`discarded:1`、`probeError` 和 `countError` 都是空串 → 最后用 `{newBook:true}` 迁回去。**最后这一步不要用 `{restart:true}`**：彩排记的那笔 1 元测试账留在集合里就是残骸、又不是这次要写的那批的子集，`restart` 重写完必撞校验（那笔账 `createdAt` 最新、排在倒序最前，逐页比对整排错开——报错单以 V7 / V2 打头、V1「集合里多出这条」垫在末尾；内存替身上实测 7 项 = V7×4 + V2×2 + V1×1——店停在 `failed`、`recordsMigratedAt` 一直是 0）；而回滚之后写路径是冻着的（见上面 `mode:'rollback'` 那条），那条账在 app 里删不掉，所以只能换账套——这正是上面「**残骸来路不明就直接 `newBook`，不要试 `restart`**」那条规矩的实例。**这三步任意一步不对就停在阶段 1，不要进阶段 2**：当晚的紧急出路只有这一条，它是不是好的，只能在这里知道。**彩排还有一个它结构性看不见的失败模式**：演示店是运营方自己 `createShop` 建的，他在那家店里既是 owner 又在白名单——「运营方不是该店成员」这一段彩排怎么跑都是绿的。阶段 2 里走 `requireMember` 的那几步能不能跑，只能靠上面「把运营方加进 `members`」那一步保证，不能指望彩排发现；这个失败模式第一次现形是在 T 日打烊后、全店已因 `apiVersion` 门停摆的时候，没有第二次机会。
 
-→ 测试店走完整流程时**必须包含「改一张进货单（或删掉它）」和「改一张退货单（或删掉它）」**——导出副本里没有现成的单可改（真实导出：549 万那家 0 张进货单、三家店 0 张退货单），要先在测试店里**记一笔进货、一笔销售、一笔退货**（退货必须挂在销售单上，所以销售那笔也得先记），再来改或删它们。这一步**是在验守卫的依赖，不是在验业务**，别省：事务里那两条 `where().orderBy().limit().get()`（`latestPurchases` / `returnsOfSale`）**只有 `updateRecord` / `deleteRecord` 才会发**，光记进货和退货一条都发不出来（实测 `addPurchase` / `addSale` / `addReturn` 在事务内的 `where` 查询数都是 0）。上面那次 `{mode:'rollback'}` 被拒只证明了 `pageDocs` 在**回滚事务**里能跑；这一步才证明**记账事务**里也能跑，两件事都得有。
+→ 演示店 `mt33kfi77idxpw`走完整流程时**必须包含「改一张进货单（或删掉它）」和「改一张退货单（或删掉它）」**——导出副本里没有现成的单可改（真实导出：549 万那家 0 张进货单、三家店 0 张退货单），要先在演示店里**记一笔进货、一笔销售、一笔退货**（退货必须挂在销售单上，所以销售那笔也得先记），再来改或删它们。这一步**是在验守卫的依赖，不是在验业务**，别省：事务里那两条 `where().orderBy().limit().get()`（`latestPurchases` / `returnsOfSale`）**只有 `updateRecord` / `deleteRecord` 才会发**，光记进货和退货一条都发不出来（实测 `addPurchase` / `addSale` / `addReturn` 在事务内的 `where` 查询数都是 0）。上面那次 `{mode:'rollback'}` 被拒只证明了 `pageDocs` 在**回滚事务**里能跑；这一步才证明**记账事务**里也能跑，两件事都得有。
 
 → **【真云实测①：事务内 `where + orderBy + limit`（`pageDocs` 还带 `_.lt` 游标）】**这条链是新引入的依赖，本机永远验不出来——`tests/memory-db.js` 的替身什么都支持。基线（`7b27b9f`）的事务里出现过的是 `doc().get()/set()/remove()`、不带修饰的 `where().get()`、和一条 `where().limit().get()`（deleteShop 清 `ledger_clears`）；**`orderBy` 和 `_.lt` 在事务里一次都没出现过**，是新云函数才引入的。触发它的操作要**逐个点名跑**，别只写「走完整流程」：改或删**进货单**（`latestPurchases`）、改或删**退货单**（`returnsOfSale`）、改**有退货的销售单**（同 `returnsOfSale`）、对着全店跑一次 **`recomputeAggregates`**（事务内 `readAllDocs` 一页页 `pageDocs`）。云端事务不支持 `orderBy` / `_.lt` 的任何一个修饰符，这四种操作就全线报错。
 
-→ **【真云实测②：单事务写入条数上限 + 事务超时】**两个量都没实测过（`ledger-records.js` 的 `SALE_RETURNS_MAX` 注释自己也写着「200 是拍的，部署前要实测再定」），而 `config.json` 的 `timeout` 是 20 秒。① 造一张挂着**几十张退货单**的销售单，改一次它的单价——这个事务要写 `ledgers` 1 + 目标 1 + 全部退货单 N，看它过不过、耗时多少；② 对着测试店的全量流水跑一次 `recomputeAggregates`——它在**一个事务里**做最多 `RECOMPUTE_MAX_RECORDS` 5000 条 / 50 次串行分页查询，看会不会撞超时。
+→ **【真云实测②：单事务写入条数上限 + 事务超时】**① **写入条数这一半已经测过一次（2026-08-24，演示店 `mt33kfi77idxpw`）**：改一张挂着 90 张退货单的销售单的单价（事务写 `ledgers` 1 + 目标 1 + 退货单 90 = 92 条）**确定性失败**，服务端报 `[ResourceUnavailable.TransactionNotExist]`「transaction must be commit or abort in 30 seconds」，而函数耗时只有 12.3 / 11.5 秒——**所以真实边界不是那 30 秒。后来在同一家店上做了二分**：**22 条写入通过（9.7 秒）、47 条失败（11.3 秒）、92 条失败（12–16 秒）**。11.3 秒失败而 9.7 秒通过，**时间至此被彻底排除**，是条数或体积。**但到底是哪一个还没分开**：演示店的 `ledgers` 文档有 3.6 MB、每次事务都要重写它一遍，所以「22–47 条」这个区间可能只对大账本成立。分开它们的办法已经就绪：建一家空店（账本几千字节）跑同样的 47 条——过了就是体积（那么任何常数都不安全，得把整体重算搬出事务），不过就是条数（可以定一个保守常数）。**这一条没结束**：还要在不同时段各测一次排除并发 / 负载因素，理由和口径见 `ledger-records.js` 的 `SALE_RETURNS_MAX` 与 `index.js` 事务改写处那两段注释。② **事务超时这一半还没测**：对着测试店的全量流水跑一次 `recomputeAggregates`——它在**一个事务里**做最多 `RECOMPUTE_MAX_RECORDS` 5000 条 / 50 次串行分页查询，看会不会撞超时（`config.json` 的 `timeout` 现在是 60 秒，不是当初写这条时的 20 秒）。
 
-→ 顺便在测试店上把 `dropLegacy` 按**上线清单自己的顺序**跑一遍：迁完 → 记一笔 1 元销售 → 删掉 → `{mode:'dropLegacy'}` **必须成功**，验收看回包里 **`shortfall` 为 0**（也就是 `collectionCount ≥ mergedCount`）。**别要求两个条数相等**：这家测试店在最后一次迁移**之后**记的账只进集合、不进老数组——为上一条造的进货 / 销售 / 退货单只要没删掉就会留在当前账套里，`collectionCount` 偏大是正常的（实测：归并 6 条 + 3 张测试单 = 集合 9 条）。回滚彩排那笔 1 元测试账也永久留在集合里，但它记在后来被 `{newBook:true}` 换掉的旧账套里，不进这两个数。真正的闸是「集合非空」而不是条数相等（见上面 `mode:'dropLegacy'` 那条），集合里**缺**了老数组该有的账才回在 `shortfall` 里（大于 0 就停下来查）。跑完这家店就没有 O(1) 回滚了，所以**只在测试店上跑**。
+> **【已实测】2026-08-24 在演示店 `mt33kfi77idxpw`（3.6 MB 账本、8129 条老流水、归并 4694 单）上跑出来的数，下面这几条不再是未知量：**
+>
+> | 测的东西 | 结果 |
+> |---|---|
+> | `migrateRecords` 写入，每批 500 条 | **30–34 秒**（末批 194 条 18.9 秒），共 9 批 |
+> | `migrateRecords` 校验，每页 | **11.5–13.6 秒**，共 **47 页** |
+> | `checkAggregates`（只读） | **7.7 秒** |
+> | `recomputeAggregates({dryRun:true})` | **7.9 秒**，`diffs: []` |
+> | 改一张挂 90 张退货单的销售单单价（单事务写 92 条） | **确定性失败**，两次 |
+>
+> 两条结论：
+>
+> 1. **`recomputeAggregates` 的 47 页串行查询不是问题**（7.9 秒，连旧的 20 秒都够）。真正吃时间的是迁移写入。
+> 2. **单事务写 92 条过不去**，两次都报 index.js 那句「库存刚被别人改过，请再提交」；函数耗时 12.3 / 11.5 秒（上限 60 秒）、内存 155 / 138 MB（上限 512 MB），**超时和内存都排除**，事务原子回滚、一条都没写进去。**原始错误已经拿到**（部署带 `console.error` 的版本后重跑，从 CLS 里捣出来的）：
+>
+> ```
+> document.set:fail -501001 resource system error.
+> [ResourceUnavailable.TransactionNotExist]
+> Transaction does not exist on the server,
+> transaction must be commit or abort in 30 seconds.
+> ```
+>
+> 失败点是**事务被服务端丢弃**：第 N 次 `document.set` 发出去时，那个事务在服务端已经不存在了。
+> **但不要把它当成「跑满 30 秒被掉」**：三次失败的函数耗时是 12.3 / 11.5 / **16.4 秒**，
+> 都远不到 30 秒。那句「must be commit or abort in 30 seconds」是错误码自带的通用提示文案，
+> 不代表真的过了 30 秒——更可能是**条数或体积**把事务提前打掉了，`TransactionNotExist`
+> 只是它现形的方式。真实边界在哪里尚未查清。所以 **`SALE_RETURNS_MAX = 200` 当前形同虚设**：够不着它，先撞事务。
+>
+> **这不阻塞迁移**：迁移写入走的是事务**外**路径（`writePhase` 用 `db.recordsCtx()`），所以 4694 条才能分批搬完；只有 `updateRecord` / `deleteRecord` 碰到「一张销售单挂很多退货单」才会撞上。
 
-**阶段 2（T 日打烊后，从第 2 步起所有店一起停摆）**：`npm test` 绿 → `npm run sync:ledger-inventory` → `node scripts/wxcloud-deploy-ledger.js` → 开发者工具打开新版源码、**运营方**（`platform_admins` 里那个 openid，阶段 1 已建好）登录——迁移夜跑这三个 action 的是运营方，不再是各家店主。**但当晚清单不是每一步都走白名单**：三个运维 action（`checkAggregates` / `migrateRecords` 各 mode / `recomputeAggregates`——最后一个在下面回滚段落里，聚合漂了才跑）过 `requirePlatformAdmin`，运营方在名单里即可；其余每一步（`getSlip`、`getLedger`、记 1 元测试账、删掉它）过的是 `requireMember`，运营方必须是**该店**成员（阶段 1 已提前加为 `staff`），不是就报「不是该店成员」。逐店步骤用〔白名单〕/〔店成员〕标注执行人。每家的 `shopId` 从阶段 0 导出的 `ledgers` 全表 `_id` 里取——`listShops` 只列调用者自己是成员的店，运营方在阶段 1 加 `members` 之前调它回 `[]`（实测），加过之后能列出这几家，但 id 一律以导出为准 → 逐店：`checkAggregates`**〔白名单〕**（`mergedCount` 与阶段 0 报告**一致**、`collectionCount === 0`；**零记录的店是例外**——`records` 为空且没迁过，云上走「已迁移」分支，报告形状不同、**没有 `mergedCount` 字段**、还报 `migrated: true`（其实 `recordsMigratedAt` 是 0），照清单核对时别卡在这一条）→ 记下 2–3 张老送货单的 `getSlip` 结果**〔店成员〕** → 循环 `migrateRecords` 到 `done`**〔白名单〕** → `getLedger` 核对 `totals` 和两个客户**〔店成员〕**（等于报告里的 `after`、**无 `aggregatesStale`**）→ **重跑那几张 `getSlip`，必须逐张相等〔店成员〕** → **预检 P11 报了有没转的快照的店，跑 `migrateRecords` 的 `mode:'snapshots'` 到 `state === 'done'` 且 `failed === 0`〔白名单〕**（漏跑 = 这家店的「恢复清空前数据」从能点变成永久报错）→ 记一笔 1 元测试销售确认写路径解冻、再删掉**〔店成员〕** → 账本文档 > 3 MB 的店跑 `dropLegacy`**〔白名单〕** → 全部绿了再发布小程序并逐店真机确认已更新。
+> **【架构上限】`migrateRecords` 每推进一个 chunk 就重写一次整个 `ledgers` 文档，而那个文档里装着正在被搬的老数组本身。** 于是每一批 500 条的代价里都含着一次 3.6 MB 的写回，**账本越大迁移越慢——而账本大正是要迁移的理由**。实测：3.6 MB 的店每批 30–34 秒，20 秒的旧配置**一个 chunk 都跑不完**（这就是 `config.json` 现在是 `timeout: 60` / `memorySize: 512` 的原因）。再大一个量级的账本会撞到 60 秒，到那时得改结构（比如把游标从 `ledgers` 里搬出去），而不是继续调大 `timeout`。
+
+→ **【真云实测②：单事务写入条数上限 + 事务超时】**两个量都没实测过（`ledger-records.js` 的 `SALE_RETURNS_MAX` 注释自己也写着「200 是拍的，部署前要实测再定」），而 `config.json` 的 `timeout` 是 20 秒。① 造一张挂着**几十张退货单**的销售单，改一次它的单价——这个事务要写 `ledgers` 1 + 目标 1 + 全部退货单 N，看它过不过、耗时多少；② 对着演示店 `mt33kfi77idxpw`的全量流水跑一次 `recomputeAggregates`——它在**一个事务里**做最多 `RECOMPUTE_MAX_RECORDS` 5000 条 / 50 次串行分页查询，看会不会撞超时。
+
+→ 顺便在演示店 `mt33kfi77idxpw`上把 `dropLegacy` 按**上线清单自己的顺序**跑一遍：迁完 → 记一笔 1 元销售 → 删掉 → `{mode:'dropLegacy'}` **必须成功**，验收看回包里 **`shortfall` 为 0**（也就是 `collectionCount ≥ mergedCount`）。**别要求两个条数相等**：这家演示店在最后一次迁移**之后**记的账只进集合、不进老数组——为上一条造的进货 / 销售 / 退货单只要没删掉就会留在当前账套里，`collectionCount` 偏大是正常的（实测：归并 6 条 + 3 张测试单 = 集合 9 条）。回滚彩排那笔 1 元测试账也永久留在集合里，但它记在后来被 `{newBook:true}` 换掉的旧账套里，不进这两个数。真正的闸是「集合非空」而不是条数相等（见上面 `mode:'dropLegacy'` 那条），集合里**缺**了老数组该有的账才回在 `shortfall` 里（大于 0 就停下来查）。跑完这家店就没有 O(1) 回滚了，所以**只在演示店上跑**。
+
+**阶段 2（T 日打烊后，从第 2 步起所有店一起停摆）**：`npm test` 绿 → `npm run sync:ledger-inventory` → `node scripts/wxcloud-deploy-ledger.js` → **回到「阶段 1 的后半段」（上面那一段）把演示店 `mt33kfi77idxpw` 的彩排和两条真云实测先跑完——那几步必须在部署之后才能做，所以它们就在今晚、就在这一步之后；**不跑彩排就直接进「逐店」，等于带着一条没验证过的紧急出路去动真实店**（彩排验的就是全店停摆窗口里唯一那条出路） → 开发者工具打开新版源码、**运营方**（`platform_admins` 里那个 openid，阶段 1 已建好）登录——迁移夜跑这三个 action 的是运营方，不再是各家店主。**但当晚清单不是每一步都走白名单**：三个运维 action（`checkAggregates` / `migrateRecords` 各 mode / `recomputeAggregates`——最后一个在下面回滚段落里，聚合漂了才跑）过 `requirePlatformAdmin`，运营方在名单里即可；其余每一步（`getSlip`、`getLedger`、记 1 元测试账、删掉它）过的是 `requireMember`，运营方必须是**该店**成员（阶段 1 已提前加为 `staff`），不是就报「不是该店成员」。逐店步骤用〔白名单〕/〔店成员〕标注执行人。每家的 `shopId` 从阶段 0 导出的 `ledgers` 全表 `_id` 里取——`listShops` 只列调用者自己是成员的店，运营方在阶段 1 加 `members` 之前调它回 `[]`（实测），加过之后能列出这几家，但 id 一律以导出为准 → **逐店的顺序不允许改（重名的两家务必按 `shopId` 认，不要按店名认）：① `mt33kfi77idxpw` 演示店（彩排，已在上一步跑完）→ ② `mt3231n3ixeenv` 卓祥服饰（第一个真实店）→ ③ `msxeubh4c6d5f9` 应收 549 万那家（**最后动**）** → 逐店：`checkAggregates`**〔白名单〕**（`mergedCount` 与阶段 0 报告**一致**、`collectionCount === 0`；**零记录的店是例外**——`records` 为空且没迁过，云上走「已迁移」分支，报告形状不同、**没有 `mergedCount` 字段**、还报 `migrated: true`（其实 `recordsMigratedAt` 是 0），照清单核对时别卡在这一条）→ 记下 2–3 张老送货单的 `getSlip` 结果**〔店成员〕** → 循环 `migrateRecords` 到 `done`**〔白名单〕** → `getLedger` 核对 `totals` 和两个客户**〔店成员〕**（等于报告里的 `after`、**无 `aggregatesStale`**）→ **重跑那几张 `getSlip`，必须逐张相等〔店成员〕** → **预检 P11 报了有没转的快照的店，跑 `migrateRecords` 的 `mode:'snapshots'` 到 `state === 'done'` 且 `failed === 0`〔白名单〕**（漏跑 = 这家店的「恢复清空前数据」从能点变成永久报错）→ 记一笔 1 元测试销售确认写路径解冻、再删掉**〔店成员〕** → 账本文档 > 3 MB 的店跑 `dropLegacy`**〔白名单〕** → 全部绿了再发布小程序并逐店真机确认已更新。
 
 **回滚**：某店 `failed` → 不动，该店停摆，无错账；某店 `done` 后发现不对 → `mode:'rollback'`（O(1)，该店**仍停摆**——只有读退回老路径，写仍被 `assertRecordsReady` 冻着；集合里的文档留着，**重跑必须带 `restart: true`**，回滚前记过账就连 `restart` 也会撞 V7/V2、只能 `newBook: true`；**迁完之后已经记过账就会被拒绝**，那些账只在集合里，回滚看不见它们——真要回滚得先另行备份再带 `force: true`；反过来，迁完之后**只删过单**的店回滚会**放行**，被删的单在老路径上复活，守卫不管这一侧）；整体不对 → 部署阶段 0 存档的旧函数包（已跑过 `dropLegacy` / 清空 / 恢复的店回不去）；聚合漂了 → `recomputeAggregates`。
 
@@ -262,11 +344,58 @@ payload: { mode: 'snapshots', limit?: 50 }
 
 店铺页「清空数据」只清当前店的商品、SKU、流水、客户、种类，店铺和成员还在。每一次清空都会在集合 `ledger_clears` 里追加一份完整快照，**不会覆盖更早的记录**。小程序免费只恢复**最近一次**；恢复后按钮消失，直到再次清空。更早的快照留在云端，以后可以做成付费恢复，这一期不接支付、也不在界面里列出历史。`getLedger` 只回 `hasClearedBackup` / `archivedClearCount` / `latestClear`（`{ savedAt, recordCount }`，最近那份的元信息，**不带快照正文**），不把快照正文传给客户端。`latestClear` 是「恢复清空前数据」弹窗的依据：说清恢复的是哪一天、多少条流水（`pages/shop/shop.js`）。`recordCount` 在**清空那一刻**写进账本 `clearSnapshots` 的元数据（已迁移的账本取 `aggregate.count`，那是被封存账套的权威条数；老数组按行数报，归并条数要等 `mode:'snapshots'` 转换时回填修正）；升级前的老元数据没有这个字段，回 `null`，弹窗退化成只带日期。
 
-快照存的是四张有界的表 + 聚合累加器 + 账套号，**不复制流水**：老账套原地不动，清空只是把指针换到新账套（O(1)）。所以恢复要快照带 `bookId`，账本升级前存的快照没有它 —— 转换见上面「账本升级」的 `mode:'snapshots'`，**每家店的每一份快照都要转**（只转最近一份会留下混合状态，将来做付费恢复时是个雷）。
+快照存的是四张有界的表 + 聚合累加器 + 账套号，**不复制流水**：老账套原地不动，清空只是把指针换到新账套（O(1)）。所以恢复要快照带 `bookId`，账本升级前存的快照没有它 —— 转换见上面「账本升级」的 `mode:'snapshots'`，**每家店的每一份快照都要转**（只转最近一份会留下混合状态，将来做付费恢复时是个雷）。恢复只认这几样，**不读 `records` 数组**——升级前的老数组转换后暂留（那是旧包退路的一半）、由 `mode:'dropSnapshotLegacy'` 收掉，删掉不影响恢复。
+
+## 商品图与云存储
+
+商品记录的 `image` 字段存的是**云存储 fileID**（`cloud://<env>.<bucket>/shops/<shopId>/products/<uid>.jpg`），空串就是没有图。图片二进制**不进 `ledgers` 文档、不过 `ledger` 云函数**：文档有大小上限，而 `getLedger` 是全量回传四张表的，一张 100KB 的 base64 塞进去就是每一次打开账本多一份固定开销；二进制走云存储自己的上传 / 下载通道，账和图各走各的路。
+
+上传链路全在客户端：编辑商品页 `wx.chooseMedia`（`compressed`）→ 页内隐藏 `<canvas type="2d">` 压缩（最长边 600px、只缩不放、JPEG 0.7，成品一般 50~150KB，见 [`utils/product-image.js`](../utils/product-image.js)）→ `wx.cloud.uploadFile` 直传 `shops/{shopId}/products/<uid>.jpg`，fileID 进表单随 `saveProduct` 入库。内存模式 / 未选店时 `canUseImage()` 为假、整块上传 UI 不渲染——本地没有云存储，不做假降级。展示侧 `<image src="cloud://…">` 直接渲染 fileID（`store.initCloud` 已 `wx.cloud.init`，客户端认得自己环境的 `cloud://` 协议）：商品 tab 卡片 112rpx 缩略图（lazy-load，无图 / 加载失败灰底首字占位），销售 / 进货选货弹层 72rpx（无图不渲染）。
+
+读与权限：云存储权限是 **`READWRITE`**（所有用户可读、仅创建者可写读），不是六张业务表那个 `ADMINONLY`——图要客户端拿 fileID 直接渲染、上传者就是创建者所以能传，两条路都不经过云函数，管理端权限会把它们全堵死。设置并进 `node scripts/wxcloud-ensure-acl.js`（`tcbGetStorageACL` / `tcbModifyStorageACL`，同样**不传 region**），部署脚本末尾同跑。能读的前提是本小程序的登录用户；fileID 不可枚举，跨店读到别家的图需要先拿到那个 fileID——已接受的风险，挡住它要给每一次渲染换临时链接，代价和风险不成比例。
+
+服务端校验只有一条，钉在事务开始之前：`saveProduct` 的 `image` 必须落在 `shops/{shopId}/products/` 前缀（`ledger-core.js` 的 `validShopImageFileId`）。不做这条的后果不止「挂一张别店的图」：挂上之后换图会让服务端把旧 fileID 当作废清理——等于借本店的换图操作删别店的文件。这个前缀是客户端 `buildCloudPath` 和服务端 `validShopImageFileId` 的共享约定，两边都有测试互钉，单边改当场红。
+
+清理挂在 mutation 上，且**在事务提交之后**：换图 / 清图（`saveProduct`）、删商品（`deleteProduct`）、恢复清空（`restoreCleared`，作废的是清空之后新记的那批商品的图）都把作废 fileID 放进 `result.obsoleteImages`，`dispatch` 在事务提交后 best-effort 删除（`index.js` 注入的 `storage.deleteFiles` 把一切错误吞干净、只 `console.warn`；云存储单次删除上限 50 个，按页删）。这是「事务提交之后零 IO」不变量的**唯一书面例外**，配当例外的理由写在 [`ledger-core.js`](../cloudfunctions/ledger/ledger-core.js) dispatch 的注释里：清理结果不进回传、错误被吞干净、最坏失败是孤儿文件而不是错账；它也不能挪到事务前或塞进事务——事务失败回滚后商品仍挂着这张图，先删就是把活图删成死链。**不清的三个**：`clearAll`（商品原样进了快照，删了文件，「恢复清空前数据」恢复回来的就是死链）、`loadSeed`（开发演示路径，为种子数据挂一套清理不值当）、`deleteShop`（与 `ledger_records` 的 2b-3 孤儿清理是同一类删店遗留，一起留给以后，见下面「删除店铺」）。
+
+孤儿文件（存储里有、没有任何商品引用）的诚实来源：选图上传成功后放弃表单、保存失败、清理调用失败、`deleteShop`。纯存储泄漏，不是错账；按下面的容量口径，它的量级也到不了值得专门做巡检的程度。
+
+上线顺序沿用既有规矩：**先部署云函数，再发小程序**。新客户端对老云函数的容忍是 `image` 字段被旧内核丢弃（商品还在、图丢了，重新编辑可以补上），不破坏旧功能；老客户端对新云函数无感，整个商品图只是缺 UI。
+
+容量口径：单图约 100KB，每店按一百张商品算 ≈ 10MB；基础套餐 2GB 容量（存储 + 数据库合计）约够 200 家店。更早撞到的墙是每月 5GB 的 CDN 下载流量——图从云存储读出来也走它。
 
 ## 删除店铺
 
-只有当前店的店主能删，且**必须带新版 `apiVersion`**（`VERSIONED_DESTRUCTIVE`，见上面版本门那条——不可逆动作不许由老客户端在冻结窗口里发起）。删的是整店：`shops` 文档、全部 `members`、当前 `ledgers`、该店在 `ledger_clears` 里的快照。**目前不清 `ledger_records`**（2b-3 处理，要按 `shopId` 分批删，单独设计，别顺手实现）：留下的孤儿记录按 `bookId` 和 `shopId` 都查不到——账本文档没了，谁也拿不到那个 `bookId`——所以它是纯存储泄漏，不产生任何错数；但**残留文档里带着 `customerName` / `customerPhone` / `customerAddress`**，店主点了「删除店铺」之后这些个人信息还在库里，2b-3 清理不做的每一天都是这个代价。索引 #6（`shopId` ASC）就是给那次清理预建的，当前没有任何查询使用。店员只能看见自己加入的店，不能删。删掉后小程序不再列出该店，也不能用「恢复清空前数据」找回。误开的测试店用这个；只想抹账、店还要留，用「清空数据」。
+只有当前店的店主能删，且**必须带新版 `apiVersion`**（`VERSIONED_DESTRUCTIVE`，见上面版本门那条——不可逆动作不许由老客户端在冻结窗口里发起）。删的是整店：`shops` 文档、全部 `members`、当前 `ledgers`、该店在 `ledger_clears` 里的快照，**以及 `ledger_records` 里这家店的全部流水**（2b-3）。店员只能看见自己加入的店，不能删。删掉后小程序不再列出该店，也不能用「恢复清空前数据」找回。误开的测试店用这个；只想抹账、店还要留，用「清空数据」。
+
+流水的清理**在删店事务提交之后做**，`records.purgeByShop` 按 `shopId` 分批删（索引 #6）。三条理由，缺一条这段就该换个写法：
+
+1. **塞不进事务。** 2026-08-24 实测**单事务写 92 条文档就确定性失败**，报 `[ResourceUnavailable.TransactionNotExist]`（函数耗时才 12 秒，所以不是简单的 30 秒墙，真实边界还没查清）。一家店上万条流水进事务必炸，而且事务是原子的——连店都删不掉。
+2. **不许反过来「先清流水再删店」。** 清到一半失败就是一家**活着的**店掉了一半流水：聚合还在、流水少了，那是**错数**，而 `recomputeAggregates` 修不回来（它按集合现状重折叠）。提交之后再清，最坏情况只是"泄漏"，不可能是"算错"。
+3. **提交之后的失败不许变成「删店失败」。** 店已经没了，报错只会让店主以为没删成、再点一次（再点报「不是该店成员」）。所以 `purgeByShop` 不抛错，清不完 / 清失败都只写 `console.warn`，回包照样 `deleted: true`，另带一个 `purge: { removed, remaining, stopped, error }` 供日志和测试核对。
+
+**按 `shopId` 而不是 `bookId` 清**，因为一家店的流水可能散在好几个账套里：当前账套、`newBook` 换掉的旧账套、`mode:'snapshots'` 转出来的 `clr-` 快照账套。账本文档一删就没人拿得到那些 `bookId` 了，`shopId` 是唯一还认得出它们的字段。索引 #6（`shopId` ASC）就是为这一条查询建的。
+
+**单次调用有两个预算，管的不是同一件事**：条数上限 `PURGE_MAX_RECORDS`（5000，确定性、与机器快慢无关，测试能精确撞上）和墙钟上限 `PURGE_BUDGET_MS`（30 秒，生产上真正先触发的那一个——单条删除多快没实测过，条数换算成多少秒是未知数，只有钟能保证不被云端硬超时砍掉）。墙钟从进 `deleteShop` 分支时起算，不是从事务结束起算，这样「事务 + 清理」的总时长才有上界。
+
+**大店一次删不完是预期内的，不是故障。** 清不完时回包里 `purge.remaining` 为 `true`，云函数日志里有一行 `[ledger] deleteShop 流水没清完 shop=…`。店主没有任何入口能接着清（店都没了，他已经不是成员），**接着清的入口是平台运营方动作 `purgeDeletedShopRecords`**：
+
+```js
+wx.cloud.callFunction({ name: 'ledger', data: {
+  action: 'purgeDeletedShopRecords', shopId: '<那家店的 shopId>',
+  apiVersion: 2, payload: {}
+}})
+```
+
+幂等、可反复调，判据只有 `shopId` 一个，不需要持久化任何进度——回包 `remaining` 为 `true` 就再调一次，直到 `false`。`payload.maxRecords` 可以把单次条数**调小**（调大会被 clamp 回 `PURGE_MAX_RECORDS`）。这个动作走**平台运营方白名单**（`platform_admins`），客户端一个入口都没有，从开发者工具 Console 调。
+
+它有**两道前置检查，判的是「这家店真的没了」，不是「调用者有没有权限」**：`shops` 和 `ledgers` 里只要还有一份文档在就拒绝，两个都查。误加在一家活店上就是一次不可恢复的抹账（聚合还在、流水没了，`recomputeAggregates` 修不回来）；半删状态（店没了账本还在，或反过来）同样拒绝——那说明上一次删店没走完，先弄清楚再说。
+
+**两道门的强度不一样，别把第二道当保险**：`listShopsByIds` 是真 fail-closed（`index.js` 那份没有 catch，读失败会抛出去），**护住活店的是它，也只有它**；`getLedger` 是 fail-open——`index.js` 和 `MemoryDb` 都把「文档不存在」和「读失败」一起折成 `null`（受限于 wxcloud 的 `doc().get()` 对缺失文档抛错，两者本来就分不开），所以 `ledgers` 的一次瞬时读失败会让第二道门从「拒绝」降级成「放行」。它挡的是半删这种基本只能靠手工改库造出来的状态，用 fail-open 换主读路径不受影响是划算的；真要它 fail-closed，得先把适配层换成 `where({ _id })` 那种分得清空结果和读失败的查法，那是另一件事。
+
+**存量泄漏**（2b-3 之前删掉的店留下的孤儿流水）也走这个动作补清，前提是你还知道那个 `shopId`。**找不回 `shopId` 的老孤儿本次不处理**：那要全表扫 `ledger_records` 找「`shops` 里已经没有的 `shopId`」，是另一件事。
+
+**为什么值得做这一项**：孤儿记录按 `bookId` 和 `shopId` 都查不到（账本文档没了，谁也拿不到那个 `bookId`），所以它不产生任何错数，是纯存储泄漏；但**残留文档里带着 `customerName` / `customerPhone` / `customerAddress`**，店主点了「删除店铺」之后这些个人信息还在库里。这一项的动机是**个人信息**，不是省存储。
 
 ## UI 测试
 
@@ -283,7 +412,7 @@ payload: { mode: 'snapshots', limit?: 50 }
 - 给流水加「开单时冻结欠款」之类的派生字段。欠款和汇总的**定义**一律是当前流水的折叠——增量维护只是算法，冻结出来的是另一个量。理由见上面「送货单欠款」和「聚合值」两条。
 - 迁移老流水时把非 `out` 记录也按 `orderId` 归并。老退货和被退销售单共享 `orderId`，会被并成一张单。
 - 在事务提交之后再读一次库来拼回传。也不要把「找不到被退销售行」吞成 `sale = null` 放行：可退上限和 `returnedQty` 同步会双双被跳过，改一下退货数量就能凭空入库、把退货单金额抬到任意值。
-- 分片上传时把退货单和它的被退销售单切到两片里。`assertReturnsPaired` 的判据是「**本片里找得到 `saleOrderId` 指向的那张销售单**」，不是「`saleOrderId` 非空」：非空只拦得住代 A（`legacyLine()` 对老退货行写死 `saleOrderId = ''`，只有 `backfillReturnedQty` 在**同一批**里找到被退销售单才补得上），而代 B / 代 C 的退货单本来就带 `saleOrderId`，切两片照样非空。放行的代价是 `repairReturnSplits` 按 `lines[0].saleOrderId` 分组、销售单不在同一片就当孤儿跳过，份额一分都不重算——实测代 B 单（销售 100 实收 40、退货 30）同片上传欠款 30、切两片欠款 60，而且 `recomputeAggregates` 修不了（它按集合现状重折叠）。
+- 分片上传时把退货单和它的被退销售单切到两片里。`assertReturnsPaired` 的判据是「**本片里找得到 `saleOrderId` 指向的那张销售单**」，不是「`saleOrderId` 非空」：非空只拦得住代 A（`legacyLine()` 对老退货行写死 `saleOrderId = ''`，只有 `backfillReturnedQty` 在**同一批**里找到被退销售单才补得上），而代 B / 代 C 的退货单本来就带 `saleOrderId`，切两片照样非空。放行的代价是 `repairReturnSplits` 按 `lines[0].saleOrderId` 分组、销售单不在同一片就当孤儿跳过，份额一分都不重算——实测代 B 单（销售 100 实收 40、退货 30）同片上传欠款 30、切两片欠款 60，而且 `recomputeAggregates` 修不了（它按集合现状重折叠）。客户端这半由 `utils/ledger-shard.js` 的 `planShards` 保证（原子组 = 销售单 + 全部退货单 + 全部同 id 记录），`tests/store.test.js` 的分片一节钉住。
 - 在页面里从流水现算钱。客户端手上只有一页，折出来必然偏小，而偏小的欠款会被印在客户手上的单据上。`tests/no-client-cloud-db.test.js` 的结构禁令会挡住，别绕过它。**结构禁令不是全覆盖的**：它挡的是「调用/引用已知的折钱函数」（扫 `pages/` + `components/` + `app.js`，名字出现就算，方括号取值和解构别名也躲不掉；另有一条禁令不许 `utils/store.js` / `utils/util.js` 把这些函数转发出去）。**手写 `reduce` 从一页流水折钱、一个名单里的名字都不出现**，正则天生抓不到——这类只能靠 code review 和「客户端手上只有一页流水」这条认知把关。
 - 给 `listRecords` 放开「同时按类型和客户筛」。代码上跑得通，但那是一条无索引查询，条数一多就超时。
 - 客户端把「今日三项算不出来」显示成 0。**要显示「—」**：0 是会被当真的错数，店主会拿它当今天真的没卖出东西。
@@ -293,5 +422,9 @@ payload: { mode: 'snapshots', limit?: 50 }
 - 拿 `recomputeAggregates` 去修错账。它按集合现状重折叠，错值会被忠实地再算一遍。
 - 转换老清空快照时先把 `bookId` 写进快照文档、再写流水。崩在中间就恢复出一本空账：商品和客户回来了、流水没了，**而且看不出来**。顺序必须是「写流水 → 数条数 → 才盖 `bookId`」，账套号由快照 id 决定（`clr-` 前缀）所以不需要先占号。
 - 活账套还没迁完就去跑 `mode:'snapshots'`。快照转换是加分项，不能挡住关键路径，服务端直接拒绝。
+- 把 `dropSnapshotLegacy` 并进 `dropLegacy`，或攒一批快照放进同一个事务里删。前一个动作的语义是「这家店的账本文档」、一个事务一份文档，并进去语义就模糊了、回滚粒度也变粗；后一个——一个事务里写 92 条文档确定性失败那次实测（`TransactionNotExist`）的真实边界还没查清，不可逆操作不许坐在一个未实测的量上。**一份快照一个事务，每个事务只写 1 份文档。**
 - 为账本升级再加一个冻结开关。`assertRecordsReady` 已经在挡未迁移账本的每一条写，两个冻结口径迟早会打架。
 - 把 `settledAmount` 对「退货缺两个结算字段」的回推改成 0。会折出负欠款，一个负账户就让这家店从此退不了货、改不了单、删不了单。
+- 把图片 base64 / 二进制塞进 `ledgers` 文档。文档有大小上限，而 `getLedger` 是全量回传四张表的，每张图都变成每次打开账本的固定开销；图放云存储、记录只存 fileID，见上面「商品图与云存储」。
+- 改掉商品图 `shops/{shopId}/products/` 路径前缀。客户端 `buildCloudPath` 和服务端 `validShopImageFileId` 靠它对齐，两边测试互钉：单边改要么让合法 fileID 被服务端拒掉，要么让前缀校验形同虚设。
+- 绕过 `saveProduct` 直接改商品 `image`。前缀校验和旧图清理都挂在 mutation 上，绕开它挂进去的 fileID 没人校验、被换掉的旧图也没人删。

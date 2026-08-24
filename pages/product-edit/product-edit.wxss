@@ -108,3 +108,46 @@
   height: var(--tap-md);
   line-height: var(--tap-md);
 }
+
+/* 隐藏压缩画布：canvas 实际像素由 node.width/height 决定，CSS 尺寸只是占位。 */
+.image-canvas {
+  position: fixed;
+  left: -2000px;
+  top: 0;
+  width: 600px;
+  height: 600px;
+  pointer-events: none;
+}
+
+.image-add {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--tap-lg);
+  border: 2rpx dashed #CBD5E1;
+  border-radius: 12rpx;
+  color: #64748B;
+  font-size: var(--fs-sm);
+}
+
+.image-box {
+  display: flex;
+  align-items: center;
+  gap: var(--gap);
+}
+
+.image-preview {
+  width: 112rpx;
+  height: 112rpx;
+  border-radius: 8rpx;
+  background: #F1F5F4;
+}
+
+.image-ops {
+  display: flex;
+  gap: var(--gap);
+}
+
+.danger {
+  color: #DC2626;
+}

@@ -1,6 +1,7 @@
 const store = require('../../utils/store')
 const util = require('../../utils/util')
 const inventory = require('../../utils/inventory')
+const productImage = require('../../utils/product-image')
 const skuCardView = require('../../utils/sku-card-view').skuCardView
 
 function axisLabel(value, fallback) {
@@ -29,6 +30,8 @@ Page({
     name: '',
     sku: '',
     barcode: '',
+    image: '',
+    showImage: false,
     costPrice: '',
     salePrice: '',
     stock: '',
@@ -60,6 +63,7 @@ Page({
   },
 
   async onLoad(query) {
+    this.setData({ showImage: productImage.canUseImage() })
     if (!(await store.ready())) return
     if (!query.id) {
       wx.setNavigationBarTitle({ title: '新增商品' })
@@ -87,6 +91,7 @@ Page({
       name: product.name,
       sku: product.sku,
       barcode: product.barcode,
+      image: product.image || '',
       costPrice: String(product.costPrice),
       salePrice: String(product.salePrice),
       alertQty: String(product.alertQty),
@@ -557,6 +562,64 @@ Page({
     this.setData(this.withSkuCards({ skuRows: skuRows }))
   },
 
+  getImageCanvas() {
+    return new Promise(function (resolve, reject) {
+      wx.createSelectorQuery()
+        .select('#imageCanvas')
+        .fields({ node: true, size: true })
+        .exec(function (res) {
+          const canvas = res && res[0] && res[0].node
+          if (!canvas) {
+            reject(new Error('图片处理失败，请重试'))
+            return
+          }
+          resolve(canvas)
+        })
+    })
+  },
+
+  async pickImage() {
+    try {
+      const media = await new Promise(function (resolve, reject) {
+        wx.chooseMedia({
+          count: 1,
+          mediaType: ['image'],
+          sizeType: ['compressed'],
+          success: resolve,
+          fail: reject
+        })
+      })
+      const filePath = media.tempFiles && media.tempFiles[0] && media.tempFiles[0].tempFilePath
+      if (!filePath) return
+      wx.showLoading({ title: '处理图片中', mask: true })
+      const canvas = await this.getImageCanvas()
+      const compressed = await productImage.compressImage(canvas, filePath)
+      wx.showLoading({ title: '上传图片中', mask: true })
+      const fileID = await productImage.uploadProductImage(compressed, store.getShopId())
+      this.setData({ image: fileID })
+      wx.hideLoading()
+    } catch (error) {
+      wx.hideLoading()
+      // 用户取消选图不是错误，不弹提示（同 utils/slip-image.js 对 cancel 的处理）
+      const msg = String((error && (error.errMsg || error.message)) || '')
+      if (msg.indexOf('cancel') < 0) util.showError(error)
+    }
+  },
+
+  removeImage() {
+    wx.showModal({
+      title: '删除图片',
+      content: '保存后将从商品上移除这张图。',
+      success: (res) => {
+        if (res.confirm) this.setData({ image: '' })
+      }
+    })
+  },
+
+  onImageError() {
+    wx.showToast({ title: '图片加载失败，保存后重试或换一张', icon: 'none' })
+  },
+
   async save() {
     try {
       const kind = this.data.productKind
@@ -573,6 +636,7 @@ Page({
         name: this.data.name,
         sku: this.data.sku,
         barcode: this.data.barcode,
+        image: this.data.image,
         costPrice: costPrice,
         salePrice: salePrice,
         stock: hasSpecs
