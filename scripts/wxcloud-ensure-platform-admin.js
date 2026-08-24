@@ -113,10 +113,30 @@ function adminDoc(openid, note) {
   return { _id: openid, openid: openid, note: note || '', createdAt: Date.now() }
 }
 
+// 存在性判断按 `_id` 直揥查，**不能拿 `listAdmins` 扫前 100 条代替**：
+// 名单长到第 101 条之后，一个已在名单里的 openid 会被判成「不在」，
+// 于是走到 flexdbPutItem 把那条文档**覆盖掉**——`createdAt` 和 `note` 当场丢失，
+// 而脉络里那句 'already present 不覆盖' 从来不会打印，看日志看不出发生过覆盖。
+// 现在的名单只有 2 条，所以这是预防性的；但代价只是一条 mgoQuery。
+//
+// `mgoQuery` 的形状是 **JSON 字符串**（2026-08-24 在真集合上只读实测过：
+// 不带过滤 total=2；`{"_id": <已存在>}` total=1 且命中那条；`{"_id": <不存在>}` total=0）。
+// **新用一个 flexdb 参数形状先在只读调用上验**，不要直接拿写接口试——
+// 本仓有过教训：`flexdbDeleteItem` 的形状没验就用，当场删错了两条成员记录。
+async function adminExists(api, opts, openid) {
+  const res = await api.flexdbQuery({
+    region: opts.region,
+    tag: opts.tag,
+    tableName: opts.tableName || COLLECTION,
+    mgoLimit: 1,
+    mgoQuery: JSON.stringify({ _id: String(openid) })
+  })
+  return ((res && res.data) || []).length > 0
+}
+
 async function ensurePlatformAdmin(api, opts) {
   const openid = opts.openid
-  const current = await listAdmins(api, opts)
-  if (findAdmin(current.data, openid)) {
+  if (await adminExists(api, opts, openid)) {
     console.log('platform admin already present', openid, '—— 不覆盖')
     return { created: false, doc: null }
   }
@@ -181,6 +201,7 @@ module.exports = {
   parseArgs: parseArgs,
   adminDoc: adminDoc,
   findAdmin: findAdmin,
+  adminExists: adminExists,
   ensureTable: ensureTable,
   listAdmins: listAdmins,
   ensurePlatformAdmin: ensurePlatformAdmin

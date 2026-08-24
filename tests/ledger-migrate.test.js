@@ -1605,7 +1605,8 @@ function receivableOf(accounts, customerId) {
   // 不可逆 action 忘了进 VERSIONED_DESTRUCTIVE）测试当场红，不用等审计来数。
   const ALL_ACTIONS = ['whoami', 'listShops', 'createShop', 'listMembers', 'addMember',
     'updateMember', 'removeMember', 'deleteShop', 'getLedger', 'getSlip', 'getRecord',
-    'listRecords', 'migrateLocal'].concat(migrate.OPS_ACTIONS).concat(apply.MUTATIONS)
+    'listRecords', 'migrateLocal'].concat(migrate.OPS_ACTIONS)
+    .concat(core.PLATFORM_ACTIONS).concat(apply.MUTATIONS)
   const m12Allowed = []
   for (let i = 0; i < ALL_ACTIONS.length; i++) {
     const action = ALL_ACTIONS[i]
