@@ -2,6 +2,7 @@ const inventory = require('./inventory')
 const apply = require('./ledger-apply')
 const cloudConfig = require('./cloud-config')
 const util = require('./util')
+const shard = require('./ledger-shard')
 
 const KEYS = {
   products: 'inv_products',
@@ -330,9 +331,11 @@ function callCloud(action, shopId, payload) {
   })
 }
 
-function showBusy() {
+function showBusy(title) {
   if (isMemoryMode()) return
-  wx.showLoading({ title: '提交中', mask: true })
+  // 重复调用 showLoading 会更新标题：分片上传靠这一条逐片刷进度，
+  // 一本几千条的账要发几十次云函数调用，一直显示「提交中」会让人以为卡死。
+  wx.showLoading({ title: title || '提交中', mask: true })
 }
 
 function hideBusy() {
@@ -1095,37 +1098,83 @@ async function removeMember(openid) {
   }
 }
 
-// 本机账本上传到云端。
+// 本机账本上传到云端。一本大账会撞两堵墙（请求体大小、事务生命周期），所以
+// 先用 ledger-shard 的 planShards 切片、逐片走服务端的分片接收端
+//（ledger-core.js 的 migrateLocalShard）；切法保证一张销售单和它的全部退货单
+// 落在同一片里，服务端逐片归并出来的钱和整本一次性上传逐项相等。
 //
-// **顺序不可换（R-4）**：`markMigrated()` 会删掉 PENDING_MIGRATE_KEY，那是本机
-// 唯一一份原始数据。所以它必须排在「**服务端确认整份账本收下了**」之后 —— 现在是
-// 一次调用就传完，最后一片就是唯一一片，所以请求成功返回就算收下。
+// 一片就一片、或有孤儿退货（saleOrderId 为空 / 指向的销售单整本账里都不存在）
+// 时，发不带 token 的一次性上传：线协议和 2b-1 完全一致，小账本零行为变化；
+// 孤儿退货在那条路上今天就放行，而带 token 的路上 assertReturnsPaired 不区分
+// 「客户端切坏的」和「源数据本来就是孤儿」，任何切法都会被拒——退回一次性
+// 上传不是回归，改成硬报错才是（一本今天传得上去的小账本就传不上去了）。
 //
-// 但它同样必须排在**回写本地缓存之前**：回写失败就跳过 markMigrated 的话，
-// 云上已有账本、本机 pending 还在，重传永远撞「云上已有账本，不能再上传本机
-// 数据」，上传按钮永久失效。
-//
-// 2b-2 把这里改成分片上传时（服务端的接收端已经在 ledger-core.js 的
-// migrateLocalShard 里了），必须是**全部片都成功**之后才 markMigrated()。
-// 中途任何一片失败都不能删本机数据：服务端那边没切账套指针，半成品账套不可达，
-// 换个 token 重来就行；而本机数据删掉就没了。
+// **不加自动重试**：中途失败时本机原件还在，店主再点一次就是一个新 token、
+// 新账套，半成品账套不可达（服务端那边没切账套指针，O(1) 回滚）；加重试会把
+// 一次确定性的服务端拒绝（「本机账本有问题，没有上传：…」）重复三遍，
+// 收益不抵复杂度。
 async function migrateLocal() {
   const pending = getPendingMigrate()
   if (!pending) {
     throw new Error('没有可上传的本机账本')
   }
+  const plan = shard.planShards(pending.records)
   showBusy()
   try {
-    const res = await request('migrateLocal', { ledger: pending })
-    markMigrated()
-    settleResponse(res)
-    // 迁完之后流水在集合里，客户端要看就走 listRecords 分页取。
-    // 这里标脏即可，不在提交之后再发一次可能失败的请求。
-    mutationSeq += 1
-    return res.ledger
+    // 一片就发一次性上传（不带 token）：线协议和 2b-1 完全一致，小账本零行为变化。
+    // 有孤儿退货时也走这条：带 token 的路上 assertReturnsPaired 不区分「客户端切坏的」
+    // 和「源数据本来就是孤儿」，任何切法都会被拒，而一次性上传今天就放行它们。
+    if (plan.shards.length <= 1 || plan.orphanReturns.length) {
+      if (plan.orphanReturns.length && plan.shards.length > 1) {
+        console.warn('[ledger] 本机账本里有找不到被退销售单的退货单，只能一次性上传',
+          plan.orphanReturns.length)
+      }
+      return finishMigrate(await request('migrateLocal', { ledger: pending }))
+    }
+    const token = uid()
+    const lists = {
+      products: pending.products || [],
+      skus: pending.skus || [],
+      customers: pending.customers || [],
+      categories: pending.categories || []
+    }
+    let res = null
+    for (let i = 0; i < plan.shards.length; i++) {
+      const final = i === plan.shards.length - 1
+      showBusy('上传中 ' + (i + 1) + '/' + plan.shards.length)
+      const payload = { token: token, seq: i, records: plan.shards[i] }
+      // 四张表只在第一片发；之后服务端从 ledgers.importing.lists 取。
+      if (i === 0) payload.ledger = lists
+      if (final) payload.final = true
+      res = await request('migrateLocal', payload)
+      // 老云函数不认 token，会把第一片当成整本收下并回 ledger。再往下发就是往一本
+      // 已经切好的账套上撞「云上已有账本」，还不如当场停手——本机数据没删。
+      if (!final && res && res.ledger) {
+        throw new Error('云函数还不支持分片上传，请先部署新版云函数。本机数据没有删。')
+      }
+    }
+    if (!res || !res.ledger) {
+      throw new Error('账本没有全部上传成功，本机数据没有删，请重新上传')
+    }
+    return finishMigrate(res)
   } finally {
     hideBusy()
   }
+}
+
+// **顺序不可换（R-4）**：markMigrated() 会删掉 PENDING_MIGRATE_KEY，那是本机
+// 唯一一份原始数据，所以它必须排在「服务端确认**整本**账本收下了」之后——分片时就是
+// 最后一片回了 ledger 之后，中途任何一片失败都不许走到这里。
+// 但它同样必须排在**回写本地缓存之前**：回写失败就跳过 markMigrated 的话，云上已有
+// 账本、本机 pending 还在，重传永远撞「云上已有账本，不能再上传本机数据」，
+// 上传按钮永久失效。
+function finishMigrate(res) {
+  markMigrated()
+  settleResponse(res)
+  // 迁完之后流水在集合里，客户端要看就走 listRecords 分页取。
+  // 这里标脏即可，不在提交之后再发一次可能失败的请求。
+  mutationSeq += 1
+  return res.ledger
 }
 
 function initCloud() {

@@ -98,8 +98,17 @@
 **上传（`migrateLocal`）和搬家（`migrateRecords`）跑的是同一个 `legacyRecordsOf`（归并 + 退货份额整体重算），所以它也会改钱**——同一份数据落库之后的欠款可以和店主在本机看到的不一样。因此它过**同一套** `migrate.recordFailures`：V4 `returnedQty`/`returnedAmount` 跨文档一致、V5 拆分不变量、V6 负账户、V8 重复/空 id、V9/V10 归并结构守恒、V12 亚分金额。不含 V1/V2/V3/V7——那四项比的是「集合里的文档 vs 内存里的 merged」，上传是往一个空账套里写，没有集合可比。**校验只写一份定义**（`ledger-migrate.js` 的 `recordFailures`），两条路都调它，将来加检查不会只加一边。
 
 - 少了这道门就是：同一份数据 `migrateRecords` 报 `failed`（V6 负账户）、`migrateLocal` 直接放行。落库后 `assertAccountsValid` 是**全账户扫描**，实测一个客户欠 −100 的后果是**全店任何客户**的退货 / 改单 / 删销售单一律报「改完后收款会超过赊账，请先改收款记录」（连和它毫无关系的另一个客户都退不了货、删不了单），负账户那个客户还收不了款；能把它拨回来的只剩「删掉那张退货单」或「删掉那笔收款单」（删完欠款回到非负所以放行），等于拿删真账换解冻。而客户端上传成功即 `markMigrated()`、本机原件已删，退不回去。
-- **V6 判在累计 `accounts` 上，不逐片判。** 一片就是一段时间切片，「A 片赊销、B 片收款」是合法切法，单片折出来的负欠款是切片假象不是错账。不带 `token` 的一次性上传只有一片、`isFinal` 恒为真，所以那道门对客户端就是全量的（`utils/store.js` 的 `migrateLocal()` 从不带 `token`）。
+- **V6 判在累计 `accounts` 上，不逐片判。** 一片就是一段时间切片，「A 片赊销、B 片收款」是合法切法，单片折出来的负欠款是切片假象不是错账。不带 `token` 的一次性上传只有一片、`isFinal` 恒为真，所以那道门对客户端就是全量的（分片时同理：中间各片 `deferNegativeAccounts`，最后一片对累计 `state.accounts` 判）。
 - **拒绝的文案必须说清「本机数据没有删」**：`markMigrated()` 只在云函数成功返回之后才调，抛错时本机原件确实还在，不能让店主以为数据没了。
+
+**客户端这半（`utils/store.js` 的 `migrateLocal()` + `utils/ledger-shard.js` 的 `planShards`）**：本机账本太大会撞两堵墙——请求体大小、事务生命周期（2026-08-24 实测：一个事务里写 92 条文档就被服务端丢弃，`[ResourceUnavailable.TransactionNotExist]`，云函数耗时才 12–16 秒，真实边界尚未查清）——所以先在**归并后的视图**上用并查集求「不可切开的原子组」再贪心装箱，**上传的仍然是原始（未归并）流水**，服务端照旧自己归并，V9/V10 在每一片上仍然是有效检查。要点：
+
+- 分片单位是**归并后**的条数（40，拍的：92 条实测丢事务的来路见上，留一倍余量）＋ 请求体 JSON 字符数（20 万，拍的，没实测过 `wx.cloud.callFunction` 的上限）。
+- 原子组 = 一张销售单 + 它的**全部**退货单 + 全部同 id 记录。归并和「退货 → 销售」的指向都读 `utils/inventory.js` 的 `migrateRecordShape` / `recordGroups`（`recordGroups(records)[i]` 和 `migrateRecordShape(records)[i]` 逐位对应），**只有这一份定义**，客户端不另抄一套。
+- 孤儿退货（`saleOrderId` 为空、或指向的销售单整本账里都不存在）整本退回不带 `token` 的一次性上传并 `console.warn`：带 `token` 的路上 `assertReturnsPaired` 不区分「客户端切坏的」和「源数据本来就是孤儿」，任何切法都会被拒，而一次性上传今天就放行它们——退回不是回归，改成硬报错才是。
+- 只需要一片时不带 `token`（线协议和 2b-1 完全一致），小账本零行为变化。
+- `markMigrated()` 只在**最后一片回了 `ledger`** 之后（`finishMigrate`），中途任何一片失败本机数据都在；失败重来是换一个新 `token`（不复用、不落盘），半成品账套不可达（服务端那边没切账套指针，O(1) 回滚）。
+- 片内原始记录可能被重排（退货单拉到销售单旁边）：不影响钱——`recomputeSaleReturns` 自己按 `(createdAt, id)` 升序排，`applyTermsDelta` 可加，落库按 `_id` 写。
 
 ## 账本升级（老流水搬进 `ledger_records`）
 
@@ -283,7 +292,7 @@ payload: { mode: 'snapshots', limit?: 50 }
 - 给流水加「开单时冻结欠款」之类的派生字段。欠款和汇总的**定义**一律是当前流水的折叠——增量维护只是算法，冻结出来的是另一个量。理由见上面「送货单欠款」和「聚合值」两条。
 - 迁移老流水时把非 `out` 记录也按 `orderId` 归并。老退货和被退销售单共享 `orderId`，会被并成一张单。
 - 在事务提交之后再读一次库来拼回传。也不要把「找不到被退销售行」吞成 `sale = null` 放行：可退上限和 `returnedQty` 同步会双双被跳过，改一下退货数量就能凭空入库、把退货单金额抬到任意值。
-- 分片上传时把退货单和它的被退销售单切到两片里。`assertReturnsPaired` 的判据是「**本片里找得到 `saleOrderId` 指向的那张销售单**」，不是「`saleOrderId` 非空」：非空只拦得住代 A（`legacyLine()` 对老退货行写死 `saleOrderId = ''`，只有 `backfillReturnedQty` 在**同一批**里找到被退销售单才补得上），而代 B / 代 C 的退货单本来就带 `saleOrderId`，切两片照样非空。放行的代价是 `repairReturnSplits` 按 `lines[0].saleOrderId` 分组、销售单不在同一片就当孤儿跳过，份额一分都不重算——实测代 B 单（销售 100 实收 40、退货 30）同片上传欠款 30、切两片欠款 60，而且 `recomputeAggregates` 修不了（它按集合现状重折叠）。
+- 分片上传时把退货单和它的被退销售单切到两片里。`assertReturnsPaired` 的判据是「**本片里找得到 `saleOrderId` 指向的那张销售单**」，不是「`saleOrderId` 非空」：非空只拦得住代 A（`legacyLine()` 对老退货行写死 `saleOrderId = ''`，只有 `backfillReturnedQty` 在**同一批**里找到被退销售单才补得上），而代 B / 代 C 的退货单本来就带 `saleOrderId`，切两片照样非空。放行的代价是 `repairReturnSplits` 按 `lines[0].saleOrderId` 分组、销售单不在同一片就当孤儿跳过，份额一分都不重算——实测代 B 单（销售 100 实收 40、退货 30）同片上传欠款 30、切两片欠款 60，而且 `recomputeAggregates` 修不了（它按集合现状重折叠）。客户端这半由 `utils/ledger-shard.js` 的 `planShards` 保证（原子组 = 销售单 + 全部退货单 + 全部同 id 记录），`tests/store.test.js` 的分片一节钉住。
 - 在页面里从流水现算钱。客户端手上只有一页，折出来必然偏小，而偏小的欠款会被印在客户手上的单据上。`tests/no-client-cloud-db.test.js` 的结构禁令会挡住，别绕过它。**结构禁令不是全覆盖的**：它挡的是「调用/引用已知的折钱函数」（扫 `pages/` + `components/` + `app.js`，名字出现就算，方括号取值和解构别名也躲不掉；另有一条禁令不许 `utils/store.js` / `utils/util.js` 把这些函数转发出去）。**手写 `reduce` 从一页流水折钱、一个名单里的名字都不出现**，正则天生抓不到——这类只能靠 code review 和「客户端手上只有一页流水」这条认知把关。
 - 给 `listRecords` 放开「同时按类型和客户筛」。代码上跑得通，但那是一条无索引查询，条数一多就超时。
 - 客户端把「今日三项算不出来」显示成 0。**要显示「—」**：0 是会被当真的错数，店主会拿它当今天真的没卖出东西。
