@@ -670,16 +670,47 @@ async function waitForPage(miniProgram, expectedPath, label) {
 // 空出一段安静时间，成没成还是照旧由 waitForPage / goBackTo 轮询确认 —— 这不是
 // 用固定 sleep 冒充完成信号（那是钉子①②禁的事），下发之后的判定一行没动。
 //
-// 值为什么是 1000：先试过「距上一次 tap 满 400ms」，期初欠款那处治好了，但
-// runNativeClearModal 结尾那处照样被吞 —— 那一步的 tap 触发的是 store.clearAll()，
-// 等它做完早就超过 400ms 了，于是「距 tap 400ms」实际等于没等。教训是**基准不能取在
-// tap 上，要取在「马上要下发」的这一刻**，所以这里就是老老实实空出一段，与上一步做了
-// 多久无关。1000 是保守取的：比观察到的所有失败（≤92ms）高一个数量级，也高于那个
-// 已知不够用的 400。嫌慢就用 WECHAT_UI_ROUTE_SETTLE 调，但调小之前先读上面那段。
+// 【为什么基准取在「马上要下发」这一刻，而不是取在上一次 tap 上】
+// 先试过「距上一次 tap 满 400ms」这条规则（ctrl-floor400-1 那轮）。期初欠款那处它治好了，
+// 但那一轮仍然红在 runNativeClearModal 处，报 `timeout waiting for automator response`。
+// **注意这句话能说到什么程度**：那一处**没有插桩**，也**没有记录 tap 到下发的实际间隔**，
+// clearAll() 到底跑了多久、那次退栈离 tap 到底多远，产物里一个数都没有。所以只能说
+// 「那条规则在这一步没有被验证有效」，**不能**断言它「等于没等」—— 那是没有数据的推断。
+// 换成「无条件空出一段」的真正理由不是前者被证伪，而是：**它对『上一步做了多久』不敏感，
+// 是更保守的形式**。「距 tap N 毫秒」在上一步耗时超过 N 的任何一步上都会退化成不等，
+// 而哪些步骤会超过 N 是没数过的；无条件空出一段没有这个前提。附带好处是 tapEl / inputEl /
+// callPageMethod 那三个记交互时刻的封装整套都不需要了，改动反而更小。
+//
+// 值为什么是 1000：比观察到的所有失败（≤92ms）高一个数量级。400 这个数只有一处实测 ——
+// 期初欠款那一处在 400ms 下退栈正常（automator 路径 ctrl-floor400-1、runtime 路径
+// probe-rt-floor400-1 各一次）—— 其余步骤在 400ms 下如何，没量过。1000 是保守取的，
+// 不是二分出来的。嫌慢就用 WECHAT_UI_ROUTE_SETTLE 调，但调小之前先读上面那段。
+//
+// 【补测：这个易感窗口不是 automator 路由通道独有的】（本轮受控实验，合并 main 之后跑）
+// 上面七轮量的都是「automator 经 RPC 下发 callWxMethod(navigateBack)」这一条路。为了知道
+// runtime 自己发路由指令会不会也被吞，在同一处、同样的 ≤92ms 早下发条件下，把下发方式换成
+// miniProgram.evaluate 在 runtime 里直接执行 wx.navigateBack({success, fail})：
+//     probe-auto-1（对照，automator 下发，距 tap 70ms）   → 被吞，两侧栈 8 秒不动
+//     probe-rt-1  （runtime 下发，距 tap 69ms）           → 被吞，回调 navigateBack:ok，栈不动
+//     probe-rt-2  （runtime 下发，距 tap 74ms）           → 被吞，同上
+//     probe-rt-floor400-1（runtime 下发，距 tap 401ms）   → 正常退栈，整轮绿
+// 也就是说：**换掉 automator 的路由指令通道并不能免疫**，wx.navigateBack 在 runtime 里
+// 执行时同样被吞（回调还报 ok）。所以不能拿「automator 桥独有」来论证产品路径安全。
+// 【这个实验测不到什么，别外推】evaluate 走的是 App.callFunction，本身仍是一条 automator
+// RPC。它能区分的是「automator 的路由指令通道」和「runtime 里执行 wx 路由 API」这两层，
+// **不等于真实手指经页面 handler 触发**。真机上有没有这个窗口，一次都没测过。
 const ROUTE_SETTLE = Number(process.env.WECHAT_UI_ROUTE_SETTLE || 1000)
 
+// 数一下真的等了几次。理由：这个次数决定了整轮多花多少秒，而它是「8 个 goto 调用点 +
+// backToTabRoot 循环里那个圈数不定的 goBackTo」算出来的，静态数调用点会数错。
+// 以前 PR 里写过一个拍出来的秒数，事后没人能核实 —— 现在跑完直接打在日志里。
+let settleCount = 0
+
 async function settleBeforeRoute() {
-  if (ROUTE_SETTLE > 0) await sleep(ROUTE_SETTLE)
+  if (ROUTE_SETTLE > 0) {
+    settleCount += 1
+    await sleep(ROUTE_SETTLE)
+  }
 }
 // ---------------------------------------------------------------------------
 
@@ -714,12 +745,22 @@ async function goto(miniProgram, method, url, label) {
 //
 // 【别再归错因】上一轮那次挂死是两个原因叠加，不是一个：
 //   ① 基准取晚了（本函数已修）；
-//   ② 有过一次「**automator 侧观测不到退栈**」的现场（上面 runNativeClearModal 那两行 trace：
-//      navigateBack 前后 App.getPageStack 一模一样）。注意措辞 —— 那一轮没有 runtime 侧快照，
-//      所以只能说「automator 侧观测不到」，**不能**说成「navigateBack 在 runtime 层面没生效」
-//      （那是 R1，见上方 runtimeStackForError 的判读表），R1/R2 至今未定。
-// ② 未根治，所以本函数**仍然可能**在那一处超时。超时报错里带 runtime 侧 getCurrentPages()
-// 快照，就是为了让下一个人一眼判出撞上的是 R1 还是 R2，不必从头查一遍。
+//   ② 「退栈没生效」的现场。R1/R2 的判读结果**按位置分开写**，两处的证据强度不一样，
+//      别把其中一处的结论套到另一处：
+//        · **runOpeningSheet 结尾那处：已定为 R1**（wx 路由在 runtime 层面就没生效）。
+//          依据是插桩采到的双栈快照（baseline-r1 / baseline-r3 / ctrl-early-1）：
+//          navigateBack() 正常返回，App.getPageStack 和 runtime 的 getCurrentPages()
+//          连读 8 秒都一动不动 —— runtime 侧自己都说没退，所以不是 automator 视图陈旧。
+//        · **runNativeClearModal 结尾那处：未插桩，R1/R2 仍未定。** 七轮插桩的探针
+//          全部只装在 runOpeningSheet 结尾，这一处**一次栈快照都没采到过**。
+//          唯一相关的一轮（ctrl-floor400-1）在这一步只留下一句裸的
+//          `timeout waiting for automator response`，既没有 automator 栈也没有 runtime 栈，
+//          而 R1/R2 的判据恰恰就是「runtime 栈退没退」。上面那两行 trace 只有 automator 侧，
+//          所以只能说「automator 侧观测不到退栈」。目前能说的只有：它的症状与上面那处
+//          被吞之后的表现一致，**疑似**同因。
+// ② 未根治，所以本函数**仍然可能**在那两处超时。超时报错里带 runtime 侧 getCurrentPages()
+// 快照，就是为了让下一个人一眼判出撞上的是 R1 还是 R2，不必从头查一遍 —— 尤其是
+// runNativeClearModal 那处，下次撞上时那份快照就是把它定性所缺的那个量。
 async function goBackTo(miniProgram, label) {
   // 【先空出安静时间，再读基准，再下发】依据见 ROUTE_SETTLE 上方那段实测。
   // 顺序有讲究：settle 放在读基准之前，基准才是"下发那一刻"的栈；放在读基准之后，
@@ -1128,6 +1169,11 @@ async function run() {
 
   activeCliPath = cliPath
 
+  // 生效参数打在开头：这两个值都能被环境变量覆盖，而产物里看不出用的是哪个值。
+  // 上一轮审计就卡在这里 —— 三轮全绿的日志里无从核实 ROUTE_SETTLE 到底是不是 1000。
+  step('本轮参数：ROUTE_SETTLE=' + ROUTE_SETTLE + 'ms（路由指令下发前的安静时间）'
+    + '，stepTimeout=' + stepTimeout + 'ms（单步超时）')
+
   const autoPort = fixedPort || basePort
   await ensurePortFree(cliPath, autoPort)
   step('用 CLI 打开本仓库并开自动化端口 ' + autoPort + '：' + cliPath)
@@ -1170,6 +1216,9 @@ async function run() {
   } else {
     step('触底加载结论：模拟器里没验到真实触底（滚动无法确认），只验了 onReachBottom 方法本身和手动按钮')
   }
+  // 代价也报出来，别让下一个人只能从 PR 正文里抄一个没法核实的秒数。
+  step('settleBeforeRoute 本轮实际执行 ' + settleCount + ' 次 × ' + ROUTE_SETTLE
+    + 'ms = 约 ' + Math.round(settleCount * ROUTE_SETTLE / 1000) + ' 秒')
   console.log('ui tests passed')
 }
 
@@ -1408,14 +1457,21 @@ assert.ok(
     + '这之后再取"基准"就等于拿变浅后的值去等"比这更浅"，永远等不到 —— 上一轮就是这么挂死的'
 )
 
-// 钉子⑨：settleBeforeRoute() 必须排在真正下发路由指令**之前**。
+// 钉子⑨：settleBeforeRoute() 必须**带 await** 且排在真正下发路由指令**之前**。
 // 钉子⑦只查函数体里有没有这个词，把它挪到 navigateBack 之后照样绿 —— 而那样一挪，
 // 「空出安静时间」就完全失效，症状是随机某一步报「等退回 XX 超时 / 两侧栈都没动」，
 // 看不出和挪动有关系。和钉子⑤同一类坑（顺序错了、静默失效），所以同样钉死。
-const settleAt = goBackToBody.indexOf('settleBeforeRoute(')
+//
+// 【为什么 needle 里要带 await】把 await 去掉（写成裸的 settleBeforeRoute()），位置比较
+// 照样通过、钉子⑦⑨全绿，但那个 sleep 变成一条没人等的游离 promise，保护完全消失 ——
+// 症状和这次一模一样。**实测过**：在旧版钉子下把 goto 里的 await 去掉，整轮 UI 测试
+// 照样 EXIT=0 全绿。所以位置和 await 必须一起钉，只钉位置等于漏掉一半。
+const settleNeedle = 'await ' + 'settleBeforeRoute('
+const settleAt = goBackToBody.indexOf(settleNeedle)
 assert.ok(
   settleAt >= 0,
-  '自检：goBackTo 体内应当有一次 settleBeforeRoute() 调用，没找到 —— 钉子⑨失效了'
+  '自检：goBackTo 体内应当有一次 ' + JSON.stringify(settleNeedle) + ' 调用，没找到 —— '
+    + '要么被删了，要么 await 被去掉了（去掉 await 的话 sleep 就没人等，保护等于不存在）'
 )
 assert.ok(
   settleAt < navBackAt,
@@ -1426,12 +1482,17 @@ assert.ok(
 
 const gotoBodyAt = routeSource.indexOf('async function goto(')
 assert.ok(gotoBodyAt >= 0, '找不到 goto 的定义，钉子⑨失效了')
-const gotoBody = routeSource.slice(gotoBodyAt, routeSource.indexOf('\n}', gotoBodyAt))
-const gotoSettleAt = gotoBody.indexOf('settleBeforeRoute(')
+// 这条 end > at 不能省：indexOf 找不到时返回 -1，slice(x, -1) 不报错，会把「函数体」变成
+// 从 goto 开头一直到文件倒数第二个字符的一大段，于是下面的位置比较仍然为真、钉子静默
+// 降级成弱检查却照样绿。钉子⑤⑦都有这一条，这里之前漏了。
+const gotoBodyEnd = routeSource.indexOf('\n}', gotoBodyAt)
+assert.ok(gotoBodyEnd > gotoBodyAt, '找不到 goto 的函数体结尾，钉子⑨失效了')
+const gotoBody = routeSource.slice(gotoBodyAt, gotoBodyEnd)
+const gotoSettleAt = gotoBody.indexOf(settleNeedle)
 const gotoCallAt = gotoBody.indexOf('miniProgram' + '[method]')
 assert.ok(gotoSettleAt >= 0 && gotoCallAt >= 0 && gotoSettleAt < gotoCallAt,
-  'goto 里 settleBeforeRoute() 必须排在下发路由指令之前：settle 在 ' + gotoSettleAt
-    + '，下发在 ' + gotoCallAt + '（-1 表示压根没找到）'
+  'goto 里 ' + JSON.stringify(settleNeedle) + ' 必须排在下发路由指令之前：settle 在 '
+    + gotoSettleAt + '，下发在 ' + gotoCallAt + '（-1 表示压根没找到 —— 也可能是 await 被去掉了）'
 )
 
 // 自检（钉住钉子④的判据本身）：上面两个正则必须真的扫到了调用点。
