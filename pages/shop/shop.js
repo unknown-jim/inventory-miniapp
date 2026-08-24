@@ -1,5 +1,6 @@
 const store = require('../../utils/store')
 const util = require('../../utils/util')
+const messages = require('../../utils/messages')
 
 Page({
   data: {
@@ -39,10 +40,12 @@ Page({
   async onShow() {
     const status = store.getStatus()
     if (!status.configured && status.mode !== 'memory') {
+      // 和看板页同一个阻断位（shop.wxml 的 blockedMessage）：走 utils/messages.js
+      // 的店员话术层，不然看板页说人话、店铺页说 openid 白名单，两套说法。
       this.setData({
         pageLoading: false,
         configured: false,
-        blockedMessage: status.message,
+        blockedMessage: messages.forStaff(status.message).text,
         currentShopId: status.shopId,
         shopName: status.shopName,
         canMigrate: !!store.getPendingMigrate(),

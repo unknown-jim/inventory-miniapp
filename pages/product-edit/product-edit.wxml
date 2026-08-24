@@ -115,7 +115,10 @@
     <block wx:if="{{isEdit}}">
       <view class="muted spec-desc" wx:if="{{productKind === 'blank'}}">待加工和现货要分开调。库存调整不计入进货、不改进价。</view>
       <view class="muted spec-desc" wx:else>件数通过进货、销售、退货、改规格或库存调整变动。库存调整不计入进货、不改进价。</view>
-      <button class="btn-ghost adjust-btn" bindtap="goAdjust">库存调整</button>
+      <view class="action-strip">
+        <button class="btn-ghost" bindtap="goAdjust">库存调整</button>
+        <button wx:if="{{productKind !== 'plain'}}" class="btn-ghost" bindtap="goConvert">改规格</button>
+      </view>
     </block>
   </view>
 

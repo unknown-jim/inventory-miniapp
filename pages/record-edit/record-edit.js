@@ -65,7 +65,9 @@ Page({
     lines: [],
     showSlip: false,
     slip: null,
-    exporting: false
+    exporting: false,
+    slipCanvasWidth: 1760,
+    slipCanvasHeight: 4000
   },
 
   async onLoad(query) {

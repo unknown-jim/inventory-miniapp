@@ -3,6 +3,7 @@ const apply = require('./ledger-apply')
 const cloudConfig = require('./cloud-config')
 const util = require('./util')
 const shard = require('./ledger-shard')
+const maintenance = require('./maintenance')
 
 const KEYS = {
   products: 'inv_products',
@@ -292,6 +293,20 @@ function mapCloudError(error) {
     return error
   }
   const msg = String((error && (error.errMsg || error.message)) || '')
+  // 下面这条 /conflict|transaction/ 会把 TransactionNotExist 一起吃掉，
+  // **这是有意的，别在这里加前置分支把它拆出来**：
+  //
+  // 服务端敢拆，是因为它拿得到 (错误文本, 事务耗时) 两个入参 —— 没到 30 秒就炸
+  // 才判「单事务写入量超限」那一类（ledger-core.js 的 classifyTransactionError）。
+  // **客户端拿不到事务耗时**，少了判据就不该判：一次真跑满 30 秒的超时和一次
+  // 写入量超限，在这里长得一模一样，而两者该给的建议正相反。
+  //
+  // 而且这条路上本来也见不到原始的 TransactionNotExist：云函数已经在
+  // index.js 的 runTransaction catch 里把它拆成「这张单牵连的记录太多，一次改不完」
+  // 或「库存刚被别人改过，请再提交」了，客户端从 result.error 收到的是拆好的那句，
+  // 会被上面第一条白名单（含「提交」二字）或末尾的 `return error` 原样放行。
+  // 这里只兜**没经过云函数改写**的 SDK 层错误，那种没有耗时可量，归进可重试
+  // 是正确的保守选择 —— 和 classifyTransactionError 在 elapsedMs 缺失时一致。
   if (/conflict|transaction/i.test(msg)) {
     return new Error('库存刚被别人改过，请再提交')
   }
@@ -322,6 +337,19 @@ function callCloud(action, shopId, payload) {
     }
   }).then(function (res) {
     const result = res && res.result
+    // 维护标志在成功和失败两条路上都要收：维护开着时服务端每一个回包都带它，
+    // 这就是「已经在用小程序的用户也能收到提示」的机制本身（不轮询）。
+    //
+    // **必须 try/catch 包住。** 这行处在每一次云调用成功路径的正中间：note() 里
+    // 会调 wx.showModal，它一旦同步抛错，异常就会穿到下面的 .catch(mapCloudError)，
+    // 把**一次已经提交成功的记账报成失败**，店员会再点一次、同一笔账落两遍。
+    // 这正是 ledger-core.js 事务段那条「提交之后不许再有可能失败的一步」要防的
+    // 同一类事故。弹窗是锦上添花，绝不能让它有本事否定一次成功的提交。
+    try {
+      maintenance.note(result && result.maintenance)
+    } catch (error) {
+      console.warn('[ledger] 维护提示失败（不影响这次请求的结果）', error)
+    }
     if (!result || result.ok !== true) {
       throw new Error((result && result.error) || '记账失败')
     }
@@ -1021,6 +1049,20 @@ async function whoami() {
   return res.openid
 }
 
+// App.onShow 的维护检查：从后台切回前台时补一次。
+// 借 whoami 这个最便宜的现成 action——维护开着时它的回包自带 maintenance
+// （回包携带的机制见 cloudfunctions/ledger/ledger-core.js 的 dispatch）。
+// **不新增专用 action，也不轮询。**
+// 失败一律静默：断网 / 没配云环境时不该弹任何东西（fail-open）。
+async function checkMaintenance() {
+  try {
+    await request('whoami', {}, { shopId: '' })
+    return maintenance.isOn()
+  } catch (error) {
+    return false
+  }
+}
+
 async function listShops() {
   const res = await request('listShops', {}, { shopId: '' })
   return res.shops || []
@@ -1257,6 +1299,7 @@ module.exports = {
   hasClearedBackup: hasClearedBackup,
   dashboard: dashboard,
   whoami: whoami,
+  checkMaintenance: checkMaintenance,
   listShops: listShops,
   createShop: createShop,
   selectShop: selectShop,

@@ -157,6 +157,11 @@ function MemoryDb(options) {
   // 平台运营方白名单（platform_admins 的替身）。**不进 snapshot() / 事务**：
   // 它不参与事务，是事务外的只读白名单，运维动作的门直接读 db.getPlatformAdmin。
   this.platformAdmins = {}
+  // 平台级维护开关（platform_config 的 maintenance 文档）的替身。
+  // **不进 snapshot() / 事务**：和 platform_admins 一样，是事务外的只读配置。
+  this.maintenance = (options && options.maintenance) || null
+  // 造「开关读失败」：拦截路径必须 fail-open（读不出来 = 没在维护 = 正常放行）
+  this.maintenanceReadThrows = !!(options && options.maintenanceReadThrows)
   this._rev = 0
   this.hooks = (options && options.hooks) || {}
 }
@@ -217,6 +222,22 @@ MemoryDb.prototype.getLedger = async function (shopId) {
 MemoryDb.prototype.getPlatformAdmin = async function (openid) {
   const key = String(openid || '')
   return this.platformAdmins[key] ? clone(this.platformAdmins[key]) : null
+}
+
+// 维护开关（index.js 的 createDb() 同名方法）。云函数侧 index.js 的 getMaintenance
+// 把「读失败」和「文档不存在」都吞成 null，所以这里也吞。要测「读失败」这条路
+// 本身，用 getMaintenanceRaw / 直接设标志让 ledger-core 的 readMaintenance 走到
+// 它的 catch。
+MemoryDb.prototype.getMaintenance = async function () {
+  if (this.maintenanceReadThrows) throw new Error('maintenance read failed')
+  return this.maintenance ? JSON.parse(JSON.stringify(this.maintenance)) : null
+}
+MemoryDb.prototype.getMaintenanceRaw = async function () {
+  if (this.maintenanceReadThrows) throw new Error('maintenance read failed')
+  return this.maintenance ? JSON.parse(JSON.stringify(this.maintenance)) : null
+}
+MemoryDb.prototype.setMaintenance = async function (doc) {
+  this.maintenance = JSON.parse(JSON.stringify(doc))
 }
 
 // 事务外读一份清空快照（账本升级的 mode:'snapshots' 用）。和 index.js 的
@@ -296,6 +317,11 @@ MemoryDb.prototype.runTransaction = async function (fn) {
     this._rev += 1
     return result
   }
+  // 这句模拟的是两类事务失败里的**真冲突**：重试的每一轮里都有别的写入者先提交
+  // （_rev 一直变），后到的被回滚 —— 重试会成功的那一类。另一类「单事务写入量
+  // 超限」（TransactionNotExist，重试永远不会成功）只有真云上有，在
+  // cloudfunctions/ledger/index.js 的 runTransaction catch 里按事务耗时拆，
+  // 内存替身造不出它，这里的文案保持和服务端冲突类一致。
   throw new Error('库存刚被别人改过，请再提交')
 }
 

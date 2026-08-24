@@ -232,5 +232,5 @@
     bind:close="closeSlip"
     bind:export="exportSlip"
   />
-  <canvas type="2d" id="slipCanvas" class="slip-canvas"></canvas>
+  <canvas type="2d" id="slipCanvas" class="slip-canvas" style="width: {{slipCanvasWidth}}px; height: {{slipCanvasHeight}}px;"></canvas>
 </view>
