@@ -20,6 +20,24 @@ const portTimeout = Number(process.env.WECHAT_AUTOMATOR_PORT_TIMEOUT || 180000)
 const connectTimeout = Number(process.env.WECHAT_AUTOMATOR_CONNECT_TIMEOUT || 60000)
 const stepTimeout = Number(process.env.WECHAT_AUTOMATOR_STEP_TIMEOUT || 30000)
 const runTimeout = Number(process.env.WECHAT_AUTOMATOR_RUN_TIMEOUT || 900000)
+// 单次 automator.connect 的上限。要比 patchCheckVersion 里那 30 轮等待（最坏约 3 分钟）
+// 宽，否则会把本来能连上的情况判死。
+const connectAttemptTimeout = Number(process.env.WECHAT_AUTOMATOR_CONNECT_ATTEMPT_TIMEOUT || 240000)
+const closeTimeout = Number(process.env.WECHAT_AUTOMATOR_CLOSE_TIMEOUT || 20000)
+// 整个脚本的上限，比 runTimeout 再外面一层：runTimeout 只罩着用例本身，起端口和连接
+// 这些前置步骤卡住时它根本没起跑。
+const scriptTimeout = Number(process.env.WECHAT_AUTOMATOR_SCRIPT_TIMEOUT || 1500000)
+// 收尾之后留给进程自己退的宽限。给到 10 秒是量出来的：收尾做完之后，Windows 还要几秒
+// 才把 cli 子进程那边的句柄放干净（实测约 5 秒），太短会让兜底看门狗在正常收场时也开火。
+const exitGrace = Number(process.env.WECHAT_AUTOMATOR_EXIT_GRACE || 10000)
+
+// 收尾要用到的东西全放模块作用域：断言失败、超时、连接断开、未捕获异常，
+// 每条退出路径都够得着，不必依赖 run() 走没走到自己的 finally。
+let activeCliPath = ''
+let toolOpened = false
+let activeMiniProgram = null
+const openMiniPrograms = new Set()
+const liveCli = new Set()
 
 function resolveCliPath() {
   if (process.env.WECHAT_CLI && fs.existsSync(process.env.WECHAT_CLI)) {
@@ -47,6 +65,11 @@ function resolveCliPath() {
 
 function step(name) {
   console.log('[UI] ' + name)
+}
+
+function errText(error) {
+  if (!error) return String(error)
+  return error.message ? error.message : String(error)
 }
 
 function sleep(ms) {
@@ -113,12 +136,39 @@ function runCli(cliPath, args) {
     windowsHide: true,
     env: childEnv(cliPath)
   })
+  started.child = child
+  liveCli.add(started)
   // 进度和 √ auto 都走 stderr，出错时要一起打出来。
   child.stdout.on('data', function (chunk) { chunks.push(String(chunk)) })
   child.stderr.on('data', function (chunk) { chunks.push(String(chunk)) })
   child.on('error', function (error) { started.error = error })
   child.on('exit', function (code) { started.exitCode = code })
+  // 从名册里划掉要等 close 而不是 exit：进程退了不等于那两个管道关了（实测 cli auto
+  // 退出之后 PipeWrap 还在 process.getActiveResourcesInfo() 里挂着），而攥着事件循环
+  // 不放的正是管道。
+  child.on('close', function () { liveCli.delete(started) })
   return started
+}
+
+// waitCli 超时之后我们就不管这个子进程了，可 cmd.exe 还在跑，它继承的那两个管道
+// 也还挂在事件循环上——光断开 automator 连接，进程照样退不掉。所以收尾时挨个杀掉，
+// 并且把读端 destroy 了：孙子进程（cli.bat 里的 node）攥着写端也拖不住我们。
+function stopCli(started) {
+  const child = started && started.child
+  if (!child) return
+  // 这几步失败都不影响结论（进程可能已经退了、句柄可能已经关了），一律吞掉。
+  try {
+    if (started.exitCode == null) child.kill()
+  } catch (error) {}
+  try {
+    if (child.stdout) child.stdout.destroy()
+  } catch (error) {}
+  try {
+    if (child.stderr) child.stderr.destroy()
+  } catch (error) {}
+  try {
+    child.unref()
+  } catch (error) {}
 }
 
 async function waitCli(label, started, timeout) {
@@ -181,6 +231,12 @@ function patchCheckVersion() {
   }
   const original = MiniProgram.prototype.checkVersion
   MiniProgram.prototype.checkVersion = async function () {
+    // automator 的 connect() = 先建连接（Connection.create 已经把 ws 连上了）再
+    // checkVersion()。checkVersion 一抛错或一卡住，那条连接就没人再碰——Launcher 不会
+    // dispose 它，调用方也拿不到实例。connectMiniProgram 是重试的，于是每失败一次就漏
+    // 一个连到自动化端口的 socket，谁也别想让进程退出。这个 patch 是唯一能拿到那个实例
+    // 的地方（this 就是它），登记下来，收尾时统一断开。
+    openMiniPrograms.add(this)
     for (let i = 0; i < 30; i++) {
       let info = null
       try {
@@ -193,7 +249,9 @@ function patchCheckVersion() {
         info = null
       }
       if (info && info.SDKVersion) {
-        return await original.call(this)
+        // 原版校验会再发一次 Tool.getInfo，而 Connection.send 没有超时：工具答过一次
+        // 之后不再答话，这里就是最后一处能永久卡住的地方，所以也掐表。
+        return await withTimeout(original.call(this), stepTimeout, '基础库版本校验')
       }
       await sleep(1000)
     }
@@ -208,7 +266,10 @@ async function connectMiniProgram(port, timeout) {
   let lastError = null
   for (;;) {
     try {
-      return await automator.connect({ wsEndpoint: wsEndpoint })
+      // 单次尝试也要掐表：connect 里等的是工具回话，卡住就是永远卡住，
+      // 而 deadline 只在被拒之后才检查，罩不住「一次都没返回」。
+      return await withTimeout(automator.connect({ wsEndpoint: wsEndpoint }),
+        connectAttemptTimeout, '连接 ' + wsEndpoint)
     } catch (error) {
       lastError = error
       if (Date.now() >= deadline) break
@@ -680,57 +741,154 @@ async function run() {
     throw new Error('找不到微信开发者工具的 cli，把环境变量 WECHAT_CLI 设成 cli.bat 的完整路径')
   }
 
+  activeCliPath = cliPath
+
   const autoPort = fixedPort || basePort
   await ensurePortFree(cliPath, autoPort)
   step('用 CLI 打开本仓库并开自动化端口 ' + autoPort + '：' + cliPath)
+  // 在 startAutoPort 之前就记上：它抛错时工具窗口可能已经开出来了，收尾一样得去关。
+  toolOpened = true
   await startAutoPort(cliPath, autoPort)
 
   patchCheckVersion()
   step('连接 ws://127.0.0.1:' + autoPort)
   const miniProgram = await connectMiniProgram(autoPort, connectTimeout)
-  try {
-    await miniProgram.mockWxMethod('showToast', {})
-    await miniProgram.mockWxMethod('showModal', {
-      confirm: true,
-      cancel: false
-    })
-    // 单步超时兜不住的情形（工具收下命令再也不回、automator 的 send 本身没有超时）
-    // 再套一层整轮看门狗，保证任何情况下都会结束并把工具关掉。
-    // 新增的两个「加载更多」步骤也必须在看门狗里 —— 它们要滚页面、等列表增长，
-    // 恰好是最容易卡住不回的那一类。
-    await withTimeout((async function () {
-      await seedFromHome(miniProgram)
-      await runSalePickerAndSlip(miniProgram)
-      await runRecordSlipExport(miniProgram)
-      await runOpeningSheet(miniProgram)
-      await runPaySheet(miniProgram)
-      await runRecordsLoadMore(miniProgram)
-      await runCustomerLedgerLoadMore(miniProgram)
-      await runNativeClearModal(miniProgram)
-    })(), runTimeout, '整轮 UI 用例')
-    // 触底加载验到了哪一层，最后一行说清楚，别让人翻日志猜。
-    // 放在看门狗之外：它是报告不是用例，超时的时候本来也走不到这里。
-    if (bottomReachedByScroll === true) {
-      step('触底加载结论：模拟器里 wx.pageScrollTo 滚到底后 onReachBottom 真的触发了')
-    } else if (bottomReachedByScroll === false) {
-      step('触底加载结论：滚动真的发生了但 onReachBottom 没触发 —— 手动「加载更多」是必要的兜底，真机还要再验')
-    } else {
-      step('触底加载结论：模拟器里没验到真实触底（滚动无法确认），只验了 onReachBottom 方法本身和手动按钮')
-    }
-    console.log('ui tests passed')
-  } finally {
-    // 关掉这次自己开的那个工具窗口，端口跟着释放；不关的话下一次跑会往上顺延端口、
-    // 窗口越堆越多。关失败不该盖掉测试本身的结论，所以吞掉异常。
-    try {
-      await miniProgram.close()
-    } catch (error) {
-      step('关闭开发者工具失败，可以手动关：' + (error && error.message ? error.message : error))
-    }
+  activeMiniProgram = miniProgram
+  openMiniPrograms.add(miniProgram)
+  // 收尾统一交给 finish()：关工具、断连接、退进程要在每条退出路径上都发生，
+  // 而不只是在 run() 自己能走到的 finally 里。
+  await miniProgram.mockWxMethod('showToast', {})
+  await miniProgram.mockWxMethod('showModal', {
+    confirm: true,
+    cancel: false
+  })
+  // 单步超时兜不住的情形（工具收下命令再也不回、automator 的 send 本身没有超时）
+  // 再套一层整轮看门狗，保证任何情况下都会结束并把工具关掉。
+  // 新增的两个「加载更多」步骤也必须在看门狗里 —— 它们要滚页面、等列表增长，
+  // 恰好是最容易卡住不回的那一类。
+  await withTimeout((async function () {
+    await seedFromHome(miniProgram)
+    await runSalePickerAndSlip(miniProgram)
+    await runRecordSlipExport(miniProgram)
+    await runOpeningSheet(miniProgram)
+    await runPaySheet(miniProgram)
+    await runRecordsLoadMore(miniProgram)
+    await runCustomerLedgerLoadMore(miniProgram)
+    await runNativeClearModal(miniProgram)
+  })(), runTimeout, '整轮 UI 用例')
+  // 触底加载验到了哪一层，最后一行说清楚，别让人翻日志猜。
+  // 放在看门狗之外：它是报告不是用例，超时的时候本来也走不到这里。
+  if (bottomReachedByScroll === true) {
+    step('触底加载结论：模拟器里 wx.pageScrollTo 滚到底后 onReachBottom 真的触发了')
+  } else if (bottomReachedByScroll === false) {
+    step('触底加载结论：滚动真的发生了但 onReachBottom 没触发 —— 手动「加载更多」是必要的兜底，真机还要再验')
+  } else {
+    step('触底加载结论：模拟器里没验到真实触底（滚动无法确认），只验了 onReachBottom 方法本身和手动按钮')
   }
+  console.log('ui tests passed')
 }
 
-run().catch(function (error) {
+// 收尾：关掉这次自己开的工具窗口，断开所有自动化连接，收掉还没退的 cli 子进程。
+// 关不掉不该盖掉测试本身的结论，所以每一步的异常都吞掉、只记一行。
+//
+// 每一步都是被实测坑过才写的（2026-08-24 三次复现）：
+//   * automator 的 close() 是 send('App.exit') → sleep → send('Tool.close') → disconnect()，
+//     而 Connection.send 没有超时。工具卡住不回话时 close() 既不 resolve 也不 reject，
+//     以前放在 run() 的 finally 里就永远停在那儿：进程不退，到自动化端口的 WebSocket
+//     一直 ESTABLISHED。下一轮 test:all 于是撞上「端口上已经有别的自动化会话」，两个
+//     自动化客户端抢同一个端口，在随机步骤报 Connection closed —— 每失败一次多留一个
+//     僵尸，重试越来越容易失败，一次偶发失败被放大成看起来像回归的连环失败。
+//     所以 close() 必须掐表。
+//   * Tool.close 一抛错，automator 就不会再走到它自己的 disconnect()，连接照样留着。
+//     所以无论 close 成功与否，这里都补一次断开——而且是对所有登记过的实例，
+//     connect 重试期间漏下的那些也在里面。
+async function teardown() {
+  const miniProgram = activeMiniProgram
+  activeMiniProgram = null
+  let closed = false
+  if (miniProgram) {
+    try {
+      await withTimeout(miniProgram.close(), closeTimeout, '关闭开发者工具')
+      closed = true
+    } catch (error) {
+      step('关闭开发者工具失败，可以手动关：' + errText(error))
+    }
+  }
+  openMiniPrograms.forEach(function (item) {
+    // close() 成功时它已经断过一次，ws.close() 是幂等的，再断一次没有副作用。
+    try {
+      item.disconnect()
+    } catch (error) {
+      step('断开自动化连接失败：' + errText(error))
+    }
+  })
+  openMiniPrograms.clear()
+  // 工具窗口没关成 => 它还开着，而且多半已经卡死，整棵进程树会一直留到下次
+  // ensurePortFree 才被收掉。用工具自己的 cli quit 兜一下，别让它按次累积。
+  // 不按镜像名杀进程：WeChatAppEx 微信本体也在用，误伤代价太大。
+  if (toolOpened && !closed && activeCliPath) {
+    step('工具没关干净，用 cli quit 兜底')
+    const started = runCli(activeCliPath, ['quit'])
+    try {
+      await waitCli('quit', started, closeTimeout)
+    } catch (error) {
+      step('cli quit 也没收干净，手动关掉开发者工具：' + errText(error))
+    }
+    stopCli(started)
+  }
+  liveCli.forEach(stopCli)
+  liveCli.clear()
+}
+
+// 兜底看门狗：收尾之后进程本该自己退，退不掉就硬退。
+// 用 unref 的定时器而不是无条件 process.exit()，是因为 unref 的定时器不会拖住事件循环
+// ——事件循环干净时 node 照常立刻退出，它压根不开火；只有还有东西攥着循环（没断干净的
+// WebSocket、没收的子进程管道）时才轮到它。这样上面的日志能先写完再退。
+function forceExitAfter(ms, code, why) {
+  const timer = setTimeout(function () {
+    // 把「还占着事件循环的是什么」一起报出来：下次再遇到退不掉，不用从头查一遍
+    const held = process.getActiveResourcesInfo
+      ? process.getActiveResourcesInfo().join('、')
+      : '这个 Node 版本报不出来'
+    console.error('[UI] ' + why + '，强制退出（exit ' + code + '；还占着：' + held + '）')
+    process.exit(code)
+  }, ms)
+  if (timer.unref) timer.unref()
+  return timer
+}
+
+// 所有退出路径的唯一出口：断言失败、超时、连接断开、未捕获异常，最后都汇到这里。
+let finishing = false
+
+async function finish(code, tail) {
+  if (finishing) return
+  finishing = true
+  // 收尾自己也会卡（工具没死透时 close 和 cli quit 都可能各等满一个 closeTimeout），
+  // 先架一道硬看门狗，保证连收尾卡住都能退。
+  forceExitAfter(closeTimeout * 2 + exitGrace * 2, code, '收尾流程本身没能在预期时间内结束')
+  try {
+    await teardown()
+  } catch (error) {
+    // 收尾里再冒出别的错也不能挡住退出，否则又回到「进程留在那儿」的老问题。
+    step('收尾时还出了别的错，忽略：' + errText(error))
+  }
+  if (tail) tail()
+  process.exitCode = code
+  forceExitAfter(exitGrace, code, '收尾跑完了、事件循环还被别的东西占着')
+}
+
+function onFatal(error) {
+  if (finishing) {
+    // 整轮超时之后被丢下的那条链路还在跑，它后面报的错不改变结论，别盖掉真正的原因。
+    step('收尾期间还有异步错误，忽略：' + errText(error))
+    return
+  }
+  console.error('[UI] 未捕获的异常 / 未处理的 Promise 拒绝：')
   console.error(error && error.stack ? error.stack : error)
+  finish(1, printChecklist)
+}
+
+function printChecklist() {
   console.error('')
   console.error('UI 测试跑不起来时，按这个清单查：')
   console.error('1. 已安装 Node.js，并在仓库根目录执行过 npm install')
@@ -743,11 +901,33 @@ run().catch(function (error) {
   console.error('5. 若看到成片的「Maximum setlocal recursion level reached」，是 cli.bat 切 UTF-8 代码页后')
   console.error('   被 cmd 误解析、把注释里的 CLI 当命令又调回自己。脚本已把安装目录从子进程 PATH 摘掉')
   console.error('6. 端口和超时可用 WECHAT_AUTOMATOR_PORT / _PORT_TIMEOUT / _CONNECT_TIMEOUT /')
-  console.error('   _STEP_TIMEOUT（单步，默认 30 秒）/ _RUN_TIMEOUT（整轮，默认 15 分钟）覆盖')
+  console.error('   _STEP_TIMEOUT（单步，默认 30 秒）/ _RUN_TIMEOUT（整轮，默认 15 分钟）/')
+  console.error('   _CLOSE_TIMEOUT（收尾关工具，默认 20 秒）/ _SCRIPT_TIMEOUT（整个脚本，默认 25 分钟）覆盖')
   console.error('7. 工具刚打开项目时 Tool.getInfo 不带 SDKVersion，automator 的版本校验会崩，')
   console.error('   脚本里已经等它出现再校验')
   console.error('8. wx.showModal 是系统弹窗，自动化点不到内部按钮，脚本里用 mockWxMethod 自动确认')
   console.error('9. 送货单弹层在 virtualHost 自定义组件里，页面级选择器够不着（page.$$ / >>> /')
   console.error('   selectComponent 实测都是 0），用例核对的是页面数据里的 slip，别再写回 .js-slip')
-  process.exit(1)
+  console.error('10. 重试之前先确认没有上一轮的残留。脚本收尾会断开连接、必要时 cli quit，但工具')
+  console.error('    卡死时这两步都可能不管用，而残留会直接毁掉下一轮：留下的开发者工具占着自动化')
+  console.error('    端口，新一轮连上的是上一轮的会话，于是在随机步骤报 Connection closed。查和清：')
+  console.error('    Get-CimInstance Win32_Process -Filter "Name=\'node.exe\'" |')
+  console.error('      Where-Object { $_.CommandLine -like \'*ui.test.js*\' }   # 有就 Stop-Process')
+  console.error('    Get-Process 微信开发者工具                                  # 有就手动关掉工具')
+  console.error('    脚本不按镜像名杀进程：WeChatAppEx 是微信本体也在用的，误伤代价太大')
+  console.error('11. 在任务 worktree 里跑时，project.private.config.json 在 .gitignore 里，git worktree')
+  console.error('    add 出来的目录没有它，工具会按全新项目的默认设置打开这棵树。症状是随机的初始化/')
+  console.error('    超时失败而不是断言失败，先从主检出 cp 一份过来再跑，别当成代码回归')
+}
+
+process.on('uncaughtException', onFatal)
+process.on('unhandledRejection', onFatal)
+
+// 最外层再罩一道超时：runTimeout 只罩着用例本身，起端口、连接这些前置步骤卡住时
+// 它还没起跑，得有人保证无论如何都会走到 finish()。
+withTimeout(run(), scriptTimeout, '整个 UI 测试脚本').then(function () {
+  return finish(0)
+}, function (error) {
+  console.error(error && error.stack ? error.stack : error)
+  return finish(1, printChecklist)
 })
