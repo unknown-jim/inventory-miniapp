@@ -42,7 +42,7 @@ const FONT = {
   value: '600 59px sans-serif',        // 14.8pt 上面这些标签对应的值
   head: '600 51px sans-serif',         // 12.8pt 表头
   name: '56px sans-serif',             // 14.1pt 品名、规格
-  num: '56px sans-serif',              // 14.1pt 序号、货号、数量、单价、金额
+  num: '56px sans-serif',              // 14.1pt 货号、数量、单价、金额
   total: '700 80px sans-serif',        // 20.1pt 合计，客户最想看清的数
   debt: '700 64px sans-serif',         // 16.1pt 结算盒主行的值
   small: '48px sans-serif',            // 12.1pt 往来欠款那一行
@@ -229,11 +229,6 @@ function floorWidth(col, measure) {
 }
 
 function columnValues(lines, key, axisName) {
-  if (key === 'seq') {
-    return lines.map(function (line, index) {
-      return String(index + 1)
-    })
-  }
   if (key === 'sku') return lines.map(skuText)
   if (key === 'spec') {
     return lines.map(function (line) {
@@ -259,7 +254,6 @@ function tableColumns(slip, measure) {
   const lines = (slip && slip.lines) || []
   const axes = specAxisNames(lines)
   const defs = [
-    { key: 'seq', title: '序号', align: 'center', font: FONT.num, values: columnValues(lines, 'seq') },
     { key: 'sku', title: '货号', align: 'center', font: FONT.num, values: columnValues(lines, 'sku') },
     { key: 'name', title: '品名', align: 'left', font: FONT.name, values: columnValues(lines, 'productName') }
   ]
