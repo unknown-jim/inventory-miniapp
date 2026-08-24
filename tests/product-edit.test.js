@@ -43,6 +43,7 @@ assert.ok(wxml.indexOf('blankStockRows') >= 0)
 assert.ok(wxml.indexOf('现货只在退货或改规格后才会有数') < 0)
 assert.ok(wxml.indexOf("productKind === 'blank' ? '销售规格' : '规格库存'") < 0)
 assert.ok(wxml.indexOf('库存调整') >= 0)
+assert.ok(wxml.indexOf('bindtap="goConvert"') >= 0)
 assert.ok(wxml.indexOf('不计入进货、不改进价') >= 0)
 assert.ok(wxml.indexOf('通过进货 / 销售变动') < 0)
 
@@ -60,12 +61,15 @@ const productsWxml = fs.readFileSync(
   path.join(__dirname, '../pages/products/products.wxml'),
   'utf8'
 )
-assert.ok(productsWxml.indexOf('action-strip') >= 0)
-assert.ok(productsWxml.indexOf('stat-grid') >= 0)
-assert.ok(productsWxml.indexOf('goods-spec-toggle') >= 0)
-assert.ok(productsWxml.indexOf('查看规格') >= 0)
-assert.ok(productsWxml.indexOf('收起规格') >= 0)
-assert.ok(productsWxml.indexOf('catchtap="toggleSpecs"') >= 0)
+assert.ok(productsWxml.indexOf('goods-grid') >= 0)
+assert.ok(productsWxml.indexOf('action-strip') < 0)
+assert.ok(productsWxml.indexOf('stat-grid') < 0)
+assert.ok(productsWxml.indexOf('goods-spec-toggle') < 0)
+assert.ok(productsWxml.indexOf('查看规格') < 0)
+assert.ok(productsWxml.indexOf('收起规格') < 0)
+assert.ok(productsWxml.indexOf('toggleSpecs') < 0)
+assert.ok(productsWxml.indexOf('进价') < 0)
+assert.ok(productsWxml.indexOf('售价') < 0)
 assert.ok(productsWxml.indexOf('skuSummary') < 0)
 assert.ok(productsWxml.indexOf('bar-fill') < 0)
 assert.ok(productsWxml.indexOf('barWidth') < 0)
@@ -75,7 +79,7 @@ assert.ok(productsWxml.indexOf('rateText') < 0)
 assert.ok(productsWxml.indexOf('毛利') < 0)
 assert.ok(productsWxml.indexOf("item.sku || '未填'") < 0)
 assert.ok(productsWxml.indexOf('库存调整') < 0)
-// 商品图：卡片左缩略图，失败回落首字占位
+// 商品图：两列图卡上方正方形预览，失败回落首字占位
 assert.ok(productsWxml.indexOf('goods-thumb') >= 0)
 assert.ok(productsWxml.indexOf('lazy-load') >= 0)
 assert.ok(productsWxml.indexOf('thumb-empty') >= 0)
@@ -86,9 +90,10 @@ const productsJs = fs.readFileSync(
   path.join(__dirname, '../pages/products/products.js'),
   'utf8'
 )
-assert.ok(productsJs.indexOf('expandedId') >= 0)
-assert.ok(productsJs.indexOf('toggleSpecs') >= 0)
-assert.ok(productsJs.indexOf('skuListView') >= 0)
+assert.ok(productsJs.indexOf('expandedId') < 0)
+assert.ok(productsJs.indexOf('toggleSpecs') < 0)
+assert.ok(productsJs.indexOf('skuListView') < 0)
+assert.ok(productsJs.indexOf('goConvert') < 0)
 assert.ok(productsJs.indexOf('barWidth') < 0)
 
 // 商品图：选货弹层行内缩略图，sale / purchase 同构；无图不渲染，不加占位灰块

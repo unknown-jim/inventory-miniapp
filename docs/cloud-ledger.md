@@ -76,7 +76,7 @@
 
    部署 `node scripts/wxcloud-deploy-ledger.js` 末尾也会跑同一段。做法是 `@wxcloud/cli` 内部 API：`tcbDescribeDatabaseACL` 读当前标签，不是 `ADMINONLY` 再用 `tcbModifyDatabaseACL` 改。**不要传 region**，一传 `Describe` 会报 `UnknownParameter`。幂等：已经是 `ADMINONLY` 的表会跳过。
 
-   标签对照：`ADMINONLY` = 仅管理端可读写；`PRIVATE` = 仅创建者可读写；`ADMINWRITE` = 仅管理端可写；`READONLY` = 所有人可读、仅创建者可写。官方还有第三方平台 HTTP 接口 [dbmodifyacl](https://developers.weixin.qq.com/doc/oplatform/openApi/cloudbase-batch/db-mgnt/api_setpermission.html)，需要 `component_access_token`，本仓库不走那条。同一条脚本现在**也会把云存储权限设为 `READWRITE`**（商品图用：所有用户可读、仅创建者可写读，做法是 `tcbGetStorageACL` / `tcbModifyStorageACL`，同样不传 region），为什么是这个标签而不是 `ADMINONLY` 见下面「商品图与云存储」。
+   标签对照：`ADMINONLY` = 仅管理端可读写；`PRIVATE` = 仅创建者可读写；`ADMINWRITE` = 仅管理端可写；`READONLY` = 所有人可读、仅创建者可写。官方还有第三方平台 HTTP 接口 [dbmodifyacl](https://developers.weixin.qq.com/doc/oplatform/openApi/cloudbase-batch/db-mgnt/api_setpermission.html)，需要 `component_access_token`，本仓库不走那条。同一条脚本现在**也会把云存储权限设为 `READONLY`**（商品图用：控制台里叫「所有用户可读，仅创建者可读写」，做法是 `tcbGetStorageACL` / `tcbModifyStorageACL`，**必须传 `bucket`**、region 可省），为什么是这个标签而不是 `ADMINONLY` 见下面「商品图与云存储」。
 4. 给 `ledger_records` 建上面「集合」那条里列的 **6 条索引**（复合索引，字段顺序和升降序都不能改；漏一条就会退化成全表扫，条数一多就超时）。**这一步不是可选的**：#1–#5 是流水的每一次查询都要用的；#6 是删店后清流水（`purgeByShop`）唯一走的那条，缺了它删店的清理会退化成全表扫。
 
    不要在控制台手点。用微信云托管 CLI 的 FlexDB 接口，脚本已写好且可重复执行：
@@ -351,9 +351,37 @@ payload: { mode: 'dropSnapshotLegacy', limit?: 50 }
 
 商品记录的 `image` 字段存的是**云存储 fileID**（`cloud://<env>.<bucket>/shops/<shopId>/products/<uid>.jpg`），空串就是没有图。图片二进制**不进 `ledgers` 文档、不过 `ledger` 云函数**：文档有大小上限，而 `getLedger` 是全量回传四张表的，一张 100KB 的 base64 塞进去就是每一次打开账本多一份固定开销；二进制走云存储自己的上传 / 下载通道，账和图各走各的路。
 
-上传链路全在客户端：编辑商品页 `wx.chooseMedia`（`compressed`）→ 页内隐藏 `<canvas type="2d">` 压缩（最长边 600px、只缩不放、JPEG 0.7，成品一般 50~150KB，见 [`utils/product-image.js`](../utils/product-image.js)）→ `wx.cloud.uploadFile` 直传 `shops/{shopId}/products/<uid>.jpg`，fileID 进表单随 `saveProduct` 入库。内存模式 / 未选店时 `canUseImage()` 为假、整块上传 UI 不渲染——本地没有云存储，不做假降级。展示侧 `<image src="cloud://…">` 直接渲染 fileID（`store.initCloud` 已 `wx.cloud.init`，客户端认得自己环境的 `cloud://` 协议）：商品 tab 卡片 112rpx 缩略图（lazy-load，无图 / 加载失败灰底首字占位），销售 / 进货选货弹层 72rpx（无图不渲染）。
+上传链路全在客户端：编辑商品页 `wx.chooseMedia`（`compressed`）→ 页内隐藏 `<canvas type="2d">` 压缩（最长边 600px、只缩不放、JPEG 0.7，成品一般 50~150KB，见 [`utils/product-image.js`](../utils/product-image.js)）→ `wx.cloud.uploadFile` 直传 `shops/{shopId}/products/<uid>.jpg`，fileID 进表单随 `saveProduct` 入库。内存模式 / 未选店时 `canUseImage()` 为假、整块上传 UI 不渲染——本地没有云存储，不做假降级。展示侧 `<image src="cloud://…">` 直接渲染 fileID（`store.initCloud` 已 `wx.cloud.init`，客户端认得自己环境的 `cloud://` 协议）：商品 tab 两列图卡用正方形大图（约半屏宽、lazy-load，无图 / 加载失败灰底首字占位），销售 / 进货选货弹层 72rpx（无图不渲染）。
 
-读与权限：云存储权限是 **`READWRITE`**（所有用户可读、仅创建者可写读），不是业务表那个 `ADMINONLY`——图要客户端拿 fileID 直接渲染、上传者就是创建者所以能传，两条路都不经过云函数，管理端权限会把它们全堵死。设置并进 `node scripts/wxcloud-ensure-acl.js`（`tcbGetStorageACL` / `tcbModifyStorageACL`，同样**不传 region**），部署脚本末尾同跑。能读的前提是本小程序的登录用户；fileID 不可枚举，跨店读到别家的图需要先拿到那个 fileID——已接受的风险，挡住它要给每一次渲染换临时链接，代价和风险不成比例。
+读与权限：云存储权限是 **`READONLY`**（控制台里那一项叫「所有用户可读，仅创建者可读写」）（所有用户可读、仅创建者可写读），不是六张业务表那个 `ADMINONLY`——图要客户端拿 fileID 直接渲染、上传者就是创建者所以能传，两条路都不经过云函数，管理端权限会把它们全堵死。设置并进 `node scripts/wxcloud-ensure-acl.js`（`tcbGetStorageACL` / `tcbModifyStorageACL`，同样**不传 region**），部署脚本末尾同跑。能读的前提是本小程序的登录用户；fileID 不可枚举，跨店读到别家的图需要先拿到那个 fileID——已接受的风险，挡住它要给每一次渲染换临时链接，代价和风险不成比例。
+
+> **【实测 2026-08-25】两个坑，都是真跑才碰出来的。**
+>
+> **坑一：标签名字是 `READONLY`，不是 `READWRITE`。** 在控制台人工选中
+> 「所有用户可读，仅创建者可读写」之后，`tcbGetStorageACL` 读回来的是 `READONLY`。
+> 完整映射（和表 ACL 同一套词汇）：
+>
+> | 控制台选项 | API 标签 |
+> |---|---|
+> | 所有用户可读，仅创建者可读写 | **`READONLY`** ← 商品图要的 |
+> | 仅创建者可读写 | `PRIVATE` |
+> | 所有用户可读 | `ADMINWRITE`（**禁客户端直传**） |
+> | 所有用户不可读写 | `ADMINONLY` |
+>
+> `READWRITE` 根本不在这套词汇里。写错的后果不是报错就完事——幂等判断永远
+> 不相等，**每次部署都会去改一次已经设对的权限**。另外别被控制台带偏：
+> 「所有用户可读」那项的适用场景写着「文章配图、商品图片等」，看上去正是我们要的，
+> 但它把写权限收给了管理端，客户端直传会失效。
+>
+> **坑二：免费套餐改不了存储权限，控制台和 API 都不行。** API 报
+> `OperationDenied.FreePackageDenied`，控制台点下去则提示充值。免费套餐下存储权限
+> 停在 `PRIVATE`，**同店另一个店员渲染不出同事传的商品图**——而这个毛病在
+> 单人店、单账号测试时看不出来（上传者自己看得见）。本环境已于 2026-08-25
+> 升级套餐并改成 `READONLY`。新环境部署前要先确认这一条。
+>
+> 碰到套餐拒绝时 `ensureStorageAcl` **大声警告但不报错**（云函数本身已部署成功，
+> 不该拖红整条部署）；其它错误照旧抛。
+
 
 服务端校验只有一条，钉在事务开始之前：`saveProduct` 的 `image` 必须落在 `shops/{shopId}/products/` 前缀（`ledger-core.js` 的 `validShopImageFileId`）。不做这条的后果不止「挂一张别店的图」：挂上之后换图会让服务端把旧 fileID 当作废清理——等于借本店的换图操作删别店的文件。这个前缀是客户端 `buildCloudPath` 和服务端 `validShopImageFileId` 的共享约定，两边都有测试互钉，单边改当场红。
 

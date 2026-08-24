@@ -98,10 +98,6 @@
       },
       {
         "type": "file",
-        "value": "utils/sku-list-view.js"
-      },
-      {
-        "type": "file",
         "value": "utils/sale-spec-view.js"
       },
       {

@@ -14,9 +14,15 @@ assert.deepStrictEqual(acl.COLLECTIONS, [
 ])
 assert.strictEqual(acl.ACL_TAG, 'ADMINONLY')
 
-// 云存储（商品图）：READWRITE = 所有用户可读、仅创建者可写读。
+// 云存储（商品图）：要的是「所有用户可读、仅创建者可读写」——
 // 客户端直接拿 cloud:// fileID 渲染 <image>，上传者是创建者可传，不绕云函数。
-assert.strictEqual(acl.STORAGE_ACL_TAG, 'READWRITE')
+// **它的标签叫 `READONLY`**：2026-08-25 在控制台选中那一项之后用
+// `tcbGetStorageACL` 读回来实测的。完整映射见 scripts/wxcloud-ensure-acl.js
+// 里 STORAGE_ACL_TAG 顶上那段。
+//
+// 这条断言不是形式主义：写错标签不会报错，而是让幂等判断永远不相等，
+// 于是**每次部署都去改一次已经设对的生产权限**。改它之前先去控制台核对。
+assert.strictEqual(acl.STORAGE_ACL_TAG, 'READONLY')
 assert.strictEqual(typeof acl.ensureStorageAcl, 'function')
 assert.strictEqual(typeof acl.describeStorageAcl, 'function')
 // 钉住脚本真的设了存储权限：删掉 tcbModifyStorageACL / tcbGetStorageACL 调用，

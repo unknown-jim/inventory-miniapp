@@ -57,6 +57,8 @@ Page({
     filteredCustomers: [],
     slip: null,
     exporting: false,
+    slipCanvasWidth: 1760,
+    slipCanvasHeight: 4000,
     pageLoading: true
   },
 
