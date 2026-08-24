@@ -46,6 +46,16 @@ assert.ok(wxml.indexOf('库存调整') >= 0)
 assert.ok(wxml.indexOf('不计入进货、不改进价') >= 0)
 assert.ok(wxml.indexOf('通过进货 / 销售变动') < 0)
 
+// 商品图：选图入口和压缩画布钉在 wxml，require 钉在 js
+assert.ok(wxml.indexOf('pickImage') >= 0)
+assert.ok(wxml.indexOf('image-canvas') >= 0)
+assert.ok(wxml.indexOf('id="imageCanvas"') >= 0)
+const editJs = fs.readFileSync(
+  path.join(__dirname, '../pages/product-edit/product-edit.js'),
+  'utf8'
+)
+assert.ok(editJs.indexOf('product-image') >= 0)
+
 const productsWxml = fs.readFileSync(
   path.join(__dirname, '../pages/products/products.wxml'),
   'utf8'

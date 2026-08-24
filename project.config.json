@@ -94,6 +94,10 @@
       },
       {
         "type": "file",
+        "value": "utils/product-image.js"
+      },
+      {
+        "type": "file",
         "value": "utils/sku-list-view.js"
       },
       {
