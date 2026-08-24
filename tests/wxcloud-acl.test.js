@@ -13,6 +13,17 @@ assert.deepStrictEqual(acl.COLLECTIONS, [
 ])
 assert.strictEqual(acl.ACL_TAG, 'ADMINONLY')
 
+// 云存储（商品图）：READWRITE = 所有用户可读、仅创建者可写读。
+// 客户端直接拿 cloud:// fileID 渲染 <image>，上传者是创建者可传，不绕云函数。
+assert.strictEqual(acl.STORAGE_ACL_TAG, 'READWRITE')
+assert.strictEqual(typeof acl.ensureStorageAcl, 'function')
+assert.strictEqual(typeof acl.describeStorageAcl, 'function')
+// 钉住脚本真的设了存储权限：删掉 tcbModifyStorageACL / tcbGetStorageACL 调用，
+// 这两条会先红。
+const aclSource = fs.readFileSync(path.join(__dirname, '../scripts/wxcloud-ensure-acl.js'), 'utf8')
+assert.ok(aclSource.indexOf('tcbModifyStorageACL') >= 0)
+assert.ok(aclSource.indexOf('tcbGetStorageACL') >= 0)
+
 assert.deepStrictEqual(
   acl.collectionsNeedingAcl(
     {

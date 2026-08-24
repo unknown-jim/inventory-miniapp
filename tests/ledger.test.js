@@ -490,6 +490,128 @@ async function rejects(promise, re) {
   const ledgerBStill = await call(db, ids, 'user-b', 'getLedger', shopB)
   assert.strictEqual(ledgerBStill.ledger.products.length, 0)
 
+  // -------------------------------------------------------------------------
+  // 商品图：image 走 saveProduct 入库；换图 / 删商品 / 恢复清空把作废 fileID 报进
+  // result.obsoleteImages，服务端在事务提交后 best-effort 删文件（storage 注入）。
+  // -------------------------------------------------------------------------
+  {
+    const dbImg = new MemoryDb()
+    const imgIds = idFactory()
+    const imgShop = (await call(dbImg, imgIds, 'user-a', 'createShop', '', { name: '图店' })).shop.id
+    const imgA = 'cloud://env-1.bucket-2/shops/' + imgShop + '/products/a.jpg'
+    const imgB = 'cloud://env-1.bucket-2/shops/' + imgShop + '/products/b.jpg'
+
+    // a) 新建带合法 image
+    const imgCreated = await call(dbImg, imgIds, 'user-a', 'saveProduct', imgShop, {
+      name: '带图轴', costPrice: 1, salePrice: 2, stock: 1, image: imgA
+    })
+    assert.strictEqual(imgCreated.result.product.image, imgA)
+    assert.deepStrictEqual(imgCreated.result.obsoleteImages, [], '新建不产生作废图')
+    const imgProductId = imgCreated.result.product.id
+
+    // b) 同 id 换图 → 旧图作废
+    const imgSwapped = await call(dbImg, imgIds, 'user-a', 'saveProduct', imgShop, {
+      id: imgProductId, name: '带图轴', costPrice: 1, salePrice: 2, image: imgB
+    })
+    assert.deepStrictEqual(imgSwapped.result.obsoleteImages, [imgA])
+
+    // c) image 传 '' 清除 → 旧图同样作废
+    const imgCleared = await call(dbImg, imgIds, 'user-a', 'saveProduct', imgShop, {
+      id: imgProductId, name: '带图轴', costPrice: 1, salePrice: 2, image: ''
+    })
+    assert.deepStrictEqual(imgCleared.result.obsoleteImages, [imgB])
+
+    // d) deleteProduct：带图的报图，不带图的报空数组
+    await call(dbImg, imgIds, 'user-a', 'saveProduct', imgShop, {
+      id: imgProductId, name: '带图轴', costPrice: 1, salePrice: 2, image: imgA
+    })
+    const imgNoProduct = (await call(dbImg, imgIds, 'user-a', 'saveProduct', imgShop, {
+      name: '无图轴', costPrice: 1, salePrice: 2, stock: 1
+    })).result.product
+    assert.deepStrictEqual(
+      (await call(dbImg, imgIds, 'user-a', 'deleteProduct', imgShop, { id: imgProductId })).result.obsoleteImages,
+      [imgA])
+    assert.deepStrictEqual(
+      (await call(dbImg, imgIds, 'user-a', 'deleteProduct', imgShop, { id: imgNoProduct.id })).result.obsoleteImages,
+      [])
+
+    // e) image 前缀不是本店 / 不是 cloud:// → 事务都不开，直接拒绝
+    await rejects(
+      call(dbImg, imgIds, 'user-a', 'saveProduct', imgShop, {
+        name: '挂别店图', costPrice: 1, salePrice: 2, stock: 1,
+        image: 'cloud://env-1.bucket-2/shops/other-shop/products/x.jpg'
+      }),
+      /商品图地址不合法/
+    )
+    await rejects(
+      call(dbImg, imgIds, 'user-a', 'saveProduct', imgShop, {
+        name: '挂外链图', costPrice: 1, salePrice: 2, stock: 1,
+        image: 'https://cdn.example.com/a.jpg'
+      }),
+      /商品图地址不合法/
+    )
+
+    // f) 注入记录型假 storage：作废 fileID 才会进 deleteFiles；
+    //    不注入 storage（上面 a–e 全都）也不炸。
+    const deletedFiles = []
+    async function callWithStorage(action, payload) {
+      return core.dispatch({
+        db: dbImg,
+        makeId: imgIds,
+        openid: 'user-a',
+        action: action,
+        shopId: imgShop,
+        apiVersion: core.API_VERSION,
+        payload: payload,
+        now: 1000,
+        storage: {
+          deleteFiles: async function (fileIds) {
+            deletedFiles.push(fileIds)
+          }
+        }
+      })
+    }
+    const stored = (await callWithStorage('saveProduct', {
+      name: '存储轴', costPrice: 1, salePrice: 2, stock: 1, image: imgA
+    })).result.product
+    assert.deepStrictEqual(deletedFiles, [], '新建不动文件')
+    await callWithStorage('saveProduct', {
+      id: stored.id, name: '存储轴', costPrice: 1, salePrice: 2, image: imgB
+    })
+    assert.deepStrictEqual(deletedFiles, [[imgA]], '换图删旧图')
+    // 服务端状态里混进一个非法 fileID（正常进不去，防御性过滤）：不许交给 deleteFiles
+    const ledgerDoc = dbImg.ledgers[imgShop]
+    const storedIdx = ledgerDoc.products.findIndex(function (item) {
+      return item.id === stored.id
+    })
+    ledgerDoc.products[storedIdx].image = 'cloud://env-1.bucket-2/shops/other-shop/products/evil.jpg'
+    await callWithStorage('deleteProduct', { id: stored.id })
+    assert.deepStrictEqual(deletedFiles, [[imgA]], '非法 fileID 在提交后被过滤，不进 deleteFiles')
+
+    // g) restoreCleared：清空后新记的带图商品在恢复时永久消失，图作废；
+    //    快照带回来的商品的图保留（文件一直存在，恢复后继续指向它）。
+    const dbRestore = new MemoryDb()
+    const restoreIds = idFactory()
+    const restoreShop = (await call(dbRestore, restoreIds, 'user-a', 'createShop', '', { name: '恢复图店' })).shop.id
+    const restoreOldImage = 'cloud://env-1.bucket-2/shops/' + restoreShop + '/products/old.jpg'
+    const restoreNewImage = 'cloud://env-1.bucket-2/shops/' + restoreShop + '/products/new.jpg'
+    await call(dbRestore, restoreIds, 'user-a', 'saveProduct', restoreShop, {
+      name: '清空前老货', costPrice: 1, salePrice: 2, stock: 5, image: restoreOldImage
+    })
+    const clearRes = await call(dbRestore, restoreIds, 'user-a', 'clearAll', restoreShop)
+    assert.strictEqual(clearRes.result.obsoleteImages, undefined, 'clearAll 不发 obsoleteImages：商品都在快照里，还要留恢复路')
+    await call(dbRestore, restoreIds, 'user-a', 'saveProduct', restoreShop, {
+      name: '清空后新货', costPrice: 1, salePrice: 2, stock: 9, image: restoreNewImage
+    })
+    const restoreRes = await call(dbRestore, restoreIds, 'user-a', 'restoreCleared', restoreShop)
+    assert.deepStrictEqual(restoreRes.result.obsoleteImages, [restoreNewImage],
+      '清空后新记的商品恢复时永久消失，图作废')
+    const restoredImgLedger = await call(dbRestore, restoreIds, 'user-a', 'getLedger', restoreShop)
+    assert.strictEqual(restoredImgLedger.ledger.products[0].name, '清空前老货')
+    assert.strictEqual(restoredImgLedger.ledger.products[0].image, restoreOldImage,
+      '快照带回来的商品继续用原来的图')
+  }
+
   console.log('ledger tests passed')
 })().catch(function (error) {
   console.error(error && error.stack ? error.stack : error)

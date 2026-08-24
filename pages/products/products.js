@@ -38,7 +38,10 @@ Page({
     this.setData({
       pageLoading: false,
       list: source.map(function (item) {
-        return Object.assign(util.withView(item, skus), skuListView(item, skus))
+        // Array.from 按码位取首字：emoji 开头的商品名不会切出半个代理对
+        return Object.assign(util.withView(item, skus), skuListView(item, skus), {
+          thumbText: Array.from(String(item.name || ''))[0] || '品'
+        })
       }),
       alertCount: alerts.length
     })
@@ -62,6 +65,16 @@ Page({
   toggleSpecs(e) {
     const id = e.currentTarget.dataset.id
     this.setData({ expandedId: this.data.expandedId === id ? '' : id })
+  },
+
+  // 商品图加载失败只换占位首字，不删 item.image，下次刷新还会再试。
+  // 动态路径走「先建空对象再赋键」：对象字面量里写 ['list[' + i + ']'] 是计算属性，
+  // 会被微信 babel 编成 @babel/runtime helper（tests/no-babel-helpers.test.js 禁）。
+  onThumbError(e) {
+    const i = e.currentTarget.dataset.index
+    const patch = {}
+    patch['list[' + i + '].imageFailed'] = true
+    this.setData(patch)
   },
 
   goAdd() {

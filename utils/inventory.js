@@ -637,11 +637,20 @@ function createProduct(input, now, id) {
     throw new Error('待加工请添加规格')
   }
 
+  // 商品图：云存储 fileID（cloud://<env>.<bucket>/shops/<shopId>/products/<uid>.jpg），
+  // 空串 = 无图。老数据没有 image 字段，读端自行兜底，不做迁移。
+  // fileID 正常约 100 字符，512 只是防滥用上限，不是刻度。
+  const image = String(input.image || '').trim()
+  if (image.length > 512) {
+    throw new Error('商品图地址过长')
+  }
+
   return {
     id: id,
     name: name,
     sku: String(input.sku || '').trim(),
     barcode: String(input.barcode || '').trim(),
+    image: image,
     costPrice: costPrice,
     salePrice: salePrice,
     stock: stock,
@@ -665,6 +674,9 @@ function updateProduct(existing, input, now) {
     name: input.name,
     sku: input.sku,
     barcode: input.barcode,
+    // image 是可选字段：payload 不带时沿用 existing 的图（colors / specAxis1 等
+    // 可选字段同款透传风格），带空串就是显式清除。
+    image: input.image != null ? input.image : existing.image,
     costPrice: input.costPrice,
     salePrice: input.salePrice,
     alertQty: input.alertQty,

@@ -356,6 +356,18 @@ function isMutation(action) {
   return apply.MUTATIONS.indexOf(action) >= 0
 }
 
+// cloud://<env>.<bucket>/shops/<shopId>/products/... —— env.bucket 段不含 '/'，
+// 第一个 '/' 之后就是路径。前缀必须是本店商品图目录：防止把别店的 fileID 挂到
+// 本店商品上（挂上之后换图会触发服务端删别店的文件）。
+function validShopImageFileId(fileId, shopId) {
+  const id = String(fileId || '')
+  if (id.length > 512) return false
+  if (id.indexOf('cloud://') !== 0) return false
+  const slash = id.indexOf('/', 'cloud://'.length)
+  if (slash < 0) return false
+  return id.slice(slash + 1).indexOf('shops/' + String(shopId) + '/products/') === 0
+}
+
 // 2b-1 起小程序必须带 apiVersion。老客户端（已发布那一版）拿到不带 records
 // 的回传会把本地流水缓存清成空数组，下一张送货单就会印一个 0.00 的前欠。
 const API_VERSION = 2
@@ -825,6 +837,15 @@ async function dispatch(input) {
     throw new Error('未知操作')
   }
 
+  // 商品图只认本店目录下的 fileID。校验放在事务开始之前：越早抛越省一次事务；
+  // 「哪个店」也只有 dispatch 知道，applyMutation 里判不了。空串 / 缺省放行
+  // （等于清除图片，会触发旧图的作废清理）。updateProduct 透传 image 缺省时，
+  // 老数据的 image 本来就是服务端写进去的合法值，不在这里重复挡。
+  if (action === 'saveProduct' && payload.image != null && String(payload.image) !== ''
+    && !validShopImageFileId(payload.image, shopId)) {
+    throw new Error('商品图地址不合法')
+  }
+
   // 事务边界：ledgers/{shopId} 的读 + 写仍然是全店所有写操作的唯一串行化点。
   // 所以即使「事务内 where() 是否上锁」语义不明，也不出问题 —— 任何并发写者要提交
   // 都必须先写 ledgers 文档，而它已经被本事务锁住了。
@@ -898,9 +919,29 @@ async function dispatch(input) {
   // 回传要用的东西全部已经在内存里：lists 就是事务里算好的账本，
   // publicListsOf 的签名里没有 db，所以这条路上根本写不出「提交之后再读库」。
   //
+  // **唯一的 sanctioned 例外：下面这段商品图清理（deleteFiles）。** 它配当例外，
+  // 是因为三条同时成立，缺一条都不行：
+  //   1. 清理结果不进回传数据 —— 回传的 result 还是事务里算好的那份，
+  //      客户端不可能因为这段而看到「记账失败」，也就不会双记；
+  //   2. index.js 注入的 storage.deleteFiles 把一切错误吞干净（只 console.warn），
+  //      这里的 await 实际上永不抛；
+  //   3. 最坏失败模式是留下一个孤儿文件（多占一点存储），不是错账。
+  // 它也不能挪到事务之前删：事务失败会回滚，商品上仍挂着这张图，先删就把
+  // 「还活着的商品的图」删成死链；同理不能塞进事务里 —— 云存储删除不是事务
+  // 参与者，事务回滚也删不回来。挂在提交之后是唯一既不双记、又不删活图的位置。
+  // （deleteShop 的商品图清理**故意不做**：和 ledger_records 的 2b-3 孤儿清理
+  // 是同一类「删店遗留」，留到以后一起做，避免 scope 膨胀。）
+  const obsolete = ((outcome.result && outcome.result.obsoleteImages) || [])
+    .filter(function (id) { return validShopImageFileId(id, shopId) })
+  if (obsolete.length && input.storage && input.storage.deleteFiles) {
+    await input.storage.deleteFiles(obsolete)
+  }
+  //
   // 2b-2b 起**不再回传 recordDelta**：分页之后客户端每个列表都是服务端取的、
   // 每个金额都来自 accounts / totals 投影，没有任何一处消费 delta。留着一个
   // 没人用的算钱字段就是给下一个人留坑（方案 C-2，用户已明确点头）。
+  // result.obsoleteImages 会随 result 原样回传客户端 —— 无害（客户端忽略），
+  // 也不剔除，别为它再花一次拷贝。
   return {
     ledger: publicListsOf(shopId, outcome.lists),
     result: outcome.result

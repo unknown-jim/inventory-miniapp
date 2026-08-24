@@ -105,6 +105,7 @@ await waitFor(sale, async function () { ... }, '商品进购物车')  // 条件
 
 - 端口被上一次没退干净的工具占着——脚本会先 `cli quit`，退不掉就手动关工具
 - `cli.bat` 切 UTF-8 代码页后被 cmd 误解析、把注释里的 `CLI` 当命令递归调自己，刷屏「Maximum setlocal recursion level reached」——脚本已把工具安装目录从子进程 `PATH` 上摘掉
+- 同一句刷屏还可能以**另一副面孔**出现（2026-08-24 复现）：`cli.bat` 本体就是 UTF-8 编码 + 中文注释 + 中途 `chcp 65001`，某些机器状态（疑似工具更新后 cmd 与代码页失同步）下 cmd 丢了解析位置，`setlocal` 无限递归——拿 `cli.bat --help` 在安装目录里就能复现，与仓库内容无关，摘 `PATH` 也救不了。**绕法**：自己写一份 GBK 编码、**不含 `chcp`**、CRLF 行尾的等价 bat（照抄原文件的 exe 探测、`ELECTRON_RUN_AS_NODE`、`BOOTSTRAP_JS` 那几段，只去掉切代码页），放临时目录，跑测试时 `WECHAT_CLI=<这份bat的绝对路径> npm run test:ui`。关键点：GBK 编码让中文安装路径在默认 CP936 的 cmd 下稳定解析，整份文件从头到尾一个代码页，就没有中途失同步的窗口
 - `automator.launch()` 不能用：Node 18.20.2 / 20.12.2 起禁止不带 shell 地 spawn `.bat`，而且报错会被转述成误导性的「cliPath 不对」。脚本改成自己经 `cmd.exe` 起端口再 `connect`
 - `wx.showModal` 是系统弹窗，自动化点不到内部按钮，用 `mockWxMethod` 自动确认
 - 在任务 worktree 里跑，却没从主检出复制 `project.private.config.json`——挂的样子是随机的初始化/超时，不是断言失败，见上面「在任务 worktree 里跑：先补两个没进版本库的文件」

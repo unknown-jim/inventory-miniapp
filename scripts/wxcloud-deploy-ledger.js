@@ -167,8 +167,9 @@ async function main() {
   // action（checkAggregates / migrateRecords / recomputeAggregates）对**所有人**
   // 拒绝，谁也迁不了 —— 而那一刻正是全店停摆、等着跑迁移的时刻。所以这张表
   // 必须在建集合清单里，而且要在部署新云函数**之前**建好并写入运营方 openid。
-  // 表建完后补 ledger_records 的 6 条索引，并把六张业务表权限设成 ADMINONLY
-  // （幂等），见 scripts/wxcloud-ensure-indexes.js、scripts/wxcloud-ensure-acl.js。
+  // 表建完后补 ledger_records 的 6 条索引，把六张业务表权限设成 ADMINONLY，
+  // 再把云存储权限设成 READWRITE（商品图：客户端直传 + 直接渲染，幂等），
+  // 见 scripts/wxcloud-ensure-indexes.js、scripts/wxcloud-ensure-acl.js。
   const names = ['shops', 'members', 'ledgers', 'ledger_records', 'ledger_clears', 'platform_admins']
   let tables = []
   try {
@@ -198,6 +199,7 @@ async function main() {
   await indexes.ensureIndexes(wx.api, { region: region, tag: tag })
   const acl = require('./wxcloud-ensure-acl')
   await acl.ensureAcl(wx.api, { envId: ENV_ID })
+  await acl.ensureStorageAcl(wx.api, { envId: ENV_ID })
 }
 
 main().catch(function (error) {
