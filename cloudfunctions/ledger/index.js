@@ -155,6 +155,21 @@ function createDb() {
       } catch (error) {
         const msg = String((error && (error.message || error.errMsg)) || error || '')
         if (/conflict|transaction/i.test(msg)) {
+          // **改写之前先把原文记下来。** 这句「库存刚被别人改过」是给店主看的话，
+          // 但它盖住的是**任何**匹配 conflict / transaction 的底层错误——真正的并发
+          // 冲突、事务超时、单事务写入量超限，在回包和日志里长得一模一样。
+          //
+          // 这不是假想。2026-08-24 演示店实测：改一张挂着 90 张退货单的销售单的
+          // 单价（单事务写 ledgers 1 + 销售单 1 + 退货单 90 = 92 条）**确定性失败**，
+          // 两次都是这句话；函数耗时 12.3 / 11.5 秒（远未到 60 秒上限）、内存
+          // 155 / 138 MB（远未到 512 MB），事务是原子的（一条都没写进去）。
+          // 当时**无法判断**到底撞了哪一条限制，因为原始错误就在这里被吞掉了，
+          // CLS 里只剩改写后的文案，没有堆栈。
+          //
+          // console.error 的输出进云函数日志，不进回包，所以不会把内部细节
+          // 泄露给客户端。**不要为了「日志干净」把这行删掉**——删掉就等于把
+          // 下一次同类故障的排查成本重新抬回到「只能靠改代码重部署来加日志」。
+          console.error('[ledger] transaction failed, original error:', msg, error && error.stack)
           throw new Error('库存刚被别人改过，请再提交')
         }
         throw error
