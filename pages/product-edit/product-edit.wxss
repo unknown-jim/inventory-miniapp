@@ -101,14 +101,6 @@
   font-weight: 600;
 }
 
-.adjust-btn {
-  width: 100%;
-  margin: 8rpx 0 0;
-  min-height: var(--tap-md);
-  height: var(--tap-md);
-  line-height: var(--tap-md);
-}
-
 /* 隐藏压缩画布：canvas 实际像素由 node.width/height 决定，CSS 尺寸只是占位。 */
 .image-canvas {
   position: fixed;

@@ -1,7 +1,5 @@
 const store = require('../../utils/store')
-const util = require('../../utils/util')
 const inventory = require('../../utils/inventory')
-const skuListView = require('../../utils/sku-list-view').skuListView
 
 Page({
   data: {
@@ -9,7 +7,6 @@ Page({
     onlyAlert: false,
     list: [],
     alertCount: 0,
-    expandedId: '',
     pageLoading: true
   },
 
@@ -39,7 +36,8 @@ Page({
       pageLoading: false,
       list: source.map(function (item) {
         // Array.from 按码位取首字：emoji 开头的商品名不会切出半个代理对
-        return Object.assign(util.withView(item, skus), skuListView(item, skus), {
+        return Object.assign({}, item, {
+          lowStock: inventory.isLowStock(item, skus),
           thumbText: Array.from(String(item.name || ''))[0] || '品'
         })
       }),
@@ -62,11 +60,6 @@ Page({
     this.refresh()
   },
 
-  toggleSpecs(e) {
-    const id = e.currentTarget.dataset.id
-    this.setData({ expandedId: this.data.expandedId === id ? '' : id })
-  },
-
   // 商品图加载失败只换占位首字，不删 item.image，下次刷新还会再试。
   // 动态路径走「先建空对象再赋键」：对象字面量里写 ['list[' + i + ']'] 是计算属性，
   // 会被微信 babel 编成 @babel/runtime helper（tests/no-babel-helpers.test.js 禁）。
@@ -87,19 +80,5 @@ Page({
 
   goRecords() {
     wx.navigateTo({ url: '/pages/records/records' })
-  },
-
-  goPurchase(e) {
-    getApp().setSelectedProduct(e.currentTarget.dataset.id)
-    wx.switchTab({ url: '/pages/purchase/purchase' })
-  },
-
-  goSale(e) {
-    getApp().setSelectedProduct(e.currentTarget.dataset.id)
-    wx.switchTab({ url: '/pages/sale/sale' })
-  },
-
-  goConvert(e) {
-    wx.navigateTo({ url: '/pages/convert/convert?id=' + e.currentTarget.dataset.id })
   }
 })
