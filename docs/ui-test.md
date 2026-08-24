@@ -77,6 +77,8 @@ await waitFor(sale, async function () { ... }, '商品进购物车')  // 条件
 
 - 单步默认 30 秒，`WECHAT_AUTOMATOR_STEP_TIMEOUT` 覆盖
 - 整轮默认 15 分钟，`WECHAT_AUTOMATOR_RUN_TIMEOUT` 覆盖
+- 整个脚本默认 25 分钟，`WECHAT_AUTOMATOR_SCRIPT_TIMEOUT` 覆盖（整轮那道只罩用例本身，起端口、连接卡住时它还没起跑）
+- 收尾关工具默认 20 秒，`WECHAT_AUTOMATOR_CLOSE_TIMEOUT` 覆盖
 - 超时消息带 `label`，直接说清在等什么：`等「出现 .js-seed」超时（30 秒）`
 
 只有纯 sleep（`page.waitFor(800)`）可以直接调，它不存在等不到的情况。
@@ -106,3 +108,23 @@ await waitFor(sale, async function () { ... }, '商品进购物车')  // 条件
 - `automator.launch()` 不能用：Node 18.20.2 / 20.12.2 起禁止不带 shell 地 spawn `.bat`，而且报错会被转述成误导性的「cliPath 不对」。脚本改成自己经 `cmd.exe` 起端口再 `connect`
 - `wx.showModal` 是系统弹窗，自动化点不到内部按钮，用 `mockWxMethod` 自动确认
 - 在任务 worktree 里跑，却没从主检出复制 `project.private.config.json`——挂的样子是随机的初始化/超时，不是断言失败，见上面「在任务 worktree 里跑：先补两个没进版本库的文件」
+
+### 失败之后先清残留，再重试
+
+一次失败会自我放大：留下来的东西会让下一轮在**随机步骤**报
+`Connection closed, check if wechat web devTools is still running`，看起来像新的回归，其实是上一轮的尾巴。
+
+脚本这边已经做到：任何退出路径（断言失败、超时、连接断开、未捕获异常）都会走同一个收尾——
+给 `close()` 掐表、无论成败都补一次 `disconnect()`、`close()` 关不掉工具就再用 `cli quit` 兜一次、
+收掉没退的 `cli` 子进程，最后确保进程真的退出（收尾自己卡住也有硬看门狗）。
+
+工具已经卡死时这些仍可能不管用。重试之前先确认：
+
+```powershell
+Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -like '*ui.test.js*' }
+Get-Process 微信开发者工具
+```
+
+前者查出来就 `Stop-Process`（它还占着到 9420 的 WebSocket），后者查出来就手动关掉工具（它还占着 9420 端口）。
+
+脚本**不**替你按镜像名杀进程：`WeChatAppEx` 是微信本体也在用的进程，按名字杀会连着把用户正在用的微信小程序一起干掉，误伤代价比留个残留大。所以自动化只做「用工具自己的 `cli quit` 好好关」，剩下的交给人。
