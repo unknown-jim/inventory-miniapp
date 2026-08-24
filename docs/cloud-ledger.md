@@ -352,7 +352,16 @@ payload: { mode: 'dropSnapshotLegacy', limit?: 50 }
 
 上传链路全在客户端：编辑商品页 `wx.chooseMedia`（`compressed`）→ 页内隐藏 `<canvas type="2d">` 压缩（最长边 600px、只缩不放、JPEG 0.7，成品一般 50~150KB，见 [`utils/product-image.js`](../utils/product-image.js)）→ `wx.cloud.uploadFile` 直传 `shops/{shopId}/products/<uid>.jpg`，fileID 进表单随 `saveProduct` 入库。内存模式 / 未选店时 `canUseImage()` 为假、整块上传 UI 不渲染——本地没有云存储，不做假降级。展示侧 `<image src="cloud://…">` 直接渲染 fileID（`store.initCloud` 已 `wx.cloud.init`，客户端认得自己环境的 `cloud://` 协议）：商品 tab 卡片 112rpx 缩略图（lazy-load，无图 / 加载失败灰底首字占位），销售 / 进货选货弹层 72rpx（无图不渲染）。
 
-读与权限：云存储权限是 **`READWRITE`**（所有用户可读、仅创建者可写读），不是六张业务表那个 `ADMINONLY`——图要客户端拿 fileID 直接渲染、上传者就是创建者所以能传，两条路都不经过云函数，管理端权限会把它们全堵死。设置并进 `node scripts/wxcloud-ensure-acl.js`（`tcbGetStorageACL` / `tcbModifyStorageACL`，同样**不传 region**），部署脚本末尾同跑。能读的前提是本小程序的登录用户；fileID 不可枚举，跨店读到别家的图需要先拿到那个 fileID——已接受的风险，挡住它要给每一次渲染换临时链接，代价和风险不成比例。
+读与权限：云存储权限**想要**的是 **`READWRITE`**（所有用户可读、仅创建者可写读），不是六张业务表那个 `ADMINONLY`——图要客户端拿 fileID 直接渲染、上传者就是创建者所以能传，两条路都不经过云函数，管理端权限会把它们全堵死。设置并进 `node scripts/wxcloud-ensure-acl.js`（`tcbGetStorageACL` / `tcbModifyStorageACL`，同样**不传 region**），部署脚本末尾同跑。能读的前提是本小程序的登录用户；fileID 不可枚举，跨店读到别家的图需要先拿到那个 fileID——已接受的风险，挡住它要给每一次渲染换临时链接，代价和风险不成比例。
+
+> **【实测：当前套餐设不了】2026-08-25** 在 `cloud1-d3g8tukt6525022b6` 上跑 `tcbModifyStorageACL`，返回 `OperationDenied.FreePackageDenied`（当前套餐无法执行此操作）。**存储权限实际停在 `PRIVATE`（仅创建者可读写）。**
+>
+> 后果是具体的：**同店另一个店员渲染不出同事传的商品图**。上传者自己看得见，所以这个毛病在单人店、单账号测试时**看不出来**。
+>
+> 两条出路，都不是脚本能定的：① 升级云开发套餐；② 改成 `PRIVATE` + 云函数按店鉴权后发临时链接（`getTempFileURL`）——后者顺带把「拿到 fileID 就能跨店读」那个已接受的风险也堵了，代价是每次渲染多一次往返。
+>
+> 在二选一之前，`ensureStorageAcl` 碰到套餐拒绝会**大声警告但不报错**（云函数本身已部署成功，不该拖红整条部署）；其它错误照旧抛。
+
 
 服务端校验只有一条，钉在事务开始之前：`saveProduct` 的 `image` 必须落在 `shops/{shopId}/products/` 前缀（`ledger-core.js` 的 `validShopImageFileId`）。不做这条的后果不止「挂一张别店的图」：挂上之后换图会让服务端把旧 fileID 当作废清理——等于借本店的换图操作删别店的文件。这个前缀是客户端 `buildCloudPath` 和服务端 `validShopImageFileId` 的共享约定，两边都有测试互钉，单边改当场红。
 
