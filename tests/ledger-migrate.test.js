@@ -149,6 +149,29 @@ function clone(value) {
   return JSON.parse(JSON.stringify(value))
 }
 
+// 记账，然后把 ledgers.records 按记账前的样子塞回去。
+//
+// **它造的不是人造状态**：老数组还在、集合里又躺着一批不在数组里的流水 —— 这正是
+// 2b-2 那一版云函数下的常态（那一版记账仍然携带 records，见 git show main:utils/
+// ledger-apply.js 里的 next.records = ledger.records），也是 docs/cloud-ledger.md
+// 「守卫是两个独立信号」那条点名要防的两类来路（上一次尝试的残骸、带外写入）。
+// 2b-3 的代码自己产不出这种状态（首笔记账就把数组删了），但它随时可能**接手**一份。
+//
+// **不要把它说成「2b-3 部署那一刻线上三家店的形状」** —— 那句话和本仓自己的上线清单
+// 打架：清单要求部署 2b-3 之前逐店跑完 dropLegacy，跑完老数组就是 [] 了。两句不能同时
+// 成立，写错了会让下一个人按一个不存在的时间点排期。
+//
+// 所以「迁完 → 记一笔账 → 调 rollback」这条老剧本，在 2b-3 的代码下如果不塞回数组，
+// 撞的是**前面那道门**（「没有可回滚的老流水」），双信号守卫根本轮不到跑；M10d/e/f/i
+// 会集体退化成「守卫没被测到」，而且是静默的。
+// 「不塞回去会怎样」是**另一件事**，由 M10r 单独钉，不要混进同一条用例。
+async function keepLegacy(shop, fn) {
+  const legacy = clone(shop.doc().records || [])
+  const out = await fn()
+  shop.patchDoc({ records: legacy })
+  return out
+}
+
 // ---------------------------------------------------------------------------
 // 三代形状混着的老账本语料。**一份定义，M4–M16 全部共用**，
 // 所以每条断言里的数字都能对回同一张手算表：
@@ -232,6 +255,11 @@ function corpusLists() {
 }
 
 // 把一份老账本装进店里（recordsMigratedAt 清零 = 还没搬）
+//
+// **必须连 recordsSchema 一起删掉。** 那是 2b-3 新加的印章，createShop 走
+// emptyLedger() 会盖上它，而 2b-1 之前留下的老文档里根本没有这个字段。不删的话
+// recordsPending 会拿它当「流水已经在集合里」的正面证据放行，整个文件里每一条
+// 「未迁移的老账本」用例测的都不再是老账本 —— 而且多数会静默变绿，不是变红。
 function installLegacy(shop, records, lists) {
   const use = lists || corpusLists()
   shop.patchDoc({
@@ -242,6 +270,7 @@ function installLegacy(shop, records, lists) {
     customers: use.customers, categories: use.categories,
     records: records || legacyCorpus()
   })
+  delete shop.db.ledgers[shop.shopId].recordsSchema
   return shop
 }
 
@@ -689,8 +718,11 @@ function receivableOf(accounts, customerId) {
   const m6Ledger = (await m6.call('getLedger', {})).ledger
   assert.ok(!m6Ledger.aggregatesStale, 'M6：不许有漂移哨兵')
   assert.strictEqual(m6Ledger.totals.receivable, 210, 'M6：全店欠款是修复后的 210')
+  // 迁移动作本身不删老数组，2b-3 也没改这一点 —— migrateRecords 不走 applyMutation。
+  // 但它现在只活到**下一笔账**为止（记账不再携带它，见 M10r），所以这条断言的含义
+  // 从「O(1) 回滚路的全部依仗」缩成「切开关这一刻迁移动作没顺手删它」。
   assert.deepStrictEqual(m6Doc.records, m6Legacy,
-    'M6：老数组**故意留着**，它是 O(1) 回滚路的全部依仗')
+    'M6：切开关这一刻迁移动作不许顺手删老数组（删它的是后面第一笔账）')
   assert.ok(m6Doc.recordsMigratedAt > 0, 'M6：recordsMigratedAt 已写')
   assert.strictEqual(m6Doc.migration.phase, 'done')
 
@@ -1113,9 +1145,11 @@ function receivableOf(accounts, customerId) {
   const m10d = await openLegacyShop('m10d')
   await m10d.runMigration({ limit: 50 })
   const m10dMerged = apply.legacyRecordsOf({ records: clone(m10d.doc().records) }).length
-  const m10dSale = await m10d.call('addSale', {
-    paidAmount: 0, customerId: 'nc1', items: [{ productId: 'p1', qty: 1, unitPrice: 30 }]
-  }, 9000)
+  const m10dSale = await keepLegacy(m10d, function () {
+    return m10d.call('addSale', {
+      paidAmount: 0, customerId: 'nc1', items: [{ productId: 'p1', qty: 1, unitPrice: 30 }]
+    }, 9000)
+  })
   // addSale 的回包里那条流水挂在 result.order 上（applyMutation 写的是
   // `result.order = applied.order`，而 applySaleOrder 的 order 就是 record 本身），
   // **不是** result.record —— 别照着 addPurchase 的写法抄。
@@ -1147,10 +1181,12 @@ function receivableOf(accounts, customerId) {
   const m10e = await openLegacyShop('m10e')
   await m10e.runMigration({ limit: 50 })
   const m10eMerged = apply.legacyRecordsOf({ records: clone(m10e.doc().records) }).length
-  await m10e.call('addSale', {
-    paidAmount: 0, customerId: 'nc1', items: [{ productId: 'p1', qty: 1, unitPrice: 30 }]
-  }, 9000)
-  await m10e.call('deleteRecord', { id: 'A-pay' })   // 删掉一条老账，条数抹平
+  await keepLegacy(m10e, async function () {
+    await m10e.call('addSale', {
+      paidAmount: 0, customerId: 'nc1', items: [{ productId: 'p1', qty: 1, unitPrice: 30 }]
+    }, 9000)
+    await m10e.call('deleteRecord', { id: 'A-pay' })   // 删掉一条老账，条数抹平
+  })
   const m10eForced = await m10e.call('migrateRecords', { mode: 'rollback', force: true })
   assert.strictEqual(m10eForced.collectionCount, m10eMerged,
     'M10e 前提：删一条加一条之后集合条数和归并条数相等，只比条数的守卫在这里是瞎的')
@@ -1160,13 +1196,40 @@ function receivableOf(accounts, customerId) {
   // 同一场景不带 force 必须被拒（上一句已经把 m10e 回滚掉了，另开一家店重跑）
   const m10e2 = await openLegacyShop('m10e2')
   await m10e2.runMigration({ limit: 50 })
-  await m10e2.call('addSale', {
-    paidAmount: 0, customerId: 'nc1', items: [{ productId: 'p1', qty: 1, unitPrice: 30 }]
-  }, 9000)
-  await m10e2.call('deleteRecord', { id: 'A-pay' })
+  await keepLegacy(m10e2, async function () {
+    await m10e2.call('addSale', {
+      paidAmount: 0, customerId: 'nc1', items: [{ productId: 'p1', qty: 1, unitPrice: 30 }]
+    }, 9000)
+    await m10e2.call('deleteRecord', { id: 'A-pay' })
+  })
   await rejects(function () {
     return m10e2.call('migrateRecords', { mode: 'rollback' })
   }, /迁完之后动过/)
+
+  // -------------------------------------------------------------------------
+  // M10r 2b-3：记过账的店，回滚撞的是**前面那道门**，守卫轮不到跑
+  // -------------------------------------------------------------------------
+  // 上面几条都靠 keepLegacy 把老数组塞回去，才走得到双信号守卫。这一条不塞 ——
+  // 它钉的正是「不塞会怎样」：applyMutation 不再携带 records，putLedger 是整文档
+  // set()，所以迁完之后的第一笔账就把老数组删了，rollback 当场报「没有可回滚的
+  // 老流水」。**这就是上线顺序要求「先逐店跑完 dropLegacy，再部署 2b-3」的原因**：
+  // 顺序反了，那一笔账就是一次没有任何守卫的隐式清空。
+  const m10r = await openLegacyShop('m10r')
+  await m10r.runMigration({ limit: 50 })
+  assert.ok((m10r.doc().records || []).length, 'M10r 前提：迁完之后老数组还在')
+  await m10r.call('addSale', {
+    paidAmount: 0, customerId: 'nc1', items: [{ productId: 'p1', qty: 1, unitPrice: 30 }]
+  }, 9000)
+  assert.strictEqual(m10r.doc().records, undefined,
+    'M10r：2b-3 起首笔记账把 ledgers.records 整个删掉')
+  await rejects(function () {
+    return m10r.call('migrateRecords', { mode: 'rollback' })
+  }, /没有可回滚的老流水/)
+  await rejects(function () {
+    return m10r.call('migrateRecords', { mode: 'rollback', force: true })
+  }, /没有可回滚的老流水/)
+  assert.ok(m10r.doc().recordsMigratedAt > 0,
+    'M10r：这道门在守卫前面，force 也绕不过，账本一个字都不许改')
 
   // -------------------------------------------------------------------------
   // M10f B-1 回归：**事务内不许依赖 count()**
@@ -1177,9 +1240,11 @@ function receivableOf(accounts, customerId) {
   // 必须表现得和 M10d 一模一样。谁把 countAll() 挪回事务里，这条当场变红。
   const m10f = await openLegacyShop('m10f')
   await m10f.runMigration({ limit: 50 })
-  await m10f.call('addSale', {
-    paidAmount: 0, customerId: 'nc1', items: [{ productId: 'p1', qty: 1, unitPrice: 30 }]
-  }, 9000)
+  await keepLegacy(m10f, function () {
+    return m10f.call('addSale', {
+      paidAmount: 0, customerId: 'nc1', items: [{ productId: 'p1', qty: 1, unitPrice: 30 }]
+    }, 9000)
+  })
   const m10fProto = Object.getPrototypeOf(m10f.db.recordsCtx().collection.where({}))
   const m10fRealCount = m10fProto.count
   // 事务里拿到的是 snapshot 里那份 bag（runTransaction 提交时会整份换掉 db.records，
@@ -1294,8 +1359,10 @@ function receivableOf(accounts, customerId) {
   // 回包必须说「不知道」。
   const m10i = await openLegacyShop('m10i')
   await m10i.runMigration({ limit: 50 })
-  await m10i.call('addSale', {
-    paidAmount: 0, customerId: 'nc1', items: [{ productId: 'p1', qty: 1, unitPrice: 30 }] }, 9000)
+  await keepLegacy(m10i, function () {
+    return m10i.call('addSale', {
+      paidAmount: 0, customerId: 'nc1', items: [{ productId: 'p1', qty: 1, unitPrice: 30 }] }, 9000)
+  })
   const m10iQuery = Object.getPrototypeOf(m10i.db.recordsCtx().collection.where({}))
   const m10iGet = m10iQuery.get
   const m10iCount = m10iQuery.count
@@ -1709,24 +1776,30 @@ function receivableOf(accounts, customerId) {
   // M16b dropLegacy 必须活过「上线清单自己写的那个顺序」
   // -------------------------------------------------------------------------
   // docs/cloud-ledger.md 阶段 2 的顺序是：迁完 -> 记一笔 1 元测试销售确认写路径
-  // 解冻 -> 再删掉 -> 账本文档 > 3 MB 的店跑 dropLegacy。2b-1b 审计 A6：那一笔
-  // 测试账会把 ledgers.migration 抹掉（applyMutation 只带 records /
-  // recordsMigratedAt / migratedFromLocal / importing），而老 dropLegacy 要
-  // migration.phase === 'done'，于是需要它的那家店必然卡死，app 内没有出路。
-  // 修法有两半，这条用例把两半都钉住。
+  // 解冻 -> 再删掉 -> 跑 dropLegacy。2b-1b 审计 A6：那一笔测试账会把
+  // ledgers.migration 抹掉（applyMutation 只带 records / recordsMigratedAt /
+  // migratedFromLocal / importing），而老 dropLegacy 要 migration.phase === 'done'，
+  // 于是需要它的那家店必然卡死，app 内没有出路。修法有两半，这条用例把两半都钉住。
+  //
+  // 那一晚跑的是**部署 2b-3 之前**的云函数（记账仍然携带 records），所以这里的
+  // 记账套在 keepLegacy 里 —— 复现的正是 2b-3 接手时线上那份文档的样子。
+  // 2b-3 之后同样这串动作会把老数组删掉、dropLegacy 变成一次空跑（dropped 0），
+  // 这正是「dropLegacy 必须提前到部署之前跑完」的原因，由 M10r 钉住。
   const m16b = await openLegacyShop('m16b')
   await m16b.runMigration({ limit: 50 })
   const m16bMigration = clone(m16b.doc().migration)
   assert.strictEqual(m16bMigration.phase, 'done')
-  const m16bSale = await m16b.call('addSale', {
-    paidAmount: 0, customerId: 'nc1', items: [{ productId: 'p1', qty: 1, unitPrice: 30 }]
-  }, 9000)
-  // 半一：migration 活过记账（applyMutation 把它原样带过去）
-  assert.deepStrictEqual(m16b.doc().migration, m16bMigration,
-    'M16b：记一笔账不许把 ledgers.migration 抹掉')
-  await m16b.call('deleteRecord', { id: m16bSale.result.order.id })
-  assert.deepStrictEqual(m16b.doc().migration, m16bMigration,
-    'M16b：删一笔账也不许把它抹掉')
+  await keepLegacy(m16b, async function () {
+    const m16bSale = await m16b.call('addSale', {
+      paidAmount: 0, customerId: 'nc1', items: [{ productId: 'p1', qty: 1, unitPrice: 30 }]
+    }, 9000)
+    // 半一：migration 活过记账（applyMutation 把它原样带过去）
+    assert.deepStrictEqual(m16b.doc().migration, m16bMigration,
+      'M16b：记一笔账不许把 ledgers.migration 抹掉')
+    await m16b.call('deleteRecord', { id: m16bSale.result.order.id })
+    assert.deepStrictEqual(m16b.doc().migration, m16bMigration,
+      'M16b：删一笔账也不许把它抹掉')
+  })
   // 半二：dropLegacy 的前置条件不再看 migration，只看 recordsMigratedAt + 集合非空
   const m16bDropped = await m16b.call('migrateRecords', { mode: 'dropLegacy' })
   assert.strictEqual(m16bDropped.state, 'dropped',
@@ -1941,8 +2014,9 @@ function receivableOf(accounts, customerId) {
     'S1：集合里有这份快照的流水')
   assert.deepStrictEqual(s1.collectionAll(s1Book), migrate.sortDesc(s1Merged),
     'S1：落库的流水逐条等于归并 + 重算的结果')
+  // 快照里这份 records 归**另一项**（「快照双份存储的终止」）管，2b-3 一个字没动。
   assert.deepStrictEqual(s1Doc.records, s1Legacy,
-    'S1：records 数组**保留不删** —— 和 ledgers.records 同一个理由，那是回滚路')
+    'S1：快照里的 records 数组**保留不删**，2b-3 删的是账本文档上那份，不是这一份')
   assert.deepStrictEqual(s1Res.report.map(function (item) { return item.status }), ['converted'])
   // 转换把归并条数回填进账本 clearSnapshots 的元数据：「恢复清空前数据」弹窗
   // 要报的数（pages/shop/shop.js）。老元数据只有 {id, savedAt}（installLegacyClears
@@ -2471,19 +2545,40 @@ function receivableOf(accounts, customerId) {
   await d8.call('restoreCleared', {})
   assert.strictEqual(d8.doc().legacyDroppedAt, d8Stamp, 'D8：「恢复清空前数据」换账套也没把它抹掉')
 
-  // ---- D9 B 类快照（迁移之后清空，数组是被抄过来的老数组）也能正确处理 -------
-  // B 类的判据取 aggregate.count（被封存账套的权威条数），**不是**重新归并
-  // records 数组的条数 —— 数组是迁移前的过期子集，封存前记过的新账在集合里而
-  // 不在数组里，按归并条数判会把 B 类全判失败。这条用例就是钉这一点的：实现
-  // 改成「重新归并再比条数」，D9 会红。
+  // ---- D9 **存量** B 类快照（2b-3 之前留下的、数组是被抄过来的老数组）------
+  //
+  // 这道闸钉的是**判据**：B 类快照删数组之前比的必须是快照冻结的
+  // `aggregate.count`（被封存账套那一刻的权威条数），**不许**改成「把 records
+  // 数组重新归并一遍再比条数」。老数组是迁移前的过期子集 —— 封存前记的新账只
+  // 进了集合、没进数组 —— 归并条数天生就小于集合条数，改成那么判，**每一份 B
+  // 类快照都会被判成 failed，一份都清不掉**。把实现改成归并再比，D9 必须红。
+  //
+  // **2b-3 起 clearAll 不再生产这种带数组的快照。** applyMutation 不再携带
+  // `next.records`，迁移之后的第一笔记账就把 `ledgers.records` 这个 key 从文档
+  // 上抹掉了（是没有这个 key，不是空数组）；snapshotLists() 里
+  // `if (legacy.length)` 于是压根不写 snapshot.records。所以这个形状**只可能是
+  // 2b-3 部署之前留下的存量** —— 生产上待清的那 3 份（卓祥 1 份、
+  // msxeubh4c6d5f9 2 份）正是这一类，dropSnapshotLegacy 这个 mode 就是冲着它们
+  // 去的，判据被改错，受害的就是那 3 份。
+  //
+  // 也正因为 2b-3 之后**没有任何自然路径**会顺手造出这个形状，这里必须用
+  // keepLegacy 把它显式造出来才能继续钉这道闸 —— 闸比以前更要紧，不是更不要紧：
+  // 存量清完之前判据一直得对，而代码里已经没有别的地方会撞到它了。
+  // 2b-3 之后的**新**形态（快照没有 records key）由紧接着的 D10 / D10b 单独钉，
+  // 三条别混：D9 = 存量形状 + 判据，D10 = 新形状端到端（咬 core.clearDoc），
+  // D10b = apply.snapshotLists 那道单独锁（内存模式下的唯一一道）。
   const d9 = await openLegacyShop('d9')
   await d9.runMigration({ limit: 50 })
-  // 迁移之后、清空之前记一笔新账：集合里 6+1 条，老数组还是原来那 7 行不涨
-  //（新账只进集合，归并出来仍是 6 条）。没有这一步，集合条数恰好等于数组归并
-  // 条数，两种判据区分不出来。
-  const d9Sale = await d9.call('addSale', {
-    paidAmount: 0, customerId: 'nc1', items: [{ productId: 'p1', qty: 1, unitPrice: 30 }]
-  }, 9000)
+  // 迁移之后、清空之前记一笔新账，并用 keepLegacy 把老数组按记账前的样子塞回去
+  //（2b-3 的记账会把它抹掉，不塞回去就造不出 B 类）。造出来的形状：集合里
+  // 7+1 = 8 条，老数组还是原来那 8 行（新账只进集合），归并出来 7 条。
+  // 于是「归并条数 7」≠「aggregate.count 8」，两种判据在这里分道扬镳 ——
+  // 没有这一步，集合条数恰好等于数组归并条数，改错了判据也照样绿。
+  const d9Sale = await keepLegacy(d9, function () {
+    return d9.call('addSale', {
+      paidAmount: 0, customerId: 'nc1', items: [{ productId: 'p1', qty: 1, unitPrice: 30 }]
+    }, 9000)
+  })
   const d9BeforeClear = clone(d9.doc())
   await d9.call('clearAll', {})
   const d9Meta = d9.doc().clearSnapshots[0]
@@ -2516,6 +2611,122 @@ function receivableOf(accounts, customerId) {
   assert.ok(d9Restored.some(function (item) { return item.id === d9Sale.result.order.id }),
     'D9：清空前记的那笔新账也在被封存的集合里，恢复得回来')
 
+  // ---- D10 2b-3 之后 clearAll 生成的**新**快照：没有 records 数组可删 --------
+  //
+  // 和 D9 是同一件事的两端：D9 造的是 2b-3 之前留下的存量（要靠 keepLegacy 才造
+  // 得出来），D10 走的是 2b-3 之后**唯一的自然路径** —— 迁移 → 裸记一笔账
+  //（applyMutation 不再携带 records，这一笔就把 ledgers.records 这个 key 抹掉）
+  // → clearAll。快照文档最后是**缺字段**，不是空数组。
+  //
+  // **这条路上有两道守卫，别把它们记混**（谁咬住这条断言，实测过）：
+  //   · apply.snapshotLists()：`if (legacy.length)` 才写 snapshot.records；
+  //   · core.clearDoc()（cloudfunctions/ledger/ledger-core.js）：
+  //     `if (snapshot.records && snapshot.records.length) { doc.records = ... }`。
+  // **云路径的快照文档到底写不写 records 键，最终由 clearDoc 说了算。** 实测：
+  // 只把 snapshotLists 改成无条件写，下面这条断言**不红**（clearDoc 兜住了）；
+  // 把 clearDoc 改成无条件 `doc.records = snapshot.records || []`，它立刻红。
+  // 所以下面那条 hasOwnProperty 断言钉的是 **clearDoc**，不是 snapshotLists。
+  // snapshotLists 那道由本段末尾的 D10b 单独直接调用来锁 —— 它在内存模式下是
+  // 裸露的那一道，理由见 D10b 自己的注释。
+  //
+  // 这一条钉两件事：
+  //   一、快照形状：没有 records key（守卫是 clearDoc，见上）。
+  //   二、dropSnapshotLegacy 对这种快照是**幂等成功**：走 `if (!legacy.length)`
+  //       那一支报 skipped，不是 failed，而且那一支直接 return、一个字都不写文档
+  //       （不盖 legacyRecordsDroppedAt）。2b-3 之后 report 里满屏 skipped 是常态，
+  //       failed > 0 才是真出事了 —— 把这条写成 failed 会让运维每次跑完都以为
+  //       出了问题，进而去动判据，而判据正是 D9 守着的东西。
+  const d10 = await openLegacyShop('d10')
+  await d10.runMigration({ limit: 50 })
+  // 裸记一笔账（**不包 keepLegacy**，这里要的就是被抹掉的自然形状）
+  const d10Sale = await d10.call('addSale', {
+    paidAmount: 0, customerId: 'nc1', items: [{ productId: 'p1', qty: 1, unitPrice: 30 }]
+  }, 9000)
+  assert.ok(!Object.prototype.hasOwnProperty.call(d10.doc(), 'records'),
+    'D10 自检：迁移之后第一笔记账就把 ledgers.records 这个 key 抹掉了')
+  const d10BeforeClear = clone(d10.doc())
+  await d10.call('clearAll', {})
+  const d10Meta = d10.doc().clearSnapshots[0]
+  const d10Snap = d10.db.clears[d10Meta.id]
+  assert.ok(!Object.prototype.hasOwnProperty.call(d10Snap, 'records'),
+    'D10：2b-3 之后的新快照根本没有 records key（缺字段，不是空数组）'
+    + ' —— 这条咬住的是 core.clearDoc 那道守卫')
+  assert.ok(d10Snap.bookId, 'D10：该有的还是在 —— bookId 非空')
+  assert.strictEqual(d10Snap.bookId, d10BeforeClear.bookId, 'D10：封存的就是清空前那本账套')
+  assert.strictEqual(d10Snap.aggregate.count, d10BeforeClear.aggregate.count,
+    'D10：aggregate 冻结的是清空前那本账套的条数（含刚记的那笔）')
+  // 闸还是那一条：先 dropLegacy 盖戳，才轮到清快照
+  const d10Drop = await d10.call('migrateRecords', { mode: 'dropLegacy' })
+  assert.strictEqual(d10Drop.state, 'dropped', 'D10：没有老数组也照样跑得通 dropLegacy')
+  const d10SnapBefore = clone(d10.db.clears[d10Meta.id])
+  const d10Res = await d10.call('migrateRecords', { mode: 'dropSnapshotLegacy' })
+  assert.strictEqual(d10Res.state, 'done')
+  assert.strictEqual(d10Res.dropped, 0, 'D10：没有数组可删，dropped 是 0')
+  assert.strictEqual(d10Res.skipped, 1, 'D10：计数落在 skipped')
+  assert.strictEqual(d10Res.failed, 0,
+    'D10：**没有数组可删是幂等成功，不是失败** —— 这条报 failed 会逼着运维去动判据')
+  assert.strictEqual(d10Res.report[0].status, 'skipped', 'D10：report 里那一条也是 skipped')
+  assert.strictEqual(d10Res.report[0].legacyCount, 0, 'D10：如实报 legacyCount = 0')
+  // 那一支是直接 return 的，文档一个字都不该动（包括不许盖 legacyRecordsDroppedAt ——
+  // 盖了就等于给「本来就没有数组」的快照留下「清过了」的假痕迹）
+  assert.deepStrictEqual(d10.db.clears[d10Meta.id], d10SnapBefore,
+    'D10：跳过的那一支不写文档，快照一个字没动')
+  assert.ok(!d10.db.clears[d10Meta.id].legacyRecordsDroppedAt,
+    'D10：没被误盖 legacyRecordsDroppedAt')
+  const d10Again = await d10.call('migrateRecords', { mode: 'dropSnapshotLegacy' })
+  assert.strictEqual(d10Again.state, 'done')
+  assert.strictEqual(d10Again.skipped, 1, 'D10：幂等，再跑一次还是 skipped')
+  assert.strictEqual(d10Again.failed, 0, 'D10：幂等，再跑一次也不失败')
+  // 端到端：跑完清理，「恢复清空前数据」仍然完整（快照本来就不靠那个数组恢复）
+  await d10.call('restoreCleared', {})
+  const d10After = (await d10.call('getLedger', {})).ledger
+  assert.strictEqual(d10.doc().bookId, d10BeforeClear.bookId, 'D10：指针指回被封存的账套')
+  assert.strictEqual(d10After.totals.receivable, 240, 'D10：全店欠款回到清空之前（210 + 新卖的 30）')
+  const d10Restored = await d10.pagedAll()
+  assert.strictEqual(d10Restored.length, d10BeforeClear.aggregate.count, 'D10：流水条数回到清空之前')
+  assert.ok(d10Restored.some(function (item) { return item.id === d10Sale.result.order.id }),
+    'D10：清空前记的那笔新账也恢复得回来')
+
+  // ---- D10b snapshotLists 那道守卫单独锁：**内存模式下它是唯一的一道** -------
+  //
+  // 上面 D10 端到端那条走的是云路径，快照文档最后经过 core.clearDoc()，
+  // 那里还有一道 `if (snapshot.records && snapshot.records.length)` 兜底 ——
+  // 所以 snapshotLists 里的 `if (legacy.length)` 就算被改成无条件写，
+  // D10 也**不会**红（实测如此）。两道守卫串在一起，端到端只测得到最后一道。
+  //
+  // 但**内存模式没有 clearDoc 这一道**：utils/store.js 里
+  // `writeArchive(readArchive().concat([applied.result.clearSnapshot]))`
+  // 把 snapshotLists() 的输出**原样落盘**，中间没有任何加工。云路径的两道守卫，
+  // 到了这里只剩 snapshotLists 自己这一道 —— 也就是说，唯一那道裸露的守卫恰恰是
+  // 端到端测不到的那道。所以这里直接调函数把它单独钉住。
+  //
+  // 判据必须用 hasOwnProperty，**不许写成判 `.length`**：`records: []` 的
+  // `.length` 也是 0，用长度判，「多写了一个空数组字段」这种回归会静默漏过去，
+  // 而这条断言存在的全部意义就是抓它。
+  const d10bCases = [
+    { name: '账本压根没有 records 键（2b-3 之后记过账的账本）', ledger: { bookId: 'b1', products: [], skus: [], customers: [], categories: [] } },
+    { name: '账本 records 是空数组（跑完 dropLegacy 之后的形状）', ledger: { bookId: 'b1', records: [], products: [], skus: [], customers: [], categories: [] } }
+  ]
+  d10bCases.forEach(function (item) {
+    const snap = apply.snapshotLists(item.ledger, 123)
+    assert.ok(!Object.prototype.hasOwnProperty.call(snap, 'records'),
+      'D10b：' + item.name + ' —— snapshotLists 不许写出 records 键（缺字段，不是空数组）')
+    assert.strictEqual(snap.bookId, 'b1', 'D10b：' + item.name + ' —— 该带的 bookId 还是要带')
+  })
+  // 反向：老文档那份数组仍然必须原样带走。上面两条只说「空的不要写」，
+  // 少了这一条，**把数组悄悄截短**（`cloneList(legacy).slice(1)` 那一类）全仓
+  // 没有一条断言逮得到（实测）—— 而升级前备份（clearedBackup / 迁移前账本）
+  // 那批流水，快照里这一份就是唯一副本，静默少一行就是永久丢一行。
+  //
+  // 把整行 `snapshot.records = cloneList(legacy)` 删掉倒是会被 D9 的自检先抓到
+  // （实测红在 D9「快照还带着被抄过来的老数组」）—— 别把这条的价值记成「防删整行」，
+  // 它真正独有的牙是**防截短**。两个方向一起锁，改动才没有静默的出路。
+  const d10bLegacy = apply.snapshotLists({ bookId: 'b2', records: legacyCorpus() }, 123)
+  assert.ok(Object.prototype.hasOwnProperty.call(d10bLegacy, 'records'),
+    'D10b：老文档的非空 records 数组必须原样带进快照（它是那批流水的唯一副本）')
+  assert.strictEqual(d10bLegacy.records.length, legacyCorpus().length,
+    'D10b：一行都不许少')
+
   console.log('ledger-migrate tests passed')
   console.log('阶段 3 补口：V12 行上亚分与 1e-9 容差、V4 金额那半（M3 专项）、'
     + 'M9b 四份脏语料完整迁移必须 failed（末尾总门的失败形态）、M4b 同批语料预检 '
@@ -2528,7 +2739,9 @@ function receivableOf(accounts, customerId) {
     + 'S4 stamp-only、S5 前置条件、S6 一份坏的不拖累其他份、S7 limit 分批、S8 份额重算'
     + '\n快照老数组清理 D1 没跑 dropLegacy 不许删、D2 活账套没迁完、D3 端到端（删完数组仍能完整恢复）、'
     + 'D4 未转换的不许删、D5 集合不完整（少一条/多一条）都拒绝、D6 幂等、D7 分批与坏数据不吃预算、'
-    + 'D8 legacyDroppedAt 活过记账、D9 迁移后清空的 B 类快照')
+    + 'D8 legacyDroppedAt 活过记账、D9 存量 B 类快照（2b-3 前留下的，判据必须取 aggregate.count）、'
+    + 'D10 2b-3 之后的新快照没有 records 可删（幂等 skipped，不是 failed；守卫是 core.clearDoc）、'
+    + 'D10b snapshotLists 单独锁（内存模式下它是唯一那道守卫）')
 })().catch(function (error) {
   console.error(error && error.stack ? error.stack : error)
   process.exit(1)
