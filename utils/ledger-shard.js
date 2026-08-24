@@ -155,18 +155,25 @@ function planShards(records, options) {
   })
 
   // 按原子组顺序贪心装箱。当前片为空时无条件收下——单个原子组自己就超限也
-  // 自成一片（数进 oversized，由调用方决定要不要警告），不然这本书就永远
-  // 传不上去了；这也顺带保证了 firstChars 被调用方算成 ≤ 0 时不会死循环。
+  // 自成一片（oversized 在装箱前的预扫里数，由调用方决定要不要警告），不然
+  // 这本书就永远传不上去了；这也顺带保证了 firstChars 被调用方算成 ≤ 0 时
+  // 不会死循环。
   const shards = []
   const oversized = []
+  // 单个原子组自己就超限：一张销售单和它的全部退货单不可切开，只能整组自成一片。
+  // **对每个原子组都要判**——从前这句写在装箱循环的「当前片为空」分支里，而
+  // current 一旦赋值就再变不回 null，于是只有排在最前面的那个原子组能被记下来，
+  // 真实账本上这条诊断几乎永远打不出来。
+  atoms.forEach(function (atom) {
+    if (atom.mergedCount > limit || atom.chars > charsLimit) {
+      oversized.push({ mergedCount: atom.mergedCount, chars: atom.chars })
+    }
+  })
   let current = null
   atoms.forEach(function (atom) {
     if (!current) {
       current = { mergedCount: 0, chars: 0, items: [] }
       shards.push(current.items)
-      if (atom.mergedCount > limit || atom.chars > charsLimit) {
-        oversized.push({ mergedCount: atom.mergedCount, chars: atom.chars })
-      }
     } else {
       // 当前片的字符上限：current 是已 push 进 shards 的那片，下标 = shards.length-1，
       // 所以 shards.length === 1 就是第 0 片——它驮着四张表，预算用扣过表的 firstChars，

@@ -1130,6 +1130,15 @@ async function migrateLocal() {
   })
   showBusy()
   try {
+    if (plan.oversized.length) {
+      // 一张销售单和它的全部退货单是不可切开的原子组，组本身超限时只能自成一片。
+      // 真撞上事务上限时错误里只有 TransactionNotExist，日志里留一条能对上号的线索。
+      // 必须排在下面「一片 / 孤儿退货 → 一次性上传」的 early return 之前：整本
+      // 只切出一片但那片本身超限、或孤儿退货导致整本走一次性上传时，排后面就
+      // 一句都不警告了——而那两种情况恰恰最需要这条线索。
+      console.warn('[ledger] 有 ' + plan.oversized.length + ' 个原子组超过单片上限，只能整组一片',
+        plan.oversized)
+    }
     // 一片就发一次性上传（不带 token）：线协议和 2b-1 完全一致，小账本零行为变化。
     // 有孤儿退货时也走这条：带 token 的路上 assertReturnsPaired 不区分「客户端切坏的」
     // 和「源数据本来就是孤儿」，任何切法都会被拒，而一次性上传今天就放行它们。
@@ -1139,12 +1148,6 @@ async function migrateLocal() {
           plan.orphanReturns.length)
       }
       return finishMigrate(await request('migrateLocal', { ledger: pending }))
-    }
-    if (plan.oversized.length) {
-      // 一张销售单和它的全部退货单是不可切开的原子组，组本身超限时只能自成一片。
-      // 真撞上事务上限时错误里只有 TransactionNotExist，日志里留一条能对上号的线索。
-      console.warn('[ledger] 有 ' + plan.oversized.length + ' 个原子组超过单片上限，只能整组一片',
-        plan.oversized)
     }
     const token = uid()
     let res = null

@@ -1572,17 +1572,43 @@ require.cache[require.resolve('../utils/cloud-config')].exports = {
     assert.ok(xShard.some(function (r) { return r.id === 'x2' }), '同一张销售单的多条原始行永远同片')
     assert.strictEqual(saleRowsPlan.mergedCount, 2, 'so 两条原始行归并后只算一条，加 y1 共两条')
 
-    // 单个原子组自己就超限时自成一片，并且出现在 oversized 里
+    // 单个原子组自己就超限时自成一片，并且出现在 oversized 里。
+    // 超限组**不在数组首位**（前面先放两个普通小组）：oversized 的采集曾经
+    // 写在装箱循环的「当前片为空」分支里，只有排第一的原子组判得到——超限组
+    // 放开头的旧夹具对那个 bug 恒绿。这条用例改好后必须先红一次再修实现。
     const fat = []
+    fat.push({ id: 'solo-a', type: 'pay', amount: 1, remark: '', createdAt: 1, lines: [] })
+    fat.push({ id: 'solo-b', type: 'pay', amount: 1, remark: '', createdAt: 2, lines: [] })
     for (let i = 0; i < 3; i++) {
-      fat.push({ id: 'big', type: 'pay', amount: 1, remark: '', createdAt: i + 1, lines: [] })
+      fat.push({ id: 'big', type: 'pay', amount: 1, remark: '', createdAt: i + 10, lines: [] })
     }
-    fat.push({ id: 'solo', type: 'pay', amount: 1, remark: '', createdAt: 9, lines: [] })
     const fatPlan = shard.planShards(fat, { limit: 2 })
-    assert.strictEqual(fatPlan.oversized.length, 1, '三条同 id 的原子组自己超限，要进 oversized')
+    assert.strictEqual(fatPlan.oversized.length, 1, '不在首位的超限原子组也要进 oversized')
     assert.strictEqual(fatPlan.oversized[0].mergedCount, 3)
     assert.ok(fatPlan.shards.some(function (one) { return one.length === 3 }), '超限原子组自成一片')
-    assert.strictEqual(fatPlan.shards.length, 2)
+    assert.strictEqual(fatPlan.shards.length, 2, '两个普通小组一片 + 超限组自成一片')
+
+    // 两个超限原子组、都不在首位：每一个都要被记进 oversized——钉住「对每个
+    // 原子组判一次」，而不只是「不再漏掉非首位的那一个」
+    const fat2 = []
+    fat2.push({ id: 'head', type: 'pay', amount: 1, remark: '', createdAt: 1, lines: [] })
+    for (let i = 0; i < 3; i++) {
+      fat2.push({ id: 'big1', type: 'pay', amount: 1, remark: '', createdAt: i + 10, lines: [] })
+    }
+    for (let i = 0; i < 3; i++) {
+      fat2.push({ id: 'big2', type: 'pay', amount: 1, remark: '', createdAt: i + 20, lines: [] })
+    }
+    const fat2Plan = shard.planShards(fat2, { limit: 2 })
+    assert.strictEqual(fat2Plan.oversized.length, 2, '两个非首位的超限原子组都要进 oversized')
+    assert.strictEqual(fat2Plan.oversized[0].mergedCount, 3)
+    assert.strictEqual(fat2Plan.oversized[1].mergedCount, 3)
+    assert.strictEqual(fat2Plan.shards.length, 3, '普通组一片，两个超限组各自成一片')
+    assert.ok(fat2Plan.shards.some(function (one) {
+      return one.length === 3 && one[0].id === 'big1'
+    }), '第一个超限组自成一片')
+    assert.ok(fat2Plan.shards.some(function (one) {
+      return one.length === 3 && one[0].id === 'big2'
+    }), '第二个超限组自成一片')
 
     // firstChars（F4a）：第 0 片驮着四张表时的字符预算要更小。limit / chars 都
     // 给足、只把 firstChars 压小——第一片必须被压小，后面的片仍按 chars 装满；
