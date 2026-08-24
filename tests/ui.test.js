@@ -915,6 +915,9 @@ function printChecklist() {
   console.error('      Where-Object { $_.CommandLine -like \'*ui.test.js*\' }   # 有就 Stop-Process')
   console.error('    Get-Process 微信开发者工具                                  # 有就手动关掉工具')
   console.error('    脚本不按镜像名杀进程：WeChatAppEx 是微信本体也在用的，误伤代价太大')
+  console.error('11. 在任务 worktree 里跑时，project.private.config.json 在 .gitignore 里，git worktree')
+  console.error('    add 出来的目录没有它，工具会按全新项目的默认设置打开这棵树。症状是随机的初始化/')
+  console.error('    超时失败而不是断言失败，先从主检出 cp 一份过来再跑，别当成代码回归')
 }
 
 process.on('uncaughtException', onFatal)
