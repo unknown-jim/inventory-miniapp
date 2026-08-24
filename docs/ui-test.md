@@ -18,6 +18,30 @@ npm run test:ui
 
 脚本自己用 `cli auto` 把工具拉起来、开自动化端口 9420，跑完再 `close` 掉。端口上若还留着上一次的会话，会先把工具整个退掉再重开——同一个端口连不同 worktree 的项目是抢不过来的，以前就这么测成了另一棵树的代码。
 
+### 在任务 worktree 里跑：先补两个没进版本库的文件
+
+在任务工作树（`../inventory-miniapp-worktrees/<短名>`，见 [git-workflow.md](git-workflow.md)）里跑 `npm run test:ui` / `npm run test:all` 之前，除了复制 `node_modules`，**还要把主检出的 `project.private.config.json` 也复制过去**：
+
+```bash
+cp -r /d/work/inventory-miniapp/node_modules ./node_modules
+cp /d/work/inventory-miniapp/project.private.config.json ./
+```
+
+两个文件都在 `.gitignore` 里，所以 `git worktree add` 出来的目录里没有它们。少了 `node_modules` 会当场报模块找不到，好认；少了 `project.private.config.json` 不报错，反而更难查——它钉着 `libVersion: 3.16.2`，以及 `useApiHook` / `useIsolateContext` / `compileHotReLoad` 等一串开发者工具设置。缺了它，工具会按「全新项目」的默认值打开这棵树，UI 测试就以**互不相同**的初始化/超时症状随机挂掉。典型标志是日志里那句：
+
+```text
+[UI] Tool.getInfo 一直没带 SDKVersion，跳过基础库版本校验
+```
+
+实测（2026-08-24，同一份代码，主检出和 worktree 交替跑）：
+
+| 环境 | 结果 |
+|---|---|
+| 主检出 `main` | 连过 2 次 |
+| 缺 `project.private.config.json` 的 worktree | 连挂 3 次，三次症状各不相同：`退不回 tab 页，页面栈太深` / `Connection closed, check if wechat web devTools is still running` / `timeout waiting for automator response` |
+
+三次挂的**没有一条是断言失败**。所以：worktree 里 UI 测试红、而且症状是初始化或超时类（连不上、等不到、页面栈不对）而不是某条断言不符，先查这个文件在不在，别急着当成代码回归去翻 diff。
+
 ## 两条硬约束
 
 ### 1. 页面级选择器查不到自定义组件内部
@@ -81,3 +105,4 @@ await waitFor(sale, async function () { ... }, '商品进购物车')  // 条件
 - `cli.bat` 切 UTF-8 代码页后被 cmd 误解析、把注释里的 `CLI` 当命令递归调自己，刷屏「Maximum setlocal recursion level reached」——脚本已把工具安装目录从子进程 `PATH` 上摘掉
 - `automator.launch()` 不能用：Node 18.20.2 / 20.12.2 起禁止不带 shell 地 spawn `.bat`，而且报错会被转述成误导性的「cliPath 不对」。脚本改成自己经 `cmd.exe` 起端口再 `connect`
 - `wx.showModal` 是系统弹窗，自动化点不到内部按钮，用 `mockWxMethod` 自动确认
+- 在任务 worktree 里跑，却没从主检出复制 `project.private.config.json`——挂的样子是随机的初始化/超时，不是断言失败，见上面「在任务 worktree 里跑：先补两个没进版本库的文件」
