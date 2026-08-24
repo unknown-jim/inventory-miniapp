@@ -185,7 +185,7 @@ async function main() {
   const db = await indexes.resolveDb(wx)
   console.log('env', db.envId, 'region', db.region, 'tag', db.tag)
   await ensureTable(wx.api, db)
-  await acl.ensureAcl(wx.api, { envId: db.envId, collections: [COLLECTION] })
+  acl.assertAclOk(await acl.ensureAcl(wx.api, { envId: db.envId, collections: [COLLECTION] }))
   await ensurePlatformAdmin(wx.api, {
     region: db.region,
     tag: db.tag,

@@ -1,4 +1,5 @@
 const inventory = require('./inventory')
+const messages = require('./messages')
 
 function money(value) {
   return inventory.round2(value).toFixed(2)
@@ -223,11 +224,30 @@ function withCustomerView(customer, summary) {
   })
 }
 
+// 报错的统一出口：先过 utils/messages.js 的店员话术层，命中的按话术显示
+//（长话术走 modal，toast 会被真机腰斩），没命中保持今天的行为 —— toast + 原文，
+// 一个字节不变。两种情况都把原文 console.warn 一份，排查不受影响。
 function showError(error) {
-  wx.showToast({
-    title: (error && error.message) || '操作失败',
-    icon: 'none'
-  })
+  const staff = messages.forStaff(error)
+  if (staff.raw && staff.raw !== staff.text) console.warn('[ledger] 原始错误:', staff.raw)
+  if (staff.modal) {
+    wx.showModal({
+      title: staff.title || '暂时不能操作',
+      content: staff.text, showCancel: false, confirmText: '知道了',
+      // **弹不出来就退回 toast，绝不能什么都不显示。** 微信在屏上已经有一个
+      // modal 时会对第二个回 fail（utils/maintenance.js 那边记过同一个坑），
+      // 而最容易撞上的正是 app.js 的更新提示 —— 它出现在「新包已下好、当前
+      // 仍跑老代码」的窗口里，也就是服务端抛「请更新小程序到最新版本」的
+      // 同一时刻。不兜底的话，规则 1 恰好在它唯一该出现的场景里被静默吞掉，
+      // 而改动前那里是 toast、和 modal 能共存、一定看得见。
+      // toast 会把长话术腰斩，但半句话远好过一句都没有。
+      fail: function () {
+        wx.showToast({ title: staff.text || '操作失败', icon: 'none' })
+      }
+    })
+    return
+  }
+  wx.showToast({ title: staff.text || '操作失败', icon: 'none' })
 }
 
 module.exports = {

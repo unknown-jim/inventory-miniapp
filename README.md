@@ -21,7 +21,7 @@
 1. 安装 [微信开发者工具](https://developers.weixin.qq.com/miniprogram/dev/devtools/download.html)
 2. 导入本仓库根目录，使用正式 AppID（测试号没有云开发）
 3. 开通云开发，把**环境 ID**填进 [`utils/cloud-config.js`](utils/cloud-config.js) 的 `CLOUD_ENV_ID`。空着不能记账，也不会自动用第一个环境
-4. 在云开发控制台创建集合 `shops`、`members`、`ledgers`、`ledger_records`、`ledger_clears`、`platform_admins`。`ledger_records` 的 6 条索引用 `node scripts/wxcloud-ensure-indexes.js` 建；六张表权限用 `node scripts/wxcloud-ensure-acl.js` 设成仅管理端可读写（部署脚本末尾都会跑）。`platform_admins` 是账本升级运维 action 的白名单（`_id` = 运营方 openid），必须在部署云函数**之前**建好并写入，见 [docs/cloud-ledger.md](docs/cloud-ledger.md) 的「账本升级」
+4. 在云开发控制台创建集合 `shops`、`members`、`ledgers`、`ledger_records`、`ledger_clears`、`platform_admins`、`platform_config`（权威清单是 `scripts/wxcloud-ensure-acl.js` 的 `COLLECTIONS`，部署脚本的建表清单直接取它）。`ledger_records` 的 6 条索引用 `node scripts/wxcloud-ensure-indexes.js` 建；这几张表的权限用 `node scripts/wxcloud-ensure-acl.js` 设成仅管理端可读写（部署脚本末尾都会跑）。`platform_config` 是平台级维护开关（见 [docs/cloud-ledger.md](docs/cloud-ledger.md) 的「维护模式」），漏建**不致命**（门是 fail-open 的），但建了就必须设权限。`platform_admins` 是账本升级运维 action 的白名单（`_id` = 运营方 openid），必须在部署云函数**之前**建好并写入，见 [docs/cloud-ledger.md](docs/cloud-ledger.md) 的「账本升级」
 5. 上传并部署云函数 `ledger`（目录 `cloudfunctions/ledger`，超时 20 秒；或 `node scripts/wxcloud-deploy-ledger.js`）
 6. 编译预览。先建店或让老板把你的 openid 加进白名单，才能记账
 

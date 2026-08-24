@@ -9,13 +9,20 @@ assert.deepStrictEqual(acl.COLLECTIONS, [
   'ledgers',
   'ledger_records',
   'ledger_clears',
-  'platform_admins'
+  'platform_admins',
+  'platform_config'
 ])
 assert.strictEqual(acl.ACL_TAG, 'ADMINONLY')
 
-// 云存储（商品图）：READWRITE = 所有用户可读、仅创建者可写读。
+// 云存储（商品图）：要的是「所有用户可读、仅创建者可读写」——
 // 客户端直接拿 cloud:// fileID 渲染 <image>，上传者是创建者可传，不绕云函数。
-assert.strictEqual(acl.STORAGE_ACL_TAG, 'READWRITE')
+// **它的标签叫 `READONLY`**：2026-08-25 在控制台选中那一项之后用
+// `tcbGetStorageACL` 读回来实测的。完整映射见 scripts/wxcloud-ensure-acl.js
+// 里 STORAGE_ACL_TAG 顶上那段。
+//
+// 这条断言不是形式主义：写错标签不会报错，而是让幂等判断永远不相等，
+// 于是**每次部署都去改一次已经设对的生产权限**。改它之前先去控制台核对。
+assert.strictEqual(acl.STORAGE_ACL_TAG, 'READONLY')
 assert.strictEqual(typeof acl.ensureStorageAcl, 'function')
 assert.strictEqual(typeof acl.describeStorageAcl, 'function')
 // 钉住脚本真的设了存储权限：删掉 tcbModifyStorageACL / tcbGetStorageACL 调用，
@@ -32,12 +39,13 @@ assert.deepStrictEqual(
       ledgers: 'PRIVATE',
       ledger_records: 'ADMINONLY',
       ledger_clears: 'PRIVATE',
-      platform_admins: 'ADMINONLY'
+      platform_admins: 'ADMINONLY',
+      platform_config: 'PRIVATE'
     },
     acl.COLLECTIONS,
     acl.ACL_TAG
   ),
-  ['shops', 'ledgers', 'ledger_clears']
+  ['shops', 'ledgers', 'ledger_clears', 'platform_config']
 )
 assert.deepStrictEqual(
   acl.collectionsNeedingAcl(
@@ -47,12 +55,51 @@ assert.deepStrictEqual(
       ledgers: 'ADMINONLY',
       ledger_records: 'ADMINONLY',
       ledger_clears: 'ADMINONLY',
-      platform_admins: 'ADMINONLY'
+      platform_admins: 'ADMINONLY',
+      platform_config: 'ADMINONLY'
     },
     acl.COLLECTIONS,
     acl.ACL_TAG
   ),
   []
+)
+
+// ---------------------------------------------------------------------------
+// 建表清单和 ACL 清单必须是**同一份**。
+//
+// 真吃过这个亏：加 platform_config 时只改了这里的 COLLECTIONS，
+// wxcloud-deploy-ledger.js 里另有一份手抄的建表数组没跟上。后果不是「少建一张表」
+// 那么轻——部署脚本先建表、再设 ACL，而 describeAcl 没有 catch：走到清单里那张
+// 不存在的集合就抛出去、main().catch 里 exit(1)，函数代码已经上传、索引已经补完，
+// 却停在 ensureStorageAcl 之前，云存储权限没设，商品图渲染不出来。
+//
+// 修法不是「记得两边一起改」，是把两份清单合成一份：要设 ADMINONLY 的集合，
+// 必然先得存在。这条断言钉住那份合并——部署脚本里再出现手抄的集合名数组就红。
+const deploySrc = fs.readFileSync(path.join(__dirname, '../scripts/wxcloud-deploy-ledger.js'), 'utf8')
+// **锚到行尾**：不锚的话 `acl.COLLECTIONS.slice(0, 6)` 照样匹配，
+// 而那就是同一个漂移换个写法（实测过，不锚时这种写法全绿）。
+assert.ok(
+  /const names = acl\.COLLECTIONS\s*$/m.test(deploySrc),
+  'wxcloud-deploy-ledger.js 的建表清单必须整份取 wxcloud-ensure-acl.js 的 COLLECTIONS，'
+  + '不许另抄一份、也不许 slice 掉几个——抄的那份漂开过一次，'
+  + '代价是部署中断在设云存储权限之前'
+)
+// 缩短传给 ensureAcl 的清单，后果比漏建表严重：那几张表**不会**被设成 ADMINONLY，
+// 等于把小程序挡在业务库外面的那道门开了，而且没有任何运行时信号。
+assert.ok(
+  !/ensureAcl\([^)]*collections:/.test(deploySrc),
+  'wxcloud-deploy-ledger.js 里 ensureAcl 不许传缩短的 collections——'
+  + '漏设的那几张表就是敞开的业务库，没有任何运行时信号会告诉你'
+)
+// 失败必须被报出来：ensureAcl 现在只收集失败不抛，调用方漏了 assertAclOk
+// 就等于把「某张表没设成 ADMINONLY」静默咽掉。
+assert.ok(
+  /assertAclOk\(/.test(deploySrc),
+  'wxcloud-deploy-ledger.js 必须调 acl.assertAclOk 报出没设成功的集合'
+)
+assert.ok(
+  !/names\s*=\s*\[\s*'shops'/.test(deploySrc),
+  'wxcloud-deploy-ledger.js 里不许再出现手抄的集合名数组'
 )
 
 const skill = fs.readFileSync(path.join(__dirname, '../.cursor/skills/wxcloud-cli/SKILL.md'), 'utf8')

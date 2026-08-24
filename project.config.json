@@ -98,10 +98,6 @@
       },
       {
         "type": "file",
-        "value": "utils/sku-list-view.js"
-      },
-      {
-        "type": "file",
         "value": "utils/sale-spec-view.js"
       },
       {
@@ -115,6 +111,14 @@
       {
         "type": "file",
         "value": "utils/ledger-shard.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/maintenance.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/messages.js"
       }
     ]
   },

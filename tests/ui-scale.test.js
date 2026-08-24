@@ -230,8 +230,10 @@ assert.strictEqual(
 const productsWxss = read('pages/products/products.wxss')
 assert.ok(
   productsWxss.indexOf('min-height: var(--tap-sm)') >= 0,
-  'products.wxss toggle should use min-height: var(--tap-sm)'
+  'products.wxss card should use min-height: var(--tap-sm)'
 )
+assert.ok(productsWxss.indexOf('goods-grid') >= 0, 'products.wxss should layout a two-column grid')
+assert.ok(productsWxss.indexOf('width: 112rpx') < 0, 'products.wxss should not keep the small left thumbnail')
 assert.ok(productsWxss.indexOf('.bar-fill') < 0, 'products.wxss should not keep .bar-fill')
 
 console.log('ui-scale tests passed')

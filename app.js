@@ -40,6 +40,12 @@ App({
     this.globalData.cloudInit = store.initCloud()
     setupUpdateManager()
   },
+  // 从后台切回前台时补一次维护检查。回包携带覆盖了「还在操作」的用户，
+  // 这一句覆盖「切走一阵子又切回来」的用户。两条路合起来就是需求 2 的全部；
+  // 剩下的缺口（完全不动的用户）见 utils/maintenance.js 顶部那段边界说明。
+  onShow() {
+    require('./utils/store').checkMaintenance()
+  },
   setSelectedProduct(id) {
     this.globalData.selectedProductId = id || ''
   },
