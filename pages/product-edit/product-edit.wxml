@@ -16,6 +16,18 @@
       </view>
       <view class="muted" wx:else>还没有种类。点管理添加，建档时就能带出名称和规格。</view>
     </view>
+    <view class="field" wx:if="{{showImage}}">
+      <view class="field-label">商品图片</view>
+      <view class="image-add" wx:if="{{!image}}" bindtap="pickImage">＋ 添加图片</view>
+      <view class="image-box" wx:else>
+        <image class="image-preview" src="{{image}}" mode="aspectFill" binderror="onImageError" />
+        <view class="image-ops">
+          <text class="link" bindtap="pickImage">换图</text>
+          <text class="link danger" bindtap="removeImage">删除</text>
+        </view>
+      </view>
+      <view class="field-hint">仅本店成员可见，用于快速认货</view>
+    </view>
     <view class="field">
       <view class="field-label">商品名称</view>
       <input class="field-input" data-field="name" value="{{name}}" bindinput="onField" placeholder="例如 纯牛奶 250ml" />
@@ -201,6 +213,7 @@
     </view>
   </view>
 
+  <canvas type="2d" id="imageCanvas" class="image-canvas"></canvas>
   <button class="btn-primary save-btn" bindtap="save">保存</button>
   <button wx:if="{{isEdit}}" class="btn-danger" bindtap="remove">删除商品</button>
 </view>

@@ -161,6 +161,20 @@
   border-bottom: 1rpx solid #F1F5F4;
 }
 
+.sheet-thumb {
+  width: 72rpx;
+  height: 72rpx;
+  border-radius: 6rpx;
+  flex-shrink: 0;
+  margin-right: var(--gap);
+  background: #f3f4f6;
+}
+
+.sheet-body {
+  flex: 1;
+  min-width: 0;
+}
+
 .item-name {
   font-weight: 600;
   margin-bottom: 6rpx;

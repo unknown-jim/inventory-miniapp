@@ -707,7 +707,12 @@ function clearSnapshotsOf(ledger, clears) {
       savedAt: inventory.toNumber(meta && meta.savedAt),
       known: !!doc,
       hasBookId: doc ? !!doc.bookId : null,
-      legacyRecordCount: doc ? ((doc.records || []).length) : null
+      legacyRecordCount: doc ? ((doc.records || []).length) : null,
+      // 转换之后这份还带不带那个重复的 records 数组 —— mode:'dropSnapshotLegacy'
+      // 的清理清单就是按这一列点名的。转换之前它恒为 true（数组是唯一副本），
+      // 所以要和 hasBookId 一起看才有意义。
+      hasLegacyRecords: doc ? !!((doc.records || []).length) : null,
+      legacyRecordsDroppedAt: doc ? inventory.toNumber(doc.legacyRecordsDroppedAt) : null
     }
   })
   const latest = list.length ? list[list.length - 1] : null
@@ -718,6 +723,10 @@ function clearSnapshotsOf(ledger, clears) {
     latestKnown: latest ? latest.known : false,
     lastRestoredClearAt: inventory.toNumber(ledger && ledger.lastRestoredClearAt),
     hasLegacyClearedBackup: !!(ledger && ledger.clearedBackup),
+    // 已经转换过（有 bookId）但还带着 records 数组的份数 = 还没收掉的双份
+    withLegacyRecords: list.filter(function (item) {
+      return item.hasBookId === true && item.hasLegacyRecords === true
+    }).length,
     snapshots: list
   }
 }
@@ -1073,6 +1082,7 @@ async function migrateRecords(db, shopId, payload, now, nextId) {
   if (mode === 'rollback') return rollbackMigration(db, shopId, now, payload)
   if (mode === 'dropLegacy') return dropLegacy(db, shopId, now)
   if (mode === 'snapshots') return convertSnapshots(db, shopId, payload, now)
+  if (mode === 'dropSnapshotLegacy') return dropSnapshotLegacy(db, shopId, payload, now)
   if (mode !== 'run') {
     throw new Error('未知的升级模式：' + mode)
   }
@@ -1610,6 +1620,228 @@ async function convertSnapshots(db, shopId, payload, now) {
   }
 }
 
+// mode:'dropSnapshotLegacy' —— 一份快照。**不抛**：失败原样记进 report 由调用方继续下一份。
+//
+// 判据只有一条，两类快照通用：**集合里这本账套的条数，等于快照冻结的 aggregate.count**。
+//   · A 类（老快照被 mode:'snapshots' 转过来的）：aggregate = foldTotalTerms(merged)，
+//     所以 aggregate.count 就是转换那一刻 countAll() 校验过的归并条数。
+//   · B 类（迁移之后、dropLegacy 之前点「清空数据」存的）：aggregate 是被封存账套
+//     那一刻的增量维护值，而被封存的账套此后不再变化。
+//     **2b-3 起不再新增，只剩存量**：记账不再携带 ledgers.records，迁移之后第一笔账
+//     就把它抹了，snapshotLists 于是不写 snapshot.records。今天还带着数组的 B 类，
+//     全都是 2b-3 部署之前留下的那几份。
+// **不要改成「重新归并 records 数组再比条数」**：B 类的数组是迁移前的过期子集，
+// 归并出来的条数本来就不等于集合里的条数，那么判会把 B 类全判成失败。
+async function dropOneSnapshotLegacy(db, shopId, meta, ledgerBookId, now) {
+  const snapshotId = String((meta && meta.id) || '')
+  const entry = { id: snapshotId, savedAt: inventory.toNumber(meta && meta.savedAt) }
+  if (!snapshotId) {
+    entry.status = 'failed'
+    entry.reason = '账本里这条清空记录没有 id'
+    return entry
+  }
+  let doc = null
+  try {
+    doc = await db.getClearSnapshot(snapshotId)
+  } catch (error) {
+    entry.status = 'failed'
+    entry.reason = '读快照失败：' + errorText(error)
+    return entry
+  }
+  if (!doc) {
+    // **不要断言「文档不见了」。** 云端的 getClearSnapshot（index.js 的 createDb）
+    // 把「文档不存在」和「这次读失败了」都吞成 null，这两种在这里分不开 —— 和
+    // dropLegacy 事务里那句 `if (!cur)` 同一个口径。一次瞬时读失败被写成「找不到它」，
+    // 会让人以为快照数据丢了，而其实一个字都没动。
+    entry.status = 'failed'
+    entry.reason = '没读到这份快照文档。云端把「文档不存在」和「这次读失败了」都返回 null，'
+      + '这两种在这里分不开。这份快照的 records 数组一个字都没动 —— 多半是一次瞬时失败，'
+      + '再调一次就好；反复如此再去控制台确认 ledger_clears 里还有没有这份文档'
+    return entry
+  }
+  if (String(doc.shopId || '') !== String(shopId || '')) {
+    entry.status = 'failed'
+    entry.reason = '这份快照文档记的 shopId 是 ' + String(doc.shopId || '') + '，不是本店 ' + String(shopId || '')
+    return entry
+  }
+  const legacy = (doc.records || [])
+  entry.legacyCount = legacy.length
+  const bookId = String(doc.bookId || '')
+  entry.bookId = bookId
+  if (!bookId) {
+    entry.status = 'failed'
+    entry.reason = '这份快照还没转换（没有 bookId），records 数组是它这批流水的唯一副本，删不得。先跑 mode:"snapshots"'
+    return entry
+  }
+  if (!legacy.length) {
+    // 幂等，也覆盖「本来就没有数组」的那几种（stamp-only、迁移之后才清空的空账套）。
+    // **2b-3 起 clearAll 生成的每一份新快照都走这一支**（snapshotLists 不再写
+    // snapshot.records），所以 report 里满屏 skipped 是常态，不是出错 —— 真正有事
+    // 可做的只有 2b-3 之前留下的存量。看见 skipped 就去改判据，会把存量那几份一起
+    // 判死，那正是上面那段「不要改成重新归并再比条数」在拦的事。
+    // 这一支**直接 return，一个字都不写文档**（不盖 legacyRecordsDroppedAt）：
+    // 本来就没有数组 ≠ 清过了，别给它留下假痕迹。
+    entry.status = 'skipped'
+    entry.reason = doc.legacyRecordsDroppedAt ? '这份快照的老数组已经清过了' : '这份快照本来就没有 records 数组'
+    return entry
+  }
+  if (bookId === String(ledgerBookId || '')) {
+    // 已知的、有意的误伤：被恢复过的快照，它的账套现在是活的、还在涨，
+    // 冻结的 aggregate.count 不再是权威值，数出来的判据不可信。安全侧一律拒绝。
+    entry.status = 'failed'
+    entry.reason = '这份快照的账套 ' + bookId + ' 现在就是本店活账套（多半被「恢复清空前数据」恢复过），'
+      + '快照里冻结的 aggregate 不再是这本账套的权威条数，证不出集合里那份完不完整，所以不删'
+    return entry
+  }
+  if (!doc.aggregate) {
+    entry.status = 'failed'
+    entry.reason = '这份快照没有 aggregate，判断不了集合里那份全不全'
+    return entry
+  }
+  const expected = inventory.toNumber(doc.aggregate.count)
+  entry.expectedCount = expected
+  let count = 0
+  try {
+    // **事务外**数。事务里调 countAll() 是本仓库明令禁止的（见 rollbackMigration 上方那段）。
+    count = await recordsModule.recordStore(db.recordsCtx(), bookId, shopId).countAll()
+  } catch (error) {
+    entry.status = 'failed'
+    entry.reason = '数这份快照的流水条数时出错：' + errorText(error) + '。删除是不可逆的，数不着就不删，过一会儿再调一次'
+    return entry
+  }
+  entry.collectionCount = count
+  if (count !== expected) {
+    entry.status = 'failed'
+    entry.reason = '账套 ' + bookId + ' 的集合里有 ' + count + ' 条，快照冻结的 aggregate.count 是 '
+      + expected + ' 条，对不上 —— 证不出集合里那份是完整的，没删 records 数组'
+    return entry
+  }
+  try {
+    // **一份快照一个事务，每个事务只写这一份文档。** 2026-08-24 实测：一个事务里写
+    // 92 条文档确定性失败（TransactionNotExist，30 秒边界，函数耗时才 12–16 秒），
+    // 真实边界尚未查清。快照现在每份才 6 条，但这里删的是文档不是流水，批量攒起来
+    // 一次删只会把这个未知边界搬到不可逆操作上，没有任何好处。
+    const outcome = await db.runTransaction(async function (tx) {
+      const cur = await tx.getClearSnapshot(snapshotId)
+      if (!cur) {
+        throw new Error('快照文档在清理过程中不见了')
+      }
+      if (String(cur.bookId || '') !== bookId) {
+        throw new Error('快照的账套号在数条数和事务之间变了（' + bookId + ' → ' + String(cur.bookId || '')
+          + '），事务外数出来的条数不能用；再调一次就好')
+      }
+      const curExpected = cur.aggregate ? inventory.toNumber(cur.aggregate.count) : null
+      if (curExpected !== expected) {
+        throw new Error('快照的 aggregate.count 在数条数和事务之间变了（' + expected + ' → ' + curExpected
+          + '），事务外数出来的条数不能用；再调一次就好')
+      }
+      if (!(cur.records || []).length) {
+        // 另一次调用抢先清掉了。集合里那份没动过，不用做任何清理。
+        return { already: true }
+      }
+      const next = Object.assign({}, cur, { legacyRecordsDroppedAt: now })
+      // putClearSnapshot 是整文档 set()，把 records 这个 key 去掉就等于删掉这个字段。
+      delete next.records
+      await tx.putClearSnapshot(snapshotId, next)
+      return { already: false }
+    })
+    if (outcome && outcome.already) {
+      entry.status = 'skipped'
+      entry.reason = '另一次调用抢先清掉了'
+      return entry
+    }
+  } catch (error) {
+    entry.status = 'failed'
+    entry.reason = '删这份快照的 records 数组时出错：' + errorText(error)
+    return entry
+  }
+  entry.status = 'dropped'
+  return entry
+}
+
+// mode:'dropSnapshotLegacy' —— 收掉清空快照里那份重复的 records 数组。
+//
+// **这是 2b-3 给「同一批流水存了两份」定的终止条件。** 转换（mode:'snapshots'）
+// 故意把数组留着，因为那时它还是旧云函数退路的一半；这个动作就是宣布那条退路
+// 到此为止，把另一半也收掉。
+//
+// **2b-3 之后不再产生新的双份**（记账不带 records，clearAll 存的快照也就没有
+// records 数组），所以这个动作只对**存量**快照有事可做，新快照一律报 skipped。
+// 但**存量任务仍然存在** —— 2026-08-25 生产上还有 3 份带着数组的快照待清（卓祥
+// 1 份、msxeubh4c6d5f9 2 份）。**不要因为「新代码不再产生」就把这个 mode 或它的
+// 判据删掉/改松**：那 3 份就是靠它清的，判据一改，它们一份都清不掉。
+//
+// 闸只有一条：**本店必须已经跑过 mode:'dropLegacy'**（`legacyDroppedAt` 非空）。
+// 为什么不判「ledgers.records 已经为空」——那是一个能被巧合满足的派生状态：活账套
+// 本来就 0 条流水的店（生产上的卓祥 mt3231n3ixeenv 就是），它的老数组天然是空的，
+// 而它那份快照的 6 条流水恰恰是旧包退路里唯一还有意义的东西。判据必须是一个
+// **显式决定的痕迹**，不是一个巧合。
+//
+// **不给 force。**和 dropLegacy 同一个口径：给一条不可逆操作配「绕过唯一一道闸」
+// 的开关才是错的。数不着条数就报失败让人再调一次。
+async function dropSnapshotLegacy(db, shopId, payload, now) {
+  const limit = clampChunk(payload.limit)
+  const ledger = await db.getLedger(shopId)
+  if (!ledger) {
+    throw new Error('店铺账本不存在')
+  }
+  if (!ledger.recordsMigratedAt) {
+    throw new Error('本店活账套还没完成流水升级，先把它迁完（不带 mode 调 migrateRecords）再来清快照里的老数组')
+  }
+  if (!inventory.toNumber(ledger.legacyDroppedAt)) {
+    throw new Error('本店还没跑过 mode:"dropLegacy"（legacyDroppedAt 是空的）。'
+      + '快照里的 records 数组和 ledgers.records 是同一条旧云函数退路的两半，'
+      + '先跑 mode:"dropLegacy" 宣布这家店放弃退路，才轮到清快照里的那一半')
+  }
+  let ledgerBookId = bookOf(ledger, shopId)
+  const metas = (ledger.clearSnapshots || [])
+  const report = []
+  let dropped = 0
+  let skipped = 0
+  let failed = 0
+  // 预算只由**真删掉的份数**消耗 —— 和 convertSnapshots 同一条理由：跳过是白拿的，
+  // 失败也不消耗，否则一份修不好的坏数据会把预算吃光、remaining 永远归不了零，
+  // 循环调不收敛。
+  let budget = limit
+  let index = 0
+  for (; index < metas.length; index++) {
+    if (budget <= 0) break
+    if (index > 0) {
+      // 每份重取一次活账套号。闸④比的是「这本快照的账套是不是**此刻**的活账套」，
+      // 而一轮跑到一半有人点「恢复清空前数据」就会把某一份快照的账套变成活的 ——
+      // 循环外只读一次拿到的是过期值。一次 doc().get() 换一次不误判，便宜。
+      // 读不到就沿用上一次的值：④是保守侧的一道，硬闸是⑤（countAll 逐份现数）。
+      const cur = await db.getLedger(shopId)
+      if (cur) ledgerBookId = bookOf(cur, shopId)
+    }
+    const entry = await dropOneSnapshotLegacy(db, shopId, metas[index], ledgerBookId, now)
+    report.push(entry)
+    if (entry.status === 'skipped') {
+      skipped += 1
+    } else if (entry.status === 'failed') {
+      failed += 1
+    } else {
+      dropped += 1
+      budget -= 1
+    }
+  }
+  const remaining = metas.length - index
+  return {
+    // state 只有 running / done 两种，failed > 0 也会收敛到 done ——
+    // **收敛不等于全清掉了，必须同时看 failed 和 report。**
+    state: remaining ? 'running' : 'done',
+    mode: 'dropSnapshotLegacy',
+    total: metas.length,
+    dropped: dropped,
+    skipped: skipped,
+    failed: failed,
+    remaining: remaining,
+    updatedAt: now,
+    report: report.slice(0, REPORT_LIST_LIMIT),
+    reportTotal: report.length
+  }
+}
+
 // mode:'rollback' —— 只清 recordsMigratedAt 和 migration，老数组还在，
 // **读**立刻退回老路径；**写是冻着的**：recordsPending 重新为真，assertRecordsReady
 // 照旧拦下每一条写（实测回滚后记账和删单都报「本店账本还没完成流水升级，暂时
@@ -1978,6 +2210,13 @@ async function dropLegacy(db, shopId, now) {
     }
     await tx.putLedger(shopId, Object.assign({}, cur, {
       records: [],
+      // 「这家店放弃了旧包退路」的唯一痕迹。mode:'dropSnapshotLegacy' 拿它当闸 ——
+      // 快照里那份重复的 records 数组和 ledgers.records 是同一条退路的两半，
+      // 先有这个戳，才轮到清另一半。
+      // **保留第一次的时间**：重跑 dropLegacy 是幂等的（老数组已经是空的、
+      // mergedCount 为 0、跳过全部条数检查），但「什么时候放弃的」只有第一次那个
+      // 时间点是真的。
+      legacyDroppedAt: inventory.toNumber(cur.legacyDroppedAt) || now,
       revision: inventory.toNumber(cur.revision) + 1
     }))
     return {
@@ -1985,6 +2224,7 @@ async function dropLegacy(db, shopId, now) {
       bookId: bookId,
       mergedCount: mergedCount,
       collectionCount: pre.count,
+      legacyDroppedAt: inventory.toNumber(cur.legacyDroppedAt) || now,
       // 集合比归并少几条 = 迁完之后删掉的单数（正常营业会有），只报不拦
       shortfall: (pre.count == null || mergedCount == null)
         ? null
@@ -1998,6 +2238,7 @@ async function dropLegacy(db, shopId, now) {
     bookId: outcome.bookId,
     mergedCount: outcome.mergedCount,
     collectionCount: outcome.collectionCount,
+    legacyDroppedAt: outcome.legacyDroppedAt,
     shortfall: outcome.shortfall,
     updatedAt: now
   }

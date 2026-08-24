@@ -20,12 +20,18 @@
 //    9 record-edit：算不出当时欠款就不开单
 //   10 打开一张不在任何已加载页里的单
 //   11 内存模式一整节（memoryRecordStore.page / getRecord / getSlip / today）
+//   12 换账套之后，上一本账的 recent / today 必须当场清掉
+//   13 聚合漂移哨兵（aggregatesStale）和 latestClear 的客户端落点
+//   14 本机账本分片上传一整节（planShards 原子组切法 / 分片 vs 一次性逐项相等 /
+//      混代语料上传载荷不被归并回填污染 / 中途失败本机原件不删 / 小账本和孤儿
+//      退货退回一次性上传 / planShards 单元含 firstChars）
 // 外加原有的：settleResponse 绝不抛、ready() 的语义。
 const assert = require('assert')
 const core = require('../cloudfunctions/ledger/ledger-core')
 const apply = require('../utils/ledger-apply')
 const inventory = require('../utils/inventory')
 const util = require('../utils/util')
+const shard = require('../utils/ledger-shard')
 const memory = require('./memory-db')
 
 const MemoryDb = memory.MemoryDb
@@ -1204,6 +1210,492 @@ require.cache[require.resolve('../utils/cloud-config')].exports = {
     await memStore.restoreCleared()
     assert.strictEqual(memStore.getLatestClear().recordCount, memCount,
       '恢复之后 latestClear 还在（元数据不动）')
+  }
+
+  // -------------------------------------------------------------------------
+  // 14) 本机账本分片上传（2b-3）
+  //
+  //     切法本身会改钱：把退货单和它的被退销售单切到两片里，
+  //     repairReturnSplits 会把那组份额一分都不重算（docs/cloud-ledger.md
+  //     「不要做」里实测欠款翻倍那条）。这一节钉住：planShards 的切法不会
+  //     拆开它们、分片上传的最终账和一次性上传逐项相等、中途失败本机原件
+  //     不删、小账本 / 孤儿退货退回一次性上传（不带 token）。
+  // -------------------------------------------------------------------------
+  {
+    // 一份**代 B 形状**（已经是 lines 数组）的本机账本，90 条：
+    //   下标 39 = 销售单 s-hot：amount 100 / paidAmount 40（欠 60），
+    //             lines[0] 带已退痕迹 returnedQty 3 / returnedAmount 30
+    //   下标 41 = 退货单 r-hot：amount 30，**单头既没有 paidAmount 也没有
+    //             payType**（代 B 的 B1 形状，会被 settledAmount 保守回推成
+    //             「整笔退现金」），lines[0] 指回 s-hot / sl1
+    //   其余 88 条 = type 'in' 的进货单（不挂客户、不影响 accounts），
+    //             id 'f-<i>'、lineId 'fl-<i>'、amount 1、createdAt 递增
+    // 同片上传时 repairReturnSplits 会把退货的 paidAmount 拨成 0（欠款 60 ≥
+    // 退货 30），于是客户 c1 的欠款 = (100−40) − (30−0) = 30。切两片就是 60
+    // （docs/cloud-ledger.md「不要做」里实测的那条）。
+    function hotFixture() {
+      const records = []
+      for (let i = 0; i < 90; i++) {
+        records.push({
+          id: 'f-' + i, type: 'in', amount: 1, profit: 0, remark: '', createdAt: 100000 + i,
+          lines: [{
+            lineId: 'fl-' + i, productId: 'p1', productName: '散货', sku: '', skuId: '',
+            color: '', size: '', qty: 1, unitPrice: 1, costPrice: 1, amount: 1, profit: 0
+          }]
+        })
+      }
+      records[39] = {
+        id: 's-hot', type: 'out', amount: 100, profit: 40, remark: '', createdAt: 100039,
+        paidAmount: 40, customerId: 'c1', customerName: '客一', customerPhone: '', customerAddress: '',
+        lines: [{
+          lineId: 'sl1', productId: 'p1', productName: '散货', sku: '', skuId: '',
+          color: '', size: '', qty: 10, unitPrice: 10, costPrice: 6, amount: 100, profit: 40,
+          allocations: [], returnedQty: 3, returnedAmount: 30
+        }]
+      }
+      records[41] = {
+        id: 'r-hot', type: 'return', amount: 30, profit: -18, remark: '', createdAt: 100041,
+        customerId: 'c1', customerName: '客一', customerPhone: '', customerAddress: '',
+        lines: [{
+          lineId: 'rl1', productId: 'p1', productName: '散货', sku: '', skuId: '',
+          color: '', size: '', qty: 3, unitPrice: 10, costPrice: 6, amount: 30, profit: -18,
+          saleOrderId: 's-hot', saleLineId: 'sl1'
+        }]
+      }
+      return records
+    }
+
+    function pendingLedgerOf(records) {
+      return {
+        products: [{ id: 'p1', name: '散货', costPrice: 1, salePrice: 10, stock: 100, alertQty: 1, colors: [], sizes: [] }],
+        skus: [],
+        customers: [{ id: 'c1', name: '客一', phone: '', address: '' }],
+        categories: [],
+        records: records
+      }
+    }
+
+    // 照抄服务端 assertReturnsPaired 的判据：片里每张退货单的每一行 saleOrderId
+    // 都能在**同一片**（归并后）里找到那张 out。片里装的是原始流水，先归并再判。
+    function returnsPairedInShard(rawShard) {
+      const merged = inventory.needsRecordMigration(rawShard)
+        ? inventory.migrateRecordShape(rawShard)
+        : rawShard
+      const saleIds = {}
+      merged.forEach(function (record) {
+        if (record && record.type === 'out') saleIds[String(record.id || '')] = true
+      })
+      let paired = true
+      merged.forEach(function (record) {
+        if (!record || record.type !== 'return') return
+        inventory.recordLines(record).forEach(function (line) {
+          const saleId = String((line && line.saleOrderId) || '')
+          if (!saleId || !saleIds[saleId]) paired = false
+        })
+      })
+      return paired
+    }
+
+    // a) planShards 的切法不会把退货和销售切开
+    const records = hotFixture()
+    const plan = shard.planShards(records)
+    assert.ok(plan.shards.length >= 2, '90 条默认上限 40，必须真的切了，切了 ' + plan.shards.length)
+    assert.strictEqual(plan.mergedCount, 90)
+    assert.strictEqual(plan.orphanReturns.length, 0)
+    plan.shards.forEach(function (one, i) {
+      assert.ok(returnsPairedInShard(one), '第 ' + i + ' 片里退货单必须找得到同片的销售单')
+    })
+    // s-hot 和 r-hot 必须落在同一片
+    const hotShard = plan.shards.filter(function (one) {
+      return one.some(function (r) { return r.id === 's-hot' })
+    })
+    assert.strictEqual(hotShard.length, 1)
+    assert.ok(hotShard[0].some(function (r) { return r.id === 'r-hot' }), 's-hot 和 r-hot 必须同片')
+
+    // 自检：这份语料真的会被朴素切法切开。朴素两片 slice(0,40)/slice(40) 把
+    // s-hot（下标 39）和 r-hot（下标 41）分进两片——服务端必须拒：
+    //   · 销售单那半片（seq 0 先发）先撞 V4：销售行记着 returnedQty、本片里
+    //     却一条退货都没有（ledger-core.js 注释里实测的「哪一片先报错」）；
+    //   · 退货单那半片按 seq 0 单独发（新店、新 token），撞的才是
+    //     assertReturnsPaired 本尊——两个方向都拒，证明这份语料对切法真的
+    //     敏感，上面那组断言不是「碰巧没切开」。
+    const hn = newHarness({ ids: idFactory('n14') })
+    await openShop(hn, '朴素切法销售侧店')
+    await rejects(function () {
+      return serverCall(hn, 'migrateLocal', {
+        token: 'naive-0', seq: 0, ledger: pendingLedgerOf(records.slice(0, 40)), records: records.slice(0, 40)
+      })
+    }, /本机账本有问题，没有上传/)
+    await openShop(hn, '朴素切法退货侧店')
+    await rejects(function () {
+      return serverCall(hn, 'migrateLocal', {
+        token: 'naive-1', seq: 0, final: true, ledger: pendingLedgerOf([]), records: records.slice(40)
+      })
+    }, /退货单和它的销售单必须在同一片里上传/)
+
+    // b) 分片上传的最终欠款和一次性上传逐项相等（判据的另一半）
+    //    A 店走真实的 store.migrateLocal()（客户端分片），B 店直连发一次性上传
+    const ha = newHarness({ ids: idFactory('a14') })
+    const storeA = loadStore(ha)
+    await openShop(ha, '分片上传店')
+    ha.storage['inv_pending_migrate'] = pendingLedgerOf(records)
+    const migrated = await storeA.migrateLocal()
+    assert.ok(migrated, '分片上传最后必须回 ledger')
+
+    const hb = newHarness({ ids: idFactory('b14') })
+    await openShop(hb, '一次性上传参照店')
+    await serverCall(hb, 'migrateLocal', { ledger: pendingLedgerOf(records) })
+
+    const ledgerA = (await serverCall(ha, 'getLedger', {})).ledger
+    const ledgerB = (await serverCall(hb, 'getLedger', {})).ledger
+    assert.deepStrictEqual(ledgerA.accounts, ledgerB.accounts,
+      '分片上传的 accounts 必须和一次性上传逐项相等')
+    assert.deepStrictEqual(ledgerA.aggregate, ledgerB.aggregate,
+      '分片上传的 aggregate 必须和一次性上传逐项相等')
+    assert.strictEqual(inventory.accountOf(ledgerA.accounts.c1).receivable, 30,
+      '同片重算份额：欠款 (100−40)−30 = 30，不是切坏后的 60')
+    // 落库流水逐条相等（fromRecordDoc 已剥掉 bookId/shopId/sortKey 等单头派生物）
+    const byId = function (a, b) { return a.id < b.id ? -1 : 1 }
+    const docsA = serverRecords(ha).sort(byId)
+    const docsB = serverRecords(hb).sort(byId)
+    assert.deepStrictEqual(docsA, docsB, '两店落库的流水必须逐条相等')
+    assert.strictEqual(docsA.length, plan.mergedCount)
+    assert.strictEqual(docsB.length, plan.mergedCount)
+
+    // 线协议：次数 = 片数、同一个 token、seq 连续、只有最后一片 final、只有第一片带 ledger
+    const wireCalls = ha.calls.filter(function (item) { return item.action === 'migrateLocal' })
+    assert.strictEqual(wireCalls.length, plan.shards.length, 'migrateLocal 调用次数 = 片数')
+    const wireTokens = {}
+    wireCalls.forEach(function (item, i) {
+      assert.ok(item.payload.token, '第 ' + i + ' 片必须带 token')
+      wireTokens[item.payload.token] = true
+      assert.strictEqual(item.payload.seq, i, 'seq 必须从 0 连续递增')
+      if (i === 0) {
+        assert.ok(item.payload.ledger && item.payload.ledger.products, '只有第一片带四张表')
+      } else {
+        assert.ok(!item.payload.ledger, '第 ' + i + ' 片不该再带四张表')
+      }
+      if (i === wireCalls.length - 1) {
+        assert.strictEqual(item.payload.final, true, '只有最后一片 final')
+      } else {
+        assert.ok(!item.payload.final, '第 ' + i + ' 片不该是 final')
+      }
+    })
+    assert.strictEqual(Object.keys(wireTokens).length, 1, '全程同一个 token')
+    assert.ok(!ha.storage['inv_pending_migrate'], '上传成功后本机 pending 必须删掉')
+    assert.strictEqual(ha.storage['inv_local_migrated'], true)
+
+    // b2) 混代语料回归（F1）：代 B 销售单（有 lines、returnedQty 0）+ 代 A 扁平
+    //     退货行（saleRecordId 指向销售行的 lineId）。规划时的 backfillReturnedQty
+    //     会把销售行的 returnedQty 就地回填成 3；曾几何时上传载荷用的就是这份
+    //     probe，服务端逐片归并再回填一次变 6，V4 拒收「本机账本有问题」——
+    //     每次重算都是同一个计划、同一个错，这本账永远传不上去，而同一份数据
+    //     一次性上传却是过的。修好后载荷必须还是本机原件。
+    function mixedFixture() {
+      const records = []
+      for (let i = 0; i < 90; i++) {
+        records.push({
+          id: 'f-' + i, type: 'in', amount: 1, profit: 0, remark: '', createdAt: 100000 + i,
+          lines: [{
+            lineId: 'fl-' + i, productId: 'p1', productName: '散货', sku: '', skuId: '',
+            color: '', size: '', qty: 1, unitPrice: 1, costPrice: 1, amount: 1, profit: 0
+          }]
+        })
+      }
+      // 代 B：有 lines 数组。returnedQty / returnedAmount 必须是 0 —— 一次性上传的
+      // V4 才是干净的，两店对照才有意义
+      records[39] = {
+        id: 's-hot', type: 'out', amount: 100, profit: 40, remark: '', createdAt: 100039,
+        paidAmount: 40, customerId: 'c1', customerName: '客一', customerPhone: '', customerAddress: '',
+        lines: [{
+          lineId: 'sl1', productId: 'p1', productName: '散货', sku: '', skuId: '',
+          color: '', size: '', qty: 10, unitPrice: 10, costPrice: 6, amount: 100, profit: 40,
+          allocations: [], returnedQty: 0, returnedAmount: 0
+        }]
+      }
+      // 代 A：扁平、没有 lines。saleRecordId 指向**销售行的 lineId**（代 A 老退货
+      // 行就是这么接的，归并后接成 saleLineId，见 inventory.js 的 backfillReturnedQty）
+      records[41] = {
+        id: 'r-hot', type: 'return', saleRecordId: 'sl1', productId: 'p1', productName: '货',
+        qty: 3, unitPrice: 10, costPrice: 5, amount: 30, profit: -15, payType: 'cash',
+        customerId: 'c1', customerName: '客户一', createdAt: 100041
+      }
+      return records
+    }
+
+    const mixed = mixedFixture()
+    // 纯函数级：片里那条 s-hot 必须还是本机原件（returnedQty 0），没被规划时
+    // 喂给 migrateRecordShape 的那份回填波及；本机原件也不能被改
+    const mixedPlan = shard.planShards(mixed, { limit: 40 })
+    assert.ok(mixedPlan.shards.length >= 2, '混代语料 90 条上限 40，必须真的切了')
+    const mixedSale = mixedPlan.shards.map(function (one) {
+      return one.find(function (r) { return r.id === 's-hot' })
+    }).filter(Boolean)
+    assert.strictEqual(mixedSale.length, 1)
+    assert.strictEqual(mixedSale[0].lines[0].returnedQty, 0,
+      '上传载荷里的 s-hot.lines[0].returnedQty 必须等于本机原件的 0，不带客户端回填')
+    assert.strictEqual(mixedSale[0].lines[0].returnedAmount, 0,
+      'returnedAmount 同理')
+    assert.strictEqual(mixed[39].lines[0].returnedQty, 0, '本机原件也不能被规划改掉')
+
+    // A 店走真实 store.migrateLocal()（分片）；B 店直连一次性上传同一份数据
+    const hMix = newHarness({ ids: idFactory('m14') })
+    const storeMix = loadStore(hMix)
+    await openShop(hMix, '混代分片店')
+    hMix.storage['inv_pending_migrate'] = pendingLedgerOf(mixed)
+    const mixedLedger = await storeMix.migrateLocal()
+    assert.ok(mixedLedger, '混代语料分片上传必须成功（修复前这里撞「本机账本有问题，没有上传」）')
+    assert.ok(
+      hMix.calls.filter(function (item) { return item.action === 'migrateLocal' }).length >= 2,
+      '混代语料必须真的走了分片路（≥ 2 片）')
+
+    const hMixB = newHarness({ ids: idFactory('mb14') })
+    await openShop(hMixB, '混代一次性店')
+    await serverCall(hMixB, 'migrateLocal', { ledger: pendingLedgerOf(mixed) })
+
+    const ledgerMix = (await serverCall(hMix, 'getLedger', {})).ledger
+    const ledgerMixB = (await serverCall(hMixB, 'getLedger', {})).ledger
+    assert.deepStrictEqual(ledgerMix.accounts, ledgerMixB.accounts,
+      '混代语料：分片上传的 accounts 必须和一次性上传逐项相等')
+    assert.deepStrictEqual(ledgerMix.aggregate, ledgerMixB.aggregate,
+      '混代语料：分片上传的 aggregate 必须和一次性上传逐项相等')
+    assert.strictEqual(inventory.accountOf(ledgerMix.accounts.c1).receivable, 30,
+      '欠款 (100−40)−30 = 30：服务端归并回填恰一次，销售行和退货行对得上')
+    const mixedDocsA = serverRecords(hMix).sort(byId)
+    const mixedDocsB = serverRecords(hMixB).sort(byId)
+    assert.deepStrictEqual(mixedDocsA, mixedDocsB, '混代语料：两店落库的流水必须逐条相等')
+
+    // c) 分片中途失败：本机原件不能在整本落库确认之前被删
+    const hc = newHarness({ ids: idFactory('c14') })
+    const storeC = loadStore(hc)
+    await openShop(hc, '中途断电店')
+    hc.storage['inv_pending_migrate'] = pendingLedgerOf(records)
+    hc.rewrite = function (data, result) {
+      if (data.action === 'migrateLocal' && data.payload.seq === 1) {
+        return { ok: false, error: '网络断了' }
+      }
+      return result
+    }
+    await rejects(function () { return storeC.migrateLocal() }, /网络断了/)
+    assert.ok(hc.storage['inv_pending_migrate'], '中途失败后本机 pending 必须还在')
+    assert.ok(!hc.storage['inv_local_migrated'], '中途失败后不许标记已迁移')
+    // 店里完全看不见半成品：bookId 还指着空账套，四张表和流水都是 0
+    const midLedger = (await serverCall(hc, 'getLedger', {})).ledger
+    assert.strictEqual(midLedger.products.length, 0)
+    assert.strictEqual(midLedger.aggregate.count, 0)
+
+    // 清掉故障重传：新 token、新账套，最终账仍然和一次性上传参照逐项相等
+    hc.rewrite = null
+    const retried = await storeC.migrateLocal()
+    assert.ok(retried, '重传必须成功')
+    const retryCalls = hc.calls.filter(function (item) { return item.action === 'migrateLocal' })
+    const allTokens = []
+    retryCalls.forEach(function (item) {
+      if (item.payload.token) allTokens.push(item.payload.token)
+    })
+    // 两次尝试各自从头到尾用同一个 token，两次之间必须换新 token
+    const tokenSeq = allTokens.slice()
+    let switched = 0
+    for (let i = 1; i < tokenSeq.length; i++) {
+      if (tokenSeq[i] !== tokenSeq[i - 1]) switched += 1
+    }
+    assert.strictEqual(switched, 1, '两次上传之间必须换过且只换一次 token')
+    const ledgerC = (await serverCall(hc, 'getLedger', {})).ledger
+    assert.deepStrictEqual(ledgerC.accounts, ledgerB.accounts,
+      '重传成功后的 accounts 仍必须和一次性上传参照逐项相等')
+    assert.deepStrictEqual(ledgerC.aggregate, ledgerB.aggregate)
+
+    // d) 小账本仍走一次性上传（不带 token）——防回归
+    const small = records.slice(0, 3)
+    const hd = newHarness({ ids: idFactory('d14') })
+    const storeD = loadStore(hd)
+    await openShop(hd, '小账本店')
+    hd.storage['inv_pending_migrate'] = pendingLedgerOf(small)
+    const smallLedger = await storeD.migrateLocal()
+    assert.ok(smallLedger)
+    const smallCalls = hd.calls.filter(function (item) { return item.action === 'migrateLocal' })
+    assert.strictEqual(smallCalls.length, 1, '3 条流水只发一次调用')
+    assert.ok(smallCalls[0].payload.token === undefined, '一次性上传不带 token')
+    assert.strictEqual(smallCalls[0].payload.ledger.records.length, 3, '走的是整本 ledger.records 协议')
+
+    // e) 孤儿退货退回一次性上传。把 r-hot 指向整本账里都不存在的 's-missing'；
+    //    同时把 s-hot 行上的已退痕迹清零——不然销售行记着 returnedQty 3、本片
+    //    （整本）里却没有一张退货指向它，那是 V4 的「数据自相矛盾」，不是
+    //    「孤儿退货」（孤儿是被退销售单**整本不在**：跨账套 / 已删，销售侧根本
+    //    没有那张单）。清零后这份语料才是今天一次性上传放行的那种孤儿。
+    const orphanRecords = hotFixture()
+    orphanRecords[41].lines[0].saleOrderId = 's-missing'
+    orphanRecords[39].lines[0].returnedQty = 0
+    orphanRecords[39].lines[0].returnedAmount = 0
+    const orphanPlan = shard.planShards(orphanRecords)
+    assert.strictEqual(orphanPlan.orphanReturns.length, 1)
+    assert.deepStrictEqual(orphanPlan.orphanReturns[0], { id: 'r-hot', saleOrderId: 's-missing' })
+
+    const he = newHarness({ ids: idFactory('e14') })
+    const storeE = loadStore(he)
+    await openShop(he, '孤儿退货店')
+    he.storage['inv_pending_migrate'] = pendingLedgerOf(orphanRecords)
+    const orphanLedger = await storeE.migrateLocal()
+    assert.ok(orphanLedger, '孤儿退货走一次性上传，必须和今天一样放行')
+    const orphanCalls = he.calls.filter(function (item) { return item.action === 'migrateLocal' })
+    assert.strictEqual(orphanCalls.length, 1, '退回一次性上传：只发一次调用')
+    assert.ok(orphanCalls[0].payload.token === undefined, '不带 token')
+    assert.ok(takeWarns(/只能一次性上传/).length >= 1, '要留一条 warn 说明为什么退回一次性上传')
+
+    // f) planShards 单元用例：不走云端，直接调纯函数，给小上限
+    //    同 id 的两条记录必须同片（limit: 1 也要同片）
+    const dupPlan = shard.planShards([
+      { id: 'dup', type: 'in', amount: 1, profit: 0, remark: '', createdAt: 1, lines: [{ lineId: 'd1' }] },
+      { id: 'dup', type: 'pay', amount: 1, remark: '', createdAt: 2, lines: [] }
+    ], { limit: 1 })
+    assert.strictEqual(dupPlan.shards.length, 1, '同 id 必须同片，limit 1 也不拆')
+    assert.strictEqual(dupPlan.shards[0].length, 2)
+
+    // 代 A（扁平、无 lines）语料：退货行 saleRecordId → 归并后视图里接线成
+    // saleOrderId，必须和销售单同片——证明「代 A 靠归并后视图接线」真的接上了
+    const genAPlan = shard.planShards([
+      { id: 'a1', type: 'out', orderId: 'ord', productId: 'p1', productName: '货', qty: 2, unitPrice: 10, costPrice: 6, amount: 20, profit: 8, payType: 'cash', createdAt: 10 },
+      { id: 'a2', type: 'return', saleRecordId: 'a1', productId: 'p1', productName: '货', qty: 1, unitPrice: 10, costPrice: 6, amount: 10, profit: -4, createdAt: 11 }
+    ], { limit: 1 })
+    assert.strictEqual(genAPlan.shards.length, 1, '代 A 的退货靠归并后视图接线，必须和销售单同片')
+    assert.strictEqual(genAPlan.mergedCount, 2)
+
+    // 同一张销售单的多条原始行（同 orderId）永远同片，且归并后算**一条**（mergedCount）
+    const saleRowsPlan = shard.planShards([
+      { id: 'x1', type: 'out', orderId: 'so', productId: 'p1', productName: '货', qty: 1, unitPrice: 10, costPrice: 6, amount: 10, profit: 4, payType: 'cash', createdAt: 1 },
+      { id: 'x2', type: 'out', orderId: 'so', productId: 'p1', productName: '货', qty: 2, unitPrice: 10, costPrice: 6, amount: 20, profit: 8, payType: 'cash', createdAt: 2 },
+      { id: 'y1', type: 'in', amount: 1, profit: 0, remark: '', createdAt: 3, lines: [{ lineId: 'y1l' }] }
+    ], { limit: 1 })
+    const xShard = saleRowsPlan.shards.find(function (one) {
+      return one.some(function (r) { return r.id === 'x1' })
+    })
+    assert.ok(xShard.some(function (r) { return r.id === 'x2' }), '同一张销售单的多条原始行永远同片')
+    assert.strictEqual(saleRowsPlan.mergedCount, 2, 'so 两条原始行归并后只算一条，加 y1 共两条')
+
+    // 单个原子组自己就超限时自成一片，并且出现在 oversized 里。
+    // 超限组**不在数组首位**（前面先放两个普通小组）：oversized 的采集曾经
+    // 写在装箱循环的「当前片为空」分支里，只有排第一的原子组判得到——超限组
+    // 放开头的旧夹具对那个 bug 恒绿。这条用例改好后必须先红一次再修实现。
+    const fat = []
+    fat.push({ id: 'solo-a', type: 'pay', amount: 1, remark: '', createdAt: 1, lines: [] })
+    fat.push({ id: 'solo-b', type: 'pay', amount: 1, remark: '', createdAt: 2, lines: [] })
+    for (let i = 0; i < 3; i++) {
+      fat.push({ id: 'big', type: 'pay', amount: 1, remark: '', createdAt: i + 10, lines: [] })
+    }
+    const fatPlan = shard.planShards(fat, { limit: 2 })
+    assert.strictEqual(fatPlan.oversized.length, 1, '不在首位的超限原子组也要进 oversized')
+    assert.strictEqual(fatPlan.oversized[0].mergedCount, 3)
+    assert.ok(fatPlan.shards.some(function (one) { return one.length === 3 }), '超限原子组自成一片')
+    assert.strictEqual(fatPlan.shards.length, 2, '两个普通小组一片 + 超限组自成一片')
+
+    // 两个超限原子组、都不在首位：每一个都要被记进 oversized——钉住「对每个
+    // 原子组判一次」，而不只是「不再漏掉非首位的那一个」
+    const fat2 = []
+    fat2.push({ id: 'head', type: 'pay', amount: 1, remark: '', createdAt: 1, lines: [] })
+    for (let i = 0; i < 3; i++) {
+      fat2.push({ id: 'big1', type: 'pay', amount: 1, remark: '', createdAt: i + 10, lines: [] })
+    }
+    for (let i = 0; i < 3; i++) {
+      fat2.push({ id: 'big2', type: 'pay', amount: 1, remark: '', createdAt: i + 20, lines: [] })
+    }
+    const fat2Plan = shard.planShards(fat2, { limit: 2 })
+    assert.strictEqual(fat2Plan.oversized.length, 2, '两个非首位的超限原子组都要进 oversized')
+    assert.strictEqual(fat2Plan.oversized[0].mergedCount, 3)
+    assert.strictEqual(fat2Plan.oversized[1].mergedCount, 3)
+    assert.strictEqual(fat2Plan.shards.length, 3, '普通组一片，两个超限组各自成一片')
+    assert.ok(fat2Plan.shards.some(function (one) {
+      return one.length === 3 && one[0].id === 'big1'
+    }), '第一个超限组自成一片')
+    assert.ok(fat2Plan.shards.some(function (one) {
+      return one.length === 3 && one[0].id === 'big2'
+    }), '第二个超限组自成一片')
+
+    // 超限原子组排在**首位**：上一条把夹具挪成非首位后，反方向没人管——预扫
+    // 若被改成 atoms.slice(1)（只从第二个原子组判起），非首位的用例全绿、
+    // 排第一的那个反而漏掉。首位和非首位两条并存，两个方向都钉住。
+    const fatHead = []
+    for (let i = 0; i < 3; i++) {
+      fatHead.push({ id: 'big0', type: 'pay', amount: 1, remark: '', createdAt: i + 10, lines: [] })
+    }
+    fatHead.push({ id: 'solo-e', type: 'pay', amount: 1, remark: '', createdAt: 1, lines: [] })
+    const fatHeadPlan = shard.planShards(fatHead, { limit: 2 })
+    assert.strictEqual(fatHeadPlan.oversized.length, 1, '首位的超限原子组也要进 oversized')
+    assert.strictEqual(fatHeadPlan.oversized[0].mergedCount, 3, '记的是该组的真实条数')
+    assert.ok(fatHeadPlan.shards.some(function (one) {
+      return one.length === 3 && one[0].id === 'big0'
+    }), '首位的超限组也自成一片')
+
+    // firstChars（F4a）：第 0 片驮着四张表时的字符预算要更小。limit / chars 都
+    // 给足、只把 firstChars 压小——第一片必须被压小，后面的片仍按 chars 装满。
+    // 压到**比一个原子组还小**：每个原子组都比 firstChars 大，但 chars 给足了，
+    // 所以正确的 oversized 判据（charsLimit）下一个都不超限；预扫判据若被换成
+    // firstChars，六个原子组全会进 oversized——旧参数（firstChars = 2 ×
+    // oneAtomChars）下两种判据都得 0，那条断言配不上它的注释。
+    const fc = []
+    for (let i = 0; i < 6; i++) {
+      fc.push({
+        id: 'fc-' + i, type: 'in', amount: 1, profit: 0, remark: '', createdAt: 200 + i,
+        lines: [{
+          lineId: 'fcl-' + i, productId: 'p1', productName: '散货', sku: '', skuId: '',
+          color: '', size: '', qty: 1, unitPrice: 1, costPrice: 1, amount: 1, profit: 0
+        }]
+      })
+    }
+    // 原子组的 chars 就是 JSON.stringify(atom.items).length（整个数组的序列化，
+    // 不是单条记录），firstChars 按同口径算
+    const oneAtomChars = JSON.stringify([fc[0]]).length
+    assert.strictEqual(JSON.stringify([fc[5]]).length, oneAtomChars, '夹具自检：六个原子组要等大')
+    const fcPlan = shard.planShards(fc, { limit: 1000, chars: 1000000, firstChars: oneAtomChars - 1 })
+    assert.strictEqual(fcPlan.shards.length, 2, 'firstChars 压小后切成两片')
+    assert.ok(fcPlan.shards[0].length < fcPlan.shards[1].length, '第一片必须比后面的片小')
+    assert.strictEqual(fcPlan.shards[0].length, 1, '第 0 片的预算比一个原子组还小，只装无条件收下的第一个')
+    assert.strictEqual(fcPlan.shards[1].length, 5, '第二片回到 chars 预算，装下剩下的五个')
+    assert.strictEqual(fcPlan.oversized.length, 0, '每个原子组都比 firstChars 大也不进 oversized：判据是 charsLimit')
+
+    // g) 整本只切出一片、但那片本身超限：store.migrateLocal 的 oversized 告警必须
+    //    排在「一片 → 一次性上传」的 early return **之前**——挪到 return 之后这句
+    //    就成了死代码，而「一片但超限」恰恰最需要这条线索（真撞事务上限时错误里
+    //    只有 TransactionNotExist）。夹具：一张销售单挂 45 张退货单，46 条归并记录
+    //    是不可切的原子组、超过 40 上限，于是整本只切出一片，走一次性上传。
+    //    销售行 returnedQty / returnedAmount 预填成名下退货行之和（45 / 450），
+    //    拆分不变量由落库时的 repairReturnSplits 重算。
+    const fatOnce = []
+    fatOnce.push({
+      id: 's-fat', type: 'out', amount: 500, profit: 200, remark: '', createdAt: 200000,
+      paidAmount: 0, customerId: 'c1', customerName: '客一', customerPhone: '', customerAddress: '',
+      lines: [{
+        lineId: 'sl-fat', productId: 'p1', productName: '散货', sku: '', skuId: '',
+        color: '', size: '', qty: 50, unitPrice: 10, costPrice: 6, amount: 500, profit: 200,
+        allocations: [], returnedQty: 45, returnedAmount: 450
+      }]
+    })
+    for (let i = 0; i < 45; i++) {
+      fatOnce.push({
+        id: 'r-fat-' + i, type: 'return', amount: 10, profit: -4, remark: '', createdAt: 200001 + i,
+        customerId: 'c1', customerName: '客一', customerPhone: '', customerAddress: '',
+        lines: [{
+          lineId: 'rl-fat-' + i, productId: 'p1', productName: '散货', sku: '', skuId: '',
+          color: '', size: '', qty: 1, unitPrice: 10, costPrice: 6, amount: 10, profit: -4,
+          saleOrderId: 's-fat', saleLineId: 'sl-fat'
+        }]
+      })
+    }
+    const fatOncePlan = shard.planShards(fatOnce)
+    assert.strictEqual(fatOncePlan.shards.length, 1, '唯一的原子组自成一片，整本就是一片')
+    assert.strictEqual(fatOncePlan.oversized.length, 1, '46 条的原子组超过 40 上限，要进 oversized')
+    assert.strictEqual(fatOncePlan.oversized[0].mergedCount, 46)
+
+    const hf = newHarness({ ids: idFactory('f15') })
+    const storeF = loadStore(hf)
+    await openShop(hf, '整片超限店')
+    hf.storage['inv_pending_migrate'] = pendingLedgerOf(fatOnce)
+    const fatLedger = await storeF.migrateLocal()
+    assert.ok(fatLedger, '整片超限走一次性上传也必须成功')
+    const fatOnceCalls = hf.calls.filter(function (item) { return item.action === 'migrateLocal' })
+    assert.strictEqual(fatOnceCalls.length, 1, '只发一次调用')
+    assert.ok(fatOnceCalls[0].payload.token === undefined, '不带 token：走的是一次性上传')
+    assert.strictEqual(takeWarns(/超过单片上限/).length, 1,
+      '整本只切出一片但那片超限，oversized 告警必须照打（它排在 early return 之前）')
   }
 
   console.log('store.test.js ok')

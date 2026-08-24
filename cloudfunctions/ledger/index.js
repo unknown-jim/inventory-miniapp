@@ -155,6 +155,35 @@ function createDb() {
       } catch (error) {
         const msg = String((error && (error.message || error.errMsg)) || error || '')
         if (/conflict|transaction/i.test(msg)) {
+          // **改写之前先把原文记下来。** 这句「库存刚被别人改过」是给店主看的话，
+          // 但它盖住的是**任何**匹配 conflict / transaction 的底层错误——真正的并发
+          // 冲突、事务超时、单事务写入量超限，在回包和日志里长得一模一样。
+          //
+          // 这不是假想。2026-08-24 演示店实测：改一张挂着 90 张退货单的销售单的
+          // 单价（单事务写 ledgers 1 + 销售单 1 + 退货单 90 = 92 条）**确定性失败**，
+          // 两次都是这句话；函数耗时 12.3 / 11.5 秒（远未到 60 秒上限）、内存
+          // 155 / 138 MB（远未到 512 MB），事务是原子的（一条都没写进去）。
+          // 这行 console.error 已经交货了，原始错误拿到了：
+          //   [ResourceUnavailable.TransactionNotExist] Transaction does not exist
+          //   on the server, transaction must be commit or abort in 30 seconds
+          // **但它没有解释那次失败**——那两次函数耗时只有 12.3 / 11.5 秒，离它
+          // 自己说的 30 秒差得远。**后来在演示店上二分过：22 条写入通过（9.7 秒）、
+          // 47 条失败（11.3 秒）、92 条失败（12–16 秒）**——11.3 秒失败而 9.7 秒通过，
+          // **时间被彻底排除**，是条数或体积。两者还没分开：那家店的 `ledgers`
+          // 有 3.6 MB、每个事务都要重写它一遍，所以那个区间可能只对大账本成立。
+          // **别把那句 30 秒文案当结论**：它是现象，不是原因。
+          //
+          // 还有一条拿到原文之后才看得出来的后果：`TransactionNotExist` 会匹配上面
+          // 那条 /conflict|transaction/i，于是被改写成「库存刚被别人改过，请再提交」
+          // ——一句**劝人重试**的话，而这类失败是确定性的（同一张单两次都炸），
+          // 重试永远不会成功。**这是给了错误的建议**，比数字不准严重。修它是独立的
+          // 一件事：得先判断是不是所有 TransactionNotExist 都不该重试（30 秒那句
+          // 暗示也可能是一次真超时，那种重试反而有用），别顺手在这里加个分支就上线。
+          //
+          // console.error 的输出进云函数日志，不进回包，所以不会把内部细节
+          // 泄露给客户端。**不要为了「日志干净」把这行删掉**——删掉就等于把
+          // 下一次同类故障的排查成本重新抬回到「只能靠改代码重部署来加日志」。
+          console.error('[ledger] transaction failed, original error:', msg, error && error.stack)
           throw new Error('库存刚被别人改过，请再提交')
         }
         throw error
@@ -175,7 +204,25 @@ exports.main = async function (event) {
       // 下一张送货单印 0.00 的前欠。门在 ledger-core.js 的 dispatch 顶部。
       apiVersion: event && event.apiVersion,
       payload: (event && event.payload) || {},
-      db: createDb()
+      db: createDb(),
+      storage: {
+        // 商品图清理：云函数以管理端身份删文件。错误在这里吞干净——ledger-core 只
+        // await，这条路上任何失败都不许变成客户端可见的「记账失败」（最坏只是留
+        // 一个孤儿文件）。为什么必须挂在事务提交之后，见 ledger-core.js dispatch
+        // 里「唯一的 sanctioned 例外」那段注释。
+        deleteFiles: async function (fileIds) {
+          try {
+            // deleteFile 单次上限 50 个（微信云存储）。restoreCleared 可能一次作废
+            // 清空后新记的几十张商品图，超了整批报错被吞，这批文件就永久留在
+            // 存储里——按页删掉。
+            for (let i = 0; i < fileIds.length; i += 50) {
+              await cloud.deleteFile({ fileList: fileIds.slice(i, i + 50) })
+            }
+          } catch (error) {
+            console.warn('[ledger] 商品图清理失败（只留孤儿文件，不影响账）', error)
+          }
+        }
+      }
     })
     return Object.assign({ ok: true }, result)
   } catch (error) {
