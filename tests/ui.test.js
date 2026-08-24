@@ -749,5 +749,8 @@ run().catch(function (error) {
   console.error('8. wx.showModal 是系统弹窗，自动化点不到内部按钮，脚本里用 mockWxMethod 自动确认')
   console.error('9. 送货单弹层在 virtualHost 自定义组件里，页面级选择器够不着（page.$$ / >>> /')
   console.error('   selectComponent 实测都是 0），用例核对的是页面数据里的 slip，别再写回 .js-slip')
+  console.error('10. 在任务 worktree 里跑时，project.private.config.json 在 .gitignore 里，git worktree')
+  console.error('    add 出来的目录没有它，工具会按全新项目的默认设置打开这棵树。症状是随机的初始化/')
+  console.error('    超时失败而不是断言失败，先从主检出 cp 一份过来再跑，别当成代码回归')
   process.exit(1)
 })
