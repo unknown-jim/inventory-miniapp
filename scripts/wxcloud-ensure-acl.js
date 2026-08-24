@@ -9,10 +9,26 @@ const root = path.join(__dirname, '..')
 const COLLECTIONS = ['shops', 'members', 'ledgers', 'ledger_records', 'ledger_clears', 'platform_admins']
 const ACL_TAG = 'ADMINONLY'
 
-// 云存储（商品图）的 ACL。READWRITE = 所有用户可读、仅创建者可写读：
+// 云存储（商品图）的 ACL。要的是「所有用户可读、仅创建者可读写」：
 // 店员客户端要能直接拿 cloud:// fileID 渲染 <image>（可读），
 // 上传者是创建者所以能传（可写）——上传在客户端做，不绕云函数。
-const STORAGE_ACL_TAG = 'READWRITE'
+//
+// **它的标签叫 `READONLY`，不叫 `READWRITE`。** 这一条是 2026-08-25 在控制台
+// 人工选中「所有用户可读，仅创建者可读写」之后、用 `tcbGetStorageACL` 读回来实测的：
+//
+//   控制台「所有用户可读，仅创建者可读写」 -> READONLY   ← 要的就是它
+//   控制台「仅创建者可读写」             -> PRIVATE
+//   控制台「所有用户可读」                 -> ADMINWRITE（**禁客户端直传**）
+//   控制台「所有用户不可读写」             -> ADMINONLY
+//
+// 和上面表 ACL 那套词汇是同一套（见 docs/cloud-ledger.md 的标签对照），
+// **`READWRITE` 根本不在这套词汇里**。写成 READWRITE 的后果不是报错就完事：
+// 幂等判断会永远不相等，于是**每次部署都去改一次已经设对的权限**。
+//
+// 另：控制台给「所有用户可读」标的适用场景写着「文章配图、商品图片等」，
+// 看上去正是我们要的，**但它把写权限收给了管理端**，客户端 `wx.cloud.uploadFile`
+// 直传会失效。别被那行提示带偏。
+const STORAGE_ACL_TAG = 'READONLY'
 
 function collectionsNeedingAcl(currentByName, wanted, tag) {
   const names = wanted || COLLECTIONS
