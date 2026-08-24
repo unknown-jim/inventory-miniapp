@@ -1371,7 +1371,10 @@ async function verifyPhase(db, shopId, ledger, state, limit, now) {
       || inventory.toNumber(got2.verified) !== inventory.toNumber(state.verified)) {
       throw new Error('账本升级进度被另一次调用推进过，请重新读一次状态再继续')
     }
-    // 老数组 records **故意不删**：它是 O(1) 回滚路的全部依仗（方案 §六-(b)）
+    // 老数组 records **故意不删**：切开关这一刻它仍是回滚路的全部依仗。
+    // 但 2b-3 起它只活到**下一笔账**为止 —— applyMutation 不再携带 records，
+    // 而 putLedger 是整文档 set()，所以迁完之后第一次记账就把它删了。
+    // 回滚窗口 = 从这里到那一笔账之间，见 rollbackMigration 上方注释。
     await tx.putLedger(shopId, Object.assign({}, cur, {
       bookId: bookId,
       accounts: terms.accounts,
@@ -1522,8 +1525,11 @@ async function convertOneSnapshot(db, shopId, meta) {
         // 另一次调用抢先转好了。集合里那批是同样的 _id、同样的内容，不用清理。
         return { raced: true, bookId: String(cur.bookId) }
       }
-      // records 数组**保留不删** —— 和 ledgers.records 同一个理由：那是回滚路，
-      // 清掉就退不回旧云函数了。
+      // 快照里的 records 数组**保留不删**。2b-3 删的是账本文档上的 ledgers.records，
+      // **一个字都没动这一份**：它归「快照双份存储的终止」那一项管，单独排。
+      // 原来的理由（「和 ledgers.records 同一个理由：那是回滚路」）已经不成立 ——
+      // 账本上那份 2b-3 之后活不过一笔账。现在保留它的理由只剩这一条：清掉就退不回
+      // 旧云函数了，而且这份快照的老流水在集合之外再没有第二个副本。
       await tx.putClearSnapshot(snapshotId, Object.assign({}, cur, {
         bookId: bookId,
         accounts: accounts,
@@ -1621,6 +1627,11 @@ async function convertSnapshots(db, shopId, payload, now) {
 //     所以 aggregate.count 就是转换那一刻 countAll() 校验过的归并条数。
 //   · B 类（迁移之后、dropLegacy 之前点「清空数据」存的）：aggregate 是被封存账套
 //     那一刻的增量维护值，而被封存的账套此后不再变化。
+//     **2b-3 起不再新增，只剩存量**：记账不再携带 ledgers.records，迁移之后第一笔账
+//     就把它抹了；空数组走不过 apply.snapshotLists 的 `if (legacy.length)`，也走不过
+//     core.clearDoc 的 `if (snapshot.records && snapshot.records.length)`
+//     ——**快照文档写不写 records 键，最终是 clearDoc 那道说了算**。
+//     今天还带着数组的 B 类，全都是 2b-3 部署之前留下的那几份。
 // **不要改成「重新归并 records 数组再比条数」**：B 类的数组是迁移前的过期子集，
 // 归并出来的条数本来就不等于集合里的条数，那么判会把 B 类全判成失败。
 async function dropOneSnapshotLegacy(db, shopId, meta, ledgerBookId, now) {
@@ -1665,7 +1676,13 @@ async function dropOneSnapshotLegacy(db, shopId, meta, ledgerBookId, now) {
     return entry
   }
   if (!legacy.length) {
-    // 幂等，也覆盖「本来就没有数组」的那几种（stamp-only、迁移之后才清空的空账套）
+    // 幂等，也覆盖「本来就没有数组」的那几种（stamp-only、迁移之后才清空的空账套）。
+    // **2b-3 起 clearAll 生成的每一份新快照都走这一支**（快照文档没有 records 键，
+    // 由 core.clearDoc 那道守卫决定），所以 report 里满屏 skipped 是常态，不是出错 —— 真正有事
+    // 可做的只有 2b-3 之前留下的存量。看见 skipped 就去改判据，会把存量那几份一起
+    // 判死，那正是上面那段「不要改成重新归并再比条数」在拦的事。
+    // 这一支**直接 return，一个字都不写文档**（不盖 legacyRecordsDroppedAt）：
+    // 本来就没有数组 ≠ 清过了，别给它留下假痕迹。
     entry.status = 'skipped'
     entry.reason = doc.legacyRecordsDroppedAt ? '这份快照的老数组已经清过了' : '这份快照本来就没有 records 数组'
     return entry
@@ -1750,6 +1767,12 @@ async function dropOneSnapshotLegacy(db, shopId, meta, ledgerBookId, now) {
 // 故意把数组留着，因为那时它还是旧云函数退路的一半；这个动作就是宣布那条退路
 // 到此为止，把另一半也收掉。
 //
+// **2b-3 之后不再产生新的双份**（记账不带 records，clearAll 存的快照也就没有
+// records 数组），所以这个动作只对**存量**快照有事可做，新快照一律报 skipped。
+// 但**存量任务仍然存在** —— 2026-08-25 生产上还有 3 份带着数组的快照待清（卓祥
+// 1 份、msxeubh4c6d5f9 2 份）。**不要因为「新代码不再产生」就把这个 mode 或它的
+// 判据删掉/改松**：那 3 份就是靠它清的，判据一改，它们一份都清不掉。
+//
 // 闸只有一条：**本店必须已经跑过 mode:'dropLegacy'**（`legacyDroppedAt` 非空）。
 // 为什么不判「ledgers.records 已经为空」——那是一个能被巧合满足的派生状态：活账套
 // 本来就 0 条流水的店（生产上的卓祥 mt3231n3ixeenv 就是），它的老数组天然是空的，
@@ -1828,9 +1851,13 @@ async function dropSnapshotLegacy(db, shopId, payload, now) {
 // 最后一步只能 newBook 的原因之一：彩排记的那条账留在集合里删不掉。
 // **这是显式动作**，不要让人去控制台手改生产文档。
 //
-// **回滚只对「迁完之后一条新账都没记」成立。** 迁完之后店是解冻的，新流水只进
-// ledger_records；ledgers.records 那份老数组一条都不涨（applyMutation 把它原样
-// 带过去，那是 O(1) 回滚路的依仗）。所以回滚是把读路径整个切回一个**过期的真子集**
+// **回滚只对「迁完之后一条新账都没记」成立。** 2b-3 之前这句话说的是「守卫会
+// 拦住记过账的店」；2b-3 之后它更硬了：applyMutation 不再携带 records，而
+// putLedger 是整文档 set()，所以**迁完之后的第一笔账就把老数组删掉了** ——
+// 那种店走到这里会撞下面「没有可回滚的老流水」，连守卫都轮不到跑。
+// 守卫仍然必须留着：它管的是老数组还在、但集合里已经有带外文档的那一类。
+//
+// 对老数组还在的那一类，回滚是把读路径整个切回一个**过期的真子集**
 // —— 迁移之后记的账在老路径上一条都看不见，欠款和流水数当场跌回迁移那一刻。
 //
 // 靠哨兵发现不了：回滚后 recordsPending 为真，getLedger 不走 attachRecent，
@@ -2018,10 +2045,13 @@ async function rollbackMigration(db, shopId, now, payload) {
         + '如果店还在，多半是一次瞬时失败 —— 再调一次就好；反复如此再去控制台确认文档还在不在。')
     }
     if (!((cur.records || []).length)) {
-      // 三种来路都会把 ledgers.records 清空，别只报第一种：
-      throw new Error('没有可回滚的老流水（老数组是空的）。三种来路：跑过 mode:"dropLegacy"；'
-        + '店主点过「清空数据」（clearAll）；店主点过「恢复清空前数据」（restoreCleared）。'
-        + '后两种在 ledger_clears 的快照文档里还留着老数组的副本')
+      // 四种来路都会把 ledgers.records 清空，别只报第一种。第四种是 2b-3 加的，
+      // 而且它是最常见的那一种：部署 2b-3 之后**任何一笔账**都会删掉老数组
+      // （applyMutation 不再携带它，putLedger 是整文档 set()）。
+      throw new Error('没有可回滚的老流水（老数组是空的）。四种来路：跑过 mode:"dropLegacy"；'
+        + '店主点过「清空数据」（clearAll）；店主点过「恢复清空前数据」（restoreCleared）；'
+        + '跑过 2b-3 之后记过账（记账不再携带老数组，第一笔就把它删了）。'
+        + '中间两种在 ledger_clears 的快照文档里还留着老数组的副本')
     }
     const bookId = bookOf(cur, shopId)
 
@@ -2095,8 +2125,9 @@ async function rollbackMigration(db, shopId, now, payload) {
   }
 }
 
-// mode:'dropLegacy' —— 把 ledgers.records 置空。**跑完就没有 O(1) 回滚了**，
-// 默认不跑，只在 P12 逼近 5MB 时当晚跑。
+// mode:'dropLegacy' —— 把 ledgers.records 置空。**跑完就没有 O(1) 回滚了**。
+// 2b-3 之前它是可选优化（默认不跑，只在 P12 逼近 5MB 时当晚跑）；2b-3 起是上线
+// 前置，每家店都要跑，顺序见本注释末尾那段。
 //
 // 前置条件只有两条，两条都**直接**回答「删了会不会把唯一一份副本删掉」：
 //
@@ -2130,6 +2161,14 @@ async function rollbackMigration(db, shopId, now, payload) {
 // 判据是「集合空不空」而**不是**「集合条数 >= 归并条数」：迁完之后正常营业一周，
 // 店主删掉几张单是常态（deleteRecord 从集合里删、老数组一条不动），拿条数当硬闸
 // 会在最需要 dropLegacy 的那家店上误伤。差多少照样回在 shortfall 里给人看。
+//
+// **2b-3 起它从「可选优化」变成「上线前置」，而且顺序不能反：先在每家店跑完
+// dropLegacy，再部署 2b-3 版本的云函数。** 理由：2b-3 的 applyMutation 不再携带
+// records，而 putLedger 是整文档 set()，所以部署之后**每家店的第一笔记账就是一次
+// 没有任何守卫的隐式清空** —— 上面那三道闸（recordsMigratedAt 非空、账套号没变、
+// 集合数得着且非空）一道都不会跑。顺序反了不会报错、也没有回头路：那一笔账落下去
+// 的同一瞬间，这家店的老数组就没了。
+// 跑晚了则是白跑（字段已经被记账删掉，dropped 恒为 0）。
 async function dropLegacy(db, shopId, now) {
   const pre = await preCountProbe(db, shopId)
   const outcome = await db.runTransaction(async function (tx) {

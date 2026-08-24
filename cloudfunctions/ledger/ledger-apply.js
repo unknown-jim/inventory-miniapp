@@ -30,17 +30,21 @@ const RECORD_DOC_KEYS = ['_id', 'bookId', 'shopId', 'sortKey', 'saleOrderId', 'p
 // out / return 是多行，单头留空 —— 唯一用到这条索引的 latestPurchase 只查 in。
 const SINGLE_LINE_TYPES = ['in', 'convert', 'adjust_in', 'adjust_out']
 
+// 账本文档的流水形态版本。2b-1 之前流水住在 ledgers.records 数组里（版本 1），
+// 2b-1 起住在 ledger_records 集合里（版本 2）。emptyLedger 盖这个章 ——
+// 新建的账本出生就是集合形态，不需要迁移，recordsPending 见了它直接放行。
+const RECORDS_SCHEMA = 2
+
 function emptyLedger() {
   return {
     products: [],
     skus: [],
-    // 遗留字段。2b-1 起流水在 ledger_records 集合里，这里恒为空数组；
-    // 迁移期用「非空 + 没有 recordsMigratedAt」判定「这本账还没搬」，见 recordsPending。
-    // 2b-3 观察一周后删字段。
-    records: [],
     customers: [],
     categories: [],
     bookId: '',
+    // 出生就是集合形态的章。它和 recordsMigratedAt 是**并列的两个正面证据**，
+    // 不是版本升级链 —— 三家生产店永远只有后者，那没关系。见 recordsPending。
+    recordsSchema: RECORDS_SCHEMA,
     revision: 0,
     clearSnapshots: [],
     lastRestoredClearAt: 0,
@@ -314,22 +318,68 @@ function listsOf(ledger) {
 //      checkLedger / checkAggregates 里跑，**migrateRecords 的 V4-V12 不查它** ——
 //      漏跑阶段 0，这一类会一路迁进集合，之后不再报错，只是安静地把钱算错。
 // 收益不抵风险。
+//
+// **2b-3 起新代码不再生产 ledger.records**（emptyLedger 不建、applyMutation 不带），
+// 所以这里读到的一律是升级前留下的老文档、ledger_clears 里的老快照、或者
+// migrateLocal 送上来的本机 payload。不是漏删的，不要顺手清掉。
 function legacyRecordsOf(ledger) {
-  const records = cloneList(ledger && ledger.records)
+  const records = cloneList(legacyArrayOf(ledger))
   const merged = inventory.needsRecordMigration(records)
     ? inventory.migrateRecordShape(records)
     : records
   return inventory.repairReturnSplits(merged)
 }
 
+// 升级前那份老数组。**只准拿来当反面证据**（见 recordsPending），不要拿它
+// 判「搬完了没有」—— 那是 2b-3 删掉的老判据，方向是反的。
+function legacyArrayOf(ledger) {
+  const list = ledger && ledger.records
+  return Array.isArray(list) ? list : []
+}
+
 // 「这本账的流水还没搬进 ledger_records」。写路径见了它必须停下来报错，
-// 否则新流水写进集合、老流水留在数组里，两边都不是完整的账。
+// 否则新流水写进集合、老流水留在别处，两边都不是完整的账。
+//
+// 判据是 **default-deny**：只有拿得出「流水住在集合里」的正面证据才放行。
+//   ① recordsMigratedAt 非空 —— migrateRecords 迁完盖的章（stampOnly 也盖它）。
+//   ② recordsSchema >= RECORDS_SCHEMA —— emptyLedger 盖的章，这本账出生就在集合里，
+//      **但这句话只在老数组不在场时才是真的**，见下面那段。
+// 两个章是并列的，不是升级链：三家生产店只有①，云上新店两个都有。
+//
+// **②要被非空的 records 数组一票否决，①不用。** 两个章说的不是同一件事：
+// ①是「搬家这个动作跑完了」，老数组留在原地是那次搬家的既定结果（2b-3 之前
+// 记账还会把它原样带过去），所以①和非空数组共存是**正常态** —— 三家生产店在
+// 部署这一版的当刻正是这个形状，否决①就是把她们全冻死。②说的是「这本账出生
+// 就没有老流水」，一份既盖着出生章、又带着非空 records 的文档在推翻这句话本身：
+// 它不是新账本，是被带外塞过老流水的（演示店压测灌数据、控制台手改、只恢复了
+// ledgers 没恢复 ledger_records 的备份）。这时候出生章是假的，反面证据优先。
+//
+// 不否决②会漏两类，都是真的会错账：
+//   a. 这种文档从头到尾就没被 assertRecordsReady 冻过，addSale 直接把新流水写进
+//      一个空集合，老流水留在数组里，两边都不是完整的账 —— 恰好是这道门要防的
+//      那件事，而且**老判据（default-allow）在这个形状上反而是冻住的**。
+//   b. rollbackMigration 只清 recordsMigratedAt、不动 recordsSchema。②不被否决的话，
+//      回滚之后②还在，店照常营业 —— 而 docs/cloud-ledger.md 的「回滚」通篇写着
+//      「写是冻着的、该店仍停摆」。那趟回滚会静默地什么都没做。
+// tests/ledger-records.test.js 的 T-C7 / T-C8 钉着这两条。
+//
+// 2b-3 之前这里看的是第三个信号「records 数组非空」，方向和上面那条**相反**。
+// **不要把它改回去**：数组非空是 default-allow 的判据 —— 数组丢了（只从备份恢复了
+// ledgers、没恢复 ledger_records；或者带外清过文档）它就放行，而放行的后果是把新
+// 流水写进一个空集合、老账再也拼不回来。同一个字段，当放行依据是错的、当否决依据
+// 是对的：拿不准就冻住，冻住有出路（跑 migrateRecords，零流水的店走 stampOnly 只
+// 补戳），放错了没有。tests/ledger-records.test.js 的 T-C1 钉的就是这一条。
 function recordsPending(ledger) {
   if (!ledger) return false
   if (ledger.recordsMigratedAt) return false
-  return !!(Array.isArray(ledger.records) && ledger.records.length)
+  if (inventory.toNumber(ledger.recordsSchema) >= RECORDS_SCHEMA && !legacyArrayOf(ledger).length) {
+    return false
+  }
+  return true
 }
 
+// lists.records 只可能来自 clearedBackup（升级前的单份备份格式，流水还装在数组里）。
+// 2b-3 起新代码不生产这个字段，所以这条兜底是纯读老数据，不是漏删的。
 function recordCountOf(lists) {
   if (!lists) return 0
   if (lists.aggregate && lists.aggregate.count) return lists.aggregate.count
@@ -365,6 +415,9 @@ function snapshotLists(ledger, now) {
     savedAt: now || 0
   }
   // 升级前的备份（clearedBackup / 迁移前的账本）流水还在数组里，原样带走不能丢。
+  // 2b-3 起新代码不再生产 ledger.records，所以这里只有老文档才走得进来；
+  // 而快照里那份 records 的存废是**另一项**（「快照双份存储的终止」），
+  // 2b-3 一个字都没动它的语义。
   const legacy = (ledger && ledger.records) || []
   if (legacy.length) {
     snapshot.records = cloneList(legacy)
@@ -384,6 +437,9 @@ function latestClearMeta(ledger) {
 // 恢复出来的条数（归并会把同一 orderId 的行并成一张单），差多少由
 // migrateRecords 的 mode:'snapshots' 在转换时回填修正成归并条数 —— 老快照
 // 元数据里没有 recordCount，弹窗退化成只带日期，见 latestClearView 的消费端。
+//
+// 2b-3 起新代码不生产 ledger.records，所以下面那条 records.length 兜底只对
+// 升级前留下的老文档成立；新账本一律走上面 aggregate.count 那条。
 function snapshotRecordCount(ledger) {
   if (ledger && ledger.recordsMigratedAt) {
     return inventory.toNumber(ledger && ledger.aggregate && ledger.aggregate.count)
@@ -578,10 +634,14 @@ function applyMutation(ledger, action, payload, now, nextId, loaded) {
   next.clearSnapshots = cloneList(ledger && ledger.clearSnapshots)
   next.lastRestoredClearAt = (ledger && ledger.lastRestoredClearAt) || 0
   // 迁移用的字段原样带过去，记账不该把它们抹掉：
-  // - records：迁移后**故意不删**的老数组。它是「切回老路径」这条 O(1) 回滚路的
-  //   全部依仗（见方案 §3.2 第 ⑤ 步）。这里只传引用不复制，不给记账加 O(n)。
-  //   2b-3 观察一周后连同这行一起删。
   // - recordsMigratedAt：清掉它就回老路径，所以它必须活过每一次记账。
+  // - recordsSchema：解冻开关的**另一半**（recordsPending 的印章②）。抹掉它，
+  //   一本只靠这个章解冻的账下一笔就被冻成「还没迁移」—— 云上 createShop 建的店
+  //   有 recordsMigratedAt 垫底，但直接拿 emptyLedger() 当起点的账本（内存模式、
+  //   测试夹具）只有这一个章。tests/ledger-records.test.js 的 T-C4 钉着它。
+  //   条件携带，**不要写成无条件 next.recordsSchema = RECORDS_SCHEMA** ——
+  //   那等于给 default-deny 开后门：任何走到这里的账本都自动获得「已迁移」身份。
+  //   今天 assertRecordsReady 挡在前面进不来，但这条依赖不该写进这里。
   // - importing：分片导入中途有人记了一笔账，不能把没收完的批次弄丢。
   // - migration：这本账**是怎么迁过来的**那份记录（条数、校验进度、孤儿退货数、
   //   起止时间）。它和 recordsMigratedAt 是同一次 putLedger 写进去的，是同一件事的
@@ -601,9 +661,11 @@ function applyMutation(ledger, action, payload, now, nextId, loaded) {
   //   快照里那份重复的 records 数组永远清不掉，而且下一个人会以为这家店没跑过
   //   dropLegacy。2b-1b 审计 A6 炸的就是这一类：上线清单让人迁完先记一笔 1 元
   //   测试账，那一笔就把没被显式带过来的字段抹了。
-  next.records = (ledger && ledger.records) || []
   if (ledger && ledger.recordsMigratedAt) {
     next.recordsMigratedAt = ledger.recordsMigratedAt
+  }
+  if (ledger && ledger.recordsSchema) {
+    next.recordsSchema = ledger.recordsSchema
   }
   if (ledger && ledger.migratedFromLocal) {
     next.migratedFromLocal = true
@@ -630,10 +692,13 @@ function applyMutation(ledger, action, payload, now, nextId, loaded) {
   }
 
   // 换账套：老账套的流水原地不动，新账套从零开始，聚合直接给定。
-  // 迁移前的老数组属于被换掉的那一本，clearAll 已经把它存进快照，这里必须清掉，
-  // 不然它会一直挂在新账套上把 listsHaveData / ledgerHasData 一路带成 true。
+  //
+  // 2b-3 之前这里第一行是 next.records = []，为的是把迁移前的老数组从新账套上
+  // 摘掉（不摘它会把 listsHaveData / ledgerHasData 一路带成 true）。现在
+  // applyMutation 顶上那次 next.records 赋值没了，而 next 来自 listsOf() ——
+  // listsOf **根本不产出 records 键**，所以再写 next.records = [] 的作用会从
+  // 「清空」翻转成「凭空塞回一个空数组」，正好把这次要删的字段又生产出来。
   function switchBook(records) {
-    next.records = []
     next.bookId = nextId()
     next.accounts = inventory.foldAccountTerms(records)
     next.aggregate = inventory.foldTotalTerms(records)
@@ -966,7 +1031,8 @@ function applyMutation(ledger, action, payload, now, nextId, loaded) {
     next.skus = cloneList(snapshot.skus)
     next.customers = cloneList(snapshot.customers)
     next.categories = cloneList(snapshot.categories)
-    next.records = []
+    // 这里原来也有一行 next.records = []，理由和 switchBook 那行一样、也一样翻转了：
+    // next 来自 listsOf()，没有 records 键，再赋值就是凭空塞回一个空数组。
     // 指针指回封存时的账套，流水一条没动过，所以聚合原样取回即可，不用重算
     next.bookId = String(snapshot.bookId)
     next.accounts = cloneAccounts(snapshot.accounts)
@@ -993,6 +1059,7 @@ function applyMutation(ledger, action, payload, now, nextId, loaded) {
 
 module.exports = {
   MUTATIONS: MUTATIONS,
+  RECORDS_SCHEMA: RECORDS_SCHEMA,
   RECORD_PAGE_DEFAULT: RECORD_PAGE_DEFAULT,
   RECORD_PAGE_LIMIT: RECORD_PAGE_LIMIT,
   clampPageLimit: clampPageLimit,
