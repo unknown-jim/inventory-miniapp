@@ -142,6 +142,10 @@ Page({
     wx.navigateTo({ url: '/pages/adjust/adjust?id=' + this.data.id })
   },
 
+  goConvert() {
+    wx.navigateTo({ url: '/pages/convert/convert?id=' + this.data.id })
+  },
+
   categoryChips(categoryId) {
     const selected = categoryId || this.data.categoryId
     return store.getCategories().map(function (item) {
