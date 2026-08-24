@@ -1610,9 +1610,27 @@ require.cache[require.resolve('../utils/cloud-config')].exports = {
       return one.length === 3 && one[0].id === 'big2'
     }), '第二个超限组自成一片')
 
+    // 超限原子组排在**首位**：上一条把夹具挪成非首位后，反方向没人管——预扫
+    // 若被改成 atoms.slice(1)（只从第二个原子组判起），非首位的用例全绿、
+    // 排第一的那个反而漏掉。首位和非首位两条并存，两个方向都钉住。
+    const fatHead = []
+    for (let i = 0; i < 3; i++) {
+      fatHead.push({ id: 'big0', type: 'pay', amount: 1, remark: '', createdAt: i + 10, lines: [] })
+    }
+    fatHead.push({ id: 'solo-e', type: 'pay', amount: 1, remark: '', createdAt: 1, lines: [] })
+    const fatHeadPlan = shard.planShards(fatHead, { limit: 2 })
+    assert.strictEqual(fatHeadPlan.oversized.length, 1, '首位的超限原子组也要进 oversized')
+    assert.strictEqual(fatHeadPlan.oversized[0].mergedCount, 3, '记的是该组的真实条数')
+    assert.ok(fatHeadPlan.shards.some(function (one) {
+      return one.length === 3 && one[0].id === 'big0'
+    }), '首位的超限组也自成一片')
+
     // firstChars（F4a）：第 0 片驮着四张表时的字符预算要更小。limit / chars 都
-    // 给足、只把 firstChars 压小——第一片必须被压小，后面的片仍按 chars 装满；
-    // 且不进 oversized（那是「原子组本身大得离谱」的判据，与第一片驮不驮表无关）
+    // 给足、只把 firstChars 压小——第一片必须被压小，后面的片仍按 chars 装满。
+    // 压到**比一个原子组还小**：每个原子组都比 firstChars 大，但 chars 给足了，
+    // 所以正确的 oversized 判据（charsLimit）下一个都不超限；预扫判据若被换成
+    // firstChars，六个原子组全会进 oversized——旧参数（firstChars = 2 ×
+    // oneAtomChars）下两种判据都得 0，那条断言配不上它的注释。
     const fc = []
     for (let i = 0; i < 6; i++) {
       fc.push({
@@ -1627,12 +1645,57 @@ require.cache[require.resolve('../utils/cloud-config')].exports = {
     // 不是单条记录），firstChars 按同口径算
     const oneAtomChars = JSON.stringify([fc[0]]).length
     assert.strictEqual(JSON.stringify([fc[5]]).length, oneAtomChars, '夹具自检：六个原子组要等大')
-    const fcPlan = shard.planShards(fc, { limit: 1000, chars: 1000000, firstChars: oneAtomChars * 2 })
+    const fcPlan = shard.planShards(fc, { limit: 1000, chars: 1000000, firstChars: oneAtomChars - 1 })
     assert.strictEqual(fcPlan.shards.length, 2, 'firstChars 压小后切成两片')
     assert.ok(fcPlan.shards[0].length < fcPlan.shards[1].length, '第一片必须比后面的片小')
-    assert.strictEqual(fcPlan.shards[0].length, 2, '第 0 片只装得下两个原子组（2 × oneAtomChars）')
-    assert.strictEqual(fcPlan.shards[1].length, 4, '第二片回到 chars 预算，装下剩下的四个')
-    assert.strictEqual(fcPlan.oversized.length, 0, 'firstChars 不参与 oversized 判据')
+    assert.strictEqual(fcPlan.shards[0].length, 1, '第 0 片的预算比一个原子组还小，只装无条件收下的第一个')
+    assert.strictEqual(fcPlan.shards[1].length, 5, '第二片回到 chars 预算，装下剩下的五个')
+    assert.strictEqual(fcPlan.oversized.length, 0, '每个原子组都比 firstChars 大也不进 oversized：判据是 charsLimit')
+
+    // g) 整本只切出一片、但那片本身超限：store.migrateLocal 的 oversized 告警必须
+    //    排在「一片 → 一次性上传」的 early return **之前**——挪到 return 之后这句
+    //    就成了死代码，而「一片但超限」恰恰最需要这条线索（真撞事务上限时错误里
+    //    只有 TransactionNotExist）。夹具：一张销售单挂 45 张退货单，46 条归并记录
+    //    是不可切的原子组、超过 40 上限，于是整本只切出一片，走一次性上传。
+    //    销售行 returnedQty / returnedAmount 预填成名下退货行之和（45 / 450），
+    //    拆分不变量由落库时的 repairReturnSplits 重算。
+    const fatOnce = []
+    fatOnce.push({
+      id: 's-fat', type: 'out', amount: 500, profit: 200, remark: '', createdAt: 200000,
+      paidAmount: 0, customerId: 'c1', customerName: '客一', customerPhone: '', customerAddress: '',
+      lines: [{
+        lineId: 'sl-fat', productId: 'p1', productName: '散货', sku: '', skuId: '',
+        color: '', size: '', qty: 50, unitPrice: 10, costPrice: 6, amount: 500, profit: 200,
+        allocations: [], returnedQty: 45, returnedAmount: 450
+      }]
+    })
+    for (let i = 0; i < 45; i++) {
+      fatOnce.push({
+        id: 'r-fat-' + i, type: 'return', amount: 10, profit: -4, remark: '', createdAt: 200001 + i,
+        customerId: 'c1', customerName: '客一', customerPhone: '', customerAddress: '',
+        lines: [{
+          lineId: 'rl-fat-' + i, productId: 'p1', productName: '散货', sku: '', skuId: '',
+          color: '', size: '', qty: 1, unitPrice: 10, costPrice: 6, amount: 10, profit: -4,
+          saleOrderId: 's-fat', saleLineId: 'sl-fat'
+        }]
+      })
+    }
+    const fatOncePlan = shard.planShards(fatOnce)
+    assert.strictEqual(fatOncePlan.shards.length, 1, '唯一的原子组自成一片，整本就是一片')
+    assert.strictEqual(fatOncePlan.oversized.length, 1, '46 条的原子组超过 40 上限，要进 oversized')
+    assert.strictEqual(fatOncePlan.oversized[0].mergedCount, 46)
+
+    const hf = newHarness({ ids: idFactory('f15') })
+    const storeF = loadStore(hf)
+    await openShop(hf, '整片超限店')
+    hf.storage['inv_pending_migrate'] = pendingLedgerOf(fatOnce)
+    const fatLedger = await storeF.migrateLocal()
+    assert.ok(fatLedger, '整片超限走一次性上传也必须成功')
+    const fatOnceCalls = hf.calls.filter(function (item) { return item.action === 'migrateLocal' })
+    assert.strictEqual(fatOnceCalls.length, 1, '只发一次调用')
+    assert.ok(fatOnceCalls[0].payload.token === undefined, '不带 token：走的是一次性上传')
+    assert.strictEqual(takeWarns(/超过单片上限/).length, 1,
+      '整本只切出一片但那片超限，oversized 告警必须照打（它排在 early return 之前）')
   }
 
   console.log('store.test.js ok')
