@@ -28,7 +28,7 @@ const SHARD_CHARS = 200000
 //   orphanReturns: [{ id, saleOrderId }], // 找不到被退销售单的退货单（归并后视角）
 //   oversized: [{ mergedCount, chars }]   // 单个原子组自己就超限、只能自成一片
 // }
-// options: { limit = SHARD_RECORDS, chars = SHARD_CHARS }
+// options: { limit = SHARD_RECORDS, chars = SHARD_CHARS, firstChars = chars }
 //
 // 片内的原始记录**可能不再是本机数组的原顺序**（原子组按「组内最小下标」排，
 // 退货单会被拉到销售单旁边）。这不影响钱：recomputeSaleReturns 自己按
@@ -37,16 +37,33 @@ function planShards(records, options) {
   options = options || {}
   const limit = options.limit != null ? options.limit : SHARD_RECORDS
   const charsLimit = options.chars != null ? options.chars : SHARD_CHARS
+  // 第 0 片的字符上限。第一片除了流水还驮着四张表（products / skus / customers /
+  // categories，见 store.js 的 migrateLocal——调用方把表的体积从 SHARD_CHARS 里
+  // 扣掉后传进来），请求体大小是分片要挡的两堵墙之一，第一片的流水预算得先减
+  // 去表的体积。只作用于第 0 片的装箱判断，不参与 oversized——那个判据说的是
+  // 「这个原子组本身就大得离谱」，和第一片驮不驮表无关。
+  const firstChars = options.firstChars != null ? options.firstChars : charsLimit
   const raw = records || []
   if (!raw.length) {
     return { shards: [], mergedCount: 0, orphanReturns: [], oversized: [] }
   }
 
-  // 先深拷贝一份再归并：migrateRecordShape 里的 backfillReturnedQty 会**就地改**
-  // 销售行的 returnedQty / returnedAmount（legacyRecordsOf 用的 cloneList 只是浅拷贝，
-  // lines 数组是共享的）。规划只是读，绝不能改到本机原件。
+  // 两份独立的深拷贝，各司其职、缺一不可：
+  //   probe  —— 只喂给 migrateRecordShape。它内部的 backfillReturnedQty 会**就地改**
+  //             销售行的 returnedQty / returnedAmount，而对 ready（本来就有 lines
+  //             数组）的组，migrated[i] 就是 probe[i] 本身，改的正是这份
+  //            （legacyRecordsOf 用的 cloneList 只是浅拷贝、lines 是共享的，
+  //             所以必须是 JSON 级克隆）。
+  //   source —— 出上传载荷（groups[i].items 装进 atom.items，最终发出去的就是它）。
+  //             绝不能拿 probe 出载荷：那样客户端规划时回填一次、服务端逐片归并
+  //             又回填一次，「代 B 销售单 + 代 A 扁平退货行指向它的 lineId」的
+  //             语料上 returnedQty 翻倍、V4 当场拒收，而每次重算都是同一个计划、
+  //             同一个错——这本账永远传不上去（一次性上传却是过的）。规划只是读：
+  //             既不能改到本机原件，也不能把改过的那份发出去。
+  // recordGroups 是确定性纯函数，两份克隆上跑出来的 groups[i].items[k] 逐位对应。
   const probe = JSON.parse(JSON.stringify(raw))
-  const groups = inventory.recordGroups(probe)
+  const source = JSON.parse(JSON.stringify(raw))
+  const groups = inventory.recordGroups(source)
   const merged = inventory.needsRecordMigration(probe)
     ? inventory.migrateRecordShape(probe)
     : probe
@@ -139,7 +156,7 @@ function planShards(records, options) {
 
   // 按原子组顺序贪心装箱。当前片为空时无条件收下——单个原子组自己就超限也
   // 自成一片（数进 oversized，由调用方决定要不要警告），不然这本书就永远
-  // 传不上去了。
+  // 传不上去了；这也顺带保证了 firstChars 被调用方算成 ≤ 0 时不会死循环。
   const shards = []
   const oversized = []
   let current = null
@@ -150,10 +167,16 @@ function planShards(records, options) {
       if (atom.mergedCount > limit || atom.chars > charsLimit) {
         oversized.push({ mergedCount: atom.mergedCount, chars: atom.chars })
       }
-    } else if (current.mergedCount + atom.mergedCount > limit
-      || current.chars + atom.chars > charsLimit) {
-      current = { mergedCount: 0, chars: 0, items: [] }
-      shards.push(current.items)
+    } else {
+      // 当前片的字符上限：current 是已 push 进 shards 的那片，下标 = shards.length-1，
+      // 所以 shards.length === 1 就是第 0 片——它驮着四张表，预算用扣过表的 firstChars，
+      // 其余片回到 charsLimit。
+      const cap = shards.length === 1 ? firstChars : charsLimit
+      if (current.mergedCount + atom.mergedCount > limit
+        || current.chars + atom.chars > cap) {
+        current = { mergedCount: 0, chars: 0, items: [] }
+        shards.push(current.items)
+      }
     }
     current.mergedCount += atom.mergedCount
     current.chars += atom.chars

@@ -1118,7 +1118,16 @@ async function migrateLocal() {
   if (!pending) {
     throw new Error('没有可上传的本机账本')
   }
-  const plan = shard.planShards(pending.records)
+  const lists = {
+    products: pending.products || [],
+    skus: pending.skus || [],
+    customers: pending.customers || [],
+    categories: pending.categories || []
+  }
+  // 第一片除了流水还驮着四张表，字符预算要先把它们扣掉。
+  const plan = shard.planShards(pending.records, {
+    firstChars: shard.SHARD_CHARS - JSON.stringify(lists).length
+  })
   showBusy()
   try {
     // 一片就发一次性上传（不带 token）：线协议和 2b-1 完全一致，小账本零行为变化。
@@ -1131,13 +1140,13 @@ async function migrateLocal() {
       }
       return finishMigrate(await request('migrateLocal', { ledger: pending }))
     }
-    const token = uid()
-    const lists = {
-      products: pending.products || [],
-      skus: pending.skus || [],
-      customers: pending.customers || [],
-      categories: pending.categories || []
+    if (plan.oversized.length) {
+      // 一张销售单和它的全部退货单是不可切开的原子组，组本身超限时只能自成一片。
+      // 真撞上事务上限时错误里只有 TransactionNotExist，日志里留一条能对上号的线索。
+      console.warn('[ledger] 有 ' + plan.oversized.length + ' 个原子组超过单片上限，只能整组一片',
+        plan.oversized)
     }
+    const token = uid()
     let res = null
     for (let i = 0; i < plan.shards.length; i++) {
       const final = i === plan.shards.length - 1

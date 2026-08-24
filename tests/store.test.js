@@ -23,7 +23,8 @@
 //   12 换账套之后，上一本账的 recent / today 必须当场清掉
 //   13 聚合漂移哨兵（aggregatesStale）和 latestClear 的客户端落点
 //   14 本机账本分片上传一整节（planShards 原子组切法 / 分片 vs 一次性逐项相等 /
-//      中途失败本机原件不删 / 小账本和孤儿退货退回一次性上传 / planShards 单元）
+//      混代语料上传载荷不被归并回填污染 / 中途失败本机原件不删 / 小账本和孤儿
+//      退货退回一次性上传 / planShards 单元含 firstChars）
 // 外加原有的：settleResponse 绝不抛、ready() 的语义。
 const assert = require('assert')
 const core = require('../cloudfunctions/ledger/ledger-core')
@@ -1384,6 +1385,86 @@ require.cache[require.resolve('../utils/cloud-config')].exports = {
     assert.ok(!ha.storage['inv_pending_migrate'], '上传成功后本机 pending 必须删掉')
     assert.strictEqual(ha.storage['inv_local_migrated'], true)
 
+    // b2) 混代语料回归（F1）：代 B 销售单（有 lines、returnedQty 0）+ 代 A 扁平
+    //     退货行（saleRecordId 指向销售行的 lineId）。规划时的 backfillReturnedQty
+    //     会把销售行的 returnedQty 就地回填成 3；曾几何时上传载荷用的就是这份
+    //     probe，服务端逐片归并再回填一次变 6，V4 拒收「本机账本有问题」——
+    //     每次重算都是同一个计划、同一个错，这本账永远传不上去，而同一份数据
+    //     一次性上传却是过的。修好后载荷必须还是本机原件。
+    function mixedFixture() {
+      const records = []
+      for (let i = 0; i < 90; i++) {
+        records.push({
+          id: 'f-' + i, type: 'in', amount: 1, profit: 0, remark: '', createdAt: 100000 + i,
+          lines: [{
+            lineId: 'fl-' + i, productId: 'p1', productName: '散货', sku: '', skuId: '',
+            color: '', size: '', qty: 1, unitPrice: 1, costPrice: 1, amount: 1, profit: 0
+          }]
+        })
+      }
+      // 代 B：有 lines 数组。returnedQty / returnedAmount 必须是 0 —— 一次性上传的
+      // V4 才是干净的，两店对照才有意义
+      records[39] = {
+        id: 's-hot', type: 'out', amount: 100, profit: 40, remark: '', createdAt: 100039,
+        paidAmount: 40, customerId: 'c1', customerName: '客一', customerPhone: '', customerAddress: '',
+        lines: [{
+          lineId: 'sl1', productId: 'p1', productName: '散货', sku: '', skuId: '',
+          color: '', size: '', qty: 10, unitPrice: 10, costPrice: 6, amount: 100, profit: 40,
+          allocations: [], returnedQty: 0, returnedAmount: 0
+        }]
+      }
+      // 代 A：扁平、没有 lines。saleRecordId 指向**销售行的 lineId**（代 A 老退货
+      // 行就是这么接的，归并后接成 saleLineId，见 inventory.js 的 backfillReturnedQty）
+      records[41] = {
+        id: 'r-hot', type: 'return', saleRecordId: 'sl1', productId: 'p1', productName: '货',
+        qty: 3, unitPrice: 10, costPrice: 5, amount: 30, profit: -15, payType: 'cash',
+        customerId: 'c1', customerName: '客户一', createdAt: 100041
+      }
+      return records
+    }
+
+    const mixed = mixedFixture()
+    // 纯函数级：片里那条 s-hot 必须还是本机原件（returnedQty 0），没被规划时
+    // 喂给 migrateRecordShape 的那份回填波及；本机原件也不能被改
+    const mixedPlan = shard.planShards(mixed, { limit: 40 })
+    assert.ok(mixedPlan.shards.length >= 2, '混代语料 90 条上限 40，必须真的切了')
+    const mixedSale = mixedPlan.shards.map(function (one) {
+      return one.find(function (r) { return r.id === 's-hot' })
+    }).filter(Boolean)
+    assert.strictEqual(mixedSale.length, 1)
+    assert.strictEqual(mixedSale[0].lines[0].returnedQty, 0,
+      '上传载荷里的 s-hot.lines[0].returnedQty 必须等于本机原件的 0，不带客户端回填')
+    assert.strictEqual(mixedSale[0].lines[0].returnedAmount, 0,
+      'returnedAmount 同理')
+    assert.strictEqual(mixed[39].lines[0].returnedQty, 0, '本机原件也不能被规划改掉')
+
+    // A 店走真实 store.migrateLocal()（分片）；B 店直连一次性上传同一份数据
+    const hMix = newHarness({ ids: idFactory('m14') })
+    const storeMix = loadStore(hMix)
+    await openShop(hMix, '混代分片店')
+    hMix.storage['inv_pending_migrate'] = pendingLedgerOf(mixed)
+    const mixedLedger = await storeMix.migrateLocal()
+    assert.ok(mixedLedger, '混代语料分片上传必须成功（修复前这里撞「本机账本有问题，没有上传」）')
+    assert.ok(
+      hMix.calls.filter(function (item) { return item.action === 'migrateLocal' }).length >= 2,
+      '混代语料必须真的走了分片路（≥ 2 片）')
+
+    const hMixB = newHarness({ ids: idFactory('mb14') })
+    await openShop(hMixB, '混代一次性店')
+    await serverCall(hMixB, 'migrateLocal', { ledger: pendingLedgerOf(mixed) })
+
+    const ledgerMix = (await serverCall(hMix, 'getLedger', {})).ledger
+    const ledgerMixB = (await serverCall(hMixB, 'getLedger', {})).ledger
+    assert.deepStrictEqual(ledgerMix.accounts, ledgerMixB.accounts,
+      '混代语料：分片上传的 accounts 必须和一次性上传逐项相等')
+    assert.deepStrictEqual(ledgerMix.aggregate, ledgerMixB.aggregate,
+      '混代语料：分片上传的 aggregate 必须和一次性上传逐项相等')
+    assert.strictEqual(inventory.accountOf(ledgerMix.accounts.c1).receivable, 30,
+      '欠款 (100−40)−30 = 30：服务端归并回填恰一次，销售行和退货行对得上')
+    const mixedDocsA = serverRecords(hMix).sort(byId)
+    const mixedDocsB = serverRecords(hMixB).sort(byId)
+    assert.deepStrictEqual(mixedDocsA, mixedDocsB, '混代语料：两店落库的流水必须逐条相等')
+
     // c) 分片中途失败：本机原件不能在整本落库确认之前被删
     const hc = newHarness({ ids: idFactory('c14') })
     const storeC = loadStore(hc)
@@ -1502,6 +1583,30 @@ require.cache[require.resolve('../utils/cloud-config')].exports = {
     assert.strictEqual(fatPlan.oversized[0].mergedCount, 3)
     assert.ok(fatPlan.shards.some(function (one) { return one.length === 3 }), '超限原子组自成一片')
     assert.strictEqual(fatPlan.shards.length, 2)
+
+    // firstChars（F4a）：第 0 片驮着四张表时的字符预算要更小。limit / chars 都
+    // 给足、只把 firstChars 压小——第一片必须被压小，后面的片仍按 chars 装满；
+    // 且不进 oversized（那是「原子组本身大得离谱」的判据，与第一片驮不驮表无关）
+    const fc = []
+    for (let i = 0; i < 6; i++) {
+      fc.push({
+        id: 'fc-' + i, type: 'in', amount: 1, profit: 0, remark: '', createdAt: 200 + i,
+        lines: [{
+          lineId: 'fcl-' + i, productId: 'p1', productName: '散货', sku: '', skuId: '',
+          color: '', size: '', qty: 1, unitPrice: 1, costPrice: 1, amount: 1, profit: 0
+        }]
+      })
+    }
+    // 原子组的 chars 就是 JSON.stringify(atom.items).length（整个数组的序列化，
+    // 不是单条记录），firstChars 按同口径算
+    const oneAtomChars = JSON.stringify([fc[0]]).length
+    assert.strictEqual(JSON.stringify([fc[5]]).length, oneAtomChars, '夹具自检：六个原子组要等大')
+    const fcPlan = shard.planShards(fc, { limit: 1000, chars: 1000000, firstChars: oneAtomChars * 2 })
+    assert.strictEqual(fcPlan.shards.length, 2, 'firstChars 压小后切成两片')
+    assert.ok(fcPlan.shards[0].length < fcPlan.shards[1].length, '第一片必须比后面的片小')
+    assert.strictEqual(fcPlan.shards[0].length, 2, '第 0 片只装得下两个原子组（2 × oneAtomChars）')
+    assert.strictEqual(fcPlan.shards[1].length, 4, '第二片回到 chars 预算，装下剩下的四个')
+    assert.strictEqual(fcPlan.oversized.length, 0, 'firstChars 不参与 oversized 判据')
   }
 
   console.log('store.test.js ok')
