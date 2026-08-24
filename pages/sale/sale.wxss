@@ -182,10 +182,9 @@
 
 .slip-canvas {
   position: fixed;
-  left: -2000px;
+  /* 挪出屏幕，避免 type=2d 原生组件盖住按钮；宽高由导出时写入，必须 ≥ dest 像素 */
+  left: -20000px;
   top: 0;
-  width: 1760px;
-  height: 4000px;
   pointer-events: none;
   opacity: 0;
 }

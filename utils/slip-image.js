@@ -637,10 +637,34 @@ function getPixelRatio() {
 // 货多的单子画布很高，这里按尺寸把倍率压下来；压到 1 还不够就整体缩小，
 // 字会跟着变小，但总比导不出来强。
 const MAX_CANVAS_PX = 16384
+// 官方 Canvas 2D 文档写的最大宽高。只在前面几档都失败时才压到这个边，避免一上来就缩小适老化字号。
+const CANVAS_2D_SAFE_PX = 1365
 
-function exportRatio(width, height) {
+function exportRatio(width, height, pixelRatio) {
+  const dpr = pixelRatio == null ? getPixelRatio() : pixelRatio
   const limit = Math.min(MAX_CANVAS_PX / width, MAX_CANVAS_PX / height)
-  return Math.min(getPixelRatio(), limit)
+  return Math.min(dpr, limit)
+}
+
+// 导出倍率从宽到窄：先按设备像素比，再试 1x，最后才压进 1365。相同尺寸不重复试。
+function exportScales(width, height, pixelRatio) {
+  const full = exportRatio(width, height, pixelRatio)
+  const dpr1 = Math.min(1, full)
+  const fit = Math.min(1, CANVAS_2D_SAFE_PX / width, CANVAS_2D_SAFE_PX / height)
+  const scales = [full]
+  function push(value) {
+    if (value < scales[scales.length - 1] - 1e-6) scales.push(value)
+  }
+  push(dpr1)
+  push(fit)
+  return scales
+}
+
+function dataUrlPayload(dataUrl) {
+  const text = String(dataUrl || '')
+  const comma = text.indexOf(',')
+  if (comma < 0) return ''
+  return text.slice(comma + 1)
 }
 
 function makeMeasure(ctx) {
@@ -664,26 +688,43 @@ function createOffscreen(width, height) {
   }
 }
 
-function queryPageCanvas(page, width, height) {
-  return new Promise(function (resolve, reject) {
-    wx.createSelectorQuery()
-      .in(page)
-      .select('#slipCanvas')
-      .fields({ node: true, size: true })
-      .exec(function (res) {
-        const canvas = res && res[0] && res[0].node
-        if (!canvas) {
-          reject(new Error('无法生成图片'))
-          return
-        }
-        canvas.width = width
-        canvas.height = height
-        resolve(canvas)
-      })
+function setPageCanvasCss(page, width, height) {
+  return new Promise(function (resolve) {
+    if (!page || typeof page.setData !== 'function') {
+      resolve()
+      return
+    }
+    page.setData({
+      slipCanvasWidth: width,
+      slipCanvasHeight: height
+    }, function () {
+      resolve()
+    })
   })
 }
 
-function canvasToFile(canvas, destWidth, destHeight) {
+function queryPageCanvas(page, width, height) {
+  return setPageCanvasCss(page, width, height).then(function () {
+    return new Promise(function (resolve, reject) {
+      wx.createSelectorQuery()
+        .in(page)
+        .select('#slipCanvas')
+        .fields({ node: true, size: true })
+        .exec(function (res) {
+          const canvas = res && res[0] && res[0].node
+          if (!canvas) {
+            reject(new Error('无法生成图片'))
+            return
+          }
+          canvas.width = width
+          canvas.height = height
+          resolve(canvas)
+        })
+    })
+  })
+}
+
+function canvasToTempPath(canvas, destWidth, destHeight) {
   return new Promise(function (resolve, reject) {
     wx.canvasToTempFilePath({
       canvas: canvas,
@@ -701,28 +742,88 @@ function canvasToFile(canvas, destWidth, destHeight) {
   })
 }
 
+function writeDataUrl(canvas, mime, quality, ext) {
+  return new Promise(function (resolve, reject) {
+    if (!canvas || typeof canvas.toDataURL !== 'function') {
+      reject(new Error('导出失败'))
+      return
+    }
+    if (typeof wx === 'undefined' || !wx.getFileSystemManager || !wx.env || !wx.env.USER_DATA_PATH) {
+      reject(new Error('导出失败'))
+      return
+    }
+    let dataUrl = ''
+    try {
+      dataUrl = canvas.toDataURL(mime, quality)
+    } catch (error) {
+      reject(new Error((error && error.message) || '导出失败'))
+      return
+    }
+    const payload = dataUrlPayload(dataUrl)
+    if (!payload) {
+      reject(new Error('导出失败'))
+      return
+    }
+    const filePath = wx.env.USER_DATA_PATH + '/slip-export.' + ext
+    wx.getFileSystemManager().writeFile({
+      filePath: filePath,
+      data: payload,
+      encoding: 'base64',
+      success: function () {
+        resolve(filePath)
+      },
+      fail: function (error) {
+        reject(new Error((error && error.errMsg) || '导出失败'))
+      }
+    })
+  })
+}
+
+function canvasToFile(canvas, destWidth, destHeight) {
+  return canvasToTempPath(canvas, destWidth, destHeight).catch(function () {
+    return writeDataUrl(canvas, 'image/png', 1, 'png').catch(function () {
+      return writeDataUrl(canvas, 'image/jpeg', 0.92, 'jpg')
+    })
+  })
+}
+
 function exportToTempFile(page, slip) {
   const probe = createOffscreen(16, 16)
   const measure = makeMeasure(probe && probe.getContext ? probe.getContext('2d') : null)
   const layout = layoutSlip(slip, measure)
-  const dpr = exportRatio(layout.width, layout.height)
-  const pixelWidth = Math.ceil(layout.width * dpr)
-  const pixelHeight = Math.ceil(layout.height * dpr)
-  const offscreen = createOffscreen(pixelWidth, pixelHeight)
+  const scales = exportScales(layout.width, layout.height)
 
-  function paint(canvas) {
-    const ctx = canvas.getContext('2d')
-    ctx.scale(dpr, dpr)
-    drawSlip(ctx, layout)
-    return canvasToFile(canvas, pixelWidth, pixelHeight)
+  function attempt(dpr) {
+    const pixelWidth = Math.ceil(layout.width * dpr)
+    const pixelHeight = Math.ceil(layout.height * dpr)
+
+    function paint(canvas) {
+      const ctx = canvas.getContext('2d')
+      if (ctx.setTransform) ctx.setTransform(1, 0, 0, 1, 0, 0)
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+      ctx.scale(dpr, dpr)
+      drawSlip(ctx, layout)
+      return canvasToFile(canvas, pixelWidth, pixelHeight)
+    }
+
+    const offscreen = createOffscreen(pixelWidth, pixelHeight)
+    if (offscreen && offscreen.getContext) {
+      return paint(offscreen).catch(function () {
+        return queryPageCanvas(page, pixelWidth, pixelHeight).then(paint)
+      })
+    }
+    return queryPageCanvas(page, pixelWidth, pixelHeight).then(paint)
   }
 
-  if (offscreen && offscreen.getContext) {
-    return paint(offscreen).catch(function () {
-      return queryPageCanvas(page, pixelWidth, pixelHeight).then(paint)
+  function tryScale(index) {
+    const run = attempt(scales[index])
+    if (index >= scales.length - 1) return run
+    return run.catch(function () {
+      return tryScale(index + 1)
     })
   }
-  return queryPageCanvas(page, pixelWidth, pixelHeight).then(paint)
+
+  return tryScale(0)
 }
 
 function previewImage(filePath) {
@@ -830,7 +931,10 @@ module.exports = {
   FONT: FONT,
   estimateWidth: estimateWidth,
   exportRatio: exportRatio,
+  exportScales: exportScales,
+  dataUrlPayload: dataUrlPayload,
   MAX_CANVAS_PX: MAX_CANVAS_PX,
+  CANVAS_2D_SAFE_PX: CANVAS_2D_SAFE_PX,
   specAxisNames: specAxisNames,
   wrapText: wrapText,
   layoutSlip: layoutSlip,
