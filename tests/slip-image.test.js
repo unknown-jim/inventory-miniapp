@@ -94,7 +94,7 @@ assert.ok(text.indexOf('TS-005') >= 0)
 assert.ok(text.indexOf('赊账') < 0)
 assert.ok(text.indexOf('门口放') >= 0)
 assert.ok(text.indexOf('¥118.00') >= 0)
-assert.ok(text.indexOf('序号') >= 0)
+assert.ok(text.indexOf('序号') < 0)
 assert.ok(text.indexOf('货号') >= 0)
 assert.ok(text.indexOf('品名') >= 0)
 assert.ok(text.indexOf('颜色') >= 0)
@@ -443,9 +443,9 @@ const shortSku = slipImage.layoutSlip(sampleSlip())
 const longSku = slipImage.layoutSlip(sampleSlip({
   lines: [Object.assign({}, sampleSlip().lines[0], { sku: 'TS-005-EXTRA-LONG-CODE' })]
 }))
-// 货号列量出来更宽，把它右边的品名列整体右推；左边的序号列不受影响
+// 货号列量出来更宽，居中表头会右移，并把它右边的品名列整体右推
+assert.ok(headX(longSku, '货号') > headX(shortSku, '货号'))
 assert.ok(headX(longSku, '品名') > headX(shortSku, '品名'))
-assert.strictEqual(headX(longSku, '序号'), headX(shortSku, '序号'))
 
 // 规格轴多到折行也救不回来时，画布变宽保信息完整，不缩字号
 const fourAxes = slipImage.layoutSlip(sampleSlip({
