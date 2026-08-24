@@ -246,6 +246,7 @@ payload: { mode: 'snapshots', limit?: 50 }
 
 → **【真云实测①：事务内 `where + orderBy + limit`（`pageDocs` 还带 `_.lt` 游标）】**这条链是新引入的依赖，本机永远验不出来——`tests/memory-db.js` 的替身什么都支持。基线（`7b27b9f`）的事务里出现过的是 `doc().get()/set()/remove()`、不带修饰的 `where().get()`、和一条 `where().limit().get()`（deleteShop 清 `ledger_clears`）；**`orderBy` 和 `_.lt` 在事务里一次都没出现过**，是新云函数才引入的。触发它的操作要**逐个点名跑**，别只写「走完整流程」：改或删**进货单**（`latestPurchases`）、改或删**退货单**（`returnsOfSale`）、改**有退货的销售单**（同 `returnsOfSale`）、对着全店跑一次 **`recomputeAggregates`**（事务内 `readAllDocs` 一页页 `pageDocs`）。云端事务不支持 `orderBy` / `_.lt` 的任何一个修饰符，这四种操作就全线报错。
 
+→ **【真云实测②：单事务写入条数上限 + 事务超时】**① **写入条数这一半已经测过一次（2026-08-24，演示店 `mt33kfi77idxpw`）**：改一张挂着 90 张退货单的销售单的单价（事务写 `ledgers` 1 + 目标 1 + 退货单 90 = 92 条）**确定性失败**，服务端报 `[ResourceUnavailable.TransactionNotExist]`「transaction must be commit or abort in 30 seconds」，而函数耗时只有 12.3 / 11.5 秒——**所以真实边界不是那 30 秒。后来在同一家店上做了二分**：**22 条写入通过（9.7 秒）、47 条失败（11.3 秒）、92 条失败（12–16 秒）**。11.3 秒失败而 9.7 秒通过，**时间至此被彻底排除**，是条数或体积。**但到底是哪一个还没分开**：演示店的 `ledgers` 文档有 3.6 MB、每次事务都要重写它一遍，所以「22–47 条」这个区间可能只对大账本成立。分开它们的办法已经就绪：建一家空店（账本几千字节）跑同样的 47 条——过了就是体积（那么任何常数都不安全，得把整体重算搬出事务），不过就是条数（可以定一个保守常数）。**这一条没结束**：还要在不同时段各测一次排除并发 / 负载因素，理由和口径见 `ledger-records.js` 的 `SALE_RETURNS_MAX` 与 `index.js` 事务改写处那两段注释。② **事务超时这一半还没测**：对着测试店的全量流水跑一次 `recomputeAggregates`——它在**一个事务里**做最多 `RECOMPUTE_MAX_RECORDS` 5000 条 / 50 次串行分页查询，看会不会撞超时（`config.json` 的 `timeout` 现在是 60 秒，不是当初写这条时的 20 秒）。
 
 > **【已实测】2026-08-24 在演示店 `mt33kfi77idxpw`（3.6 MB 账本、8129 条老流水、归并 4694 单）上跑出来的数，下面这几条不再是未知量：**
 >
