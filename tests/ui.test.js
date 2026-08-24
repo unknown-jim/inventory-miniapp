@@ -634,7 +634,57 @@ async function waitForPage(miniProgram, expectedPath, label) {
 //
 // 期望路径由 url 自己推导（pathOf），调用方不额外传：多一个参数就多一次写错的机会，
 // 而这个参数写错的后果恰恰是「静默确认到了错误的页面」。
+// ---------------------------------------------------------------------------
+// 【路由指令不许紧挨着上一步下发】—— 本轮判定实验的结论，goto / goBackTo 里那句
+// settleBeforeRoute() 的全部依据都在这段里。
+//
+// 在 origin/main（9c4abe0，**一个字没改**）上插桩跑了 7 轮，把 runOpeningSheet 结尾
+// 那次退回前后的两侧页面栈连读 8 秒都打了出来（[PROBE] 原文在 PR #70 正文里）。
+// 结论：**这个失败在 main 上本来就有，不是本分支引入的**，只是 main 那句裸的
+// `await miniProgram.navigateBack()` 没有任何验证，紧接着 runPaySheet 一个 switchTab
+// 就把页面栈重置了，于是退没退成功看不出来。
+//
+// 被吞的现场长这样：navigateBack() 正常返回（3027ms，正是 changeRoute 那个固定 sleep），
+// 通道完全健康（探针 RPC 全是 1-3ms），但连读 8 秒，App.getPageStack 和 runtime 的
+// getCurrentPages() 都一动不动，始终是 [customers > customer-edit]。
+// 分离得很干净：退栈下发在上一次 tap 之后 ≤92ms → 3/3 被吞；≥290ms → 4/4 正常。
+//
+// 三条**已经被排除**的解释，别再回头查：
+//   · 不是遮罩挡住 —— 内存模式下 store 的 showBusy/hideBusy 直接 return，没有 showLoading；
+//   · 不是在途的 reloadLedger —— 被吞那几轮里 ledgerLoading / ledgerLock 早已是 false、
+//     ledgerHasMore 也已落定；
+//   · 不是视图层还没渲染完 —— 被吞的那一轮，页面上的欠款文案已经从 ¥17.00 变成 ¥37.00，
+//     渲染明明落地了，退栈照样被吞。
+//
+// 两条同样重要的否定结论：
+//   · **补发无效，不许加重试。** 从 runtime 侧补发 wx.navigateBack({success,fail})，
+//     回调拿到的是 {"ok":true,"res":{"errMsg":"navigateBack:ok"}} —— API 说成功了，
+//     栈依旧不动。重试只会把 30 秒烧完再报同一句话。
+//   · **一旦被吞，路由就整个卡死。** 紧接着的任何一条路由指令都会让工具等满 10 秒、
+//     报 timeout waiting for automator response。所以那个「偶发 timeout」和这里抓到的
+//     「栈没退」是同一件事的两种表现，不是两个 bug。
+//
+// 【所以怎么修，以及诚实说明它的边界】
+// 唯一被实测支撑的因果是「离上一步远一点就不犯」，**真正的阈值没测出来，成因也没查到
+// （那在开发者工具里面，从外面看不见）**。所以这里只做一件事：每条路由指令下发之前
+// 空出一段安静时间，成没成还是照旧由 waitForPage / goBackTo 轮询确认 —— 这不是
+// 用固定 sleep 冒充完成信号（那是钉子①②禁的事），下发之后的判定一行没动。
+//
+// 值为什么是 1000：先试过「距上一次 tap 满 400ms」，期初欠款那处治好了，但
+// runNativeClearModal 结尾那处照样被吞 —— 那一步的 tap 触发的是 store.clearAll()，
+// 等它做完早就超过 400ms 了，于是「距 tap 400ms」实际等于没等。教训是**基准不能取在
+// tap 上，要取在「马上要下发」的这一刻**，所以这里就是老老实实空出一段，与上一步做了
+// 多久无关。1000 是保守取的：比观察到的所有失败（≤92ms）高一个数量级，也高于那个
+// 已知不够用的 400。嫌慢就用 WECHAT_UI_ROUTE_SETTLE 调，但调小之前先读上面那段。
+const ROUTE_SETTLE = Number(process.env.WECHAT_UI_ROUTE_SETTLE || 1000)
+
+async function settleBeforeRoute() {
+  if (ROUTE_SETTLE > 0) await sleep(ROUTE_SETTLE)
+}
+// ---------------------------------------------------------------------------
+
 async function goto(miniProgram, method, url, label) {
+  await settleBeforeRoute()
   await miniProgram[method](url)
   return await waitForPage(miniProgram, pathOf(url), label)
 }
@@ -671,6 +721,11 @@ async function goto(miniProgram, method, url, label) {
 // ② 未根治，所以本函数**仍然可能**在那一处超时。超时报错里带 runtime 侧 getCurrentPages()
 // 快照，就是为了让下一个人一眼判出撞上的是 R1 还是 R2，不必从头查一遍。
 async function goBackTo(miniProgram, label) {
+  // 【先空出安静时间，再读基准，再下发】依据见 ROUTE_SETTLE 上方那段实测。
+  // 顺序有讲究：settle 放在读基准之前，基准才是"下发那一刻"的栈；放在读基准之后，
+  // 基准就旧了一秒。另外说清楚 —— 本函数上一轮抓到的「navigateBack 返回了、两侧栈
+  // 都没动」不是本函数写错了，那就是被吞的现场，本函数的功劳是把它从静默变成了报错。
+  await settleBeforeRoute()
   // 基准这一次读**不能**降级成 null：读不到基准就没法判断退没退到位，直接报错比蒙着走好。
   // 套 withTimeout 只是为了别永远挂着（Connection.send 没超时）。这行在 navigateBack 之前，
   // 抛出去也不存在盖掉原始错误的问题。
@@ -1240,8 +1295,8 @@ assert.strictEqual(
 // 1 毫秒它照样绿。它挡的是「整体退化成固定 sleep」这一种，不是所有写坏的方式。
 ;[
   ['waitForPage', ['deadline', 'sleep(200)', 'pollCurrentPage']],
-  ['goBackTo', ['deadline', 'sleep(200)', 'pollPageStack']],
-  ['goto', ['waitForPage']]
+  ['goBackTo', ['deadline', 'sleep(200)', 'pollPageStack', 'settleBeforeRoute']],
+  ['goto', ['waitForPage', 'settleBeforeRoute']]
 ].forEach(function (pair) {
   const name = pair[0]
   const at = routeSource.indexOf('async function ' + name + '(')
@@ -1351,6 +1406,32 @@ assert.ok(
     + '）排在 navigateBack（' + navBackAt + '）之后。'
     + 'navigateBack() 自带 3 秒睡眠，返回时栈往往已经变浅，'
     + '这之后再取"基准"就等于拿变浅后的值去等"比这更浅"，永远等不到 —— 上一轮就是这么挂死的'
+)
+
+// 钉子⑨：settleBeforeRoute() 必须排在真正下发路由指令**之前**。
+// 钉子⑦只查函数体里有没有这个词，把它挪到 navigateBack 之后照样绿 —— 而那样一挪，
+// 「空出安静时间」就完全失效，症状是随机某一步报「等退回 XX 超时 / 两侧栈都没动」，
+// 看不出和挪动有关系。和钉子⑤同一类坑（顺序错了、静默失效），所以同样钉死。
+const settleAt = goBackToBody.indexOf('settleBeforeRoute(')
+assert.ok(
+  settleAt >= 0,
+  '自检：goBackTo 体内应当有一次 settleBeforeRoute() 调用，没找到 —— 钉子⑨失效了'
+)
+assert.ok(
+  settleAt < navBackAt,
+  'settleBeforeRoute() 必须排在 navigateBack 之前：现在它在位置 ' + settleAt
+    + '，而 navigateBack 在 ' + navBackAt + '。放在后面等于没空出安静时间，'
+    + '被吞的退栈会原样复发（依据见 ROUTE_SETTLE 上方那段实测）'
+)
+
+const gotoBodyAt = routeSource.indexOf('async function goto(')
+assert.ok(gotoBodyAt >= 0, '找不到 goto 的定义，钉子⑨失效了')
+const gotoBody = routeSource.slice(gotoBodyAt, routeSource.indexOf('\n}', gotoBodyAt))
+const gotoSettleAt = gotoBody.indexOf('settleBeforeRoute(')
+const gotoCallAt = gotoBody.indexOf('miniProgram' + '[method]')
+assert.ok(gotoSettleAt >= 0 && gotoCallAt >= 0 && gotoSettleAt < gotoCallAt,
+  'goto 里 settleBeforeRoute() 必须排在下发路由指令之前：settle 在 ' + gotoSettleAt
+    + '，下发在 ' + gotoCallAt + '（-1 表示压根没找到）'
 )
 
 // 自检（钉住钉子④的判据本身）：上面两个正则必须真的扫到了调用点。

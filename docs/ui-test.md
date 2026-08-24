@@ -42,7 +42,7 @@ cp /d/work/inventory-miniapp/project.private.config.json ./
 
 三次挂的**没有一条是断言失败**。所以：worktree 里 UI 测试红、而且症状是初始化或超时类（连不上、等不到、页面栈不对）而不是某条断言不符，先查这个文件在不在，别急着当成代码回归去翻 diff。
 
-## 两条硬约束
+## 三条硬约束
 
 ### 1. 页面级选择器查不到自定义组件内部
 
@@ -85,6 +85,38 @@ await waitFor(sale, async function () { ... }, '商品进购物车')  // 条件
 
 **不要**在用例里写 `await page.waitFor('.js-xxx')`。
 
+### 3. 路由指令不许紧挨着上一步下发
+
+实测（2026-08-25，开发者工具 2.02.x + `miniprogram-automator` 0.12.1）：路由指令下发得离上一步太近，会被**静默吞掉**，而且会把路由整个卡死。
+
+在未改动的 `origin/main`（9c4abe0）上插桩跑了 7 轮，盯 `runOpeningSheet` 结尾那次退回，把 automator 侧 `App.getPageStack` 和 runtime 侧 `getCurrentPages()` 两个栈连读 8 秒：
+
+| 退栈下发距上一次 tap | 结果 |
+|---|---|
+| ≤ 92ms | 3/3 被吞，两侧栈一动不动 |
+| ≥ 290ms | 4/4 正常退回 |
+
+被吞时的现场：`navigateBack()` 正常返回（3027ms，正是 `changeRoute` 那个固定 `sleep(3000)`），通道也完全健康（探针 RPC 全是 1–3ms），但栈就是不动。**这不是通道问题，也不是没等够。**
+
+三条已经排除的解释，别再回头查：
+
+- 不是遮罩挡住 —— 内存模式下 `store` 的 `showBusy` / `hideBusy` 直接 return，压根没有 `showLoading`
+- 不是在途的异步取数 —— 被吞那几轮里 `ledgerLoading` / `ledgerLock` 早已是 `false`
+- 不是视图层还没渲染完 —— 被吞的那一轮，页面上的欠款文案已经从 `¥17.00` 变成 `¥37.00`
+
+两条同样重要的否定结论：
+
+- **补发无效，不要加重试。** 从 runtime 侧补发 `wx.navigateBack({success, fail})`，回调拿到的是 `{"ok":true,"res":{"errMsg":"navigateBack:ok"}}` —— API 说成功了，栈依旧不动。
+- **一旦被吞，路由整个卡死。** 紧接着的任何一条路由指令都会让工具等满 10 秒、报 `timeout waiting for automator response`。所以那个「偶发 timeout」和「栈没退」是同一件事的两种表现，不是两个 bug。
+
+`tests/ui.test.js` 的对策是：`goto` / `goBackTo` 在真正下发之前先空出 `WECHAT_UI_ROUTE_SETTLE`（默认 1000）毫秒。**下发之后仍旧靠轮询确认到没到位**，这段安静时间不是拿固定 `sleep` 冒充完成信号。
+
+基准要取在「马上要下发」的这一刻，不要取在上一次 tap 上：先试过「距上一次 tap 满 400ms」，期初欠款那处治好了，但 `runNativeClearModal` 结尾那处照旧被吞 —— 那一步的 tap 触发的是 `store.clearAll()`，等它做完早就超过 400ms，于是那条规则实际等于没等。
+
+**真正的阈值没测出来，成因也没查到**（那在开发者工具内部，从外面看不见），1000 是保守取的。嫌慢可以用 `WECHAT_UI_ROUTE_SETTLE` 调，但调小之前先把这一节读完。
+
+这个窗口是自动化独有的：店员用手点，两次操作之间天然隔着几百毫秒到几秒，进不了这个窗口；`pages/customer-edit/customer-edit.js` 的 `save()` 本来就是 `setTimeout(() => wx.navigateBack(), 400)`。
+
 ## 改 wxml 时的检查清单
 
 - [ ] 新增或改名 `js-` 钩子后，`grep` 过 `tests/ui.test.js`
@@ -97,7 +129,7 @@ await waitFor(sale, async function () { ... }, '商品进购物车')  // 条件
 
 暴露的样子值得记一笔：销售流程**全部成功**——库存从 42 扣到 41、单号 `SH20260823-H9ZH` 生成了、弹层在模拟器里画得好好的，只有 `waitFor('.js-slip')` 永远等不到，于是整个测试无声挂了二十多分钟，既不报错也不退出。
 
-两个教训就是上面那两条硬约束：**跨不进组件**，以及**等待没有超时**。
+两个教训就是上面第 1、2 条硬约束：**跨不进组件**，以及**等待没有超时**。
 
 ## 排查
 
