@@ -1750,6 +1750,11 @@ function totalStock(skus, productId) {
   //     事务内走 tx.recordsCtx()，事务外走 MemoryDb.prototype.recordsCtx ——
   //     是两个不同的方法，所以「事务外一次都没读」可以被精确断言。
   //     这条用例在修复前必挂：老实现的记账返回是「事务提交之后再 await 一次读库」。
+  //
+  //     **标题里的「一次都不许」限于记账路径**（下面 noReadStep 那份清单），
+  //     不是全局不变量。deleteShop 从 2b-3 起故意在事务提交之后碰集合（按 shopId
+  //     清流水，见 21 节）—— 那条路上「提交之后失败」的正确处理不是不做，而是
+  //     不许把它变成一个错误回包，21j 钉的就是这一条。
   // -------------------------------------------------------------------------
   const noReadShop = await new Shop({ ids: idFactory('nr') }).open('提交后不读库店')
   await noReadShop.call('saveProduct', { name: '普通货', costPrice: 2, salePrice: 10, stock: 200, alertQty: 1 })
@@ -2514,7 +2519,7 @@ function totalStock(skus, productId) {
     'clearAll 换账套必须把迁移前留下的老数组清掉')
 
   // -------------------------------------------------------------------------
-  // 14) 2b-3：删店之后按 shopId 分批清 ledger_records
+  // 21) 2b-3：删店之后按 shopId 分批清 ledger_records
   //
   //     覆盖：空集合 / 正好整页倍数 / 超过一页 / shopId 隔离（跨账套要一起清，
   //     别的店一条都不许动）/ 条数预算到顶可续 / 中途真删失败可续 / 墙钟预算到顶 /
@@ -2551,38 +2556,38 @@ function totalStock(skus, productId) {
 
   const PAGE = recordsModule.PAGE_LIMIT
 
-  // 14a 空集合：什么都没有也要干净返回，不能报错、不能空转
+  // 21a 空集合：什么都没有也要干净返回，不能报错、不能空转
   const pgEmpty = new MemoryDb()
   const pgEmptyGot = await recordsModule.purgeByShop(ctxOf(pgEmpty), 'ghost-1', {})
   assert.deepStrictEqual(pgEmptyGot,
     { removed: 0, remaining: false, stopped: '', error: '' },
-    '14a：空集合要回 removed 0 / remaining false')
+    '21a：空集合要回 removed 0 / remaining false')
 
-  // 14b 正好整页倍数：1 页、2 页整。**这一条是这组用例的重点** —— 老样板里
+  // 21b 正好整页倍数：1 页、2 页整。**这一条是这组用例的重点** —— 老样板里
   //     hasMore = docs.length >= limit 在整页倍数时恒为真，就是那个 off-by-one。
   //     这里终止判据是「查出来 0 条」，整页倍数不该多转、也不该少删。
   for (let m = 1; m <= 2; m++) {
     const pgExact = new MemoryDb()
     seedShopDocs(pgExact, 'shop-exact', 'book-exact', PAGE * m, 'ex' + m)
     const got = await recordsModule.purgeByShop(ctxOf(pgExact), 'shop-exact', {})
-    assert.strictEqual(got.removed, PAGE * m, '14b：正好 ' + m + ' 整页要全删掉')
-    assert.strictEqual(got.remaining, false, '14b：正好 ' + m + ' 整页删完不该说还有剩')
-    assert.strictEqual(countShopDocs(pgExact, 'shop-exact'), 0, '14b：集合里必须一条不剩')
+    assert.strictEqual(got.removed, PAGE * m, '21b：正好 ' + m + ' 整页要全删掉')
+    assert.strictEqual(got.remaining, false, '21b：正好 ' + m + ' 整页删完不该说还有剩')
+    assert.strictEqual(countShopDocs(pgExact, 'shop-exact'), 0, '21b：集合里必须一条不剩')
   }
 
-  // 14c 超过一页（含只多一条这种最容易翻车的形状）
+  // 21c 超过一页（含只多一条这种最容易翻车的形状）
   const overSizes = [PAGE + 1, PAGE * 2 + 37]
   for (let i = 0; i < overSizes.length; i++) {
     const n = overSizes[i]
     const pgOver = new MemoryDb()
     seedShopDocs(pgOver, 'shop-over', 'book-over', n, 'ov' + i)
     const got = await recordsModule.purgeByShop(ctxOf(pgOver), 'shop-over', {})
-    assert.strictEqual(got.removed, n, '14c：' + n + ' 条要全删掉')
-    assert.strictEqual(got.remaining, false, '14c：' + n + ' 条删完不该说还有剩')
-    assert.strictEqual(countShopDocs(pgOver, 'shop-over'), 0, '14c：集合里必须一条不剩')
+    assert.strictEqual(got.removed, n, '21c：' + n + ' 条要全删掉')
+    assert.strictEqual(got.remaining, false, '21c：' + n + ' 条删完不该说还有剩')
+    assert.strictEqual(countShopDocs(pgOver, 'shop-over'), 0, '21c：集合里必须一条不剩')
   }
 
-  // 14d shopId 隔离 + 跨账套：同一家店散在三个账套里的流水要一起清（这正是 #6 按
+  // 21d shopId 隔离 + 跨账套：同一家店散在三个账套里的流水要一起清（这正是 #6 按
   //     shopId 而不是 bookId 建索引的理由），别的店一条都不许动。
   const pgIso = new MemoryDb()
   seedShopDocs(pgIso, 'shop-a', 'shop-a', 150, 'a-cur')        // 当前账套
@@ -2590,12 +2595,12 @@ function totalStock(skus, productId) {
   seedShopDocs(pgIso, 'shop-a', 'clr-a-1', 60, 'a-clr')        // 快照转换出来的 clr- 账套
   seedShopDocs(pgIso, 'shop-b', 'shop-b', 120, 'b-cur')        // 另一家店，一条都不许动
   const pgIsoGot = await recordsModule.purgeByShop(ctxOf(pgIso), 'shop-a', {})
-  assert.strictEqual(pgIsoGot.removed, 250, '14d：三个账套 150+40+60 要一起清掉')
-  assert.strictEqual(pgIsoGot.remaining, false, '14d：清完了')
-  assert.strictEqual(countShopDocs(pgIso, 'shop-a'), 0, '14d：这家店一条不剩')
-  assert.strictEqual(countShopDocs(pgIso, 'shop-b'), 120, '14d：别的店的流水一条都不许动')
+  assert.strictEqual(pgIsoGot.removed, 250, '21d：三个账套 150+40+60 要一起清掉')
+  assert.strictEqual(pgIsoGot.remaining, false, '21d：清完了')
+  assert.strictEqual(countShopDocs(pgIso, 'shop-a'), 0, '21d：这家店一条不剩')
+  assert.strictEqual(countShopDocs(pgIso, 'shop-b'), 120, '21d：别的店的流水一条都不许动')
 
-  // 14e 条数预算到顶 → remaining: true，再调接着删（幂等可续，不需要任何进度状态）
+  // 21e 条数预算到顶 → remaining: true，再调接着删（幂等可续，不需要任何进度状态）
   const pgCap = new MemoryDb()
   seedShopDocs(pgCap, 'shop-cap', 'book-cap', 250, 'cap')
   const capRounds = []
@@ -2605,25 +2610,38 @@ function totalStock(skus, productId) {
     if (!got.remaining) break
   }
   assert.deepStrictEqual(capRounds.map(function (r) { return r.removed }), [100, 100, 50],
-    '14e：250 条按每次 100 条删，三轮删完 100/100/50')
+    '21e：250 条按每次 100 条删，三轮删完 100/100/50')
   assert.deepStrictEqual(capRounds.map(function (r) { return r.stopped }), ['cap', 'cap', ''],
-    '14e：前两轮撞条数上限，最后一轮是自然删完')
-  assert.strictEqual(capRounds[2].remaining, false, '14e：最后一轮不该说还有剩')
-  assert.strictEqual(countShopDocs(pgCap, 'shop-cap'), 0, '14e：三轮之后一条不剩')
+    '21e：前两轮撞条数上限，最后一轮是自然删完')
+  assert.strictEqual(capRounds[2].remaining, false, '21e：最后一轮不该说还有剩')
+  assert.strictEqual(countShopDocs(pgCap, 'shop-cap'), 0, '21e：三轮之后一条不剩')
   // maxRecords 只能调小不能调大：传一个比 PURGE_MAX_RECORDS 还大的数要被 clamp 回去
   const pgClamp = new MemoryDb()
   seedShopDocs(pgClamp, 'shop-clamp', 'book-clamp', 3, 'cl')
   const pgClampGot = await recordsModule.purgeByShop(ctxOf(pgClamp), 'shop-clamp',
     { maxRecords: recordsModule.PURGE_MAX_RECORDS * 10 })
-  assert.strictEqual(pgClampGot.removed, 3, '14e：maxRecords 调大不该改变行为')
+  assert.strictEqual(pgClampGot.removed, 3, '21e：maxRecords 调大不该改变行为')
   // 非法 maxRecords 不许被当成「无上限」：NaN 的 `removed >= cap` 恒为假会变无界循环
   const pgNaN = new MemoryDb()
   seedShopDocs(pgNaN, 'shop-nan', 'book-nan', 5, 'nan')
   const pgNaNGot = await recordsModule.purgeByShop(ctxOf(pgNaN), 'shop-nan', { maxRecords: 'x' })
-  assert.strictEqual(pgNaNGot.removed, 5, '14e：非法 maxRecords 要退回缺省，不是无上限')
-  assert.strictEqual(pgNaNGot.remaining, false, '14e：非法 maxRecords 退回缺省后照样删完')
+  assert.strictEqual(pgNaNGot.removed, 5, '21e：非法 maxRecords 要退回缺省，不是无上限')
+  assert.strictEqual(pgNaNGot.remaining, false, '21e：非法 maxRecords 退回缺省后照样删完')
+  // 两个「安全但反直觉」的角落：0.5 必须先取整再判 > 0（顺序反了 cap 会变成 0、
+  // 一条不删还回 remaining: true），null 的 deadline 必须当「不限时」而不是
+  // 「截止时刻 0」（Number(null) === 0 是有限数，照单全收就是一进来就超时）。
+  // 两个都够不着（现有调用点都传真数字），但都会让下一个调用者拿到一次莫名其妙
+  // 的空转，钉住免得改回去。
+  const pgCorner = new MemoryDb()
+  seedShopDocs(pgCorner, 'shop-corner', 'book-corner', 4, 'cn')
+  const pgHalf = await recordsModule.purgeByShop(ctxOf(pgCorner), 'shop-corner', { maxRecords: 0.5 })
+  assert.strictEqual(pgHalf.removed, 4, '21e：maxRecords 0.5 要退回缺省，不是取整成 0 空转')
+  seedShopDocs(pgCorner, 'shop-corner', 'book-corner', 4, 'cn2')
+  const pgNullDeadline = await recordsModule.purgeByShop(ctxOf(pgCorner), 'shop-corner', { deadline: null })
+  assert.strictEqual(pgNullDeadline.removed, 4, '21e：deadline null 是「不限时」，不是「截止时刻 0」')
+  assert.strictEqual(pgNullDeadline.remaining, false, '21e：不限时就该一次删完')
 
-  // 14f 中途**真的**删失败：就地停下、如实回报已删条数，再调一次接着删干净。
+  // 21f 中途**真的**删失败：就地停下、如实回报已删条数，再调一次接着删干净。
   //     这条钉的是「中间态可收拾」：删店事务已经提交，删到一半失败不能变成
   //     谁也接不上的状态。
   function failAfterCtx(db, failAfter) {
@@ -2651,17 +2669,17 @@ function totalStock(skus, productId) {
   const pgFail = new MemoryDb()
   seedShopDocs(pgFail, 'shop-fail', 'book-fail', 250, 'fl')
   const pgFailGot = await recordsModule.purgeByShop(failAfterCtx(pgFail, 6), 'shop-fail', {})
-  assert.strictEqual(pgFailGot.removed, 6, '14f：第 7 条删失败，前 6 条已经删掉了，要如实回报')
-  assert.strictEqual(pgFailGot.remaining, true, '14f：失败停下 = 还有剩')
-  assert.strictEqual(pgFailGot.stopped, 'error', '14f：停下的原因是出错')
-  assert.ok(/删不动了/.test(pgFailGot.error), '14f：错误原文要带回来，不许吞')
-  assert.strictEqual(countShopDocs(pgFail, 'shop-fail'), 244, '14f：只删掉了 6 条')
+  assert.strictEqual(pgFailGot.removed, 6, '21f：第 7 条删失败，前 6 条已经删掉了，要如实回报')
+  assert.strictEqual(pgFailGot.remaining, true, '21f：失败停下 = 还有剩')
+  assert.strictEqual(pgFailGot.stopped, 'error', '21f：停下的原因是出错')
+  assert.ok(/删不动了/.test(pgFailGot.error), '21f：错误原文要带回来，不许吞')
+  assert.strictEqual(countShopDocs(pgFail, 'shop-fail'), 244, '21f：只删掉了 6 条')
   const pgFailAgain = await recordsModule.purgeByShop(ctxOf(pgFail), 'shop-fail', {})
-  assert.strictEqual(pgFailAgain.removed, 244, '14f：故障恢复之后再调一次要接着删完')
-  assert.strictEqual(pgFailAgain.remaining, false, '14f：这次删完了')
-  assert.strictEqual(countShopDocs(pgFail, 'shop-fail'), 0, '14f：一条不剩')
+  assert.strictEqual(pgFailAgain.removed, 244, '21f：故障恢复之后再调一次要接着删完')
+  assert.strictEqual(pgFailAgain.remaining, false, '21f：这次删完了')
+  assert.strictEqual(countShopDocs(pgFail, 'shop-fail'), 0, '21f：一条不剩')
 
-  // 14g 墙钟预算到顶。注入一个每次调用 +1 的假时钟，撞点才是确定性的 ——
+  // 21g 墙钟预算到顶。注入一个每次调用 +1 的假时钟，撞点才是确定性的 ——
   //     用真 Date.now() 写这条用例，快机器上永远撞不上，等于没测。
   const pgTime = new MemoryDb()
   seedShopDocs(pgTime, 'shop-time', 'book-time', 250, 'tm')
@@ -2670,17 +2688,17 @@ function totalStock(skus, productId) {
     deadline: 100,
     clock: function () { fakeClock += 1; return fakeClock }
   })
-  assert.strictEqual(pgTimeGot.stopped, 'time', '14g：应该是撞墙钟停的')
-  assert.strictEqual(pgTimeGot.remaining, true, '14g：撞墙钟 = 还有剩')
+  assert.strictEqual(pgTimeGot.stopped, 'time', '21g：应该是撞墙钟停的')
+  assert.strictEqual(pgTimeGot.remaining, true, '21g：撞墙钟 = 还有剩')
   assert.ok(pgTimeGot.removed > 0 && pgTimeGot.removed < 250,
-    '14g：撞墙钟之前删掉了一部分（' + pgTimeGot.removed + '），不是 0 也不是全部')
+    '21g：撞墙钟之前删掉了一部分（' + pgTimeGot.removed + '），不是 0 也不是全部')
   assert.strictEqual(countShopDocs(pgTime, 'shop-time'), 250 - pgTimeGot.removed,
-    '14g：回报的条数要和集合里少掉的条数对得上')
+    '21g：回报的条数要和集合里少掉的条数对得上')
   const pgTimeAgain = await recordsModule.purgeByShop(ctxOf(pgTime), 'shop-time', {})
-  assert.strictEqual(pgTimeAgain.remaining, false, '14g：不限时再调一次要删完')
-  assert.strictEqual(countShopDocs(pgTime, 'shop-time'), 0, '14g：一条不剩')
+  assert.strictEqual(pgTimeAgain.remaining, false, '21g：不限时再调一次要删完')
+  assert.strictEqual(countShopDocs(pgTime, 'shop-time'), 0, '21g：一条不剩')
 
-  // 14h 空 shopId 必须抛：where({ shopId: '' }) 命中的是别人的文档，
+  // 21h 空 shopId 必须抛：where({ shopId: '' }) 命中的是别人的文档，
   //     这一条是调用方的 bug，不能像删失败那样"就地停下回个结构"了事。
   const pgBad = new MemoryDb()
   seedShopDocs(pgBad, 'shop-keep', 'book-keep', 3, 'kp')
@@ -2690,9 +2708,9 @@ function totalStock(skus, productId) {
   await rejects(function () {
     return recordsModule.purgeByShop(ctxOf(pgBad), null, {})
   }, /缺少 shopId/)
-  assert.strictEqual(countShopDocs(pgBad, 'shop-keep'), 3, '14h：抛错之前一条都不许删')
+  assert.strictEqual(countShopDocs(pgBad, 'shop-keep'), 3, '21h：抛错之前一条都不许删')
 
-  // 14i deleteShop 端到端：真记几笔账（文档里带着 customerName / customerPhone，
+  // 21i deleteShop 端到端：真记几笔账（文档里带着 customerName / customerPhone，
   //     这一项的动机就是这些个人信息），再灌一个 clr- 快照账套和另一家店，
   //     删店之后这家店跨账套一条不剩、别人一条不少。
   const delShop = await new Shop({ ids: idFactory('ds') }).open('待删店')
@@ -2707,20 +2725,20 @@ function totalStock(skus, productId) {
   })
   await delShop.call('addPayment', { customerId: dsCustomer.id, amount: 1 })
   const dsRealCount = countShopDocs(delShop.db, delShop.shopId)
-  assert.ok(dsRealCount > 0, '14i：前置 —— 删之前集合里确实有这家店的流水')
+  assert.ok(dsRealCount > 0, '21i：前置 —— 删之前集合里确实有这家店的流水')
   seedShopDocs(delShop.db, delShop.shopId, 'clr-ds-1', 120, 'ds-clr')
   seedShopDocs(delShop.db, 'shop-other', 'shop-other', 30, 'ds-other')
   const dsRes = await delShop.call('deleteShop', {})
-  assert.strictEqual(dsRes.deleted, true, '14i：删店照旧回 deleted: true')
+  assert.strictEqual(dsRes.deleted, true, '21i：删店照旧回 deleted: true')
   assert.strictEqual(dsRes.purge.removed, dsRealCount + 120,
-    '14i：真流水 + clr- 快照账套的流水要一起清掉')
-  assert.strictEqual(dsRes.purge.remaining, false, '14i：这么点条数一次就该清完')
+    '21i：真流水 + clr- 快照账套的流水要一起清掉')
+  assert.strictEqual(dsRes.purge.remaining, false, '21i：这么点条数一次就该清完')
   assert.strictEqual(countShopDocs(delShop.db, delShop.shopId), 0,
-    '14i：删店之后这家店的流水一条不剩（残留文档里带着客户姓名电话）')
+    '21i：删店之后这家店的流水一条不剩（残留文档里带着客户姓名电话）')
   assert.strictEqual(countShopDocs(delShop.db, 'shop-other'), 30,
-    '14i：别的店的流水一条都不许动')
+    '21i：别的店的流水一条都不许动')
 
-  // 14j 清理失败绝不能把删店变成失败。店已经没了，报错只会让店主以为没删成、
+  // 21j 清理失败绝不能把删店变成失败。店已经没了，报错只会让店主以为没删成、
   //     再点一次（再点报「不是该店成员」）。db.recordsCtx() 本身抛错是最狠的一种。
   const dsJitter = await new Shop({ ids: idFactory('dj') }).open('清理抖动店')
   await dsJitter.call('saveProduct', { name: '货', costPrice: 1, salePrice: 2, stock: 5, alertQty: 1 })
@@ -2729,13 +2747,13 @@ function totalStock(skus, productId) {
   dsJitter.db.recordsCtx = function () { throw new Error('boom') }
   const djRes = await dsJitter.call('deleteShop', {})
   dsJitter.db.recordsCtx = djRealCtx
-  assert.strictEqual(djRes.deleted, true, '14j：清理失败不许把删店变成失败')
-  assert.strictEqual(djRes.purge.remaining, true, '14j：清理没做成，要说还有剩')
-  assert.ok(/boom/.test(djRes.purge.error), '14j：错误原文要带回来')
-  assert.strictEqual(dsJitter.db.shops[djShopId], undefined, '14j：店确实删掉了')
-  assert.strictEqual(dsJitter.db.ledgers[djShopId], undefined, '14j：账本确实删掉了')
+  assert.strictEqual(djRes.deleted, true, '21j：清理失败不许把删店变成失败')
+  assert.strictEqual(djRes.purge.remaining, true, '21j：清理没做成，要说还有剩')
+  assert.ok(/boom/.test(djRes.purge.error), '21j：错误原文要带回来')
+  assert.strictEqual(dsJitter.db.shops[djShopId], undefined, '21j：店确实删掉了')
+  assert.strictEqual(dsJitter.db.ledgers[djShopId], undefined, '21j：账本确实删掉了')
 
-  // 14k 续清动作 purgeDeletedShopRecords：三道判据分开钉。
+  // 21k 续清动作 purgeDeletedShopRecords：三道判据分开钉。
   const pgOps = new MemoryDb()
   pgOps.platformAdmins['ops-admin'] = {
     _id: 'ops-admin', openid: 'ops-admin', note: '运营方', createdAt: 1
@@ -2752,33 +2770,33 @@ function totalStock(skus, productId) {
   await rejects(function () {
     return opsCall('user-a', 'ghost-shop', {})
   }, /清理已删店铺的流水只能由平台运营方执行/)
-  assert.strictEqual(countShopDocs(pgOps, 'ghost-shop'), 250, '14k：被拒时一条都不许删')
+  assert.strictEqual(countShopDocs(pgOps, 'ghost-shop'), 250, '21k：被拒时一条都不许删')
   // ② 店还在 → 拒。误加在活店上就是一次不可恢复的抹账。
   pgOps.shops['live-shop'] = { _id: 'live-shop', name: '活着的店', ownerOpenid: 'user-a', createdAt: 1 }
   seedShopDocs(pgOps, 'live-shop', 'live-shop', 20, 'lv')
   await rejects(function () {
     return opsCall('ops-admin', 'live-shop', {})
   }, /还在，不能清它的流水/)
-  assert.strictEqual(countShopDocs(pgOps, 'live-shop'), 20, '14k：活店的流水一条都不许删')
+  assert.strictEqual(countShopDocs(pgOps, 'live-shop'), 20, '21k：活店的流水一条都不许删')
   // ③ 店没了但账本还在（半删状态）→ 同样拒
   pgOps.ledgers['half-shop'] = { _id: 'half-shop', bookId: 'half-shop' }
   seedShopDocs(pgOps, 'half-shop', 'half-shop', 10, 'hf')
   await rejects(function () {
     return opsCall('ops-admin', 'half-shop', {})
   }, /账本还在，不能清它的流水/)
-  assert.strictEqual(countShopDocs(pgOps, 'half-shop'), 10, '14k：半删状态下一条都不许删')
+  assert.strictEqual(countShopDocs(pgOps, 'half-shop'), 10, '21k：半删状态下一条都不许删')
   // ④ 运营方 + 店确实没了 → 分批清，remaining 为 true 就再调一次，直到清完
   const opsRounds = []
   for (let round = 0; round < 4; round++) {
     const got = await opsCall('ops-admin', 'ghost-shop', { maxRecords: 100 })
-    assert.strictEqual(got.shopId, 'ghost-shop', '14k：回包要带 shopId')
+    assert.strictEqual(got.shopId, 'ghost-shop', '21k：回包要带 shopId')
     opsRounds.push(got)
     if (!got.remaining) break
   }
   assert.deepStrictEqual(opsRounds.map(function (r) { return r.removed }), [100, 100, 50],
-    '14k：续清动作幂等可续，三轮清完 250 条')
-  assert.strictEqual(countShopDocs(pgOps, 'ghost-shop'), 0, '14k：孤儿流水一条不剩')
-  assert.strictEqual(countShopDocs(pgOps, 'live-shop'), 20, '14k：活店的流水始终没被动过')
+    '21k：续清动作幂等可续，三轮清完 250 条')
+  assert.strictEqual(countShopDocs(pgOps, 'ghost-shop'), 0, '21k：孤儿流水一条不剩')
+  assert.strictEqual(countShopDocs(pgOps, 'live-shop'), 20, '21k：活店的流水始终没被动过')
 
   console.log('ledger records tests passed')
 })().catch(function (error) {

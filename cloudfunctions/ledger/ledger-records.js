@@ -343,9 +343,15 @@ async function applyWrites(store, writes) {
 // 账本文档一删就没人拿得到那些 bookId 了，shopId 是唯一还认得出它们的字段。
 //
 // **只能在删店事务提交之后调，事务里和事务之前都不行**（理由三条，改这里之前先读完）：
-//   ① 塞不进事务。2026-08-24 实测单事务写 92 条文档就确定性失败，报
-//      TransactionNotExist（证据和数字见 index.js 那段 console.error 的注释）。
-//      上万条删除进事务必炸，而且事务原子回滚 —— 连店都删不掉。
+//   ① 塞不进事务。2026-08-24 演示店实测：**单事务写 92 条文档就确定性失败**，
+//      服务端报 [ResourceUnavailable.TransactionNotExist]「transaction must be
+//      commit or abort in 30 seconds」，而那两次函数耗时只有 12–16 秒 —— 所以
+//      **真实边界不是那 30 秒，是别的东西，至今没查清**。92 条 / 12 秒这组数字
+//      在 index.js 那段 console.error 的注释里；但**那段注释比这里旧**：它写的是
+//      「当时无法判断撞了哪一条限制，因为原始错误在这里被吞掉了」，错误原文是后来
+//      加上 console.error 才拿到的。别拿它当 TransactionNotExist 的出处。
+//      不管边界具体在哪，上万条删除进事务都远远越过它，而且事务原子回滚 ——
+//      连店都删不掉。
 //   ② 不许反过来「先清流水再删店」。清到一半失败就是一家**活着的**店掉了一半流水，
 //      聚合还在、流水少了 —— 那是**错数**，而 recomputeAggregates 修不回来（它按集合
 //      现状重折叠）。提交之后再清，最坏也只是泄漏，不可能算错。
@@ -383,13 +389,17 @@ async function purgeByShop(ctx, shopId, options) {
   if (!shop) {
     throw new Error('缺少 shopId，不能按店清理流水')
   }
-  const wantedCap = Number(options.maxRecords)
-  // 非法值（未传 / NaN / <=0）一律退回缺省，**不许当成"无上限"** —— cap 是 NaN 时
-  // `removed >= cap` 恒为假，这个循环就变成无界的了。
+  // 非法值（未传 / NaN / 负数 / 字符串）一律退回缺省，**不许当成「无上限」** ——
+  // cap 是 NaN 时 `removed >= cap` 恒为假，这个循环就变成无界的了。
+  // **先取整再判 > 0**，顺序反过来的话 0.5 会通过「> 0」、取整之后变成 cap = 0，
+  // 于是这次调用一条都不删却回 remaining: true —— 安全但莫名其妙的空转。
+  const wantedCap = Math.floor(Number(options.maxRecords))
   const cap = Number.isFinite(wantedCap) && wantedCap > 0
-    ? Math.min(Math.floor(wantedCap), PURGE_MAX_RECORDS)
+    ? Math.min(wantedCap, PURGE_MAX_RECORDS)
     : PURGE_MAX_RECORDS
-  const wantedDeadline = Number(options.deadline)
+  // null 要当成「不限时」而不是「截止时刻 0」：Number(null) === 0 是有限数，
+  // 照单全收就等于一进来就超时，同样是一次莫名其妙的空转。undefined 天然是 NaN。
+  const wantedDeadline = options.deadline == null ? NaN : Number(options.deadline)
   const deadline = Number.isFinite(wantedDeadline) ? wantedDeadline : null
   const clock = options.clock || Date.now
   const col = ctx.collection

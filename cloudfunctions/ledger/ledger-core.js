@@ -404,9 +404,18 @@ async function membersOfShop(db, tx, shopId) {
 // **两道前置检查判的是「这家店真的没了」，不是「调用者有没有权限」**（权限是上面
 // 那道白名单门的事）。这个 action 会把一个 shopId 名下的流水全删光，误加在一家活店
 // 上就是一次不可恢复的抹账：聚合还在、流水没了，recomputeAggregates 也修不回来
-//（它按集合现状重折叠）。所以 shops 和 ledgers 里**只要还有一份文档在就直接拒绝**，
-// 两个都查，不是二选一 —— 半删状态（店没了账本还在，或反过来）同样要拒绝，
-// 那说明上一次删店没走完，先弄清楚再说，不能顺手把流水删了。
+//（它按集合现状重折叠）。shops 和 ledgers 两个都查，不是二选一 —— 半删状态
+//（店没了账本还在，或反过来）同样要拒绝，那说明上一次删店没走完，先弄清楚再说。
+//
+// **两道门的强度不一样，别把第二道当保险**：
+//   · listShopsByIds 是真 fail-closed —— index.js 那份没有 catch，读失败会抛出去，
+//     这次调用直接失败。**护住活店的是它**，也只有它。
+//   · getLedger 是 fail-open —— index.js 和 MemoryDb 的实现都把「文档不存在」和
+//     「读失败」一起折成 null（受限于 wxcloud 的 doc().get() 对缺失文档抛错，
+//     两者本来就分不开），所以 ledgers 的一次瞬时读失败会让这道门从「拒绝」
+//     降级成「放行」。它挡的是半删这种基本只能靠手工改库造出来的状态，
+//     用 fail-open 换主读路径不受影响是划算的；真要它 fail-closed，得先把适配层
+//     换成 where({ _id }) 那种分得清空结果和读失败的查法，那是另一件事。
 async function purgeDeletedShopRecords(db, shopId, payload) {
   payload = payload || {}
   const shops = await db.listShopsByIds([shopId])

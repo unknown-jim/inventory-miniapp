@@ -209,7 +209,7 @@ payload: { mode: 'snapshots', limit?: 50 }
 
 **前置条件：本店活账套必须已经迁完**（`recordsMigratedAt` 已写），没迁完调它明确报错。快照转换是加分项，**不能挡住关键路径**；而且它和活账套走的是同一套 `legacyRecordsOf`（归并 + 退货份额整体重算），先在活账上跑通再来转快照更安全。
 
-**逐份处理**账本 `clearSnapshots` 里的每一条元数据：`bookId` 非空就跳过（幂等）；`records` 为空走 stamp-only（只补 `bookId` + 空 `accounts`/`aggregate`）；否则 `legacyRecordsOf` 归并 + 重算 → 事务外逐条 `set()` 写进 `ledger_records` → `countAll` 必须等于归并条数 → **一个事务**写回快照文档的 `bookId`/`accounts`/`aggregate`。**`records` 数组保留不删**，和 `ledgers.records` 同一个理由：那是回滚路。代价是同一批流水在库里存了两份（快照数组一份、集合一份），**目前没人给这个双份定终止时间**——`dropLegacy` 只清 `ledgers.records`，不管快照里的。2b-3 清理清单要把它一起算上。
+**逐份处理**账本 `clearSnapshots` 里的每一条元数据：`bookId` 非空就跳过（幂等）；`records` 为空走 stamp-only（只补 `bookId` + 空 `accounts`/`aggregate`）；否则 `legacyRecordsOf` 归并 + 重算 → 事务外逐条 `set()` 写进 `ledger_records` → `countAll` 必须等于归并条数 → **一个事务**写回快照文档的 `bookId`/`accounts`/`aggregate`。**`records` 数组保留不删**，和 `ledgers.records` 同一个理由：那是回滚路。代价是同一批流水在库里存了两份（快照数组一份、集合一份），**目前没人给这个双份定终止时间**——`dropLegacy` 只清 `ledgers.records`，不管快照里的。**2b-3 已经落地，但没覆盖这一条**：它只做了「删店时按 `shopId` 清 `ledger_records`」（见下面「删除店铺」），删店会把 `ledger_clears` 文档连同里面的 `records` 数组一起删掉，所以**只有活店的快照双份仍然悬着**，仍然没有终止时间。
 
 - **账套号 = `'clr-' + 快照 id`，故意不发新号**（对比 `newBook`）。发号会逼出一个两头不讨好的选择：先把号写进快照文档再写流水，崩在中间就恢复出一本空账（商品回来了、流水没了，**静默错账**）；先写流水再写号，崩在中间只是留下一批孤儿文档、下次重试换一个号（**是存储泄漏，不算错钱**——两头的代价不同级，别把它当成和上一条一样危险）。号由快照自己决定，两头都不用付：同一份快照重跑写的是同一批 `_id`，`set()` 幂等，`countAll` 永远只数这一份，且没有任何需要跨调用持久化的状态。`clr-` 前缀保证不会撞上现有账套。
 - **单份失败不影响其他份。** 快照之间互相独立，一份坏数据不该让其他份也恢复不了。失败的记进 `report[]`（带 `reason`）继续下一份。**失败不吃 `limit` 预算**，否则一份修不好的快照会把预算吃光、`remaining` 永远归不了零，循环调不收敛。所以 `state` 只有 `running` / `done` 两种，`failed > 0` 也会收敛到 `done` —— 收敛不等于全好，**要看 `failed` 和 `report`**。
@@ -289,7 +289,9 @@ wx.cloud.callFunction({ name: 'ledger', data: {
 
 幂等、可反复调，判据只有 `shopId` 一个，不需要持久化任何进度——回包 `remaining` 为 `true` 就再调一次，直到 `false`。`payload.maxRecords` 可以把单次条数**调小**（调大会被 clamp 回 `PURGE_MAX_RECORDS`）。这个动作走**平台运营方白名单**（`platform_admins`），客户端一个入口都没有，从开发者工具 Console 调。
 
-它有**两道前置检查，判的是「这家店真的没了」，不是「调用者有没有权限」**：`shops` 和 `ledgers` 里只要还有一份文档在就直接拒绝，两个都查。误加在一家活店上就是一次不可恢复的抹账（聚合还在、流水没了，`recomputeAggregates` 修不回来）；半删状态（店没了账本还在，或反过来）同样拒绝——那说明上一次删店没走完，先弄清楚再说。
+它有**两道前置检查，判的是「这家店真的没了」，不是「调用者有没有权限」**：`shops` 和 `ledgers` 里只要还有一份文档在就拒绝，两个都查。误加在一家活店上就是一次不可恢复的抹账（聚合还在、流水没了，`recomputeAggregates` 修不回来）；半删状态（店没了账本还在，或反过来）同样拒绝——那说明上一次删店没走完，先弄清楚再说。
+
+**两道门的强度不一样，别把第二道当保险**：`listShopsByIds` 是真 fail-closed（`index.js` 那份没有 catch，读失败会抛出去），**护住活店的是它，也只有它**；`getLedger` 是 fail-open——`index.js` 和 `MemoryDb` 都把「文档不存在」和「读失败」一起折成 `null`（受限于 wxcloud 的 `doc().get()` 对缺失文档抛错，两者本来就分不开），所以 `ledgers` 的一次瞬时读失败会让第二道门从「拒绝」降级成「放行」。它挡的是半删这种基本只能靠手工改库造出来的状态，用 fail-open 换主读路径不受影响是划算的；真要它 fail-closed，得先把适配层换成 `where({ _id })` 那种分得清空结果和读失败的查法，那是另一件事。
 
 **存量泄漏**（2b-3 之前删掉的店留下的孤儿流水）也走这个动作补清，前提是你还知道那个 `shopId`。**找不回 `shopId` 的老孤儿本次不处理**：那要全表扫 `ledger_records` 找「`shops` 里已经没有的 `shopId`」，是另一件事。
 
