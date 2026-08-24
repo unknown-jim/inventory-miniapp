@@ -182,6 +182,18 @@ function printReport(report, limit) {
   head(unconverted, limit).forEach(function (item) {
     say('      待转换 ' + item.id + ' savedAt=' + item.savedAt + ' 流水 ' + item.legacyRecordCount + ' 条')
   })
+  // 份数取纯函数算好的 withLegacyRecords（明细还得自己筛，snapshots 已按 limit 截断，
+  // 这里的 doubled.length 可能小于总数 —— 报总数要用前者）。
+  const doubled = (clears.snapshots || []).filter(function (item) {
+    return item.hasBookId === true && item.hasLegacyRecords === true
+  })
+  if (clears.withLegacyRecords) {
+    say('      已转换但还带着 records 双份 ' + clears.withLegacyRecords + ' 份，'
+      + '跑过 migrateRecords 的 mode:"dropLegacy" 之后可以用 mode:"dropSnapshotLegacy" 收掉')
+    head(doubled, limit).forEach(function (item) {
+      say('      待清理 ' + item.id + ' savedAt=' + item.savedAt + ' 数组 ' + item.legacyRecordCount + ' 条')
+    })
+  }
   say(report.blocking.length
     ? '阻塞项 ' + report.blocking.length + ' 类：' + report.blocking.map(function (item) {
       return item.check + '(' + item.count + ')'
