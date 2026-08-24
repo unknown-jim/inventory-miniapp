@@ -2564,7 +2564,9 @@ function receivableOf(accounts, customerId) {
   // 也正因为 2b-3 之后**没有任何自然路径**会顺手造出这个形状，这里必须用
   // keepLegacy 把它显式造出来才能继续钉这道闸 —— 闸比以前更要紧，不是更不要紧：
   // 存量清完之前判据一直得对，而代码里已经没有别的地方会撞到它了。
-  // 2b-3 之后的**新**形态（快照没有 records key）由紧接着的 D10 单独钉，两条别混。
+  // 2b-3 之后的**新**形态（快照没有 records key）由紧接着的 D10 / D10b 单独钉，
+  // 三条别混：D9 = 存量形状 + 判据，D10 = 新形状端到端（咬 core.clearDoc），
+  // D10b = apply.snapshotLists 那道单独锁（内存模式下的唯一一道）。
   const d9 = await openLegacyShop('d9')
   await d9.runMigration({ limit: 50 })
   // 迁移之后、清空之前记一笔新账，并用 keepLegacy 把老数组按记账前的样子塞回去
@@ -2614,14 +2616,21 @@ function receivableOf(accounts, customerId) {
   // 和 D9 是同一件事的两端：D9 造的是 2b-3 之前留下的存量（要靠 keepLegacy 才造
   // 得出来），D10 走的是 2b-3 之后**唯一的自然路径** —— 迁移 → 裸记一笔账
   //（applyMutation 不再携带 records，这一笔就把 ledgers.records 这个 key 抹掉）
-  // → clearAll。snapshotLists() 里 `legacy.length` 为 0，于是 snapshot.records
-  // 这个 key 压根不写：快照是**缺字段**，不是空数组。
+  // → clearAll。快照文档最后是**缺字段**，不是空数组。
+  //
+  // **这条路上有两道守卫，别把它们记混**（谁咬住这条断言，实测过）：
+  //   · apply.snapshotLists()：`if (legacy.length)` 才写 snapshot.records；
+  //   · core.clearDoc()（cloudfunctions/ledger/ledger-core.js）：
+  //     `if (snapshot.records && snapshot.records.length) { doc.records = ... }`。
+  // **云路径的快照文档到底写不写 records 键，最终由 clearDoc 说了算。** 实测：
+  // 只把 snapshotLists 改成无条件写，下面这条断言**不红**（clearDoc 兜住了）；
+  // 把 clearDoc 改成无条件 `doc.records = snapshot.records || []`，它立刻红。
+  // 所以下面那条 hasOwnProperty 断言钉的是 **clearDoc**，不是 snapshotLists。
+  // snapshotLists 那道由本段末尾的 D10b 单独直接调用来锁 —— 它在内存模式下是
+  // 裸露的那一道，理由见 D10b 自己的注释。
   //
   // 这一条钉两件事：
-  //   一、快照形状：没有 records key。顺带锁住 snapshotLists 里那个
-  //       `if (legacy.length)` 不被改成无条件 `snapshot.records = []` ——
-  //       写成空数组虽然「看起来一样」，却会让每份新快照都多一个没用的字段，
-  //       也让 dropSnapshotLegacy 的 report 分不清「没有」和「已经清过」。
+  //   一、快照形状：没有 records key（守卫是 clearDoc，见上）。
   //   二、dropSnapshotLegacy 对这种快照是**幂等成功**：走 `if (!legacy.length)`
   //       那一支报 skipped，不是 failed，而且那一支直接 return、一个字都不写文档
   //       （不盖 legacyRecordsDroppedAt）。2b-3 之后 report 里满屏 skipped 是常态，
@@ -2640,7 +2649,8 @@ function receivableOf(accounts, customerId) {
   const d10Meta = d10.doc().clearSnapshots[0]
   const d10Snap = d10.db.clears[d10Meta.id]
   assert.ok(!Object.prototype.hasOwnProperty.call(d10Snap, 'records'),
-    'D10：2b-3 之后的新快照根本没有 records key（缺字段，不是空数组）')
+    'D10：2b-3 之后的新快照根本没有 records key（缺字段，不是空数组）'
+    + ' —— 这条咬住的是 core.clearDoc 那道守卫')
   assert.ok(d10Snap.bookId, 'D10：该有的还是在 —— bookId 非空')
   assert.strictEqual(d10Snap.bookId, d10BeforeClear.bookId, 'D10：封存的就是清空前那本账套')
   assert.strictEqual(d10Snap.aggregate.count, d10BeforeClear.aggregate.count,
@@ -2677,6 +2687,42 @@ function receivableOf(accounts, customerId) {
   assert.ok(d10Restored.some(function (item) { return item.id === d10Sale.result.order.id }),
     'D10：清空前记的那笔新账也恢复得回来')
 
+  // ---- D10b snapshotLists 那道守卫单独锁：**内存模式下它是唯一的一道** -------
+  //
+  // 上面 D10 端到端那条走的是云路径，快照文档最后经过 core.clearDoc()，
+  // 那里还有一道 `if (snapshot.records && snapshot.records.length)` 兜底 ——
+  // 所以 snapshotLists 里的 `if (legacy.length)` 就算被改成无条件写，
+  // D10 也**不会**红（实测如此）。两道守卫串在一起，端到端只测得到最后一道。
+  //
+  // 但**内存模式没有 clearDoc 这一道**：utils/store.js 里
+  // `writeArchive(readArchive().concat([applied.result.clearSnapshot]))`
+  // 把 snapshotLists() 的输出**原样落盘**，中间没有任何加工。云路径的两道守卫，
+  // 到了这里只剩 snapshotLists 自己这一道 —— 也就是说，唯一那道裸露的守卫恰恰是
+  // 端到端测不到的那道。所以这里直接调函数把它单独钉住。
+  //
+  // 判据必须用 hasOwnProperty，**不许写成判 `.length`**：`records: []` 的
+  // `.length` 也是 0，用长度判，「多写了一个空数组字段」这种回归会静默漏过去，
+  // 而这条断言存在的全部意义就是抓它。
+  const d10bCases = [
+    { name: '账本压根没有 records 键（2b-3 之后记过账的账本）', ledger: { bookId: 'b1', products: [], skus: [], customers: [], categories: [] } },
+    { name: '账本 records 是空数组（跑完 dropLegacy 之后的形状）', ledger: { bookId: 'b1', records: [], products: [], skus: [], customers: [], categories: [] } }
+  ]
+  d10bCases.forEach(function (item) {
+    const snap = apply.snapshotLists(item.ledger, 123)
+    assert.ok(!Object.prototype.hasOwnProperty.call(snap, 'records'),
+      'D10b：' + item.name + ' —— snapshotLists 不许写出 records 键（缺字段，不是空数组）')
+    assert.strictEqual(snap.bookId, 'b1', 'D10b：' + item.name + ' —— 该带的 bookId 还是要带')
+  })
+  // 反向：老文档那份数组仍然必须原样带走。上面两条只说「空的不要写」，
+  // 光靠它们，把 `snapshot.records = cloneList(legacy)` 整行删掉也照样绿 ——
+  // 而删掉它，升级前备份（clearedBackup / 迁移前账本）那批流水就在封存那一刻丢了，
+  // 那是它们的唯一副本。两个方向一起锁，改动才没有静默的出路。
+  const d10bLegacy = apply.snapshotLists({ bookId: 'b2', records: legacyCorpus() }, 123)
+  assert.ok(Object.prototype.hasOwnProperty.call(d10bLegacy, 'records'),
+    'D10b：老文档的非空 records 数组必须原样带进快照（它是那批流水的唯一副本）')
+  assert.strictEqual(d10bLegacy.records.length, legacyCorpus().length,
+    'D10b：一行都不许少')
+
   console.log('ledger-migrate tests passed')
   console.log('阶段 3 补口：V12 行上亚分与 1e-9 容差、V4 金额那半（M3 专项）、'
     + 'M9b 四份脏语料完整迁移必须 failed（末尾总门的失败形态）、M4b 同批语料预检 '
@@ -2690,7 +2736,8 @@ function receivableOf(accounts, customerId) {
     + '\n快照老数组清理 D1 没跑 dropLegacy 不许删、D2 活账套没迁完、D3 端到端（删完数组仍能完整恢复）、'
     + 'D4 未转换的不许删、D5 集合不完整（少一条/多一条）都拒绝、D6 幂等、D7 分批与坏数据不吃预算、'
     + 'D8 legacyDroppedAt 活过记账、D9 存量 B 类快照（2b-3 前留下的，判据必须取 aggregate.count）、'
-    + 'D10 2b-3 之后的新快照没有 records 可删（幂等 skipped，不是 failed）')
+    + 'D10 2b-3 之后的新快照没有 records 可删（幂等 skipped，不是 failed；守卫是 core.clearDoc）、'
+    + 'D10b snapshotLists 单独锁（内存模式下它是唯一那道守卫）')
 })().catch(function (error) {
   console.error(error && error.stack ? error.stack : error)
   process.exit(1)

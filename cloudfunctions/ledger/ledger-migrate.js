@@ -1628,8 +1628,10 @@ async function convertSnapshots(db, shopId, payload, now) {
 //   · B 类（迁移之后、dropLegacy 之前点「清空数据」存的）：aggregate 是被封存账套
 //     那一刻的增量维护值，而被封存的账套此后不再变化。
 //     **2b-3 起不再新增，只剩存量**：记账不再携带 ledgers.records，迁移之后第一笔账
-//     就把它抹了，snapshotLists 于是不写 snapshot.records。今天还带着数组的 B 类，
-//     全都是 2b-3 部署之前留下的那几份。
+//     就把它抹了；空数组走不过 apply.snapshotLists 的 `if (legacy.length)`，也走不过
+//     core.clearDoc 的 `if (snapshot.records && snapshot.records.length)`
+//     ——**快照文档写不写 records 键，最终是 clearDoc 那道说了算**。
+//     今天还带着数组的 B 类，全都是 2b-3 部署之前留下的那几份。
 // **不要改成「重新归并 records 数组再比条数」**：B 类的数组是迁移前的过期子集，
 // 归并出来的条数本来就不等于集合里的条数，那么判会把 B 类全判成失败。
 async function dropOneSnapshotLegacy(db, shopId, meta, ledgerBookId, now) {
@@ -1675,8 +1677,8 @@ async function dropOneSnapshotLegacy(db, shopId, meta, ledgerBookId, now) {
   }
   if (!legacy.length) {
     // 幂等，也覆盖「本来就没有数组」的那几种（stamp-only、迁移之后才清空的空账套）。
-    // **2b-3 起 clearAll 生成的每一份新快照都走这一支**（snapshotLists 不再写
-    // snapshot.records），所以 report 里满屏 skipped 是常态，不是出错 —— 真正有事
+    // **2b-3 起 clearAll 生成的每一份新快照都走这一支**（快照文档没有 records 键，
+    // 由 core.clearDoc 那道守卫决定），所以 report 里满屏 skipped 是常态，不是出错 —— 真正有事
     // 可做的只有 2b-3 之前留下的存量。看见 skipped 就去改判据，会把存量那几份一起
     // 判死，那正是上面那段「不要改成重新归并再比条数」在拦的事。
     // 这一支**直接 return，一个字都不写文档**（不盖 legacyRecordsDroppedAt）：
