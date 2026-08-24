@@ -182,6 +182,16 @@ function printReport(report, limit) {
   head(unconverted, limit).forEach(function (item) {
     say('      待转换 ' + item.id + ' savedAt=' + item.savedAt + ' 流水 ' + item.legacyRecordCount + ' 条')
   })
+  const doubled = (clears.snapshots || []).filter(function (item) {
+    return item.hasBookId === true && item.hasLegacyRecords === true
+  })
+  if (doubled.length) {
+    say('      已转换但还带着 records 双份 ' + doubled.length + ' 份，'
+      + '跑过 migrateRecords 的 mode:"dropLegacy" 之后可以用 mode:"dropSnapshotLegacy" 收掉')
+    head(doubled, limit).forEach(function (item) {
+      say('      待清理 ' + item.id + ' savedAt=' + item.savedAt + ' 数组 ' + item.legacyRecordCount + ' 条')
+    })
+  }
   say(report.blocking.length
     ? '阻塞项 ' + report.blocking.length + ' 类：' + report.blocking.map(function (item) {
       return item.check + '(' + item.count + ')'

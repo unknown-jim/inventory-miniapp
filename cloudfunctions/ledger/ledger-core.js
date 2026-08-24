@@ -966,6 +966,10 @@ async function migrateLocalShard(db, shopId, openid, payload, now, nextId) {
     next.importing = null
     next.clearSnapshots = current.clearSnapshots || []
     next.lastRestoredClearAt = current.lastRestoredClearAt || 0
+    // 快照跟着 clearSnapshots 一起留下来了，那么「这家店放弃过退路」这件事也要留下来 ——
+    // 丢了它，那些快照里可能还带着的 records 数组就永远清不掉了（见 ledger-migrate.js
+    // 的 dropSnapshotLegacy）。
+    if (current.legacyDroppedAt) next.legacyDroppedAt = current.legacyDroppedAt
     await tx.putLedger(shopId, next)
     return { lists: next }
   })

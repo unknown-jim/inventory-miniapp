@@ -596,6 +596,11 @@ function applyMutation(ledger, action, payload, now, nextId, loaded) {
   //   客户一项），但那两种状态下账本被冻着，这里进不来。
   //   注意它是**历史记录不是当前状态**：clearAll / loadSeed 换过账套之后
   //   migration.bookId 会和 ledger.bookId 不一样，那是对的。
+  // - legacyDroppedAt：这家店**什么时候放弃的旧包退路**（mode:'dropLegacy' 盖的戳）。
+  //   它是 mode:'dropSnapshotLegacy' 唯一的闸（见 ledger-migrate.js）。抹掉它 =
+  //   快照里那份重复的 records 数组永远清不掉，而且下一个人会以为这家店没跑过
+  //   dropLegacy。2b-1b 审计 A6 炸的就是这一类：上线清单让人迁完先记一笔 1 元
+  //   测试账，那一笔就把没被显式带过来的字段抹了。
   next.records = (ledger && ledger.records) || []
   if (ledger && ledger.recordsMigratedAt) {
     next.recordsMigratedAt = ledger.recordsMigratedAt
@@ -608,6 +613,9 @@ function applyMutation(ledger, action, payload, now, nextId, loaded) {
   }
   if (ledger && ledger.migration) {
     next.migration = ledger.migration
+  }
+  if (ledger && ledger.legacyDroppedAt) {
+    next.legacyDroppedAt = ledger.legacyDroppedAt
   }
   const result = {}
   let recordWrites = []
