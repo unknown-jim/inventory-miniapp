@@ -119,6 +119,10 @@
       {
         "type": "file",
         "value": "utils/maintenance.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/messages.js"
       }
     ]
   },

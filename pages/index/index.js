@@ -1,5 +1,6 @@
 const store = require('../../utils/store')
 const util = require('../../utils/util')
+const messages = require('../../utils/messages')
 
 Page({
   data: {
@@ -29,10 +30,13 @@ Page({
   async onShow() {
     const status = store.getStatus()
     if (!status.canBookkeep) {
+      // 整页阻断位是**技术文案最刺眼的落点**：它不是一闪而过的 toast，而是占满首页。
+      // 过一层 utils/messages.js 换成店员话术；原文仍在 error.message 上，
+      // console 里也还看得到（forStaff 里 warn 了），排查不受影响。
       this.setData({
         pageLoading: false,
         blocked: true,
-        blockedMessage: status.message,
+        blockedMessage: messages.forStaff(status.message).text,
         shopName: '',
         dateText: util.formatDate(Date.now()),
         productCount: 0,
@@ -60,7 +64,7 @@ Page({
       this.setData({
         pageLoading: false,
         blocked: true,
-        blockedMessage: error.message || '无法记账',
+        blockedMessage: messages.forStaff(error).text || '暂时不能记账',
         isEmpty: false
       })
       return

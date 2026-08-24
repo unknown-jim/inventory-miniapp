@@ -18,7 +18,7 @@
     </view>
   </view>
 
-  <view wx:if="{{aggregatesStale}}" class="card quiet js-aggregates-stale">账目正在核对中，金额可能不准，请联系开发者</view>
+  <view wx:if="{{aggregatesStale}}" class="card quiet js-aggregates-stale">这里的汇总金额正在核对，可能不准；单张单据上的金额是准的。请把这个情况告诉店主。</view>
 
   <view class="chips">
     <view class="chip {{type === 'all' ? 'on' : ''}}" data-type="all" bindtap="setType">全部 {{count}}</view>

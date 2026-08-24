@@ -481,6 +481,46 @@ function withMaintenance(error, doc) {
   return error
 }
 
+// 事务失败分两类，**给店员的话必须分开说，因为该做的事正相反**：
+//
+//   ① 真冲突（write conflict）：两个人同时改同一批货，后到的那个被回滚。
+//      **重试会成功**，文案要劝重试。
+//   ② 单事务写入量超限：整体重算会连带重写全部退货单，写放大 =
+//      ledgers 1 + 目标 1 + N（见 ledger-records.js 的 SALE_RETURNS_MAX ②）。
+//      **重试永远不会成功**——2026-08-24 演示店实测，证据和二分结果记在
+//      index.js 那段注释里。旧文案「库存刚被别人改过，请再提交」对这一类是
+//      **错的建议**：劝人重试一件永远不会成功的事，而每次重试都是一次几十条的写放大。
+//
+// **判据要两个入参，不能只看错误文本。** index.js 那段注释留了一个未决问题：
+// 「得先判断是不是所有 TransactionNotExist 都不该重试（30 秒那句暗示也可能是一次
+// 真超时）」。这里不去回答「是不是所有」，而是**当场量**：那几次实测在 11–16 秒
+// 就炸了，离错误文本自己说的 30 秒差得远，所以它们不是超时；真跑满 30 秒的那种
+// 长什么样还没见过，**就按可重试处理**（退回今天的行为，不比今天更糟）。
+// 这样这条分支不坐在任何一个没实测过的假设上。
+//
+// **顺序不能反**：TransactionNotExist 这个词里带着 "transaction"，
+// 先跑通用冲突正则会把它误判成可重试。
+const TX_NOT_EXIST = /TransactionNotExist|transaction\s+(does\s+)?not\s+exist/i
+const TX_CONFLICT = /conflict|transaction/i
+// 错误文本自称 30 秒；取 25 秒留出测量误差。**只在明显没到这个数时才判定
+// 「确定性失败」**，够不着的一律退回可重试那一侧。
+const TX_TIMEOUT_FLOOR_MS = 25000
+const TX_TOO_BIG_MESSAGE = '这张单牵连的记录太多，一次改不完'
+const TX_CONFLICT_MESSAGE = '库存刚被别人改过，请再提交'
+
+// 返回 'too-big' / 'conflict' / ''（不是事务类失败，调用方原样抛原错误）。
+// elapsedMs 传不进来（undefined）时**不判 too-big** —— 少了这个入参就等于
+// 少了判据，宁可退回今天的行为。
+function classifyTransactionError(msg, elapsedMs) {
+  const text = String(msg || '')
+  if (TX_NOT_EXIST.test(text)) {
+    return (typeof elapsedMs === 'number' && elapsedMs < TX_TIMEOUT_FLOOR_MS)
+      ? 'too-big' : 'conflict'
+  }
+  if (TX_CONFLICT.test(text)) return 'conflict'
+  return ''
+}
+
 async function membersOfShop(db, tx, shopId) {
   if (tx && tx.listMembersByShop) {
     return tx.listMembersByShop(shopId)
@@ -1286,5 +1326,11 @@ module.exports = {
   publicListsOf: publicListsOf,
   attachRecent: attachRecent,
   withBookId: withBookId,
-  requireMember: requireMember
+  requireMember: requireMember,
+  classifyTransactionError: classifyTransactionError,
+  TX_NOT_EXIST: TX_NOT_EXIST,
+  TX_CONFLICT: TX_CONFLICT,
+  TX_TIMEOUT_FLOOR_MS: TX_TIMEOUT_FLOOR_MS,
+  TX_TOO_BIG_MESSAGE: TX_TOO_BIG_MESSAGE,
+  TX_CONFLICT_MESSAGE: TX_CONFLICT_MESSAGE
 }

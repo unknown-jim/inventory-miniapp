@@ -47,7 +47,9 @@
     </view>
   </view>
 
-  <view wx:if="{{aggregatesStale}}" class="card quiet js-aggregates-stale">账目正在核对中，金额可能不准，请联系开发者</view>
+  <view wx:if="{{!todayAvailable}}" class="card quiet js-today-unavailable">今天的汇总暂时算不出来，上面几项先显示「—」。稍后重新进这个页面再看。</view>
+
+  <view wx:if="{{aggregatesStale}}" class="card quiet js-aggregates-stale">这里的汇总金额正在核对，可能不准；单张单据上的金额是准的。请把这个情况告诉店主。</view>
 
   <view wx:if="{{hasReceivable}}" class="card debt-banner" bindtap="goCustomers">
     <view>
@@ -88,7 +90,7 @@
         </view>
       </view>
     </view>
-    <view wx:else class="card quiet">当前没有低于预警的商品</view>
+    <view wx:else class="card quiet">暂时没有需要补货的商品</view>
 
     <view class="section-title">
       <text>最近流水</text>
@@ -107,7 +109,7 @@
         </view>
       </view>
     </view>
-    <view wx:else class="card quiet">今天还没有进销记录</view>
+    <view wx:else class="card quiet">还没有进货或销售记录</view>
   </block>
   </block>
 </view>

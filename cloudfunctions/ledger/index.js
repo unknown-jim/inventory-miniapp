@@ -101,6 +101,9 @@ function createDb() {
       }
     },
     async runTransaction(fn) {
+      // 事务耗时从这里起算：catch 里要拿它判「TransactionNotExist 是写入量超限
+      // 还是一次真超时」（classifyTransactionError 的第二个入参）。
+      const startedAt = Date.now()
       try {
         return await db.runTransaction(async function (transaction) {
           const tx = {
@@ -180,38 +183,57 @@ function createDb() {
         })
       } catch (error) {
         const msg = String((error && (error.message || error.errMsg)) || error || '')
-        if (/conflict|transaction/i.test(msg)) {
-          // **改写之前先把原文记下来。** 这句「库存刚被别人改过」是给店主看的话，
-          // 但它盖住的是**任何**匹配 conflict / transaction 的底层错误——真正的并发
-          // 冲突、事务超时、单事务写入量超限，在回包和日志里长得一模一样。
-          //
-          // 这不是假想。2026-08-24 演示店实测：改一张挂着 90 张退货单的销售单的
-          // 单价（单事务写 ledgers 1 + 销售单 1 + 退货单 90 = 92 条）**确定性失败**，
-          // 两次都是这句话；函数耗时 12.3 / 11.5 秒（远未到 60 秒上限）、内存
-          // 155 / 138 MB（远未到 512 MB），事务是原子的（一条都没写进去）。
-          // 这行 console.error 已经交货了，原始错误拿到了：
-          //   [ResourceUnavailable.TransactionNotExist] Transaction does not exist
-          //   on the server, transaction must be commit or abort in 30 seconds
-          // **但它没有解释那次失败**——那两次函数耗时只有 12.3 / 11.5 秒，离它
-          // 自己说的 30 秒差得远。**后来在演示店上二分过：22 条写入通过（9.7 秒）、
-          // 47 条失败（11.3 秒）、92 条失败（12–16 秒）**——11.3 秒失败而 9.7 秒通过，
-          // **时间被彻底排除**，是条数或体积。两者还没分开：那家店的 `ledgers`
-          // 有 3.6 MB、每个事务都要重写它一遍，所以那个区间可能只对大账本成立。
-          // **别把那句 30 秒文案当结论**：它是现象，不是原因。
-          //
-          // 还有一条拿到原文之后才看得出来的后果：`TransactionNotExist` 会匹配上面
-          // 那条 /conflict|transaction/i，于是被改写成「库存刚被别人改过，请再提交」
-          // ——一句**劝人重试**的话，而这类失败是确定性的（同一张单两次都炸），
-          // 重试永远不会成功。**这是给了错误的建议**，比数字不准严重。修它是独立的
-          // 一件事：得先判断是不是所有 TransactionNotExist 都不该重试（30 秒那句
-          // 暗示也可能是一次真超时，那种重试反而有用），别顺手在这里加个分支就上线。
-          //
-          // console.error 的输出进云函数日志，不进回包，所以不会把内部细节
-          // 泄露给客户端。**不要为了「日志干净」把这行删掉**——删掉就等于把
-          // 下一次同类故障的排查成本重新抬回到「只能靠改代码重部署来加日志」。
-          console.error('[ledger] transaction failed, original error:', msg, error && error.stack)
-          throw new Error('库存刚被别人改过，请再提交')
-        }
+        // **改写之前先把原文记下来。** 这句「库存刚被别人改过」是给店主看的话，
+        // 但它盖住的是**任何**匹配 conflict / transaction 的底层错误——真正的并发
+        // 冲突、事务超时、单事务写入量超限，在回包和日志里长得一模一样。
+        //
+        // 这不是假想。2026-08-24 演示店实测：改一张挂着 90 张退货单的销售单的
+        // 单价（单事务写 ledgers 1 + 销售单 1 + 退货单 90 = 92 条）**确定性失败**，
+        // 两次都是这句话；函数耗时 12.3 / 11.5 秒（远未到 60 秒上限）、内存
+        // 155 / 138 MB（远未到 512 MB），事务是原子的（一条都没写进去）。
+        // 这行 console.error 已经交货了，原始错误拿到了：
+        //   [ResourceUnavailable.TransactionNotExist] Transaction does not exist
+        //   on the server, transaction must be commit or abort in 30 seconds
+        // **但它没有解释那次失败**——那两次函数耗时只有 12.3 / 11.5 秒，离它
+        // 自己说的 30 秒差得远。**后来在演示店上二分过：22 条写入通过（9.7 秒）、
+        // 47 条失败（11.3 秒）、92 条失败（12–16 秒）**——11.3 秒失败而 9.7 秒通过，
+        // **时间被彻底排除**，是条数或体积。两者还没分开：那家店的 `ledgers`
+        // 有 3.6 MB、每个事务都要重写它一遍，所以那个区间可能只对大账本成立。
+        // **别把那句 30 秒文案当结论**：它是现象，不是原因。
+        //
+        // 还有一条拿到原文之后才看得出来的后果：`TransactionNotExist` 会匹配上面
+        // 那条 /conflict|transaction/i，于是被改写成「库存刚被别人改过，请再提交」
+        // ——一句**劝人重试**的话，而这类失败是确定性的（同一张单两次都炸），
+        // 重试永远不会成功。**这是给了错误的建议**，比数字不准严重。修它是独立的
+        // 一件事：得先判断是不是所有 TransactionNotExist 都不该重试（30 秒那句
+        // 暗示也可能是一次真超时，那种重试反而有用），别顺手在这里加个分支就上线。
+        //
+        // console.error 的输出进云函数日志，不进回包，所以不会把内部细节
+        // 泄露给客户端。**不要为了「日志干净」把这行删掉**——删掉就等于把
+        // 下一次同类故障的排查成本重新抬回到「只能靠改代码重部署来加日志」。
+        //
+        // —— 2026-08-25 起，上面留下的那个未决问题（「得先判断是不是所有
+        // TransactionNotExist 都不该重试」）这样回答：不绕开它，用测量代替猜测。
+        // 不去回答「是不是所有」，而是当场量**这一次**事务跑了多久：实测那几次
+        // 在 11–16 秒就炸了，离错误文本自称的 30 秒差得远，所以它们不是超时；
+        // 真跑满 30 秒的那种还没见过，就按可重试处理（退回今天的行为，不比今天
+        // 更糟）。判据是 (错误文本, 事务耗时) 两个入参，纯函数在 ledger-core.js 的
+        // classifyTransactionError（放那边是为了 node 测试 require 得进来，本文件
+        // 顶部有 wx-server-sdk）：
+        //   · TransactionNotExist 且耗时明显没到 30 秒（阈值取 25 秒留测量误差，
+        //     TX_TIMEOUT_FLOOR_MS）→ 单事务写入量超限，确定性失败，抛
+        //     「这张单牵连的记录太多，一次改不完」——不再劝人重试；
+        //   · TransactionNotExist 但耗时够得着 30 秒、或耗时有任何可疑 → 可能是
+        //     一次真超时，照旧抛「库存刚被别人改过，请再提交」。
+        // 其余匹配 conflict / transaction 的仍然算真冲突，不变。elapsed 和判定
+        // 结果都打进下面这行 console.error —— 以后补实测名单、调 25 秒这个阈值，
+        // 依据就是它。回包里**不加任何新字段**（detail 之类）：内部细节只进日志。
+        const elapsed = Date.now() - startedAt
+        const kind = core.classifyTransactionError(msg, elapsed)
+        console.error('[ledger] transaction failed:', 'kind=' + (kind || 'other'),
+          'elapsedMs=' + elapsed, msg, error && error.stack)
+        if (kind === 'too-big') throw new Error(core.TX_TOO_BIG_MESSAGE)
+        if (kind === 'conflict') throw new Error(core.TX_CONFLICT_MESSAGE)
         throw error
       }
     }
