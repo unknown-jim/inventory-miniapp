@@ -323,11 +323,18 @@ function listsOf(ledger) {
 // 所以这里读到的一律是升级前留下的老文档、ledger_clears 里的老快照、或者
 // migrateLocal 送上来的本机 payload。不是漏删的，不要顺手清掉。
 function legacyRecordsOf(ledger) {
-  const records = cloneList(ledger && ledger.records)
+  const records = cloneList(legacyArrayOf(ledger))
   const merged = inventory.needsRecordMigration(records)
     ? inventory.migrateRecordShape(records)
     : records
   return inventory.repairReturnSplits(merged)
+}
+
+// 升级前那份老数组。**只准拿来当反面证据**（见 recordsPending），不要拿它
+// 判「搬完了没有」—— 那是 2b-3 删掉的老判据，方向是反的。
+function legacyArrayOf(ledger) {
+  const list = ledger && ledger.records
+  return Array.isArray(list) ? list : []
 }
 
 // 「这本账的流水还没搬进 ledger_records」。写路径见了它必须停下来报错，
@@ -335,19 +342,39 @@ function legacyRecordsOf(ledger) {
 //
 // 判据是 **default-deny**：只有拿得出「流水住在集合里」的正面证据才放行。
 //   ① recordsMigratedAt 非空 —— migrateRecords 迁完盖的章（stampOnly 也盖它）。
-//   ② recordsSchema >= RECORDS_SCHEMA —— emptyLedger 盖的章，这本账出生就在集合里。
+//   ② recordsSchema >= RECORDS_SCHEMA —— emptyLedger 盖的章，这本账出生就在集合里，
+//      **但这句话只在老数组不在场时才是真的**，见下面那段。
 // 两个章是并列的，不是升级链：三家生产店只有①，云上新店两个都有。
 //
-// 2b-3 之前这里看的是第三个信号「records 数组非空」，而 2b-3 把那个数组删了。
-// **不要把它改回「数组非空」再加个兜底**：数组非空是 default-allow 的判据 ——
-// 数组丢了（只从备份恢复了 ledgers、没恢复 ledger_records；或者带外清过文档）
-// 它就放行，而放行的后果是把新流水写进一个空集合、老账再也拼不回来。
-// 拿不准就冻住：冻住有出路（跑 migrateRecords，零流水的店走 stampOnly 只补戳），
-// 放错了没有。tests/ledger-records.test.js 的 T-C1 钉的就是这一条。
+// **②要被非空的 records 数组一票否决，①不用。** 两个章说的不是同一件事：
+// ①是「搬家这个动作跑完了」，老数组留在原地是那次搬家的既定结果（2b-3 之前
+// 记账还会把它原样带过去），所以①和非空数组共存是**正常态** —— 三家生产店在
+// 部署这一版的当刻正是这个形状，否决①就是把她们全冻死。②说的是「这本账出生
+// 就没有老流水」，一份既盖着出生章、又带着非空 records 的文档在推翻这句话本身：
+// 它不是新账本，是被带外塞过老流水的（演示店压测灌数据、控制台手改、只恢复了
+// ledgers 没恢复 ledger_records 的备份）。这时候出生章是假的，反面证据优先。
+//
+// 不否决②会漏两类，都是真的会错账：
+//   a. 这种文档从头到尾就没被 assertRecordsReady 冻过，addSale 直接把新流水写进
+//      一个空集合，老流水留在数组里，两边都不是完整的账 —— 恰好是这道门要防的
+//      那件事，而且**老判据（default-allow）在这个形状上反而是冻住的**。
+//   b. rollbackMigration 只清 recordsMigratedAt、不动 recordsSchema。②不被否决的话，
+//      回滚之后②还在，店照常营业 —— 而 docs/cloud-ledger.md 的「回滚」通篇写着
+//      「写是冻着的、该店仍停摆」。那趟回滚会静默地什么都没做。
+// tests/ledger-records.test.js 的 T-C7 / T-C8 钉着这两条。
+//
+// 2b-3 之前这里看的是第三个信号「records 数组非空」，方向和上面那条**相反**。
+// **不要把它改回去**：数组非空是 default-allow 的判据 —— 数组丢了（只从备份恢复了
+// ledgers、没恢复 ledger_records；或者带外清过文档）它就放行，而放行的后果是把新
+// 流水写进一个空集合、老账再也拼不回来。同一个字段，当放行依据是错的、当否决依据
+// 是对的：拿不准就冻住，冻住有出路（跑 migrateRecords，零流水的店走 stampOnly 只
+// 补戳），放错了没有。tests/ledger-records.test.js 的 T-C1 钉的就是这一条。
 function recordsPending(ledger) {
   if (!ledger) return false
   if (ledger.recordsMigratedAt) return false
-  if (inventory.toNumber(ledger.recordsSchema) >= RECORDS_SCHEMA) return false
+  if (inventory.toNumber(ledger.recordsSchema) >= RECORDS_SCHEMA && !legacyArrayOf(ledger).length) {
+    return false
+  }
   return true
 }
 

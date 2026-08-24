@@ -988,10 +988,14 @@ async function migrateLocalShard(db, shopId, openid, payload, now, nextId) {
     // apply.listsOf()（不产出 records 键），所以这一次写就把老数组删掉了 ——
     // 2b-3 之前这里是 next.records = []，效果相同、只是留了个空数组。
     //
-    // **新代码写出去的每一份账本文档都要带着章**，这是条类不变式：没有章
-    // 就一定是升级前留下的老文档。少了它，这份文档就只剩 recordsMigratedAt
-    // 一个证据 —— 那个字段一旦丢掉（只从局部备份恢复、控制台手改），
-    // default-deny 会把一本流水明明在集合里的账冻住。两个章互为独立证据。
+    // 顺手盖上出生章：这份文档是新代码从零拼出来的，流水从第一条起就在集合里，
+    // 说得出这句话就该写下来。少了它这份文档只剩 recordsMigratedAt 一个证据，
+    // 那个字段一旦丢掉（只从局部备份恢复、控制台手改），default-deny 会把一本
+    // 流水明明在集合里的账冻住。
+    //
+    // **这不是类不变式，别当它是**：migrateRecords 的 stampOnly / verifyPhase 写出去
+    // 的文档就只有 recordsMigratedAt 一个章（那些是老文档，出生在集合之前，盖出生章
+    // 是撒谎）。所以「没有 recordsSchema」推不出「是老文档」，判据那边也没这么用。
     next.recordsSchema = apply.RECORDS_SCHEMA
     next.importing = null
     next.clearSnapshots = current.clearSnapshots || []

@@ -1291,7 +1291,7 @@ function totalStock(skus, productId) {
   //
   // 2b-3 删掉了 ledgers.records，于是「records 非空 + 没有 recordsMigratedAt」
   // 这条老判据必须换掉。换成 default-deny：只有拿得出正面印章（recordsMigratedAt
-  // 或 recordsSchema）才放行。下面六条把这次换判据的每一侧都钉住。
+  // 或 recordsSchema）才放行。下面八条把这次换判据的每一侧都钉住。
   // -------------------------------------------------------------------------
 
   // T-C1（本次改动最重要的一条）：**没迁过、又没有 records 字段**的账本。
@@ -1342,8 +1342,10 @@ function totalStock(skus, productId) {
   assert.strictEqual(noSealDb.ledgers[noSealShopId].recordsMigratedAt, 1234,
     'T-C3：只盖 recordsMigratedAt 的老店（线上三家）行为不变，戳也要活过记账')
 
-  // T-C4：新建的店连记两笔。第二笔证明 applyMutation 把 recordsSchema 带过去了
-  // —— 漏带的话第一笔记完文档就没章了，第二笔当场被 default-deny 冻住。
+  // T-C4：新建的店连记两笔，钉住 applyMutation 对 recordsSchema 的携带。
+  // **注意失效机制**：createShop 的店同时盖了 recordsMigratedAt，所以漏带 recordsSchema
+  // 并不会让第二笔被冻住（①垫着底），当场变红的是 T-C2 那条。这里真正有牙的是下面
+  // 第一条断言 —— 章必须活过记账，不能被记账悄悄抹掉。
   const twiceShop = await new Shop({ ids: idFactory('tw') }).open('连记两笔店')
   await twiceShop.call('saveProduct', { name: '货', costPrice: 1, salePrice: 2, stock: 9, alertQty: 1 })
   const twiceProduct = (await twiceShop.call('getLedger', {})).ledger.products[0]
@@ -1362,6 +1364,41 @@ function totalStock(skus, productId) {
     'T-C5：emptyLedger 不许再建 records 字段')
   assert.strictEqual(twiceShop.db.ledgers[twiceShop.shopId].records, undefined,
     'T-C6：已迁移的店记完账，文档里不许再有 records 键')
+
+  // T-C7：**②要被非空的 records 数组一票否决。** 一份既盖着出生章、又带着非空老
+  // 数组的文档不是新账本 —— 它是被带外塞过老流水的（演示店压测灌数据、控制台手改、
+  // 只恢复了 ledgers 没恢复 ledger_records 的备份），出生章在这里是假的。
+  // 不否决的话它从头到尾就没被 assertRecordsReady 冻过，addSale 直接把新流水写进
+  // 一个空集合、老流水留在数组里，两边都不是完整的账。
+  // **而老判据（default-allow）在这个形状上反而是冻住的** —— 换判据不许在这一侧退步。
+  const staleLine = {
+    id: 'sl1', type: 'out', orderId: 'sord', productId: 'p1', productName: '牛奶',
+    qty: 1, unitPrice: 5, costPrice: 2, amount: 5, profit: 3,
+    payType: 'credit', customerId: 'c1', customerName: '甲店', createdAt: 2000
+  }
+  noSealDb.ledgers[noSealShopId] = Object.assign({}, noSealBase, {
+    recordsSchema: 2, records: [staleLine]
+  })
+  await rejects(function () {
+    return noSealCall('addSale', { payType: 'cash', items: [{ productId: 'p1', qty: 1, unitPrice: 5 }] })
+  }, /还没完成流水升级/)
+  assert.strictEqual((await noSealCall('getLedger')).ledger.recordsPendingMigration, true,
+    'T-C7：出生章压不过非空老数组这条反面证据，必须判为「还没搬」')
+
+  // T-C8：上面那条否决顺手保住了 rollback 的语义。rollbackMigration 只清
+  // recordsMigratedAt、**不动 recordsSchema**（见 ledger-migrate.js），所以回滚之后
+  // 的文档就是「②在 + 老数组非空 + ①没了」这个形状。②不被否决的话回滚会静默地什么
+  // 都没做：店照常营业，而 docs/cloud-ledger.md 的「回滚」通篇写着「写是冻着的、
+  // 该店仍停摆」。这里直接对判据断言，不重跑一遍迁移机器（那部分在 M10 系列里）。
+  const rolledBackShape = Object.assign({}, noSealBase, {
+    recordsSchema: 2, recordsMigratedAt: 0, records: [staleLine]
+  })
+  assert.strictEqual(apply.recordsPending(rolledBackShape), true,
+    'T-C8：回滚之后 recordsSchema 还在，但老数组也还在 —— 必须仍然冻着，'
+    + '否则那趟 rollback 什么都没做，而文档说的是「该店仍停摆」')
+  assert.strictEqual(
+    apply.recordsPending(Object.assign({}, rolledBackShape, { records: [] })), false,
+    'T-C8 对照：老数组空了就没有反面证据，出生章照常放行')
 
   // -------------------------------------------------------------------------
   // 10) migrateLocal 分片接收端：切换是最后一片的一次原子写
@@ -1634,6 +1671,10 @@ function totalStock(skus, productId) {
       categories: [],
       records: v6Corpus
     })
+  // 和 legacyDoc 同一个口径：真正的 2b-1 前老文档没有出生章。这里不删也不会变红
+  // （非空 records 本来就一票否决②，见 recordsPending），但两处夹具口径不一致
+  // 迟早会让人以为「带着章的老账本」是合法形状。
+  delete v6MoveShop.db.ledgers[v6MoveShop.shopId].recordsSchema
   let v6Move = null
   // 搬家路是运维 action（2b-4 起平台运营方白名单门），调用者得先在名单里，
   // 否则这条测的是「被门拒」而不是「两条路口径一致」。

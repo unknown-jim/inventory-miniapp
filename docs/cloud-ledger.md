@@ -50,7 +50,7 @@
 - 环境 ID 写在 [`utils/cloud-config.js`](../utils/cloud-config.js) 的 `CLOUD_ENV_ID`，必须等于开发者工具「云开发 → 设置」里的那一串（微信侧）。腾讯云控制台里另一套环境填进来会报 Environment not found。空着不能记账，也不要用客户端 `DYNAMIC_CURRENT_ENV` 代替填写。
 - 集合：`shops`、`members`、`ledgers`、`ledger_records`、`ledger_clears`、`platform_admins`。前四张是当前店账；`ledger_clears` 保存每一次清空的完整快照，不回传给小程序；`platform_admins` 是**平台运营方白名单**（账本升级三个运维 action 的门，见下面「账本升级」），文档形状 `{ _id: openid, openid, note, createdAt }` —— `_id` 就是 openid，查询是一次 `doc(openid).get()`，**不需要索引**，权限同样是仅管理端可读写。
   - `ledger_records` 是 2b-1 从 `ledgers.records` 数组里拆出来的**当前流水表**，一单一条文档，`_id` = `bookId_recordId`，排序键 `sortKey` = `pad13(createdAt)_id`。**2b-3 起新代码不再生产 `ledgers.records`**：`emptyLedger()` 不建这个字段、`applyMutation` 不再携带它，而 `putLedger` 是整文档 `set()`，所以任何一次记账都会把它从文档里删掉。库里还带着它的只剩**升级前留下的老文档**（以及 `ledger_clears` 里的老快照，那是另一项，见下面「账本升级」的 `mode:'snapshots'`）。
-  - **「这本账的流水搬完了没有」2b-3 起是 default-deny 判据**（`ledger-apply.js` 的 `recordsPending`）：只有拿得出正面印章才算搬完 —— ① `recordsMigratedAt` 非空（`migrateRecords` 迁完盖的，`stampOnly` 也盖它）；② `recordsSchema >= 2`（`emptyLedger()` 盖的，「这本账出生就在集合里」）。两个章**并列**，不是升级链：线上三家老店只有①，云上新建的店两个都有。**不要改回「`records` 数组非空」那条老判据**——那是 default-allow：数组丢了（只从备份恢复了 `ledgers`、没恢复 `ledger_records`；或者带外清过文档）它就放行，而放行的后果是新流水写进一个空集合、老账再也拼不回来。拿不准就冻住，冻住有出路（跑 `migrateRecords`，零流水的店走 stamp-only 只补戳），放错了没有。`tests/ledger-records.test.js` 的 T-C1 钉着这一条。
+  - **「这本账的流水搬完了没有」2b-3 起是 default-deny 判据**（`ledger-apply.js` 的 `recordsPending`）：只有拿得出正面印章才算搬完 —— ① `recordsMigratedAt` 非空（`migrateRecords` 迁完盖的，`stampOnly` 也盖它）；② `recordsSchema >= 2`（`emptyLedger()` 盖的，「这本账出生就在集合里」）。两个章**并列**，不是升级链：迁完的老店只有①，云上新建的店两个都有。**②要被非空的 `records` 数组一票否决，①不用**——①是「搬家跑完了」，老数组留在原地是那次搬家的既定结果，共存是正常态（三家生产店在 2b-3 部署当刻正是这个形状，否决①就把她们全冻死）；②说的是「这本账出生就没有老流水」，而一份既盖着出生章、又带着非空 `records` 的文档正在推翻这句话本身——它是被带外塞过老流水的（演示店压测灌数据、控制台手改、只恢复了 `ledgers` 没恢复 `ledger_records` 的备份）。不否决它，这种店从头到尾就没被 `assertRecordsReady` 冻过，而且 `rollbackMigration` 只清①不清②，回滚之后店照常营业——本节下面写的「写是冻着的」会变成假话。`tests/ledger-records.test.js` 的 T-C7 / T-C8 钉着这一条。**不要改回「`records` 数组非空」那条老判据**——那是 default-allow：数组丢了（只从备份恢复了 `ledgers`、没恢复 `ledger_records`；或者带外清过文档）它就放行，而放行的后果是新流水写进一个空集合、老账再也拼不回来。拿不准就冻住，冻住有出路（跑 `migrateRecords`，零流水的店走 stamp-only 只补戳），放错了没有。`tests/ledger-records.test.js` 的 T-C1 钉着这一条。
   - 它需要 **6 条索引**，定义和用途写在 [`cloudfunctions/ledger/ledger-records.js`](../cloudfunctions/ledger/ledger-records.js) 顶部注释里，和这里必须一致。#1–#5 全部避开数组字段；#6 是另一回事：
     1. `bookId` ASC, `sortKey` DESC —— `page` / `recentAndToday`
     2. `bookId` ASC, `customerId` ASC, `sortKey` DESC —— `page(customerId)` / `suffixOfCustomer`
@@ -181,7 +181,7 @@ do {
   > **2b-3 之后这条路只剩「迁完之后一笔账都没记过」的店走得通。** 新版记账不再携带 `ledgers.records`（`putLedger` 是整文档 `set()`），**首笔账就把老数组删了**，那种店调 `rollback` 会当场报「没有可回滚的老流水」——连守卫都轮不到跑，带 `force` 也一样（这道门在守卫前面）。所以 2b-3 部署之后，回滚不再是「全店停摆窗口里的紧急出路」，而是一条会随第一笔生意消失的窗口路。`tests/ledger-migrate.test.js` 的 M10r 钉着这一条。
 
   下面这几条说的都是**老数组还在**的那一类（2b-3 部署当刻的线上三家店就是这一类：她们在 2b-2 那一版下迁完并继续营业，那一版记账仍然携带数组）：
-**写是冻着的**——`recordsPending` 重新为真，`assertRecordsReady` 照旧拦下每一条写（实测回滚后记账和删单都报「本店账本还没完成流水升级，暂时不能记账」），回滚是回到停摆态、不是重新开张。**这是显式动作，不要让人去控制台手改生产文档。**代码**不检查 `migration.phase`**：`writing` / `verifying` 中途也能调，效果同样是回到停摆态（`cursor` / `verifyCursor` 跟着 `migration` 一起清掉，等于放弃这次尝试）；前置条件只有一条真实的——老数组非空，为空的店（跑过 `dropLegacy`、点过「清空数据」、点过「恢复清空前数据」）当场报「没有可回滚的老流水」。回滚后**重跑必须带 `restart: true`**（集合里的文档还在，不带 `restart` 会被残骸检查拒绝），若回滚前已按新路径记过账，`restart` 会撞 V7/V2（见上面「失败恢复」），只剩 `newBook: true` 一条路。
+  **写是冻着的**——`recordsPending` 重新为真，`assertRecordsReady` 照旧拦下每一条写（实测回滚后记账和删单都报「本店账本还没完成流水升级，暂时不能记账」），回滚是回到停摆态、不是重新开张。**这是显式动作，不要让人去控制台手改生产文档。**代码**不检查 `migration.phase`**：`writing` / `verifying` 中途也能调，效果同样是回到停摆态（`cursor` / `verifyCursor` 跟着 `migration` 一起清掉，等于放弃这次尝试）；前置条件只有一条真实的——老数组非空，为空的店（跑过 `dropLegacy`、点过「清空数据」、点过「恢复清空前数据」）当场报「没有可回滚的老流水」。回滚后**重跑必须带 `restart: true`**（集合里的文档还在，不带 `restart` 会被残骸检查拒绝），若回滚前已按新路径记过账，`restart` 会撞 V7/V2（见上面「失败恢复」），只剩 `newBook: true` 一条路。
   - **只对「迁完之后一条新账都没记」成立。** 迁完之后店是解冻的，新流水只进 `ledger_records`；2b-3 之前 `ledgers.records` 那份老数组一条都不涨（`applyMutation` 把它原样带过去，那正是当时 O(1) 回滚路的依仗），守卫负责拦住这种店；2b-3 之后连数组本身都被首笔账删掉，那种店在守卫之前就被拒了。两版的结论是同一句话，只是 2b-3 把它变硬了。对老数组还在、集合里却有外来文档的那一类（上一次尝试的残骸、带外写入），回滚是把读路径整个切回一个**过期的真子集**——迁移之后写进集合的账在老路径上一条都看不见，欠款和流水数当场跌回迁移那一刻，而且 `aggregatesStale` 哨兵**看不见**（回滚后 `recordsPending` 为真，`getLedger` 不走 `attachRecent`，那次 `count()` 根本不发生）。
   - **守卫是两个独立信号**：①**事务内**翻集合最新一页（`ROLLBACK_PROBE_LIMIT` = 100 条），逐条看 `doc.id` 在不在老数组归并后的那一份里（用 `pageDocs`，**事务里绝不调 `count()`**，理由见上面第三条设计取舍）——精确、无竞态、一次往返，抓得到「删 3 条老账 + 记 3 笔新账」这类**条数一模一样**的情形（`tests/ledger-migrate.test.js` 的 M10e / M10e2）；②**事务外** `countAll()` 和归并条数比——抓得到埋在最新一页之外的残骸（这本账迁过、被 `force` 回滚过、又重迁过；**M10h 钉的就是这一类，拆掉②它当场变红**）。②有毫秒级竞态，两个方向都有（窗口里新记账 → 数偏小、可能放过；窗口里删记录 → 数偏大、可能误拦，安全侧且 `force` 可恢复），**所以②是提醒不是保险箱，回包里的数才是最终账**；而它漏掉的偏小那一侧恰好是①的强项（新记的账 `createdAt` 最大，一定在最新一页最前面）。
   - **两个信号的失效面重叠得很窄，但不是零。** 不要写成「失效模式互不重叠」——那句是假的，实测能构造出反例：130 条老账迁完之后，带外删掉 2 条已迁文档 + 带外塞进 2 条 `createdAt` 排在最新一页之外的文档，条数被抹平（②瞎）而且外来文档不在最新一页（①瞎），**不带 `force` 会静默回滚成功、`discarded: 0`，2 条真账从读路径消失**。app 内没有任何路径能塞一条 `createdAt` 比老数组还早的文档，所以现实概率很低，但守卫的说明书不能写错。
@@ -234,7 +234,15 @@ payload: { mode: 'snapshots', limit?: 50 }
 
 ### 上线清单
 
-> **这份清单说的是把流水搬进 `ledger_records` 的那一晚（部署 2b-2 版云函数 + 逐店 `migrateRecords`）。2b-3 是后面另一次部署，它自带一条硬前置：** 部署 2b-3 版云函数**之前**，必须先在**每一家店**上跑完 `migrateRecords` 的 `mode:'dropLegacy'`。理由见上面 `mode:'dropLegacy'` 那条：2b-3 的记账不再携带 `ledgers.records`，顺序反了，每家店的第一笔账就是一次无守卫的隐式清空；跑晚了则是白跑。这一步做完，「部署存档的旧函数包」这条整体退路对所有店同时失效——这是用户明确拍板接受的代价。
+> **这份清单说的是把流水搬进 `ledger_records` 的那一晚（部署 2b-2 版云函数 + 逐店 `migrateRecords`）。2b-3 是后面另一次部署，它自带两条硬前置，顺序是死的：**
+>
+> **前置一（先做）：逐店确认 `recordsMigratedAt` 非零。** 一个字都不能省。2b-3 的判据是 default-deny——`recordsMigratedAt` 和 `recordsSchema` 两个章一个都没有的账本会被判成「还没搬」，**写路径全线冻死，连 `saveProduct` 都进不去，app 内零出路**。而库里确实有这个形态：**零流水、又没迁过的店**（`records` 为空、`recordsMigratedAt` 是 0）。`mt3231n3ixeenv`（卓祥服饰，0 条流水）就是这一类。这种店在 2b-2 及更早的版本上一直正常营业，因为老判据是 default-allow。
+>
+> 这类店的补戳办法：**不带 mode 调一次 `migrateRecords`**，`initMigration` 会走 stamp-only 分支（`!legacy.length`）把 `recordsMigratedAt` 补上。阶段 2 的逐店流程里本来就有「循环 `migrateRecords` 到 `done`」这一步，照字面走完就不会留下这个形态——**风险全在「看到 `checkAggregates` 报 `migrated: true` 就跳过这家店」这条缝上**，而 2b-2 那一版恰好会对零流水的店这么报（见下面阶段 2 里那条例外说明）。
+>
+> **别指望前置二能兜住前置一**：`mode:'dropLegacy'` 的第一道闸就是 `recordsMigratedAt` 非空，这类店跑 `dropLegacy` 会**直接报错**。错误文案指的路是对的（「先不带 mode 调 migrateRecords 把它迁完」），但操作者很容易读成「这家店没老数组，没什么可删，跳过」，然后部署，然后那家店第二天开不了张。**这一步报错就是部署闸，不许跳过。**
+>
+> **前置二：逐店跑完 `mode:'dropLegacy'`。** 理由见上面 `mode:'dropLegacy'` 那条：2b-3 的记账不再携带 `ledgers.records`，顺序反了，每家店的第一笔账就是一次无守卫的隐式清空；跑晚了则是白跑。这一步做完，「部署存档的旧函数包」这条整体退路对所有店同时失效——这是用户明确拍板接受的代价。
 
 **阶段 0（T−7 天，不部署、不影响营业）**：控制台导出 `ledgers` 全表（另导 `ledger_clears` 的 `_id`/`shopId`/`savedAt`/`bookId`/**`records`**——漏了 `records`，P11 明细里每份快照的「流水 N 条」就全是 0，看不出哪份需要转换）→ `node scripts/check-ledger-export.js <文件> --json > 预检报告.json` → 逐店过 P1–P14，阻塞项必须为空、P4 每条改动能归到三类之一 → `mergedCount` 填进排期表 → **下载存档当前线上 `ledger` 云函数代码包**（唯一的整体回滚路，事后补不回来）。任何一项不过就停在这里。
 
