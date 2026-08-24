@@ -166,6 +166,18 @@ async function pagedAllVia(callFn, options) {
   return out
 }
 
+// 把一份 createShop 建出来的账本文档改造成「2b-1 之前留下的老文档」。
+//
+// **两件事缺一不可**：清掉 recordsMigratedAt（没迁过），以及**删掉 recordsSchema**。
+// 后者是 2b-3 新加的印章，createShop 走 emptyLedger() 会盖上它，而真正的老文档
+// 里根本没有这个字段 —— 不删的话 recordsPending 会拿它当「流水在集合里」的正面
+// 证据放行，整节「未迁移的老账本」测的就不是老账本了（会静默变绿）。
+function legacyDoc(base, patch) {
+  const doc = Object.assign({}, base, patch, { recordsMigratedAt: 0 })
+  delete doc.recordsSchema
+  return doc
+}
+
 function rejects(fn, re) {
   return fn().then(function () {
     assert.fail('expected to reject ' + re)
@@ -1205,8 +1217,7 @@ function totalStock(skus, productId) {
     db: legacyDb, makeId: legacyIds, openid: 'u1', action: 'createShop',
     shopId: '', apiVersion: core.API_VERSION, payload: { name: '老账本店' }, now: 1000
   })).shop.id
-  legacyDb.ledgers[legacyShopId] = Object.assign({}, legacyDb.ledgers[legacyShopId], {
-    recordsMigratedAt: 0,
+  legacyDb.ledgers[legacyShopId] = legacyDoc(legacyDb.ledgers[legacyShopId], {
     products: [{ id: 'p1', name: '牛奶', costPrice: 2, salePrice: 5, stock: 10, alertQty: 5, colors: [], sizes: [] }],
     customers: [{ id: 'c1', name: '甲店' }],
     records: [
@@ -1239,8 +1250,12 @@ function totalStock(skus, productId) {
     return legacyCall('clearAll', {})
   }, /还没完成流水升级/)
 
-  // 切开关之后（下一趟的 migrateRecords 会这么写）：老数组**故意留着**当回滚路，
-  // 记账不能把它和 recordsMigratedAt 抹掉，否则 O(1) 回滚就没了。
+  // 切开关之后（下一趟的 migrateRecords 会这么写）：2b-3 起 applyMutation 不再
+  // 携带老数组，而 putLedger 是整文档 set()，**所以迁完之后的第一笔账就把它删了**。
+  // 这条断言是反过来钉的（2b-3 之前钉的是「记账不能抹掉它」）：老数组从此不是
+  // O(1) 回滚路，回滚窗口只到下一笔账为止。
+  // **这正是上线顺序要求「先逐店跑完 dropLegacy，再部署这版云函数」的原因** ——
+  // 顺序反了，每家店的第一笔记账就是一次没有任何守卫的隐式清空。
   const keptRecords = legacyDb.ledgers[legacyShopId].records
   legacyDb.ledgers[legacyShopId] = Object.assign({}, legacyDb.ledgers[legacyShopId], {
     recordsMigratedAt: 4000,
@@ -1250,20 +1265,103 @@ function totalStock(skus, productId) {
   await legacyCall('addPurchase', { productId: 'p1', qty: 3, unitPrice: 2 })
   const switched = legacyDb.ledgers[legacyShopId]
   assert.strictEqual(switched.recordsMigratedAt, 4000, 'recordsMigratedAt 必须活过每一次记账')
-  assert.deepStrictEqual(switched.records, keptRecords, '老数组是回滚路，记账不能抹掉它')
+  assert.strictEqual(switched.records, undefined,
+    '2b-3：记账不再携带老数组，putLedger 是整文档 set()，首笔账就把 records 删掉')
   const switchedRead = (await legacyCall('getLedger')).ledger
   assert.ok(!switchedRead.recordsPendingMigration)
   const switchedPaged = await pagedAllVia(legacyCall)
   assert.strictEqual(switchedPaged.length, 1, '切开关之后只读集合，读不到老数组')
   assert.strictEqual(switchedPaged[0].type, 'in')
 
-  // 清回老路径：清掉 recordsMigratedAt，读写立刻退回老数组，用户无感
-  legacyDb.ledgers[legacyShopId] = Object.assign({}, switched, { recordsMigratedAt: 0 })
+  // 清回老路径（mode:'rollback' 就是这么写的：只清 recordsMigratedAt）。
+  // 2b-3 起这条只对**迁完之后一笔账都没记**的店成立 —— 记过账的店老数组已经
+  // 被上面那笔进货删掉了，rollbackMigration 会当场报「没有可回滚的老流水」。
+  // 所以这里手工把老数组塞回去，演的就是「还没记过账」那种店。
+  legacyDb.ledgers[legacyShopId] = Object.assign({}, switched, {
+    recordsMigratedAt: 0, records: keptRecords
+  })
   const rolledBack = (await legacyCall('getLedger')).ledger
   assert.strictEqual(rolledBack.recordsPendingMigration, true)
   const rolledBackPaged = await pagedAllVia(legacyCall)
   assert.strictEqual(rolledBackPaged.length, 1)
   assert.strictEqual(rolledBackPaged[0].id, 'ord1', '回滚之后看到的是迁移前那张单')
+
+  // -------------------------------------------------------------------------
+  // 9b) 2b-3：判据从 default-allow 换成 default-deny
+  //
+  // 2b-3 删掉了 ledgers.records，于是「records 非空 + 没有 recordsMigratedAt」
+  // 这条老判据必须换掉。换成 default-deny：只有拿得出正面印章（recordsMigratedAt
+  // 或 recordsSchema）才放行。下面六条把这次换判据的每一侧都钉住。
+  // -------------------------------------------------------------------------
+
+  // T-C1（本次改动最重要的一条）：**没迁过、又没有 records 字段**的账本。
+  // 现实来路：只从备份恢复了 ledgers、没恢复 ledger_records；或者有人带外把
+  // 文档里的 records 清掉了。老判据（数组非空才算未迁移）会把它当成已迁移放行。
+  const noSealDb = new MemoryDb()
+  const noSealIds = idFactory('ns')
+  const noSealShopId = (await core.dispatch({
+    db: noSealDb, makeId: noSealIds, openid: 'u1', action: 'createShop',
+    shopId: '', apiVersion: core.API_VERSION, payload: { name: '没有印章店' }, now: 1000
+  })).shop.id
+  const noSealBase = legacyDoc(noSealDb.ledgers[noSealShopId], {
+    products: [{ id: 'p1', name: '牛奶', costPrice: 2, salePrice: 5, stock: 10, alertQty: 5, colors: [], sizes: [] }],
+    customers: [{ id: 'c1', name: '甲店' }]
+  })
+  delete noSealBase.records
+  noSealDb.ledgers[noSealShopId] = noSealBase
+  assert.ok(!('records' in noSealDb.ledgers[noSealShopId]),
+    'T-C1 前提：这份文档连 records 字段都没有')
+  function noSealCall(action, payload) {
+    return core.dispatch({
+      db: noSealDb, makeId: noSealIds, openid: 'u1', action: action,
+      shopId: noSealShopId, apiVersion: core.API_VERSION,
+      payload: payload || {}, now: 5000
+    })
+  }
+  await rejects(function () {
+    return noSealCall('addSale', { payType: 'cash', items: [{ productId: 'p1', qty: 1, unitPrice: 5 }] })
+  }, /还没完成流水升级/)
+  await rejects(function () {
+    return noSealCall('clearAll', {})
+  }, /还没完成流水升级/)
+  assert.strictEqual((await noSealCall('getLedger')).ledger.recordsPendingMigration, true,
+    'T-C1：没迁过、又没有 records 字段的账本必须判为「还没搬」并冻住写路径 —— '
+    + '放行的话新流水会写进一个空集合，老账再也拼不回来，而且没有任何守卫会叫')
+
+  // T-C2：同一份文档补上 recordsSchema 就必须放行。证明 default-deny 不会误伤
+  // 新建的店（emptyLedger 出生就盖这个章）。
+  noSealDb.ledgers[noSealShopId] = Object.assign({}, noSealBase, { recordsSchema: 2 })
+  await noSealCall('addSale', { payType: 'cash', items: [{ productId: 'p1', qty: 1, unitPrice: 5 }] })
+  assert.ok(!(await noSealCall('getLedger')).ledger.recordsPendingMigration,
+    'T-C2：recordsSchema 是「流水在集合里」的正面证据，见了它必须放行')
+
+  // T-C3：只有 recordsMigratedAt 的那条路一个字都没变 —— 三家生产店走的就是它，
+  // 它们永远不会拿到 recordsSchema 这个章。
+  noSealDb.ledgers[noSealShopId] = Object.assign({}, noSealBase, { recordsMigratedAt: 1234 })
+  await noSealCall('addSale', { payType: 'cash', items: [{ productId: 'p1', qty: 1, unitPrice: 5 }] })
+  assert.strictEqual(noSealDb.ledgers[noSealShopId].recordsMigratedAt, 1234,
+    'T-C3：只盖 recordsMigratedAt 的老店（线上三家）行为不变，戳也要活过记账')
+
+  // T-C4：新建的店连记两笔。第二笔证明 applyMutation 把 recordsSchema 带过去了
+  // —— 漏带的话第一笔记完文档就没章了，第二笔当场被 default-deny 冻住。
+  const twiceShop = await new Shop({ ids: idFactory('tw') }).open('连记两笔店')
+  await twiceShop.call('saveProduct', { name: '货', costPrice: 1, salePrice: 2, stock: 9, alertQty: 1 })
+  const twiceProduct = (await twiceShop.call('getLedger', {})).ledger.products[0]
+  await twiceShop.call('addSale', { payType: 'cash', items: [{ productId: twiceProduct.id, qty: 1, unitPrice: 2 }] })
+  assert.strictEqual(twiceShop.db.ledgers[twiceShop.shopId].recordsSchema, apply.RECORDS_SCHEMA,
+    'T-C4：recordsSchema 是解冻开关的一半，必须活过每一次记账')
+  await twiceShop.call('addSale', { payType: 'cash', items: [{ productId: twiceProduct.id, qty: 1, unitPrice: 2 }] })
+  assert.strictEqual((await twiceShop.pagedAll()).length, 2,
+    'T-C4：第二笔不许被自己上一笔记账冻住')
+
+  // T-C5 / T-C6：字段真的被删掉了的正面证明。
+  // T-C6 靠的是 putLedger 是整文档 set()（云上 index.js 的 doc().set()、
+  // 内存替身的整条替换），所以「applyMutation 不再产出 records」== 「首笔记账
+  // 把这个字段从文档里删掉」。这不是副作用，这就是本次删字段的机制本身。
+  assert.ok(!('records' in apply.emptyLedger()),
+    'T-C5：emptyLedger 不许再建 records 字段')
+  assert.strictEqual(twiceShop.db.ledgers[twiceShop.shopId].records, undefined,
+    'T-C6：已迁移的店记完账，文档里不许再有 records 键')
 
   // -------------------------------------------------------------------------
   // 10) migrateLocal 分片接收端：切换是最后一片的一次原子写
@@ -2028,9 +2126,9 @@ function totalStock(skus, productId) {
     db: winDb, makeId: winIds, openid: 'u1', action: 'createShop',
     shopId: '', apiVersion: core.API_VERSION, payload: { name: '迁移窗口店' }, now: 1000
   })).shop.id
-  // 2a 形状：流水还在数组里，**没有** accounts / aggregate 这两个 2b 才有的累加器
-  const winDoc = Object.assign({}, winDb.ledgers[winShopId], {
-    recordsMigratedAt: 0,
+  // 2a 形状：流水还在数组里，**没有** accounts / aggregate 这两个 2b 才有的累加器，
+  // 也没有 2b-3 才有的 recordsSchema 印章（legacyDoc 负责把它删掉）
+  const winDoc = legacyDoc(winDb.ledgers[winShopId], {
     products: [{ id: 'p1', name: '牛奶', costPrice: 2, salePrice: 5, stock: 10, alertQty: 5, colors: [], sizes: [] }],
     customers: [{ id: 'c1', name: '甲' }],
     records: [
@@ -2495,9 +2593,13 @@ function totalStock(skus, productId) {
     })
   }, /实收不能为负数/)
 
-  // clearAll 清老数组：迁移后的账本 records **故意留着**（O(1) 回滚路的依仗，
-  // M6 钉过不许迁移清）。clearAll 换账套时必须把它清掉 —— 不清的话它会挂在
-  // 新账套上，把 listsHaveData / ledgerHasData 一路带成 true。
+  // 老数组不许挂到新账套上 —— 挂着它会把 listsHaveData / ledgerHasData 一路带成
+  // true（新开的账套看起来「有数据」，「云上已有账本」那道门就会误拦上传）。
+  //
+  // 2b-3 之前这件事由 clearAll 自己负责（switchBook 第一行 next.records = []）。
+  // 现在**任何一次记账**都不再携带它，clearAll 只是其中一次，所以这里断言的从
+  // 「被清成空数组」改成「字段整个没了」。别再把 next.records = [] 加回 switchBook：
+  // next 来自 listsOf()（不产出 records 键），那行的作用会翻转成凭空塞回一个空数组。
   const caShop = await new Shop({ ids: idFactory('ca') }).open('清老数组店')
   await caShop.call('saveProduct', { name: '货', costPrice: 1, salePrice: 2, stock: 5, alertQty: 1 })
   const caLegacy = [taRec('ca-r1', 'out', 1000, 3, 1)]
@@ -2510,8 +2612,8 @@ function totalStock(skus, productId) {
     aggregate: inv.foldTotalTerms(caMerged)
   })
   await caShop.call('clearAll', {})
-  assert.deepStrictEqual(caShop.db.ledgers[caShop.shopId].records, [],
-    'clearAll 换账套必须把迁移前留下的老数组清掉')
+  assert.strictEqual(caShop.db.ledgers[caShop.shopId].records, undefined,
+    'clearAll 换账套之后，迁移前留下的老数组不许还挂在新账套上')
 
   console.log('ledger records tests passed')
 })().catch(function (error) {

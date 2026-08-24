@@ -47,6 +47,16 @@ function publicListsOf(shopId, doc, opts) {
     // 2b-2b 起 `ledger.records` 在线上彻底消失（含未迁移的店），流水一律走
     // listRecords 分页取。线上只存在一种线协议形态（方案 Q1）。
     // 写路径已经被 assertRecordsReady 拦住，不会有一半在数组一半在集合的账。
+    //
+    // 2b-3 起「还没搬」的判据变成 default-deny：没有 recordsMigratedAt、也没有
+    // recordsSchema 才算未迁移（见 apply.recordsPending）。所以这个分支现在多覆盖
+    // 一类账本 —— 两个章都没有、老数组也丢了。那种时候 legacy 折出来是空的，
+    // 读路径给出一本空账，而写路径冻着；这是**故意的**：冻住有出路（跑
+    // migrateRecords），放行会把新流水写进一个空集合、老账再也拼不回来。
+    //
+    // 上面 `const source = doc || apply.emptyLedger()`：emptyLedger 带着
+    // recordsSchema 的章，所以「账本文档读不到」这条防御路径不会掉进这个分支，
+    // 行为和 2b-3 之前逐字一致。
     const legacy = apply.legacyRecordsOf(source)
     // 迁移窗口内 accounts / aggregate 还是 2b-1 之前的形状（根本没有这两个字段），
     // 直接投影会把全店金额和每个客户的欠款都回传成 0，而 getSlip 的 legacy 分支
@@ -300,6 +310,13 @@ async function loadRecordById(ledger, store, id) {
 
 // 流水搬走之后不能再看 ledger.records.length，改看聚合里的条数。
 // 仍然带上 records.length，是为了让迁移前的老文档也算「有数据」。
+//
+// 2b-3 起新代码不再写这个字段，这一条只对**升级前留下的老文档**成立，不是漏删的。
+// 它能真正起作用的窗口很窄（唯一调用点 migrateLocalShard 排在 assertRecordsReady
+// 后面，未迁移的店根本走不到这里；走到这里还只靠这一条为真的，只有「刚迁完、
+// 老数组还没被第一笔账删掉、而且四张表和 aggregate 全空」那一种账本）。
+// **但别顺手删它**：它守的是「云上已有账本，不能再上传本机数据」，删掉一个判据
+// 就是把这道门放松一分，而放行的后果是拿本机账本盖掉云上的账。
 function ledgerHasData(ledger) {
   if (!ledger) return false
   return !!(
@@ -344,6 +361,11 @@ function assertReturnsPaired(shard) {
 
 // 迁移前的账本：流水还在文档数组里，谁也不该往集合里写第一条新流水。
 // 这不是可选的保护 —— 少了它，新账进集合、老账留数组，两边都不是完整的账。
+//
+// 2b-3 起判据改成 default-deny，这道门顺带多覆盖一类：**两个章都没有、老数组
+// 也丢了**（只从备份恢复了 ledgers、没恢复 ledger_records）。文案照旧对 ——
+// 对那一类，「跑 migrateRecords」也确实是正确的出路：零流水的店走 stampOnly
+// 只补戳，有流水的店走正常迁移。
 function assertRecordsReady(ledger) {
   if (apply.recordsPending(ledger)) {
     throw new Error('本店账本还没完成流水升级，暂时不能记账')
@@ -962,7 +984,15 @@ async function migrateLocalShard(db, shopId, openid, payload, now, nextId) {
     next.revision = 1
     next.migratedFromLocal = true
     next.recordsMigratedAt = now
-    next.records = []
+    // 出生就是集合形态的章。这里是 putLedger 的整文档 set()，而 next 来自
+    // apply.listsOf()（不产出 records 键），所以这一次写就把老数组删掉了 ——
+    // 2b-3 之前这里是 next.records = []，效果相同、只是留了个空数组。
+    //
+    // **新代码写出去的每一份账本文档都要带着章**，这是条类不变式：没有章
+    // 就一定是升级前留下的老文档。少了它，这份文档就只剩 recordsMigratedAt
+    // 一个证据 —— 那个字段一旦丢掉（只从局部备份恢复、控制台手改），
+    // default-deny 会把一本流水明明在集合里的账冻住。两个章互为独立证据。
+    next.recordsSchema = apply.RECORDS_SCHEMA
     next.importing = null
     next.clearSnapshots = current.clearSnapshots || []
     next.lastRestoredClearAt = current.lastRestoredClearAt || 0
