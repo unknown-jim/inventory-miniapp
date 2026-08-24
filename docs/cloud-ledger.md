@@ -48,7 +48,8 @@
   - **没有「逐店冻结窗口」这回事。** `apiVersion` 门是全局的：部署云函数那一瞬间**所有**店的老客户端一起被挡住，不是迁一家停一家。冻结窗口 = 从部署到发布小程序之间的**整段**时间，排期要按这个算。
 - 扣账内核只有一份。云函数不能 `require('../../utils/inventory')`，用 `npm run sync:ledger-inventory` 复制到 `cloudfunctions/ledger/`。`npm test` 会在两份不一致时失败。
 - 环境 ID 写在 [`utils/cloud-config.js`](../utils/cloud-config.js) 的 `CLOUD_ENV_ID`，必须等于开发者工具「云开发 → 设置」里的那一串（微信侧）。腾讯云控制台里另一套环境填进来会报 Environment not found。空着不能记账，也不要用客户端 `DYNAMIC_CURRENT_ENV` 代替填写。
-- 集合：`shops`、`members`、`ledgers`、`ledger_records`、`ledger_clears`、`platform_admins`。前四张是当前店账；`ledger_clears` 保存每一次清空的完整快照，不回传给小程序；`platform_admins` 是**平台运营方白名单**（账本升级三个运维 action 的门，见下面「账本升级」），文档形状 `{ _id: openid, openid, note, createdAt }` —— `_id` 就是 openid，查询是一次 `doc(openid).get()`，**不需要索引**，权限同样是仅管理端可读写。
+- 集合：`shops`、`members`、`ledgers`、`ledger_records`、`ledger_clears`、`platform_admins`、`platform_config`。前四张是当前店账；`ledger_clears` 保存每一次清空的完整快照，不回传给小程序；`platform_admins` 是**平台运营方白名单**（账本升级三个运维 action 的门，见下面「账本升级」），文档形状 `{ _id: openid, openid, note, createdAt }` —— `_id` 就是 openid，查询是一次 `doc(openid).get()`，**不需要索引**，权限同样是仅管理端可读写；`platform_config` 是**平台级配置**，目前只有一份 `_id: 'maintenance'` 的维护开关文档（见下面「维护模式」），同样仅管理端可读写。
+  - **这七张表的权威清单只有一份**：`scripts/wxcloud-ensure-acl.js` 的 `COLLECTIONS`。`wxcloud-deploy-ledger.js` 的建表清单直接取它，不另抄——两份清单漂开过一次，后果是部署跑到设 ACL 那步撞「集合不存在」而中断，函数已上传、却停在云存储 ACL 之前。
   - `ledger_records` 是 2b-1 从 `ledgers.records` 数组里拆出来的**当前流水表**，一单一条文档，`_id` = `bookId_recordId`，排序键 `sortKey` = `pad13(createdAt)_id`。账本文档里的 `records` 数组只剩没迁移的老店在用，迁完就是空的。
   - 它需要 **6 条索引**，定义和用途写在 [`cloudfunctions/ledger/ledger-records.js`](../cloudfunctions/ledger/ledger-records.js) 顶部注释里，和这里必须一致。#1–#5 全部避开数组字段；#6 是另一回事：
     1. `bookId` ASC, `sortKey` DESC —— `page` / `recentAndToday`
@@ -64,8 +65,8 @@
 ## 上线前要做的事
 
 1. 开通云开发，把**开发者工具云开发面板里的**环境 ID 填进 `utils/cloud-config.js`。
-2. 建集合 `shops`、`members`、`ledgers`、`ledger_records`、`ledger_clears`、`platform_admins`。`node scripts/wxcloud-deploy-ledger.js` 会自动建这六张表（缺 `ledger_records` 就是部署完每一次流水查询都报错，所以它必须在那个数组里），补 `ledger_records` 的 6 条索引，并把六张表权限设成仅管理端可读写。**但 `platform_admins` 不能等部署脚本去建**：脚本是先更新函数代码、后建表，而门是 fail-closed 的——新代码上线那一刻读不到名单，三个运维 action 对所有人拒绝。正确顺序见「账本升级」一节的上线硬依赖（`node scripts/wxcloud-ensure-platform-admin.js <运营方 openid>`）。
-3. 给这六张业务表设权限为 **仅管理端可读写**（`ADMINONLY`）。**不是可选的**：小程序禁止直连业务库，权限必须把客户端挡在外面。控制台新建的表常常是 `PRIVATE`（仅创建者可读写），比设计松。CLI 新建的表默认已是 `ADMINONLY`。
+2. 建集合 `shops`、`members`、`ledgers`、`ledger_records`、`ledger_clears`、`platform_admins`、`platform_config`。`node scripts/wxcloud-deploy-ledger.js` 会自动建这七张表（清单取 `wxcloud-ensure-acl.js` 的 `COLLECTIONS`，缺 `ledger_records` 就是部署完每一次流水查询都报错），补 `ledger_records` 的 6 条索引，并把这七张表权限设成仅管理端可读写。**但 `platform_admins` 不能等部署脚本去建**：脚本是先更新函数代码、后建表，而门是 fail-closed 的——新代码上线那一刻读不到名单，三个运维 action 对所有人拒绝。正确顺序见「账本升级」一节的上线硬依赖（`node scripts/wxcloud-ensure-platform-admin.js <运营方 openid>`）。
+3. 给这七张业务表设权限为 **仅管理端可读写**（`ADMINONLY`）。**不是可选的**：小程序禁止直连业务库，权限必须把客户端挡在外面。控制台新建的表常常是 `PRIVATE`（仅创建者可读写），比设计松。CLI 新建的表默认已是 `ADMINONLY`。
 
    不要在控制台手点。用微信云托管 CLI：
 
@@ -352,7 +353,7 @@ payload: { mode: 'dropSnapshotLegacy', limit?: 50 }
 
 上传链路全在客户端：编辑商品页 `wx.chooseMedia`（`compressed`）→ 页内隐藏 `<canvas type="2d">` 压缩（最长边 600px、只缩不放、JPEG 0.7，成品一般 50~150KB，见 [`utils/product-image.js`](../utils/product-image.js)）→ `wx.cloud.uploadFile` 直传 `shops/{shopId}/products/<uid>.jpg`，fileID 进表单随 `saveProduct` 入库。内存模式 / 未选店时 `canUseImage()` 为假、整块上传 UI 不渲染——本地没有云存储，不做假降级。展示侧 `<image src="cloud://…">` 直接渲染 fileID（`store.initCloud` 已 `wx.cloud.init`，客户端认得自己环境的 `cloud://` 协议）：商品 tab 卡片 112rpx 缩略图（lazy-load，无图 / 加载失败灰底首字占位），销售 / 进货选货弹层 72rpx（无图不渲染）。
 
-读与权限：云存储权限是 **`READWRITE`**（所有用户可读、仅创建者可写读），不是六张业务表那个 `ADMINONLY`——图要客户端拿 fileID 直接渲染、上传者就是创建者所以能传，两条路都不经过云函数，管理端权限会把它们全堵死。设置并进 `node scripts/wxcloud-ensure-acl.js`（`tcbGetStorageACL` / `tcbModifyStorageACL`，同样**不传 region**），部署脚本末尾同跑。能读的前提是本小程序的登录用户；fileID 不可枚举，跨店读到别家的图需要先拿到那个 fileID——已接受的风险，挡住它要给每一次渲染换临时链接，代价和风险不成比例。
+读与权限：云存储权限是 **`READWRITE`**（所有用户可读、仅创建者可写读），不是业务表那个 `ADMINONLY`——图要客户端拿 fileID 直接渲染、上传者就是创建者所以能传，两条路都不经过云函数，管理端权限会把它们全堵死。设置并进 `node scripts/wxcloud-ensure-acl.js`（`tcbGetStorageACL` / `tcbModifyStorageACL`，同样**不传 region**），部署脚本末尾同跑。能读的前提是本小程序的登录用户；fileID 不可枚举，跨店读到别家的图需要先拿到那个 fileID——已接受的风险，挡住它要给每一次渲染换临时链接，代价和风险不成比例。
 
 服务端校验只有一条，钉在事务开始之前：`saveProduct` 的 `image` 必须落在 `shops/{shopId}/products/` 前缀（`ledger-core.js` 的 `validShopImageFileId`）。不做这条的后果不止「挂一张别店的图」：挂上之后换图会让服务端把旧 fileID 当作废清理——等于借本店的换图操作删别店的文件。这个前缀是客户端 `buildCloudPath` 和服务端 `validShopImageFileId` 的共享约定，两边都有测试互钉，单边改当场红。
 
@@ -397,6 +398,46 @@ wx.cloud.callFunction({ name: 'ledger', data: {
 
 **为什么值得做这一项**：孤儿记录按 `bookId` 和 `shopId` 都查不到（账本文档没了，谁也拿不到那个 `bookId`），所以它不产生任何错数，是纯存储泄漏；但**残留文档里带着 `customerName` / `customerPhone` / `customerAddress`**，店主点了「删除店铺」之后这些个人信息还在库里。这一项的动机是**个人信息**，不是省存储。
 
+## 维护模式
+
+平台级维护开关：维护窗口期**所有写操作由服务端硬拦**，客户端弹「后台维护中」。开关在集合 `platform_config` 的 `maintenance` 文档（形状 `{ _id: 'maintenance', on, message, updatedAt, updatedBy }`，只有 `on === true` 才算维护中）。建集合用 `node scripts/wxcloud-ensure-platform-config.js`（幂等：建表、设 `ADMINONLY`、插入一条**关着的**初始文档；文档已存在就跳过、不覆盖——不会把正开着的开关关掉）。
+
+**怎么开怎么关**：`setMaintenance` / `getMaintenance` 两个 action 走**平台运营方白名单**（和账本升级三个动作同一道门，`requirePlatformAdmin`），客户端一个入口都没有，从开发者工具 Console 调：
+
+```js
+// 开（message 可省，省了用服务端默认文案）
+wx.cloud.callFunction({ name: 'ledger', data: { action: 'setMaintenance',
+  payload: { on: true, message: '今晚 22:00-23:00 升级' } } })
+// 关
+wx.cloud.callFunction({ name: 'ledger', data: { action: 'setMaintenance',
+  payload: { on: false } } })
+// 看（诊断用：分辨「开关是关的」和「开关读不出来」，读失败会抛错）
+wx.cloud.callFunction({ name: 'ledger', data: { action: 'getMaintenance' } })
+```
+
+**逃生口**：文档不存在 = 没在维护（fail-open 的必然结果）。万一 `setMaintenance` 本身出了问题关不掉，去云开发控制台把 `platform_config` 里这条文档删掉、或把 `on` 改成 `false` 就解除，完全不依赖任何代码、不需要重新部署。
+
+**拦什么放什么**：**白名单，不是黑名单**——以后新增的 action 默认落在「维护期不许」那一侧，写错的方向是安全的那一侧。放行的三组：只读（`whoami` / `listShops` / `listMembers` / `getLedger` / `getSlip` / `getRecord` / `listRecords`——维护期店里仍然能查账、查库存、翻流水、看送货单，只是不能记）、维护开关自己（`getMaintenance` / `setMaintenance`——**setMaintenance 必须放行**，否则开关一旦打开就再也关不掉）、运维动作（`checkAggregates` 等，由 `platform_admins` 守着）。其余全部拒绝，包括 `createShop` / 加改删成员 / `deleteShop` / `migrateLocal` 和所有记账 action，也包括未知 action。
+
+**fail-open，两条，都是有意选的**：
+
+1. **弹窗侧**：开关读不到就当作没在维护。维护期真正的拦截由服务端那道门负责；读失败时最坏是「该弹的窗没弹」，回到今天的状态。fail-closed 的代价大得多：一次瞬时读失败会把**所有店**锁死，而那时没人能进去关掉这个开关——它自己就是故障放大器。
+2. **写拦截侧**：这**不是**从第 1 条推出来的，是单独判断的，结论仍是 fail-open。读失败和「维护是否真的开着」互相独立，读失败在非维护期（一年里 99.9% 的时间）发生的绝对次数远多于维护期；fail-closed 的后果是「所有店做不了生意」，且从店员视角和真维护完全无法区分；维护窗口里真正保护数据完整性的也不是这道门——`ledgers/{shopId}` 的事务是全店写的唯一串行化点，搬家期间的硬围栏是 `assertRecordsReady`，维护门只是**减少无谓写入**的闸。把它当最后防线来设计，会同时得到一条不可靠的防线和一个高频的误伤。残余风险如实记着：维护开着 + 那一次读恰好失败 + 恰好有人在提交 = 一笔写会落进去，三件事同时发生，后果由上面两道真围栏兜。
+
+**和 `platform_admins` 的 fail-closed 不矛盾**——同一个仓里两种方向并存的理由是代价不在一个量级：
+
+| | `platform_admins` | 维护开关 |
+|---|---|---|
+| 读失败时拒绝的是 | **运维动作** | **店里做生意** |
+| 代价 | 运维暂时不可用，重试即可 | 所有店停业，且没人能进去关开关 |
+| 所以 | fail-closed | fail-open |
+
+**回包携带**（已经在用小程序的用户也要弹的机制）：维护开着时，云函数**每一个回包**——成功的和失败的——都带 `maintenance: { on: true, message }` 字段（`ledger-core.js` 的 `dispatch` 包装挂上，`index.js` 的失败分支也抬进回包）。用户只要还在操作（翻页、开单、查账），下一次请求就把维护状态带回来，客户端（`utils/maintenance.js`）立刻弹窗并按文案去重，零额外往返，**不轮询**。`App.onShow` 里 `store.checkMaintenance()` 再借 `whoami` 补一次，盖住「切走一阵子又切回来」的用户。**诚实边界**：一个用户盯着静态页面完全不动、一个请求都不发，是收不到弹窗的——覆盖不是 100%。这不构成风险：他在不发请求的情况下也写不进任何东西，写的门在服务端。**不要因为这条边界就去加轮询**：轮询买到的只是「弹窗更及时一点」，代价是全天候的空转请求。维护**关着**时回包一个字节都不改（不加 `maintenance` 键），行为与没有这个功能时完全一致，老云函数的回包天然落在「没在维护」那一侧。**不在客户端加写拦截**：弹窗是 UX，门在服务端；客户端再加一道会引入第二个真相（本地状态可能是旧的），既挡不住老客户端，又会在开关已关掉时误挡。
+
+**集合不是上线硬依赖**（和 `platform_admins` 相反——那个是硬依赖，顺序反了会锁死）：`platform_config` 没建 = 开关读不出来 = fail-open = 和今天一样，先部署云函数后建表也不会拦任何人。开关不缓存，每次 `dispatch` 现读一次小集合 `doc().get()`——「随时能关掉」比省这次读重要；真到了要省它的量级，旋钮是加 TTL 缓存并接受关闭延迟。
+
+**边界（和「不要做」里那条的关系）**：`assertRecordsReady` 是**按店**、**自动**的，口径来自这本账自己的迁移状态，它回答「这家店的账搬完没有」，账本升级仍然只用它；维护开关是**平台级**、**手动**的，不编码任何一家店的迁移状态，它回答「平台现在是不是在维护」。两个口径不重叠，不要拿维护开关去当账本升级的冻结开关，也不要把账本升级的冻结改读这个开关。
+
 ## UI 测试
 
 不连真实云。`tests/ui.test.js` 写入 `inv_test_memory_ledger`，`store` 用同一套 `inventory.js` 在本地改账。
@@ -423,7 +464,7 @@ wx.cloud.callFunction({ name: 'ledger', data: {
 - 转换老清空快照时先把 `bookId` 写进快照文档、再写流水。崩在中间就恢复出一本空账：商品和客户回来了、流水没了，**而且看不出来**。顺序必须是「写流水 → 数条数 → 才盖 `bookId`」，账套号由快照 id 决定（`clr-` 前缀）所以不需要先占号。
 - 活账套还没迁完就去跑 `mode:'snapshots'`。快照转换是加分项，不能挡住关键路径，服务端直接拒绝。
 - 把 `dropSnapshotLegacy` 并进 `dropLegacy`，或攒一批快照放进同一个事务里删。前一个动作的语义是「这家店的账本文档」、一个事务一份文档，并进去语义就模糊了、回滚粒度也变粗；后一个——一个事务里写 92 条文档确定性失败那次实测（`TransactionNotExist`）的真实边界还没查清，不可逆操作不许坐在一个未实测的量上。**一份快照一个事务，每个事务只写 1 份文档。**
-- 为账本升级再加一个冻结开关。`assertRecordsReady` 已经在挡未迁移账本的每一条写，两个冻结口径迟早会打架。
+- 为账本升级再加一个冻结开关。`assertRecordsReady` 已经在挡未迁移账本的每一条写，两个冻结口径迟早会打架。这条禁的仍然是「账本升级自己的冻结开关」；「维护模式」一节的平台级维护开关不在禁令里——它是**平台级**、**手动**的，不编码任何一家店的迁移状态，和 `assertRecordsReady`（**按店**、**自动**、口径来自这本账自己的迁移状态）两个口径不重叠。边界只有两条：不要拿维护开关去当账本升级的冻结开关，也不要把账本升级的冻结改读它。
 - 把 `settledAmount` 对「退货缺两个结算字段」的回推改成 0。会折出负欠款，一个负账户就让这家店从此退不了货、改不了单、删不了单。
 - 把图片 base64 / 二进制塞进 `ledgers` 文档。文档有大小上限，而 `getLedger` 是全量回传四张表的，每张图都变成每次打开账本的固定开销；图放云存储、记录只存 fileID，见上面「商品图与云存储」。
 - 改掉商品图 `shops/{shopId}/products/` 路径前缀。客户端 `buildCloudPath` 和服务端 `validShopImageFileId` 靠它对齐，两边测试互钉：单边改要么让合法 fileID 被服务端拒掉，要么让前缀校验形同虚设。

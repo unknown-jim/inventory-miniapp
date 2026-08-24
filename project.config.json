@@ -115,6 +115,10 @@
       {
         "type": "file",
         "value": "utils/ledger-shard.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/maintenance.js"
       }
     ]
   },

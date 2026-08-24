@@ -6,7 +6,8 @@ const root = path.join(__dirname, '..')
 
 // 与 docs/cloud-ledger.md 必须一致。ADMINONLY = 仅管理端可读写。
 // platform_admins 是运维白名单（_id = openid），漏设 ADMINONLY 等于把名单暴露给客户端。
-const COLLECTIONS = ['shops', 'members', 'ledgers', 'ledger_records', 'ledger_clears', 'platform_admins']
+// platform_config 是平台级维护开关，漏设 ADMINONLY 等于让客户端能直接改开关。
+const COLLECTIONS = ['shops', 'members', 'ledgers', 'ledger_records', 'ledger_clears', 'platform_admins', 'platform_config']
 const ACL_TAG = 'ADMINONLY'
 
 // 云存储（商品图）的 ACL。READWRITE = 所有用户可读、仅创建者可写读：
@@ -58,29 +59,67 @@ async function describeAcl(api, envId, collectionName) {
   return res && res.aclTag
 }
 
+// 逐张设权限。**一张失败不许带走整轮**，这条是吃过亏改的：
+//
+// 从前 describeAcl 没有 catch、ensureAcl 也没有，于是清单里只要有一张集合还没建
+// 出来（新增 platform_config 那次就是），第一次 describe 就抛出去、调用方
+// `main().catch` 里 exit(1) —— 而在 wxcloud-deploy-ledger.js 里，那一刻函数代码
+// 已经上传、索引已经补完，却停在 ensureStorageAcl **之前**，云存储权限没设，
+// 商品图渲染不出来。一张表的小问题炸掉了整条部署路径的后半段。
+//
+// 现在的做法：describe 失败**不当结论**，直接去试 modify（幂等，本来就要设）；
+// modify 也失败就记进 failed 继续下一张，**跑完再由调用方决定怎么报**。
+// 这样后面的步骤（云存储 ACL）一定跑得到，而失败又不会被悄悄咽下去
+// —— 悄悄咽下去比抛出去更危险：一张业务表没设成 ADMINONLY，就是把客户端
+// 挡在外面的那道门开了，而没人会发现。**调用方必须检查 failed。**
 async function ensureAcl(api, opts) {
   const envId = opts.envId
   const wanted = opts.collections || COLLECTIONS
   const tag = opts.aclTag || ACL_TAG
   const updated = []
   const skipped = []
+  const failed = []
   for (let i = 0; i < wanted.length; i++) {
     const name = wanted[i]
-    const current = await describeAcl(api, envId, name)
+    let current = null
+    try {
+      current = await describeAcl(api, envId, name)
+    } catch (error) {
+      // 读不到当前值可能是集合不存在，也可能是一次瞬时失败。两种都不是结论 ——
+      // 下面照样试着设一次，让 modify 去回答「这张集合到底在不在」。
+      console.log('acl describe failed', name, error.message || error)
+    }
     if (current === tag) {
       console.log('acl already', tag, name)
       skipped.push(name)
       continue
     }
-    await api.tcbModifyDatabaseACL({
-      envId: envId,
-      collectionName: name,
-      aclTag: tag
-    })
+    try {
+      await api.tcbModifyDatabaseACL({
+        envId: envId,
+        collectionName: name,
+        aclTag: tag
+      })
+    } catch (error) {
+      console.warn('acl set FAILED', name, error.message || error)
+      failed.push({ name: name, error: String((error && error.message) || error) })
+      continue
+    }
     console.log('acl set', tag, name, 'was', current)
     updated.push(name)
   }
-  return { updated: updated, skipped: skipped }
+  return { updated: updated, skipped: skipped, failed: failed }
+}
+
+// 调用方共用的报错口径：跑完全部集合、也跑完云存储之后再抛。
+// 抛出来而不是只 warn —— 一张业务表没设成 ADMINONLY 是安全问题，不许静默通过。
+function assertAclOk(result) {
+  const failed = (result && result.failed) || []
+  if (!failed.length) return result
+  throw new Error('这几张集合的权限没设成 ' + ACL_TAG + '：'
+    + failed.map(function (item) { return item.name + '（' + item.error + '）' }).join('、')
+    + '。集合不存在就先建出来（node scripts/wxcloud-deploy-ledger.js 会建全部，'
+    + '或 node scripts/wxcloud-ensure-platform-config.js 只建维护开关那张），再重跑本脚本。')
 }
 
 async function describeStorageAcl(api, envId) {
@@ -121,8 +160,10 @@ async function main() {
   wx.initCloudAPI(state.appid)
   const db = await indexes.resolveDb(wx)
   console.log('env', db.envId)
-  await ensureAcl(wx.api, { envId: db.envId })
+  // 先把两件事都做完，再报表 ACL 的失败：云存储权限不该被某一张集合的问题连累。
+  const acl = await ensureAcl(wx.api, { envId: db.envId })
   await ensureStorageAcl(wx.api, { envId: db.envId })
+  assertAclOk(acl)
 }
 
 module.exports = {
@@ -131,6 +172,7 @@ module.exports = {
   STORAGE_ACL_TAG: STORAGE_ACL_TAG,
   collectionsNeedingAcl: collectionsNeedingAcl,
   ensureAcl: ensureAcl,
+  assertAclOk: assertAclOk,
   describeAcl: describeAcl,
   describeStorageAcl: describeStorageAcl,
   ensureStorageAcl: ensureStorageAcl

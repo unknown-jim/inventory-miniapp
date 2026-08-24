@@ -167,10 +167,21 @@ async function main() {
   // action（checkAggregates / migrateRecords / recomputeAggregates）对**所有人**
   // 拒绝，谁也迁不了 —— 而那一刻正是全店停摆、等着跑迁移的时刻。所以这张表
   // 必须在建集合清单里，而且要在部署新云函数**之前**建好并写入运营方 openid。
-  // 表建完后补 ledger_records 的 6 条索引，把六张业务表权限设成 ADMINONLY，
-  // 再把云存储权限设成 READWRITE（商品图：客户端直传 + 直接渲染，幂等），
-  // 见 scripts/wxcloud-ensure-indexes.js、scripts/wxcloud-ensure-acl.js。
-  const names = ['shops', 'members', 'ledgers', 'ledger_records', 'ledger_clears', 'platform_admins']
+  // platform_config（维护开关）漏了**不致命**：门是 fail-open 的，读不出来就当没在
+  // 维护，等于今天的行为。但它的 ACL 一点都不能少 —— 集合建出来却没设成 ADMINONLY，
+  // 就等于把「一键锁死全平台写操作」的开关摆在客户端够得着的地方。
+  //
+  // 表建完后补 ledger_records 的索引，把业务表权限设成 ADMINONLY，再把云存储权限
+  // 设成 READWRITE（商品图：客户端直传 + 直接渲染，幂等），见
+  // scripts/wxcloud-ensure-indexes.js、scripts/wxcloud-ensure-acl.js。
+  //
+  // **建表清单直接取 acl.COLLECTIONS，不另抄一份。** 从前这里是一份手抄的数组，
+  // 于是加 platform_config 时只改了 ACL 那份、这份忘了 —— 后果是部署跑到设 ACL
+  // 那一步撞上「集合不存在」而中断（describeAcl 没有 catch），函数已经上传、
+  // 索引已经建好，却停在云存储 ACL 之前，商品图渲染不出来。两份清单本来就该
+  // 是同一份：要设 ADMINONLY 的集合，必然先得存在。合成一份之后漂不了。
+  const acl = require('./wxcloud-ensure-acl')
+  const names = acl.COLLECTIONS
   let tables = []
   try {
     const listed = await wx.api.flexdbListTables({
@@ -197,9 +208,12 @@ async function main() {
   }
   const indexes = require('./wxcloud-ensure-indexes')
   await indexes.ensureIndexes(wx.api, { region: region, tag: tag })
-  const acl = require('./wxcloud-ensure-acl')
-  await acl.ensureAcl(wx.api, { envId: ENV_ID })
+  // 表 ACL 的失败**留到云存储 ACL 之后再报**：从前一张集合出问题就 exit(1)，
+  // 函数已上传、索引已建，却停在下面这行之前，商品图渲染不出来。
+  // ensureAcl 现在只收集失败不抛，assertAclOk 在两件事都做完之后统一报。
+  const aclResult = await acl.ensureAcl(wx.api, { envId: ENV_ID })
   await acl.ensureStorageAcl(wx.api, { envId: ENV_ID })
+  acl.assertAclOk(aclResult)
 }
 
 main().catch(function (error) {
