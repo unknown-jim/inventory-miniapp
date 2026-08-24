@@ -2462,6 +2462,13 @@ function receivableOf(accounts, customerId) {
   await d8.call('migrateRecords', { mode: 'dropLegacy' })
   assert.strictEqual(d8.doc().legacyDroppedAt, d8Stamp,
     'D8：重跑 dropLegacy 不刷新 legacyDroppedAt（「什么时候放弃的」只有第一次是真的）')
+  // 换账套的两条路也不许抹掉它。applyMutation 里的透传写在所有 action 分支之前，
+  // switchBook（clearAll / loadSeed）和 restoreCleared 都不碰它 —— 这两行把这条钉住，
+  // 免得以后有人把透传挪到分支里面。
+  await d8.call('clearAll', {})
+  assert.strictEqual(d8.doc().legacyDroppedAt, d8Stamp, 'D8：「清空数据」换账套没把它抹掉')
+  await d8.call('restoreCleared', {})
+  assert.strictEqual(d8.doc().legacyDroppedAt, d8Stamp, 'D8：「恢复清空前数据」换账套也没把它抹掉')
 
   // ---- D9 B 类快照（迁移之后清空，数组是被抄过来的老数组）也能正确处理 -------
   // B 类的判据取 aggregate.count（被封存账套的权威条数），**不是**重新归并

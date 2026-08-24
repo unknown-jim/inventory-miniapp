@@ -1640,8 +1640,14 @@ async function dropOneSnapshotLegacy(db, shopId, meta, ledgerBookId, now) {
     return entry
   }
   if (!doc) {
+    // **不要断言「文档不见了」。** 云端的 getClearSnapshot（index.js 的 createDb）
+    // 把「文档不存在」和「这次读失败了」都吞成 null，这两种在这里分不开 —— 和
+    // dropLegacy 事务里那句 `if (!cur)` 同一个口径。一次瞬时读失败被写成「找不到它」，
+    // 会让人以为快照数据丢了，而其实一个字都没动。
     entry.status = 'failed'
-    entry.reason = '账本里记着这份快照，ledger_clears 里却找不到它'
+    entry.reason = '没读到这份快照文档。云端把「文档不存在」和「这次读失败了」都返回 null，'
+      + '这两种在这里分不开。这份快照的 records 数组一个字都没动 —— 多半是一次瞬时失败，'
+      + '再调一次就好；反复如此再去控制台确认 ledger_clears 里还有没有这份文档'
     return entry
   }
   if (String(doc.shopId || '') !== String(shopId || '')) {
@@ -1766,7 +1772,7 @@ async function dropSnapshotLegacy(db, shopId, payload, now) {
       + '快照里的 records 数组和 ledgers.records 是同一条旧云函数退路的两半，'
       + '先跑 mode:"dropLegacy" 宣布这家店放弃退路，才轮到清快照里的那一半')
   }
-  const ledgerBookId = bookOf(ledger, shopId)
+  let ledgerBookId = bookOf(ledger, shopId)
   const metas = (ledger.clearSnapshots || [])
   const report = []
   let dropped = 0
@@ -1779,6 +1785,14 @@ async function dropSnapshotLegacy(db, shopId, payload, now) {
   let index = 0
   for (; index < metas.length; index++) {
     if (budget <= 0) break
+    if (index > 0) {
+      // 每份重取一次活账套号。闸④比的是「这本快照的账套是不是**此刻**的活账套」，
+      // 而一轮跑到一半有人点「恢复清空前数据」就会把某一份快照的账套变成活的 ——
+      // 循环外只读一次拿到的是过期值。一次 doc().get() 换一次不误判，便宜。
+      // 读不到就沿用上一次的值：④是保守侧的一道，硬闸是⑤（countAll 逐份现数）。
+      const cur = await db.getLedger(shopId)
+      if (cur) ledgerBookId = bookOf(cur, shopId)
+    }
     const entry = await dropOneSnapshotLegacy(db, shopId, metas[index], ledgerBookId, now)
     report.push(entry)
     if (entry.status === 'skipped') {
