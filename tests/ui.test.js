@@ -234,7 +234,7 @@ function withTimeout(promise, timeout, label) {
   })
 }
 
-// 只用来等条件和等选择器；纯 sleep（page.waitFor(800)）不必套。
+// 只用来等条件和等选择器；纯 sleep（page.waitFor 传毫秒数）不必套。
 async function waitFor(page, target, label) {
   await withTimeout(page.waitFor(target), stepTimeout, label)
 }
@@ -341,21 +341,338 @@ async function resetStorage(miniProgram) {
   })
 }
 
+// 判据是 data.pageLoading === false。index / customers / shop / sale 这些页有这个字段，
+// **record-edit / customer-edit / records 没有** —— 对它们调用会一路等到 stepTimeout，
+// 然后报一句「等「页面加载完成 pages/customer-edit/customer-edit」超时（30 秒）」：
+// undefined === false 恒为 false，所以那不是「页面没加载完」，是这个判据对那些页压根不适用。
+// 这句误导性的报错跟真实原因（走错页了 / 上一步没退回去）毫无关系，排查时被它带偏过一次。
+// 所以这里先探一次：没有这个字段就直说是用错了地方，别死等 30 秒再报个假原因。
+// 哪些页有这个字段由 tests/automator-contract.test.js 钉着，页面侧一改就会红。
 async function waitPageReady(page) {
+  const first = await page.data()
+  if (!first || !Object.prototype.hasOwnProperty.call(first, 'pageLoading')) {
+    throw new Error('waitPageReady 用错了地方：' + page.path + ' 的 data 里没有 pageLoading 字段，'
+      + '等不到。多半是上一步没走到预期的页面。当前 data 的字段：'
+      + Object.keys(first || {}).slice(0, 12).join(','))
+  }
+  if (first.pageLoading === false) return
   await waitFor(page, async function () {
     const data = await page.data()
     return data && data.pageLoading === false
   }, '页面加载完成 ' + page.path)
 }
 
+// ---------------------------------------------------------------------------
+// 「现在到底在哪一页」一律走原始 RPC，不看 Page 对象的 path。
+//
+// automator 的 Page.create 有一层 pageMap 缓存（out/Page.js）：
+//     static create(t,e,a){if(a.get(e.id))return a.get(e.id);const i=new Page(t,e);return a.set(e.id,i),i}
+// 命中 pageId 就返回旧对象，而 Page.path 是**构造那一刻的快照、之后永不更新**
+// （构造函数里只有 this.path=e.path 一次赋值）。pageMap 挂在 MiniProgram 实例上，
+// 整轮测试期间从不清理。小程序的 pageId 在页面销毁后会被复用，一旦复用，
+// currentPage() / pageStack() 就可能返回一个 path 还停在上一个页面的 Page 对象。
+//
+// MiniProgram.send(method, params) 是直通 connection.send 的（out/MiniProgram.js:
+// `async send(t,e={}){return await this.connection.send(t,e)}`），拿到的是未经这层
+// 缓存污染的原始数据。currentPage() / pageStack() 自己用的也正是这两个 RPC。
+// ---------------------------------------------------------------------------
+async function rawCurrentPage(miniProgram) {
+  return await miniProgram.send('App.getCurrentPage')      // { pageId, path, query }
+}
+
+async function rawPageStack(miniProgram) {
+  const res = await miniProgram.send('App.getPageStack')
+  return (res && res.pageStack) || []                      // [{ pageId, path, query }]
+}
+
+function describeStack(stack) {
+  return '[' + stack.map(function (p) { return p.path + '#' + p.pageId }).join(' > ') + ']'
+}
+
+// 绕过 automator 的页面栈视图，直接问小程序 runtime 自己：getCurrentPages() 的 route 列表。
+//
+// 为什么需要第二条路：上面 rawPageStack 走的是 App.getPageStack，而 automator 这一侧
+// 已知有缓存问题（见 pageMap 那段）。光看 App.getPageStack 说「栈没变」，分不清是
+//   R1：wx.navigateBack 在 runtime 里真的没生效（栈实际没动）
+//   R2：runtime 里栈动了，但 automator 的视图陈旧、没跟上
+// evaluate 走的是 App.callFunction（out/MiniProgram.js: evaluate -> send('App.callFunction')），
+// 和 App.getPageStack 是两条不同的 RPC 路径。两个栈并排打出来就能定性。
+//
+// 套 withTimeout：runtime 卡住时 automator 的 send 自己没有超时，这里要报「取不到」
+// 而不是把整轮拖死 —— 而且「取不到」本身就是一条现场证据。
+async function runtimeStack(miniProgram) {
+  return await withTimeout(miniProgram.evaluate(function () {
+    return getCurrentPages().map(function (p) { return p.route })
+  }), 10000, 'runtime getCurrentPages()')
+}
+
+// 出错路径上的取证：除了 automator 侧的页面栈，再拿一次 runtime 侧的 getCurrentPages()。
+// 两个数字并排才判得出路由指令到底生没生效 —— 这是排查这类失败的第一个岔路口：
+//   runtime 侧变了、automator 侧没变 = automator 的页面栈视图陈旧（R2）
+//   两边都没变                       = wx 路由在 runtime 层面就没生效（R1）
+// 这不是探针，是错误信息的一部分。runNativeClearModal 结尾那处退栈失败是偶发的，
+// 而且**据用户实测，同一步在 main 基线上也红过**（症状同样是 timeout waiting for
+// automator response）—— 注意这条依据来自用户的实测，不是本轮验证跑出来的：本轮的
+// main 基线那一轮死在更早的 runCustomerLedgerLoadMore，压根没跑到这个函数。
+// 既然它还会再犯，下一个人撞上时应当一眼看出是 R1 还是 R2，不必像这次一样从头查一遍。
+// **取证本身不许抛异常盖掉原始错误**，所以整段 try/catch（runtimeStack 内部已带超时）。
+async function runtimeStackForError(miniProgram) {
+  try {
+    const routes = await runtimeStack(miniProgram)
+    return 'runtime栈(' + routes.length + ')=[' + routes.join(' > ') + ']'
+  } catch (error) {
+    return 'runtime栈=<取证失败: ' + (error && error.message ? error.message : error) + '>'
+  }
+}
+
+// 出问题时把现场打全：automator 眼里的栈 + runtime 自己的栈 + Page 对象以为的 path。
+// 默认关掉（每次三四个额外 RPC，噪音大），要查路由问题时 WECHAT_UI_TRACE=1 打开。
+const traceOn = process.env.WECHAT_UI_TRACE === '1'
+
+// 纯日志断点，不发任何 RPC —— 工具卡住时它一定打得出来，用来定位「是哪一条命令把工具卡住的」。
+// 卡住的那条命令的「之前」会打出来、「之后」不会，夹逼即可。
+function mark(tag) {
+  if (!traceOn) return
+  console.log('[UI:mark] ' + tag)
+}
+
+async function trace(miniProgram, tag) {
+  if (!traceOn) return
+  let autoPart = ''
+  let rtPart = ''
+  try {
+    // 这两个 RPC 也要套超时：automator 的 send 自己没有超时，工具卡住时
+    // trace 会连着一起挂死，那就既没有现场、也不知道卡在哪。
+    const cur = await withTimeout(rawCurrentPage(miniProgram), 10000, 'App.getCurrentPage')
+    const stack = await withTimeout(rawPageStack(miniProgram), 10000, 'App.getPageStack')
+    autoPart = 'cur=' + cur.path + '#' + cur.pageId + ' automator栈(' + stack.length + ')=' + describeStack(stack)
+  } catch (error) {
+    autoPart = 'automator栈=<取不到: ' + (error && error.message ? error.message : error) + '>'
+  }
+  try {
+    const routes = await runtimeStack(miniProgram)
+    rtPart = ' runtime栈(' + routes.length + ')=[' + routes.join(' > ') + ']'
+  } catch (error) {
+    rtPart = ' runtime栈=<取不到: ' + (error && error.message ? error.message : error) + '>'
+  }
+  // trace 只是观测，坏了不许把用例带崩
+  console.log('[UI:trace] ' + tag + ' ' + autoPart + rtPart)
+}
+
+// 从跳转用的 url 推出 App.getCurrentPage 会报的 path 形式：去掉 query、去掉前导斜杠。
+// 实测（WECHAT_UI_TRACE=1 的 trace 输出）path 就是 'pages/record-edit/record-edit' 这种，
+// 无前导斜杠、query 是独立字段。
+function pathOf(url) {
+  return String(url || '').split('?')[0].replace(/^\//, '')
+}
+
+// 轮询体里的单次 RPC 也必须有超时。
+//
+// automator 的 Connection.send **没有任何超时**（out/Connection.js：生成 uuid、塞进
+// callbacks Map、等对面回，回不来就永远挂着）。所以只要某一次 RPC 永不返回，下面轮询里
+// 那句 `if (Date.now() >= deadline)` 根本走不到 —— stepTimeout 形同虚设，只能等 15 分钟的
+// 整轮看门狗兜底，而且那条报错不指位置。本轮要消灭的就是这类「等待不可靠」，
+// 所以热路径上一条都不能漏。
+//
+// 取不到就当「还没到」返回 null，继续轮询，直到 stepTimeout 走完再报那条带现场的详细错 ——
+// 单次 RPC 抖一下不该直接掐掉整个等待。
+async function pollCurrentPage(miniProgram) {
+  try {
+    return await withTimeout(rawCurrentPage(miniProgram), 10000, 'App.getCurrentPage')
+  } catch (error) {
+    return null
+  }
+}
+
+async function pollPageStack(miniProgram) {
+  try {
+    return await withTimeout(rawPageStack(miniProgram), 10000, 'App.getPageStack')
+  } catch (error) {
+    return null
+  }
+}
+
+// 出错路径上读页面栈：读不到就降级成一句话，**不许抛异常盖掉原始错误**（同 runtimeStackForError）。
+async function pageStackForError(miniProgram) {
+  const stack = await pollPageStack(miniProgram)
+  return stack ? describeStack(stack) : '<取证失败: 读 automator 页面栈超时或出错>'
+}
+
+// 取「到位之后」的 Page 对象，并挡掉 pageMap 缓存返回陈旧对象的情况
+//（缓存机制见上方 rawCurrentPage / rawPageStack 那段长注释；对应的源码断言在
+// tests/automator-contract.test.js 里，那边编号为 F2）。
+// 这两次 currentPage() 也套 withTimeout：Connection.send 没有任何超时（见上方
+// pollCurrentPage 那段），不套就可能永久挂住。这里**不降级**成 null —— 取不到 Page 对象
+// 就没法往下走，直接带标签抛出去比蒙着走好，报错也指得出是哪一步卡住。
+//
+// 【别写成「仅剩的无超时 RPC」】本文件还有若干 await miniProgram.X() 没套超时：
+// 4 处 evaluate（resetStorage / seedExtraPayDocs / countMemoryDocs / 取 customerId）、
+// pageScrollTo、run() 里两处 mockWxMethod。它们不在等待/判位置的热路径上，本轮按范围控制
+// 没动，但它们同样会挂住。谁要补，照这里的写法套 withTimeout 即可。
+async function freshCurrentPage(miniProgram, pageId, expectedPath, label) {
+  let page = await withTimeout(miniProgram.currentPage(), 10000, '取当前页对象（' + label + '）')
+  if (String(page.path || '') !== expectedPath) {
+    console.log('[UI] pageMap 缓存返回了陈旧页面对象（id=' + pageId
+      + '，对象说 ' + page.path + '，实为 ' + expectedPath + '），已重建')
+    miniProgram.pageMap.delete(pageId)
+    page = await withTimeout(miniProgram.currentPage(), 10000, '删缓存后重取当前页对象（' + label + '）')
+  }
+  assert.strictEqual(String(page.path || ''), expectedPath,
+    '取到的页面对象仍然不是' + label + ': ' + page.path)
+  return page
+}
+
+// 等页面到位。**判据是完整路径精确相等，不是子串包含。**
+//
+// 曾经用过子串匹配（waitForPage(mp, 'shop', ...)）。它当时能work纯属路径命名的偶然：
+// 'record' 同时是 pages/records/records 和 pages/record-edit/record-edit 的子串，
+// 'customers' 和 'customer-edit' 也只差一个字符。一旦拿它当通用包装器，
+// 「静默确认到了错误的页面」就是迟早的事 —— 而这正是本轮要消灭的失败形态本身。
+// 所以判据收紧成 ===，调用点一律传 pages/ 开头的完整路径（由文件末尾的钉子看着）。
+//
+// 路径判定走 rawCurrentPage，不走 currentPage() —— 后者会被 pageMap 缓存骗（见上方注释）。
+async function waitForPage(miniProgram, expectedPath, label) {
+  const deadline = Date.now() + stepTimeout
+  let cur = null
+  for (;;) {
+    cur = await pollCurrentPage(miniProgram)
+    if (cur && String(cur.path || '') === expectedPath) break
+    if (Date.now() >= deadline) {
+      const stack = await pageStackForError(miniProgram)
+      const rt = await runtimeStackForError(miniProgram)
+      throw new Error('等「进入' + label + '」超时（' + Math.round(stepTimeout / 1000) + ' 秒）：'
+        + '期望 ' + expectedPath + '，当前页 ' + (cur ? cur.path : '<读不到>') + '，页面栈 ' + stack
+        + '，' + rt
+        + '（这是轮询预算的下界，单次 RPC 各带 10 秒超时，实际可能更久）'
+        + '。判读同 goBackTo：两边都没到 = 路由在 runtime 层面没生效；'
+        + 'runtime 到了而 automator 没到 = automator 的页面栈视图陈旧')
+    }
+    await sleep(200)
+  }
+  return await freshCurrentPage(miniProgram, cur.pageId, expectedPath, label)
+}
+
+// 主动跳转：下发路由指令，然后**自己确认真的到了**，不信路由方法的返回值。
+//
+// 为什么不能信返回值 —— 依据是**源码事实**，不是实测：
+// changeRoute 的等待是 `sleep(3e3)` 这个固定睡眠，睡够就返回、不管跳转成没成，
+// 它不是完成信号（out/MiniProgram.js，由 tests/automator-contract.test.js 钉着）。
+// 固定睡眠只要不够长就会漏，只是漏的门槛从 800 毫秒抬到了 3 秒而已 —— 这和本文件
+// 曾经用固定 800 毫秒等 tap 跳转是同一个错误，只是尺度不同。
+//
+// 【关于证据，说明白】曾经有一轮 main 版本在
+//     const edit = await miniProgram.navigateTo('/pages/customer-edit/customer-edit?id=' + id)
+// 之后报 'Cannot read properties of undefined (reading length)'（edit.data() 里没有 ledger），
+// 一度被当成「3 秒不够」的实测证据。**这条证据后来被判定为不干净、已撤回**：当时那一轮
+// 可能受热重载干扰（见文件末尾钉子⑥），而热重载会把小程序重启回入口页 pages/index/index，
+// 其 data 同样没有 ledger —— 与「没跳到」完全同形，无法区分；而 main 版本在那一行
+// 没有记录实际 path，所以两种解释都成立。
+// 所以本函数的依据只有两条，都不依赖那轮：① 上面的源码事实；② 可诊断性 —— 出错时
+// waitForPage 会报出「期望 X、当前页 Y、两侧页面栈」，而直接用返回值只会在下游炸出
+// 一句看不出原因的 TypeError。
+//
+// 期望路径由 url 自己推导（pathOf），调用方不额外传：多一个参数就多一次写错的机会，
+// 而这个参数写错的后果恰恰是「静默确认到了错误的页面」。
+async function goto(miniProgram, method, url, label) {
+  await miniProgram[method](url)
+  return await waitForPage(miniProgram, pathOf(url), label)
+}
+
+// 退栈：下发 navigateBack，然后**自己确认真的退到了目标页**，不信它的返回值。
+//
+// 【为什么必须包这一层】navigateBack() 返回 **不等于** 退栈完成。changeRoute 的等待是固定
+// sleep(3e3)（out/MiniProgram.js，由 tests/automator-contract.test.js 钉着），是睡够就返回，
+// 不是完成信号。本轮实测抓到过它返回了、栈却一层没退：
+//     [UI:trace] runNativeClearModal 结尾 navigateBack 之前 stack(2)=[pages/index/index#15 > pages/shop/shop#16]
+//     [UI:trace] runNativeClearModal 结尾 navigateBack 之后 stack(2)=[pages/index/index#15 > pages/shop/shop#16]
+//     紧接着下一条命令报 timeout waiting for automator response
+// 两条 trace 都打了出来（说明 navigateBack() 正常返回、RPC 通道当时还通），但栈没动。
+// 所以「navigateBack() 返回即已完成」是错的 —— 这正是本函数存在的理由。
+//
+// 【判据】「栈变浅」和「栈顶就是退栈前的那一页」两个条件同时成立，缺一不可：
+//   · 只等栈顶匹配 —— 遇上 customers > customer-edit > customers 这种同一个页面在栈里
+//     出现两次的情形，navigateBack 还没生效时栈顶就已经"匹配"了，立刻假通过；
+//   · 只等栈长度变小 —— 退到了非预期的页面（多退了一层、或者被别的跳转插队）不会报错。
+// 栈顶按 **pageId** 认而不是按 path 认：pageId 是页面实例的身份，target 那一层没被弹掉、
+// id 不会变；path 认不出「同一个路径的两个不同实例」。
+//
+// 【基准必须取在 navigateBack 之前】这是上一轮栽过的坑，别再挪。曾经包过一层同样意图的
+// 等待（叫 goBack），它在 navigateBack() **返回之后**才去读基准栈深；而那时 3 秒已经睡完、
+// 栈往往早就变浅了，于是拿变浅后的值再等「比这更浅」，永远等不到，整轮挂死。
+// 教训是「基准取晚了」，**不是**「不该包等待」。这个先后顺序由文件末尾的钉子⑤看着。
+//
+// 【别再归错因】上一轮那次挂死是两个原因叠加，不是一个：
+//   ① 基准取晚了（本函数已修）；
+//   ② 有过一次「**automator 侧观测不到退栈**」的现场（上面 runNativeClearModal 那两行 trace：
+//      navigateBack 前后 App.getPageStack 一模一样）。注意措辞 —— 那一轮没有 runtime 侧快照，
+//      所以只能说「automator 侧观测不到」，**不能**说成「navigateBack 在 runtime 层面没生效」
+//      （那是 R1，见上方 runtimeStackForError 的判读表），R1/R2 至今未定。
+// ② 未根治，所以本函数**仍然可能**在那一处超时。超时报错里带 runtime 侧 getCurrentPages()
+// 快照，就是为了让下一个人一眼判出撞上的是 R1 还是 R2，不必从头查一遍。
+async function goBackTo(miniProgram, label) {
+  // 基准这一次读**不能**降级成 null：读不到基准就没法判断退没退到位，直接报错比蒙着走好。
+  // 套 withTimeout 只是为了别永远挂着（Connection.send 没超时）。这行在 navigateBack 之前，
+  // 抛出去也不存在盖掉原始错误的问题。
+  const before = await withTimeout(rawPageStack(miniProgram), 10000, '读退栈前的页面栈基准')
+  if (before.length < 2) {
+    throw new Error('退回「' + label + '」没有可退的目标：当前页面栈只有 '
+      + before.length + ' 层 ' + describeStack(before))
+  }
+  const target = before[before.length - 2]
+  await miniProgram.navigateBack()
+  const deadline = Date.now() + stepTimeout
+  for (;;) {
+    const now = await pollPageStack(miniProgram)
+    const top = now && now.length ? now[now.length - 1] : null
+    if (now && now.length < before.length && top && String(top.pageId) === String(target.pageId)) {
+      break
+    }
+    if (Date.now() >= deadline) {
+      const nowText = now ? describeStack(now) : '<取证失败: 读 automator 页面栈超时或出错>'
+      const rt = await runtimeStackForError(miniProgram)
+      throw new Error('等「退回' + label + '」超时（' + Math.round(stepTimeout / 1000) + ' 秒）：'
+        + '期望退到 ' + target.path + '#' + target.pageId
+        + '，退栈前 ' + describeStack(before) + '，现在 ' + nowText + '，' + rt
+        + '（这是轮询预算的下界，单次 RPC 各带 10 秒超时，实际可能更久）'
+        + '。判读：runtime 栈也没退 = wx.navigateBack 在 runtime 层面没生效（R1，多等无用，'
+        + '要换路由方式或在页面侧加可观测的卸载信号）；runtime 栈退了而 automator 栈没退 = '
+        + 'automator 的页面栈视图陈旧（R2，等的判据要改成读 runtime 侧）')
+    }
+    await sleep(200)
+  }
+  return await freshCurrentPage(miniProgram, target.pageId, String(target.path || ''), label)
+}
+
+// 【源码事实】automator 0.12.1 的 out/MiniProgram.js#changeRoute 是：
+//     currentPage() → callWxMethod(navigateBack) → sleep(3000) → currentPage()
+// 五个路由方法（navigateTo / redirectTo / navigateBack / reLaunch / switchTab）全走它，
+// 每次固定至少 3 秒。**但那 3 秒是固定睡眠、不是完成信号**：睡够就返回，不管跳转成没成。
+// 所以下面这个循环不直接调 miniProgram.navigateBack()，而是走 goBackTo —— 由它自己确认
+// 退到了目标页（为什么必须这样，见 goBackTo 上方那段里的实测反例）。
+// 这条源码事实被 tests/automator-contract.test.js 钉着，automator 一升级就会红。
+//
+// 顺带纠正一个曾经的错觉：这个循环「5 圈在一瞬间烧完」是不可能的 —— 每圈之间隔着
+// navigateBack 自带的 3 秒，再加 goBackTo 自己的确认轮询。实测一圈就退回去了：
+//     [UI:trace] backToTabRoot#0 navigateBack 之前 stack(2)=[pages/customers/customers#9 > pages/customer-edit/customer-edit#11]
+//     [UI:trace] backToTabRoot#0 navigateBack 之后 stack(1)=[pages/customers/customers#9]
+//
 // 工具 2.02.x 上，站在 navigateTo 进来的二级页调用 reLaunch，automator 会等满 10 秒报
 // 「timeout waiting for automator response」，而且页面压根没跳（在 customer-edit 上必现）。
 // 退回栈底的 tab 页再 reLaunch 就正常。所以每次 reLaunch 之前先把栈清干净。
 async function backToTabRoot(miniProgram) {
   for (let i = 0; i < 5; i++) {
-    const stack = await miniProgram.pageStack()
+    // 走 pollPageStack 而不是 miniProgram.pageStack()：后者没有超时（挂住就是本函数
+    // 永久挂死，只剩 15 分钟整轮看门狗兜底、报错还不指位置），而且它会过 pageMap 构造
+    // Page 对象 —— 判「现在在哪一页 / 栈多深」一律走原始 RPC，理由见上方 rawPageStack 那段。
+    // 读不到就当「栈还没读到」，按栈深未知处理：直接报错比拿不确定的值往下走好。
+    const stack = await pollPageStack(miniProgram)
+    if (!stack) {
+      throw new Error('backToTabRoot 第 ' + i + ' 圈读页面栈失败（超时或出错），无法判断还要退几层')
+    }
     if (stack.length <= 1) return
-    await miniProgram.navigateBack()
+    await trace(miniProgram, 'backToTabRoot#' + i + ' navigateBack 之前')
+    await goBackTo(miniProgram, '上一页（backToTabRoot 第 ' + i + ' 圈）')
+    await trace(miniProgram, 'backToTabRoot#' + i + ' navigateBack 之后')
   }
   throw new Error('退不回 tab 页，页面栈太深')
 }
@@ -364,7 +681,7 @@ async function seedFromHome(miniProgram) {
   step('清空本地数据并点「填充示例数据」')
   await resetStorage(miniProgram)
   await backToTabRoot(miniProgram)
-  const home = await miniProgram.reLaunch('/pages/index/index')
+  const home = await goto(miniProgram, 'reLaunch', '/pages/index/index', '首页')
   await waitPageReady(home)
   await waitFor(home, '.js-seed', '出现 .js-seed')
   await tap(home, '.js-seed')
@@ -377,7 +694,7 @@ async function seedFromHome(miniProgram) {
 
 async function runSalePickerAndSlip(miniProgram) {
   step('销售：点选商品、客户，一分未收出库，核对送货单')
-  const sale = await miniProgram.switchTab('/pages/sale/sale')
+  const sale = await goto(miniProgram, 'switchTab', '/pages/sale/sale', '销售页')
   await waitPageReady(sale)
   await waitFor(sale, '.js-product-picker', '出现 .js-product-picker')
 
@@ -429,15 +746,13 @@ async function runSalePickerAndSlip(miniProgram) {
 
 async function runRecordSlipExport(miniProgram) {
   step('流水：打开销售记录，默认只读，再次打开送货单')
-  const records = await miniProgram.navigateTo('/pages/records/records')
+  const records = await goto(miniProgram, 'navigateTo', '/pages/records/records', '流水页')
   await waitFor(records, '.js-record-out', '出现 .js-record-out')
   const items = await records.$$('.js-record-out')
   assert.ok(items.length > 0, '流水里没有销售记录')
   await items[0].tap()
 
-  await records.waitFor(800)
-  const edit = await miniProgram.currentPage()
-  assert.ok(edit.path.indexOf('record-edit') >= 0, '未进入流水详情: ' + edit.path)
+  const edit = await waitForPage(miniProgram, 'pages/record-edit/record-edit', '流水详情页')
   await waitFor(edit, '.js-edit', '出现 .js-edit')
   let pageData = await edit.data()
   assert.strictEqual(pageData.editing, false, '进入详情就进入了修改')
@@ -458,18 +773,18 @@ async function runRecordSlipExport(miniProgram) {
   await waitFor(edit, '.js-edit', '出现 .js-edit')
   pageData = await edit.data()
   assert.strictEqual(pageData.editing, false, '取消后没有回到详情')
-  await miniProgram.navigateBack()
+  await trace(miniProgram, 'runRecordSlipExport 结尾 navigateBack 之前')
+  await goBackTo(miniProgram, '流水页')
+  await trace(miniProgram, 'runRecordSlipExport 结尾 navigateBack 之后')
 }
 
 async function runOpeningSheet(miniProgram) {
   step('客户页：记期初欠款，弹出层并确认')
-  const list = await miniProgram.switchTab('/pages/customers/customers')
+  const list = await goto(miniProgram, 'switchTab', '/pages/customers/customers', '客户页')
   await waitFor(list, '.js-customer-item', '出现 .js-customer-item')
   await tap(list, '.js-customer-item')
 
-  await list.waitFor(800)
-  const edit = await miniProgram.currentPage()
-  assert.ok(edit.path.indexOf('customer-edit') >= 0, '未进入客户编辑页: ' + edit.path)
+  const edit = await waitForPage(miniProgram, 'pages/customer-edit/customer-edit', '客户编辑页')
   await waitFor(edit, '.js-opening', '出现 .js-opening')
   await tapWhen(edit, '.js-opening')
   await waitFor(edit, '.js-opening-sheet', '出现 .js-opening-sheet')
@@ -480,19 +795,19 @@ async function runOpeningSheet(miniProgram) {
   await amount.input('20')
   await tapWhen(edit, '.js-opening-submit')
   await waitGone(edit, '.js-opening-sheet')
-  await miniProgram.navigateBack()
+  await trace(miniProgram, 'runOpeningSheet 结尾 navigateBack 之前')
+  await goBackTo(miniProgram, '客户页')
+  await trace(miniProgram, 'runOpeningSheet 结尾 navigateBack 之后')
 }
 
 async function runPaySheet(miniProgram) {
   step('客户页：点收款，弹出收款层并确认')
-  const list = await miniProgram.switchTab('/pages/customers/customers')
+  const list = await goto(miniProgram, 'switchTab', '/pages/customers/customers', '客户页')
   await waitPageReady(list)
   await waitFor(list, '.js-collect', '出现 .js-collect')
   await tap(list, '.js-collect')
 
-  await list.waitFor(800)
-  const edit = await miniProgram.currentPage()
-  assert.ok(edit.path.indexOf('customer-edit') >= 0, '未进入客户编辑页: ' + edit.path)
+  const edit = await waitForPage(miniProgram, 'pages/customer-edit/customer-edit', '客户编辑页')
   await waitFor(edit, '.js-pay-sheet', '出现 .js-pay-sheet')
   await tapWhen(edit, '.js-pay-submit')
   await waitGone(edit, '.js-pay-sheet')
@@ -552,7 +867,7 @@ async function runRecordsLoadMore(miniProgram) {
   assert.ok(expectedTotal > 20, '前提：当前账套的流水超过一页（实为 ' + expectedTotal + ' 条）')
 
   await backToTabRoot(miniProgram)
-  const records = await miniProgram.navigateTo('/pages/records/records')
+  const records = await goto(miniProgram, 'navigateTo', '/pages/records/records', '流水页')
   await waitForData(records, function (data) { return data.loaded }, '流水页首屏加载完成')
   const first = await records.data()
   assert.strictEqual(first.list.length, 20, '首屏只给一页 20 条，不多给')
@@ -614,7 +929,9 @@ async function runRecordsLoadMore(miniProgram) {
     ids[item.id] = true
   })
   await waitForGone(records, '.js-load-more', '翻完之后「加载更多」按钮要消失')
-  await miniProgram.navigateBack()
+  await trace(miniProgram, 'runRecordsLoadMore 结尾 navigateBack 之前')
+  await goBackTo(miniProgram, '客户页')
+  await trace(miniProgram, 'runRecordsLoadMore 结尾 navigateBack 之后')
 }
 
 async function runCustomerLedgerLoadMore(miniProgram) {
@@ -625,7 +942,8 @@ async function runCustomerLedgerLoadMore(miniProgram) {
   })
   assert.ok(customerId, '前提：示例数据里有客户')
   await seedExtraPayDocs(miniProgram, 30, customerId, 'cust')
-  const edit = await miniProgram.navigateTo('/pages/customer-edit/customer-edit?id=' + customerId)
+  const edit = await goto(miniProgram, 'navigateTo',
+    '/pages/customer-edit/customer-edit?id=' + customerId, '客户编辑页')
   await waitForData(edit, function (data) { return data.ledger.length === 20 }, '往来记录首屏一页 20 条')
   await waitFor(edit, '.js-ledger-more', '往来记录的「加载更多」按钮')
   let guard = 0
@@ -647,29 +965,41 @@ async function runCustomerLedgerLoadMore(miniProgram) {
     seen[item.id] = true
   })
   await waitForGone(edit, '.js-ledger-more', '翻完之后按钮要消失')
-  await miniProgram.navigateBack()
+  await trace(miniProgram, 'runCustomerLedgerLoadMore 结尾 navigateBack 之前')
+  await goBackTo(miniProgram, '客户页')
+  await trace(miniProgram, 'runCustomerLedgerLoadMore 结尾 navigateBack 之后')
 }
 
 async function runNativeClearModal(miniProgram) {
   step('店铺页：点清空（原生弹窗用 mock 自动确认）')
   // 上一步停在 customer-edit，直接 reLaunch 会超时，见 backToTabRoot。
+  // 这一整段逐条打了 mark：两轮 UI 测试都在本函数里以「timeout waiting for automator
+  // response」告终，但一次在结尾的 navigateBack 之后、一次早到连 trace 都没来得及打，
+  // 需要夹逼出到底是哪条命令把工具卡住的。mark 不发 RPC，工具卡死了它也打得出来。
+  mark('runNativeClearModal: backToTabRoot 之前')
   await backToTabRoot(miniProgram)
-  const home = await miniProgram.reLaunch('/pages/index/index')
+  mark('runNativeClearModal: reLaunch(/pages/index/index) 之前')
+  const home = await goto(miniProgram, 'reLaunch', '/pages/index/index', '首页')
+  mark('runNativeClearModal: reLaunch 之后 / waitPageReady(home) 之前')
   await waitPageReady(home)
   await waitFor(home, '.js-shop', '出现 .js-shop')
+  mark('runNativeClearModal: tap(.js-shop) 之前')
   await tap(home, '.js-shop')
-  await home.waitFor(800)
-  const shop = await miniProgram.currentPage()
-  assert.ok(shop.path.indexOf('shop') >= 0, '未进入店铺页: ' + shop.path)
+  const shop = await waitForPage(miniProgram, 'pages/shop/shop', '店铺页')
+  mark('runNativeClearModal: 已进入 shop / waitPageReady(shop) 之前')
   await waitPageReady(shop)
   await waitFor(shop, '.js-clear', '出现 .js-clear')
+  mark('runNativeClearModal: tap(.js-clear) 之前')
   await tap(shop, '.js-clear')
+  mark('runNativeClearModal: tap(.js-clear) 之后 / 等 isEmpty')
   await waitFor(shop, async function () {
     const data = await shop.data()
     return data && data.isEmpty === true
   }, '店铺数据清空')
-  await miniProgram.navigateBack()
-  const backHome = await miniProgram.currentPage()
+  mark('runNativeClearModal: isEmpty 已为 true')
+  await trace(miniProgram, 'runNativeClearModal 结尾 navigateBack 之前')
+  const backHome = await goBackTo(miniProgram, '首页')
+  await trace(miniProgram, 'runNativeClearModal 结尾 navigateBack 之后')
   await waitPageReady(backHome)
   await waitFor(backHome, '.js-seed', '出现 .js-seed')
 }
@@ -729,6 +1059,268 @@ async function run() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// 自检钉子：读本文件自己的源码，钉住两条容易被下一个人顺手改掉的约定。
+// 放在 run() 之前而不是文件真正的末尾 —— 红的时候要在打开开发者工具之前就断掉，
+// 否则会在 run() 已经在飞的时候抛顶层异常，finally 里那句关窗口就执行不到了。
+// needle 一律用拼接写，不写成字面量，免得钉子自己的这几行把自己扫红。
+// ---------------------------------------------------------------------------
+const selfSource = fs.readFileSync(__filename, 'utf8')
+
+// 只剥注释，块注释换成等量空白（保持长度，不影响别处）。抄自
+// tests/no-duplicate-decls.test.js 的 stripComments —— 那边是脚本不是模块，
+// require 它会把整个测试再跑一遍，所以只能抄不能共享。
+function stripJsComments(src) {
+  return src
+    .replace(/\/\*[\s\S]*?\*\//g, function (block) { return block.replace(/[^\n]/g, ' ') })
+    .replace(/(^|[^:])\/\/[^\n]*/g, '$1')
+}
+
+function countOccurrences(haystack, needle) {
+  let n = 0
+  let at = haystack.indexOf(needle)
+  while (at >= 0) {
+    n += 1
+    at = haystack.indexOf(needle, at + needle.length)
+  }
+  return n
+}
+
+// 钉子①：不许再出现「固定睡 800 毫秒的 page.waitFor」这个**具体字面量**。
+// page.waitFor(数字) 就是 sleep(数字)（out/Page.js: isNum -> sleep），跟页面没关系；
+// 跳转比它慢就拿到跳转之前的页面，报「未进入 XX 页」这种看着像功能坏了的假失败。
+//
+// **诚实说明覆盖面**：这条只钉「waitFor 后面直接跟 800」这一个字面量，不是「禁止一切固定 sleep」。
+// 换成 sleep(2000)、page.waitFor(1500) 等等它都拦不住（实测绕过确认过）。
+// 结构性保护来自钉子③（不许直接用路由方法返回值）、钉子④（调用点必须传完整路径）
+// 和钉子⑦（封装体内必须真的有轮询确认）。**说清各自管什么**：③④ 只盯**调用点写法**，
+// 不看封装体；把 goto 的函数体整个换成「下发指令 + 睡 2 秒 + currentPage()」，③④ 照样全绿
+// （实测验证过）。补钉子⑦就是为了堵这个洞，但它也只认结构关键字，不保证语义正确。
+// 本条的价值只是：把踩过的那个坑本身钉死，别原样复发。
+assert.strictEqual(
+  countOccurrences(selfSource, 'waitFor(' + '800)'),
+  0,
+  '本文件里不许再出现「固定睡 800 毫秒的 page.waitFor」来等跳转：跳转慢一点就拿到旧页面，'
+    + '要用 waitForPage 轮询真实路径'
+)
+
+// 钉子②：runSalePickerAndSlip 里那一处「等 200 毫秒的 sale.waitFor」必须原样留着，且只有一处。
+// 它不是在等跳转 —— 那时人已经在 sale 页上没动过，等的是点「一分未收」之后
+// setData 回到视图层；页面数据里没有可以拿来判定「这次点击算完了」的标志位
+// （paidAmount 点之前点之后都是字符串，分不出"还没变"和"变成了 0"），
+// 所以这里保留一小段固定等待是有意的，不是漏改。
+// 全局把 waitFor(数字) 换成轮询的时候，别把这一处也顺手换掉。
+assert.strictEqual(
+  countOccurrences(selfSource, 'sale.waitFor(' + '200)'),
+  1,
+  'runSalePickerAndSlip 里那一处「等 200 毫秒的 sale.waitFor」应当恰好保留 1 次：'
+    + '它等的是 setData 回视图层，不是等跳转'
+)
+
+// 钉子③：路由方法的返回值一律不许直接用，必须过 goto / goBackTo。
+// 依据是源码事实：changeRoute 的等待是固定 sleep(3e3)，睡够就返回、不是完成信号
+// （由 tests/automator-contract.test.js 钉着）。
+// 注：曾经引用过一轮 main 版本的 TypeError 当实测证据，那条证据已判定不干净并撤回，
+// 理由写在 goto 函数上方。这条钉子不依赖它。
+// 所以除了 goBackTo 内部那一次 navigateBack，本文件不许再直接调这五个路由方法。
+// 这条红了 = 有人又直接用返回值了，请改走 goto / goBackTo。
+// needle 一律拼出来，不写成字面量 —— 下面这张名单本身就在本文件里，写成字面量会把自己数进去。
+const routeSource = stripJsComments(selfSource)
+;[
+  ['navigateTo', 0],
+  ['switchTab', 0],
+  ['reLaunch', 0],
+  ['redirectTo', 0],
+  ['navigateBack', 1]
+].forEach(function (pair) {
+  assert.strictEqual(
+    countOccurrences(routeSource, 'miniProgram.' + pair[0] + '('),
+    pair[1],
+    '直接调用 miniProgram.' + pair[0] + '(...) 的次数应当是 ' + pair[1] + ' —— 路由方法的返回值不可信'
+      + '（changeRoute 只是固定睡 3 秒），一律走 goto / goBackTo 自己确认到位'
+  )
+})
+
+// 上面那张名单只挡点号写法。方括号写法（miniProgram['switchTab'](…)）能绕过去，
+// 所以再钉一条：本文件里 miniProgram[ 这种下标调用只允许有一处 —— goto 内部那句
+// miniProgram[method](url)。多出来的多半就是绕过上面名单的路由直调。
+assert.strictEqual(
+  countOccurrences(routeSource, 'miniProgram' + '['),
+  1,
+  '下标形式的路由直调（miniProgram 后面直接跟方括号）只允许 1 处 —— 就是 goto 内部'
+    + '那句用下标取方法名的调用。多出来的多半是用方括号写法绕过了「不许直接用路由方法返回值」这条'
+)
+
+// 钉子④：waitForPage / goto 的调用点必须传 pages/ 开头的完整路径，不许退回短片段。
+// 判据是完整路径精确相等；传 'shop' 这种短片段在今天能work纯属路径命名的偶然
+// （'record' 同时是 pages/records/records 和 pages/record-edit/record-edit 的子串）。
+// 这条红了 = 有人图省事传了短片段，请补成完整路径。
+var badTargets = []
+var reWaitForPage = /waitForPage\(miniProgram,\s*'([^']*)'/g
+var hit = null
+while ((hit = reWaitForPage.exec(routeSource)) !== null) {
+  if (hit[1].indexOf('pages/') !== 0) badTargets.push('waitForPage -> ' + JSON.stringify(hit[1]))
+}
+var reGoto = /goto\(miniProgram,\s*'[a-zA-Z]+',\s*'([^']*)'/g
+while ((hit = reGoto.exec(routeSource)) !== null) {
+  if (hit[1].indexOf('/pages/') !== 0) badTargets.push('goto -> ' + JSON.stringify(hit[1]))
+}
+assert.strictEqual(
+  badTargets.length,
+  0,
+  '这些调用点传的不是 pages/ 开头的完整路径（判据是精确相等，短片段会静默匹配到别的页面）：\n'
+    + badTargets.join('\n')
+)
+
+// 钉子⑦：goto / goBackTo / waitForPage 的**封装体本身**必须真的在轮询确认，不能退化成
+// 「下发指令 + 睡一觉 + 读一次」。
+// 钉子③④ 只盯调用点写法：实测把 goto 的函数体换成
+//     await miniProgram[method](url); await sleep(2000); return await miniProgram.currentPage()
+// 之后，③④ 仍然全绿 —— 因为调用点一个字没改。这条就是堵那个洞。
+// **局限**：它只认结构关键字（deadline / 轮询 / 转调），不校验语义；有人把 deadline 设成
+// 1 毫秒它照样绿。它挡的是「整体退化成固定 sleep」这一种，不是所有写坏的方式。
+;[
+  ['waitForPage', ['deadline', 'sleep(200)', 'pollCurrentPage']],
+  ['goBackTo', ['deadline', 'sleep(200)', 'pollPageStack']],
+  ['goto', ['waitForPage']]
+].forEach(function (pair) {
+  const name = pair[0]
+  const at = routeSource.indexOf('async function ' + name + '(')
+  assert.ok(at >= 0, '钉子⑦：找不到 ' + name + ' 的定义，钉子失效了')
+  const end = routeSource.indexOf('\n}', at)
+  assert.ok(end > at, '钉子⑦：找不到 ' + name + ' 的函数体结尾，钉子失效了')
+  const body = routeSource.slice(at, end)
+  pair[1].forEach(function (needle) {
+    assert.ok(
+      body.indexOf(needle) >= 0,
+      '钉子⑦：' + name + ' 的函数体里找不到 ' + JSON.stringify(needle) + ' —— 封装体可能被退化成了'
+        + '「下发指令 + 固定 sleep + 读一次」。这类退化钉子③④看不见（它们只盯调用点写法），'
+        + '所以必须由本条拦下。要改封装体的实现方式，连同本条一起改，别直接删。'
+    )
+  })
+})
+
+// 钉子⑧：automator 的 pageMap 字段名。
+// freshCurrentPage 里直接摸 miniProgram.pageMap.delete(...) —— 这是**非公开字段**，
+// automator 改名的话不会让契约测试变红，而是在跑到那一行时抛运行期 TypeError
+// （「Cannot read properties of undefined (reading 'delete')」），现场看不出是升级导致的。
+// 所以在这里先确认它存在、且是个带 delete 的 Map。
+const MiniProgramCls = require('miniprogram-automator/out/MiniProgram').default
+// 构造函数会往 connection 上挂三个监听，所以喂一个只有 on() 的假连接；不发任何 RPC。
+const probeInstance = new MiniProgramCls({ on: function () {} })
+assert.ok(
+  probeInstance.pageMap && typeof probeInstance.pageMap.delete === 'function',
+  'MiniProgram 实例上没有带 delete 的 pageMap 字段了（automator 可能改了名或换了实现）。'
+    + 'tests/ui.test.js 的 freshCurrentPage 直接用 miniProgram.pageMap.delete(pageId) 清缓存，'
+    + '字段没了会在运行期抛 TypeError 而不是让契约测试变红，所以在这里先拦一道。'
+)
+
+// 钉子⑥：项目目录里不许留运行日志之类的产物。**这是本仓最隐蔽的一个坑。**
+//
+// 【为什么】project.config.json 里 compileHotReLoad = true，开发者工具还带一个
+// wxfilewatcher 进程在监听整个项目目录。跑 UI 测试时往这个目录里写文件 —— 最常见的就是
+// `npm run test:ui > out.txt` 这种输出重定向，shell 是**流式**写入的，一轮十分钟日志一直在长
+// —— 会持续触发热重载：小程序被重启，页面栈清空、回到入口页 pages/index/index。
+// 此后任何等待都等不到目标页，而报错现场看上去只是「没跳过去」，**完全看不出真实原因**。
+//
+// 【实测对照】同一份代码（tests/ui.test.js sha1 35db9459…），唯一变量是日志写在哪：
+//   · 日志写在项目根目录 → 红。现场是：
+//       等「进入流水页」超时（30 秒）：期望 pages/records/records，当前页 pages/index/index，
+//       页面栈 [pages/index/index#8]，runtime栈(1)=[pages/index/index]
+//     栈深 1 且停在入口页、pageId 还比同期健康轮更大（新建的实例）= 小程序被重启过。
+//   · 日志改写到项目目录之外 → 绿。
+//
+// 【热重载解释不了什么，别过度归因】热重载的现场签名是「栈深 1、停在入口页、pageId 变大
+// （新建实例）」。曾经另有一处 runNativeClearModal 结尾退栈失败，现场是
+//     navigateBack 之前 stack(2)=[pages/index/index#15 > pages/shop/shop#16]
+//     navigateBack 之后 stack(2)=[pages/index/index#15 > pages/shop/shop#16]
+// 栈深没变、pageId 前后完全相同 —— 不符合热重载的签名，**热重载解释不了它**。那一处
+// 至今原因未定（R1/R2 未定），不要因为找到了热重载就把它一并算进去。
+//
+// 【正确做法】把输出重定向到项目目录**之外**（系统临时目录之类）：
+//     npm run test:ui > "$TMPDIR/ui.txt" 2>&1; echo "EXIT=$?"
+//
+// 【这条钉子的局限，别高估它】
+//   · 只查项目根目录，**不递归** —— 写进任何子目录照样触发热重载，钉不住；
+//   · 只认 .txt / .log / .out 三种后缀 —— 换个文件名就漏；
+//   · 只在**进程启动那一刻**查一次 —— 真正危险的是「跑测试期间往项目目录内写任何文件」，
+//     那是个动态过程，静态断言在原理上就覆盖不了。
+//   它能挡的只是最常见的那一种踩法：重定向的目标文件在 node 启动前就已经被 shell 创建。
+//   钉不住的那些，只能靠上面这段注释和排查清单第 10 条。
+const runArtifacts = fs.readdirSync(projectPath).filter(function (name) {
+  return /\.(txt|log|out)$/i.test(name)
+})
+assert.strictEqual(
+  runArtifacts.length,
+  0,
+  '项目根目录里有运行产物：' + runArtifacts.join(', ')
+    + '。开发者工具在监听这个目录（project.config.json 里 compileHotReLoad=true，'
+    + '外加 wxfilewatcher 进程），跑测试期间往这里写文件会触发热重载 —— 小程序被重启、'
+    + '页面栈清空回入口页 pages/index/index，于是所有等待都等不到目标页，'
+    + '而报错看上去只是「没跳过去」，查不到真正原因。'
+    + '请把输出重定向到项目目录之外再跑，例如 npm run test:ui > "$TMPDIR/ui.txt" 2>&1'
+)
+
+// 钉子⑤：goBackTo 必须在 navigateBack **之前**取页面栈基准。
+//
+// 这是上一轮唯一真正栽进去的坑：老的 goBack 在 navigateBack() 返回之后才读基准栈深，
+// 而 navigateBack() 自己已经睡了 3 秒、栈往往早就变浅了，于是拿变浅后的值再等
+// 「比这更浅」，永远等不到，整轮挂死 30 秒。
+// 在此之前这条只有注释在管 —— 有人把取基准那行挪到 navigateBack 之后，
+// 前面四条钉子全都照样绿，等于没有保护。所以这里按**源码里的先后位置**钉死。
+const goBackToBody = (function () {
+  const at = routeSource.indexOf('async function goBackTo(')
+  assert.ok(at >= 0, '找不到 goBackTo 的定义，钉子⑤失效了')
+  const end = routeSource.indexOf('\n}', at)
+  assert.ok(end > at, '找不到 goBackTo 的函数体结尾，钉子⑤失效了')
+  return routeSource.slice(at, end)
+})()
+
+const baselineAt = goBackToBody.indexOf('rawPageStack(')
+const navBackAt = goBackToBody.indexOf('miniProgram.' + 'navigateBack(')
+assert.ok(
+  baselineAt >= 0,
+  '自检：goBackTo 体内应当读一次 rawPageStack 当基准，没找到 —— 钉子⑤失效了'
+)
+assert.ok(
+  navBackAt >= 0,
+  '自检：goBackTo 体内应当有一次 navigateBack 调用，没找到 —— 钉子⑤失效了'
+)
+assert.ok(
+  baselineAt < navBackAt,
+  '基准必须取在 navigateBack 之前：现在读 rawPageStack 的位置（' + baselineAt
+    + '）排在 navigateBack（' + navBackAt + '）之后。'
+    + 'navigateBack() 自带 3 秒睡眠，返回时栈往往已经变浅，'
+    + '这之后再取"基准"就等于拿变浅后的值去等"比这更浅"，永远等不到 —— 上一轮就是这么挂死的'
+)
+
+// 自检（钉住钉子④的判据本身）：上面两个正则必须真的扫到了调用点。
+// 不能用 countOccurrences 来做这个自检 —— 它数的是「函数名 + miniProgram,」的出现次数
+// （还会把函数定义本身和 goto 内部那次调用数进去），而钉子④真正依赖的是**正则匹配到的
+// 带引号字面量**。两者数的不是一回事：正则哪天写坏了匹配不到任何东西，badTargets 会是空的、
+// 钉子④假绿，而 countOccurrences 那个数一点不会变，照样放行。所以这里直接数正则的战果。
+var waitForPageTargets = []
+reWaitForPage.lastIndex = 0
+while ((hit = reWaitForPage.exec(routeSource)) !== null) waitForPageTargets.push(hit[1])
+assert.strictEqual(
+  waitForPageTargets.length,
+  4,
+  '自检：waitForPage 的字面量调用点应当正好 4 处（4 处 tap 触发的跳转），实为 '
+    + waitForPageTargets.length + ' 处：' + JSON.stringify(waitForPageTargets)
+    + ' —— 数目对不上说明要么正则失效了（钉子④是假绿的），要么调用点增减了，两种都要人看一眼'
+)
+
+var gotoTargets = []
+reGoto.lastIndex = 0
+while ((hit = reGoto.exec(routeSource)) !== null) gotoTargets.push(hit[1])
+assert.strictEqual(
+  gotoTargets.length,
+  8,
+  '自检：goto 的字面量调用点应当正好 8 处，实为 ' + gotoTargets.length + ' 处：'
+    + JSON.stringify(gotoTargets)
+    + ' —— 数目对不上说明要么正则失效了（钉子④是假绿的），要么调用点增减了，两种都要人看一眼'
+)
+
 run().catch(function (error) {
   console.error(error && error.stack ? error.stack : error)
   console.error('')
@@ -749,5 +1341,8 @@ run().catch(function (error) {
   console.error('8. wx.showModal 是系统弹窗，自动化点不到内部按钮，脚本里用 mockWxMethod 自动确认')
   console.error('9. 送货单弹层在 virtualHost 自定义组件里，页面级选择器够不着（page.$$ / >>> /')
   console.error('   selectComponent 实测都是 0），用例核对的是页面数据里的 slip，别再写回 .js-slip')
+  console.error('10. **不要把测试的输出/日志写在项目目录里**（含 > out.txt 这种重定向）。工具在监听')
+  console.error('    这个目录且开了热重载，写入会让小程序重启、页面栈清空回入口页，之后所有等待都')
+  console.error('    等不到目标页，报错却只显示「没跳过去」。把输出重定向到项目目录之外再跑。')
   process.exit(1)
 })
