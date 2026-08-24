@@ -31,7 +31,7 @@
   - 怎么修：`recomputeAggregates`（见下面「账本升级」一节）。它在一个事务里翻完当前账套的全部记录，重新 `foldAccountTerms` / `foldTotalTerms` 写回账本文档，有界 `RECOMPUTE_MAX_RECORDS` 5000 条、判条数不判页数，`dryRun: true` 只算不写，返回包永远带 before/after diff。
     - **它按集合的现状重折叠，所以它不修 B1。** 如果集合里某张退货单的 `paidAmount` 本身就是错的，重算会忠实地把这个错数再算一遍。退货份额的整体重算（`repairReturnSplits`）只发生在老数组搬进集合的那一刻（`migrateRecords`）；已经在集合里的错值只能靠改单据本身来修（`updateRecord` / `deleteRecord` 内置整体重算）。**不要拿 `recomputeAggregates` 去修错账。**
   - 还没迁移的老账本没有这两个字段，`cloneTerms` 只会把它补成空累加器 —— 那样全店金额和每个客户的欠款会一路回传成 0，而 `getSlip` 走 `receivableAt` 算得对，同一笔钱在送货单上印 200、在客户页显示 0。所以 `publicListsOf` 的 `recordsPending` 分支必须拿刚自愈出来的老数组现折一次（`foldAccountTerms` / `foldTotalTerms`），数组已经在内存里，零额外 IO。
-- **事务提交之后不允许有任何可能失败的 IO。** 回传要用的东西必须在事务里备齐。提交后再报一次错，客户端看到的是「记账失败」，店员会再点一次，账就记两遍。结构上靠签名保证：`publicListsOf(shopId, doc, opts)` 是纯内存函数、**签名里没有 db**（`opts` 只是 `{dayStart, recentLimit}` 这样的纯数据），记账返回处只准调它；唯一会读 `ledger_records` 的 `attachRecent(db, ...)` 只准从只读 action 调。**记账回传只有四张表 + 聚合投影，一条流水都没有**——2b-2 起也不再有 `recordDelta`：分页之后客户端每个列表都是服务端取的、每个金额都来自 `accounts` / `totals` 投影，delta 零消费者，留着一个没人用的算钱字段就是给下一个人留坑。记账之后客户端只把本地的 `dataVersion` 标脏，页面 `onShow` 时再决定要不要重取，**不在提交之后再发一次可能失败的请求**。
+- **事务提交之后不允许有任何可能失败的 IO。** 回传要用的东西必须在事务里备齐。提交后再报一次错，客户端看到的是「记账失败」，店员会再点一次，账就记两遍。结构上靠签名保证：`publicListsOf(shopId, doc, opts)` 是纯内存函数、**签名里没有 db**（`opts` 只是 `{dayStart, recentLimit}` 这样的纯数据），记账返回处只准调它；唯一会读 `ledger_records` 的 `attachRecent(db, ...)` 只准从只读 action 调。**记账回传只有四张表 + 聚合投影，一条流水都没有**——2b-2 起也不再有 `recordDelta`：分页之后客户端每个列表都是服务端取的、每个金额都来自 `accounts` / `totals` 投影，delta 零消费者，留着一个没人用的算钱字段就是给下一个人留坑。记账之后客户端只把本地的 `dataVersion` 标脏，页面 `onShow` 时再决定要不要重取，**不在提交之后再发一次可能失败的请求**。**唯一的书面例外是商品图清理**：事务提交后 best-effort 删掉作废的图，错误被吞干净、最坏只留一个孤儿文件，见下面「商品图与云存储」。
 - 分页协议（`listRecords`）：
   - 入参 `{ type?, customerId?, cursor?, limit? }`，返回 `{ records[], cursor, hasMore }`，`sortKey` 倒序。
   - `limit` 由纯函数 `apply.clampPageLimit` 收口：不传 / 非法（NaN、0、负数）**一律给缺省 20**（不是钳到 1），超过上限才钳到 100。集合查询、未迁移老账本的内存切片、小程序内存模式**三处用同一份定义** `apply.pageRecords`，等价性由 `tests/ledger-records.test.js` 的 T-A2 逐字段钉住。
@@ -57,6 +57,7 @@
     4. `bookId` ASC, `saleOrderId` ASC, `sortKey` ASC —— 查一张销售单的退货（整体重算用）
     5. `bookId` ASC, `type` ASC, `productId` ASC, `skuId` ASC, `sortKey` DESC —— `latestPurchases`
     6. `shopId` ASC —— **给 2b-3 的 `deleteShop` 清理预留，当前没有任何查询使用**（`ledger-records.js` 里除 #6 外每条查询都带 `bookId` 前缀）
+- 商品图：图片二进制放云开发存储，商品记录只存 fileID（`shops/{shopId}/products/` 前缀），不进 `ledgers` 文档、不通过 `ledger` 云函数传输。上传、权限、前缀校验、清理边界和容量口径见下面「商品图与云存储」。
 
 建店、加成员、选店、店主删店在低频页，不进 tab，不挂全局组件。店铺页按有没有店分流：没店只展示创建和复制身份，有店后才展示本店、切换、账本和删除。tab 仍留主包。`lazyCodeLoading` 保持开启。`cloudfunctions/` 不进小程序包。
 
@@ -74,7 +75,7 @@
 
    部署 `node scripts/wxcloud-deploy-ledger.js` 末尾也会跑同一段。做法是 `@wxcloud/cli` 内部 API：`tcbDescribeDatabaseACL` 读当前标签，不是 `ADMINONLY` 再用 `tcbModifyDatabaseACL` 改。**不要传 region**，一传 `Describe` 会报 `UnknownParameter`。幂等：已经是 `ADMINONLY` 的表会跳过。
 
-   标签对照：`ADMINONLY` = 仅管理端可读写；`PRIVATE` = 仅创建者可读写；`ADMINWRITE` = 仅管理端可写；`READONLY` = 所有人可读、仅创建者可写。官方还有第三方平台 HTTP 接口 [dbmodifyacl](https://developers.weixin.qq.com/doc/oplatform/openApi/cloudbase-batch/db-mgnt/api_setpermission.html)，需要 `component_access_token`，本仓库不走那条。
+   标签对照：`ADMINONLY` = 仅管理端可读写；`PRIVATE` = 仅创建者可读写；`ADMINWRITE` = 仅管理端可写；`READONLY` = 所有人可读、仅创建者可写。官方还有第三方平台 HTTP 接口 [dbmodifyacl](https://developers.weixin.qq.com/doc/oplatform/openApi/cloudbase-batch/db-mgnt/api_setpermission.html)，需要 `component_access_token`，本仓库不走那条。同一条脚本现在**也会把云存储权限设为 `READWRITE`**（商品图用：所有用户可读、仅创建者可写读，做法是 `tcbGetStorageACL` / `tcbModifyStorageACL`，同样不传 region），为什么是这个标签而不是 `ADMINONLY` 见下面「商品图与云存储」。
 4. 给 `ledger_records` 建上面「集合」那条里列的 **6 条索引**（复合索引，字段顺序和升降序都不能改；漏一条就会退化成全表扫，条数一多就超时）。**这一步不是可选的**：#1–#5 是流水的每一次查询都要用的；#6 当前没有查询用，但是 2b-3 清理的前置，一起预建。
 
    不要在控制台手点。用微信云托管 CLI 的 FlexDB 接口，脚本已写好且可重复执行：
@@ -264,6 +265,24 @@ payload: { mode: 'snapshots', limit?: 50 }
 
 快照存的是四张有界的表 + 聚合累加器 + 账套号，**不复制流水**：老账套原地不动，清空只是把指针换到新账套（O(1)）。所以恢复要快照带 `bookId`，账本升级前存的快照没有它 —— 转换见上面「账本升级」的 `mode:'snapshots'`，**每家店的每一份快照都要转**（只转最近一份会留下混合状态，将来做付费恢复时是个雷）。
 
+## 商品图与云存储
+
+商品记录的 `image` 字段存的是**云存储 fileID**（`cloud://<env>.<bucket>/shops/<shopId>/products/<uid>.jpg`），空串就是没有图。图片二进制**不进 `ledgers` 文档、不过 `ledger` 云函数**：文档有大小上限，而 `getLedger` 是全量回传四张表的，一张 100KB 的 base64 塞进去就是每一次打开账本多一份固定开销；二进制走云存储自己的上传 / 下载通道，账和图各走各的路。
+
+上传链路全在客户端：编辑商品页 `wx.chooseMedia`（`compressed`）→ 页内隐藏 `<canvas type="2d">` 压缩（最长边 600px、只缩不放、JPEG 0.7，成品一般 50~150KB，见 [`utils/product-image.js`](../utils/product-image.js)）→ `wx.cloud.uploadFile` 直传 `shops/{shopId}/products/<uid>.jpg`，fileID 进表单随 `saveProduct` 入库。内存模式 / 未选店时 `canUseImage()` 为假、整块上传 UI 不渲染——本地没有云存储，不做假降级。展示侧 `<image src="cloud://…">` 直接渲染 fileID（`store.initCloud` 已 `wx.cloud.init`，客户端认得自己环境的 `cloud://` 协议）：商品 tab 卡片 112rpx 缩略图（lazy-load，无图 / 加载失败灰底首字占位），销售 / 进货选货弹层 72rpx（无图不渲染）。
+
+读与权限：云存储权限是 **`READWRITE`**（所有用户可读、仅创建者可写读），不是六张业务表那个 `ADMINONLY`——图要客户端拿 fileID 直接渲染、上传者就是创建者所以能传，两条路都不经过云函数，管理端权限会把它们全堵死。设置并进 `node scripts/wxcloud-ensure-acl.js`（`tcbGetStorageACL` / `tcbModifyStorageACL`，同样**不传 region**），部署脚本末尾同跑。能读的前提是本小程序的登录用户；fileID 不可枚举，跨店读到别家的图需要先拿到那个 fileID——已接受的风险，挡住它要给每一次渲染换临时链接，代价和风险不成比例。
+
+服务端校验只有一条，钉在事务开始之前：`saveProduct` 的 `image` 必须落在 `shops/{shopId}/products/` 前缀（`ledger-core.js` 的 `validShopImageFileId`）。不做这条的后果不止「挂一张别店的图」：挂上之后换图会让服务端把旧 fileID 当作废清理——等于借本店的换图操作删别店的文件。这个前缀是客户端 `buildCloudPath` 和服务端 `validShopImageFileId` 的共享约定，两边都有测试互钉，单边改当场红。
+
+清理挂在 mutation 上，且**在事务提交之后**：换图 / 清图（`saveProduct`）、删商品（`deleteProduct`）、恢复清空（`restoreCleared`，作废的是清空之后新记的那批商品的图）都把作废 fileID 放进 `result.obsoleteImages`，`dispatch` 在事务提交后 best-effort 删除（`index.js` 注入的 `storage.deleteFiles` 把一切错误吞干净、只 `console.warn`；云存储单次删除上限 50 个，按页删）。这是「事务提交之后零 IO」不变量的**唯一书面例外**，配当例外的理由写在 [`ledger-core.js`](../cloudfunctions/ledger/ledger-core.js) dispatch 的注释里：清理结果不进回传、错误被吞干净、最坏失败是孤儿文件而不是错账；它也不能挪到事务前或塞进事务——事务失败回滚后商品仍挂着这张图，先删就是把活图删成死链。**不清的三个**：`clearAll`（商品原样进了快照，删了文件，「恢复清空前数据」恢复回来的就是死链）、`loadSeed`（开发演示路径，为种子数据挂一套清理不值当）、`deleteShop`（与 `ledger_records` 的 2b-3 孤儿清理是同一类删店遗留，一起留给以后，见下面「删除店铺」）。
+
+孤儿文件（存储里有、没有任何商品引用）的诚实来源：选图上传成功后放弃表单、保存失败、清理调用失败、`deleteShop`。纯存储泄漏，不是错账；按下面的容量口径，它的量级也到不了值得专门做巡检的程度。
+
+上线顺序沿用既有规矩：**先部署云函数，再发小程序**。新客户端对老云函数的容忍是 `image` 字段被旧内核丢弃（商品还在、图丢了，重新编辑可以补上），不破坏旧功能；老客户端对新云函数无感，整个商品图只是缺 UI。
+
+容量口径：单图约 100KB，每店按一百张商品算 ≈ 10MB；基础套餐 2GB 容量（存储 + 数据库合计）约够 200 家店。更早撞到的墙是每月 5GB 的 CDN 下载流量——图从云存储读出来也走它。
+
 ## 删除店铺
 
 只有当前店的店主能删，且**必须带新版 `apiVersion`**（`VERSIONED_DESTRUCTIVE`，见上面版本门那条——不可逆动作不许由老客户端在冻结窗口里发起）。删的是整店：`shops` 文档、全部 `members`、当前 `ledgers`、该店在 `ledger_clears` 里的快照。**目前不清 `ledger_records`**（2b-3 处理，要按 `shopId` 分批删，单独设计，别顺手实现）：留下的孤儿记录按 `bookId` 和 `shopId` 都查不到——账本文档没了，谁也拿不到那个 `bookId`——所以它是纯存储泄漏，不产生任何错数；但**残留文档里带着 `customerName` / `customerPhone` / `customerAddress`**，店主点了「删除店铺」之后这些个人信息还在库里，2b-3 清理不做的每一天都是这个代价。索引 #6（`shopId` ASC）就是给那次清理预建的，当前没有任何查询使用。店员只能看见自己加入的店，不能删。删掉后小程序不再列出该店，也不能用「恢复清空前数据」找回。误开的测试店用这个；只想抹账、店还要留，用「清空数据」。
@@ -295,3 +314,6 @@ payload: { mode: 'snapshots', limit?: 50 }
 - 活账套还没迁完就去跑 `mode:'snapshots'`。快照转换是加分项，不能挡住关键路径，服务端直接拒绝。
 - 为账本升级再加一个冻结开关。`assertRecordsReady` 已经在挡未迁移账本的每一条写，两个冻结口径迟早会打架。
 - 把 `settledAmount` 对「退货缺两个结算字段」的回推改成 0。会折出负欠款，一个负账户就让这家店从此退不了货、改不了单、删不了单。
+- 把图片 base64 / 二进制塞进 `ledgers` 文档。文档有大小上限，而 `getLedger` 是全量回传四张表的，每张图都变成每次打开账本的固定开销；图放云存储、记录只存 fileID，见上面「商品图与云存储」。
+- 改掉商品图 `shops/{shopId}/products/` 路径前缀。客户端 `buildCloudPath` 和服务端 `validShopImageFileId` 靠它对齐，两边测试互钉：单边改要么让合法 fileID 被服务端拒掉，要么让前缀校验形同虚设。
+- 绕过 `saveProduct` 直接改商品 `image`。前缀校验和旧图清理都挂在 mutation 上，绕开它挂进去的 fileID 没人校验、被换掉的旧图也没人删。
