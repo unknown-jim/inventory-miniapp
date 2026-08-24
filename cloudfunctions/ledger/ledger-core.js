@@ -252,10 +252,12 @@ function requireOwner(members, shopId, openid) {
 //
 // 名单在集合 platform_admins，_id 就是 openid，所以这里是一次 doc().get()，不用索引。
 // **fail-closed**：db.getPlatformAdmin 把「文档不存在」和「读失败」都返回 null，两种都拒绝。
-async function requirePlatformAdmin(db, openid) {
+// what 只影响错误文案：这道门现在不只管账本升级，还管删店后的流水清理，
+// 报「账本升级只能由平台运营方执行」会指错地方。不传就是原来那句，老调用点不动。
+async function requirePlatformAdmin(db, openid, what) {
   const admin = db.getPlatformAdmin ? await db.getPlatformAdmin(openid) : null
   if (!admin) {
-    throw new Error('账本升级只能由平台运营方执行')
+    throw new Error((what || '账本升级') + '只能由平台运营方执行')
   }
   return admin
 }
@@ -359,9 +361,10 @@ function isMutation(action) {
 const API_VERSION = 2
 const VERSIONED_READS = ['getLedger', 'getSlip', 'migrateLocal', 'listRecords', 'getRecord']
 // 版本门的第二条理由，和上面那条（会不会回传账本）**不是一回事**：deleteShop 是
-// 不可逆动作（shops / members / ledgers / ledger_clears 全删，只留查不回 bookId 的
-// 孤儿 ledger_records），冻结窗口里店主到处撞「请更新小程序到最新版本」、最容易
-// 乱点的时候，删店按钮就在同一个店铺页上。可逆的读写撞门还能重试，不可逆的
+// 不可逆动作（shops / members / ledgers / ledger_clears 全删，ledger_records 里
+// 该店的流水也在提交之后按 shopId 清掉，见下面 deleteShop 分支），冻结窗口里店主
+// 到处撞「请更新小程序到最新版本」、最容易乱点的时候，删店按钮就在同一个店铺页上。
+// 可逆的读写撞门还能重试，不可逆的
 // 动作不许由老客户端在冻结窗口里发起。单列一个数组而不是并进 VERSIONED_READS，
 // 就是为了让这两条理由各管各的名单。
 const VERSIONED_DESTRUCTIVE = ['deleteShop']
@@ -371,9 +374,18 @@ const VERSIONED_DESTRUCTIVE = ['deleteShop']
 function isOpsAction(action) {
   return migrate.OPS_ACTIONS.indexOf(action) >= 0
 }
+// 删店之后没清完的流水，由平台运营方接着清（2b-3）。和账本升级三动作共用同一道
+// 白名单门，但**不并进 OPS_ACTIONS**：那三个是账本升级，这个不是，两份名单各自
+// 说得清自己是什么。它同样是不可逆动作，却**不进 VERSIONED_DESTRUCTIVE** ——
+// 那份名单管的是「不许由老客户端发起」，而这个 action 客户端一个入口都没有，
+// 真正的门是 requirePlatformAdmin；版本门由下面的 isPlatformAction 一并带上。
+const PLATFORM_ACTIONS = ['purgeDeletedShopRecords']
+function isPlatformAction(action) {
+  return isOpsAction(action) || PLATFORM_ACTIONS.indexOf(action) >= 0
+}
 function needsApiVersion(action) {
   return VERSIONED_READS.indexOf(action) >= 0 || VERSIONED_DESTRUCTIVE.indexOf(action) >= 0
-    || isOpsAction(action) || isMutation(action)
+    || isPlatformAction(action) || isMutation(action)
 }
 
 async function membersOfShop(db, tx, shopId) {
@@ -381,6 +393,35 @@ async function membersOfShop(db, tx, shopId) {
     return tx.listMembersByShop(shopId)
   }
   return db.listMembersByShop(shopId)
+}
+
+// 删店之后没清完的流水，由平台运营方带同一个 shopId 接着清（2b-3）。
+// 幂等、可反复调：判据只有 shopId 一个，回包 remaining 为 true 就再调一次。
+// 这次改动之前删掉的店留下的存量孤儿也走这里补清，前提是你还知道那个 shopId ——
+// **找不回 shopId 的老孤儿本次不处理**：那要全表扫 ledger_records 找「shops 里
+// 已经没有的 shopId」，是另一件事。
+//
+// **两道前置检查判的是「这家店真的没了」，不是「调用者有没有权限」**（权限是上面
+// 那道白名单门的事）。这个 action 会把一个 shopId 名下的流水全删光，误加在一家活店
+// 上就是一次不可恢复的抹账：聚合还在、流水没了，recomputeAggregates 也修不回来
+//（它按集合现状重折叠）。所以 shops 和 ledgers 里**只要还有一份文档在就直接拒绝**，
+// 两个都查，不是二选一 —— 半删状态（店没了账本还在，或反过来）同样要拒绝，
+// 那说明上一次删店没走完，先弄清楚再说，不能顺手把流水删了。
+async function purgeDeletedShopRecords(db, shopId, payload) {
+  payload = payload || {}
+  const shops = await db.listShopsByIds([shopId])
+  if (shops && shops.length) {
+    throw new Error('店铺 ' + shopId + ' 还在，不能清它的流水：这个动作只清已经删掉的店')
+  }
+  const ledger = await db.getLedger(shopId)
+  if (ledger) {
+    throw new Error('店铺 ' + shopId + ' 的账本还在，不能清它的流水：先确认这家店确实已经删干净了')
+  }
+  const got = await records.purgeByShop(db.recordsCtx(), shopId, {
+    maxRecords: payload.maxRecords,
+    deadline: Date.now() + records.PURGE_BUDGET_MS
+  })
+  return Object.assign({ shopId: String(shopId) }, got)
 }
 
 async function dispatch(input) {
@@ -551,7 +592,12 @@ async function dispatch(input) {
   }
 
   if (action === 'deleteShop') {
-    return db.runTransaction(async function (tx) {
+    // 墙钟从进这个分支起算，**不用上面那个 now**：now 是调用方传进来的记账时刻
+    //（测试里是固定值），这里要的是「这次函数调用还剩多少时间」。从事务之前起算
+    // 而不是从事务之后，是为了让「事务 + 清理」的总时长有上界 —— 事务慢了，
+    // 留给清理的预算就自动变少，不会两段各自算各自的、加起来撞云端硬超时。
+    const startedAt = Date.now()
+    const result = await db.runTransaction(async function (tx) {
       const members = await membersOfShop(db, tx, shopId)
       const member = requireMember(members, shopId, openid)
       if (member.role !== 'owner') {
@@ -609,12 +655,45 @@ async function dispatch(input) {
       await tx.removeShop(shopId)
       return { deleted: true, shopId: shopId }
     })
+    // 事务提交之后才清这家店的流水（2b-3）。三条理由写在 records.purgeByShop 上方，
+    // 缺一条这段就该换个写法：塞不进事务 / 先清后删会让活店掉流水（那是错数）/
+    // 提交之后的失败不许变成「删店失败」。
+    //
+    // 所以这里**捕获一切**：purgeByShop 自己不抛，但 db.recordsCtx() 本身也可能抛
+    //（真云上是一次瞬时故障，tests/ledger-records.test.js 第 13 节那条「提交后的读
+    // 失败绝不能变成记账失败」用的就是这个替身）。店已经没了，回包必须照样是
+    // deleted: true —— 报错只会让店主以为没删成，再点一次还报「不是该店成员」。
+    let purge = null
+    try {
+      purge = await records.purgeByShop(db.recordsCtx(), shopId, {
+        deadline: startedAt + records.PURGE_BUDGET_MS
+      })
+    } catch (error) {
+      purge = {
+        removed: 0, remaining: true, stopped: 'error',
+        error: String((error && error.message) || error || '')
+      }
+    }
+    if (purge.remaining) {
+      // 没清完是**预期内**的（大店一次调用删不完），但必须留下痕迹：店主没有任何
+      // 入口能接着清，只有平台运营方能。日志里要带够接着清所需的全部信息。
+      console.warn('[ledger] deleteShop 流水没清完 shop=' + shopId
+        + ' removed=' + purge.removed + ' stopped=' + purge.stopped
+        + (purge.error ? ' error=' + purge.error : '')
+        + ' —— 由平台运营方带同一个 shopId 调 purgeDeletedShopRecords 接着清')
+    }
+    return Object.assign({}, result, { purge: purge })
   }
 
-  // 账本升级的三个运维动作。**平台运营方白名单**，不是 owner-gated（理由见
-  // requirePlatformAdmin 上方）。客户端一个入口都没有：从开发者工具 Console 直接
-  // wx.cloud.callFunction 调。加个隐藏按钮就等于把「一键重写全店流水」发到线上。
-  if (isOpsAction(action)) {
+  // 平台运营方动作：账本升级三个 + 删店后的流水清理。**平台运营方白名单**，
+  // 不是 owner-gated（理由见 requirePlatformAdmin 上方）。客户端一个入口都没有：
+  // 从开发者工具 Console 直接 wx.cloud.callFunction 调。加个隐藏按钮就等于把
+  // 「一键重写全店流水」「一键删光一家店的流水」发到线上。
+  if (isPlatformAction(action)) {
+    if (action === 'purgeDeletedShopRecords') {
+      await requirePlatformAdmin(db, openid, '清理已删店铺的流水')
+      return purgeDeletedShopRecords(db, shopId, payload)
+    }
     await requirePlatformAdmin(db, openid)
     if (action === 'checkAggregates') {
       return migrate.checkAggregates(db, shopId, payload)
@@ -990,6 +1069,7 @@ async function migrateLocalShard(db, shopId, openid, payload, now, nextId) {
 module.exports = {
   NOT_MEMBER: NOT_MEMBER,
   API_VERSION: API_VERSION,
+  PLATFORM_ACTIONS: PLATFORM_ACTIONS,
   dispatch: dispatch,
   publicListsOf: publicListsOf,
   attachRecent: attachRecent,

@@ -10,16 +10,16 @@ const inventory = require('./inventory')
 // 文档形状和 sortKey / _id 的定义在 ledger-apply.js（纯映射，小程序内存模式也要用）。
 //
 // 需要的索引（用 node scripts/wxcloud-ensure-indexes.js 建，幂等；不要靠控制台手点。
-// #1–#5 本文件的每一次查询都对得上其中一条，全部避开数组字段；#6 当前没有任何
-// 查询使用——它是给 2b-3 的 deleteShop 清理 ledger_records 预建的，删店目前只删
-// shops / members / ledgers / ledger_clears，见 ledger-core.js 的 deleteShop 和
-// docs/cloud-ledger.md 的「删除店铺」）：
+// #1–#5 是流水的读写路径，每一次查询都对得上其中一条，全部避开数组字段；
+// #6 只服务 purgeByShop —— 它是本文件里**唯一不带 bookId 前缀**的查询，因为
+// 「这家店的流水」跨账套：当前账套、newBook 换掉的旧账套、mode:'snapshots' 转出来的
+// clr- 快照账套，共同标识只有 shopId 一个（见 purgeByShop 上方那段））：
 //   1  bookId ASC, sortKey DESC                                 -> page / recentAndToday
 //   2  bookId ASC, customerId ASC, sortKey DESC                 -> page(customerId) / suffixOfCustomer
 //   3  bookId ASC, type ASC, sortKey DESC                       -> page(type)
 //   4  bookId ASC, saleOrderId ASC, sortKey ASC                 -> 查一张销售单的退货（整体重算用）
 //   5  bookId ASC, type ASC, productId ASC, skuId ASC, sortKey DESC -> latestPurchases
-//   6  shopId ASC                                               -> 给 2b-3 的 deleteShop 清理预留，当前无查询使用
+//   6  shopId ASC                                               -> purgeByShop（删店之后清孤儿流水，2b-3）
 
 const COLLECTION = 'ledger_records'
 const PAGE_LIMIT = 100
@@ -65,6 +65,16 @@ const TODAY_MAX_RECORDS = 2000
 //      吞掉了（那边已加 console.error，拿到原文之后再回来把这个数改对）。
 //      在改对之前，别把 200 当成「验证过安全」的值引用。
 const SALE_RETURNS_MAX = 200
+
+// 删店之后清孤儿流水（2b-3）的单次调用预算。**两个都要，管的不是同一件事**：
+//   · PURGE_MAX_RECORDS 是条数上限，确定性、与机器快慢无关，测试能精确撞上；
+//   · PURGE_BUDGET_MS 是墙钟上限，才是生产上真正会先触发的那一个 —— 单条删除多快
+//     没实测过，条数上限换算成多少秒是未知数，只有钟能保证这次函数调用不被云端硬
+//     超时砍掉（config.json 当前 timeout: 60，这里留出足够余量给删店事务本身）。
+// **删不完不是故障，是设计**：调用方拿到 remaining: true 之后带同一个 shopId 再调
+// 一次就接着删（purgeByShop 幂等、无需持久化进度）。
+const PURGE_MAX_RECORDS = 5000
+const PURGE_BUDGET_MS = 30000
 
 function docsOf(res) {
   return (res && res.data) || []
@@ -327,6 +337,99 @@ async function applyWrites(store, writes) {
   return list.length
 }
 
+// 按 shopId 把一家**已经删掉的**店留下的流水删干净（2b-3）。走索引 #6，是本文件里
+// 唯一一条不带 bookId 前缀的查询 —— 这是有意的：一家店的流水可能散在好几个账套里
+//（当前账套、newBook 换掉的旧账套、mode:'snapshots' 转出来的 clr- 快照账套），
+// 账本文档一删就没人拿得到那些 bookId 了，shopId 是唯一还认得出它们的字段。
+//
+// **只能在删店事务提交之后调，事务里和事务之前都不行**（理由三条，改这里之前先读完）：
+//   ① 塞不进事务。2026-08-24 实测单事务写 92 条文档就确定性失败，报
+//      TransactionNotExist（证据和数字见 index.js 那段 console.error 的注释）。
+//      上万条删除进事务必炸，而且事务原子回滚 —— 连店都删不掉。
+//   ② 不许反过来「先清流水再删店」。清到一半失败就是一家**活着的**店掉了一半流水，
+//      聚合还在、流水少了 —— 那是**错数**，而 recomputeAggregates 修不回来（它按集合
+//      现状重折叠）。提交之后再清，最坏也只是泄漏，不可能算错。
+//   ③ 于是中途停下必须能续：判据只有 shopId 一个，不需要持久化任何进度，拿同一个
+//      shopId 再调一次就接着删。删店之后店主已经不是成员，续的入口是平台运营方动作
+//      purgeDeletedShopRecords（见 ledger-core.js）。
+//
+// **不抛错**（唯一的例外是空 shopId，见下）。调用时机是事务已经提交、店已经没了，
+// 这时把一次删除失败抛成「删店失败」会让店主以为店还在、再点一次（再点报「不是该店
+// 成员」）。读失败 / 删失败一律就地停下，把已删条数和错误原文一起回给调用方写日志。
+// 空 shopId 是**调用方的 bug**，那一条必须抛：where({ shopId: '' }) 命中的是所有
+// shopId 为空的文档，那不是「这家店的流水」，是别人的。
+//
+// 循环形状和仓里另外三处「有界循环」（SUFFIX_MAX_RECORDS / TODAY_MAX_RECORDS /
+// ledger-migrate.js 的 readAllDocs）**同源但不同形**，两点差别：
+//   ① 那三处是游标向前翻，必须回答「还有没有下一页」，于是有 hasMore 的 off-by-one；
+//      这里**边读边删**，同一条 where 再查一次返回的就是剩下的，所以终止判据是
+//      「这一页查出来 0 条」—— 精确，不判页数，也没有 off-by-one。
+//   ② 预算仍然**判条数不判页数**（deleted >= cap），和那三处同一份样板。
+//
+// 不用 where().remove() 批量删：单次批量删的条数上限没有实测过，返回的 stats.removed
+// 也分不清「删完了」和「被云端截断了」—— 和 SALE_RETURNS_MAX 顶上是同一类风险。
+// 逐条删慢，但每一条的成败都是确定的。**这是取舍，不是没想到**：真要换批量删，
+// 先在真环境上把上限和截断信号实测出来再说。
+//
+// options：
+//   maxRecords 单次最多删多少条，只能**调小**不能调大（clamp 到 PURGE_MAX_RECORDS）
+//   deadline   墙钟截止时刻（毫秒），到点就停
+//   clock      取当前时刻的函数，缺省 Date.now；测试注入它才能确定性地撞上 deadline
+// 回值：{ removed: 已删条数, remaining: 是否还有剩, stopped: 'cap'|'time'|'error'|'',
+//        error: 错误原文（没有就是空串） }
+async function purgeByShop(ctx, shopId, options) {
+  options = options || {}
+  const shop = String(shopId == null ? '' : shopId)
+  if (!shop) {
+    throw new Error('缺少 shopId，不能按店清理流水')
+  }
+  const wantedCap = Number(options.maxRecords)
+  // 非法值（未传 / NaN / <=0）一律退回缺省，**不许当成"无上限"** —— cap 是 NaN 时
+  // `removed >= cap` 恒为假，这个循环就变成无界的了。
+  const cap = Number.isFinite(wantedCap) && wantedCap > 0
+    ? Math.min(Math.floor(wantedCap), PURGE_MAX_RECORDS)
+    : PURGE_MAX_RECORDS
+  const wantedDeadline = Number(options.deadline)
+  const deadline = Number.isFinite(wantedDeadline) ? wantedDeadline : null
+  const clock = options.clock || Date.now
+  const col = ctx.collection
+  let removed = 0
+  function outOfTime() {
+    return deadline != null && clock() >= deadline
+  }
+  try {
+    for (;;) {
+      if (removed >= cap) return { removed: removed, remaining: true, stopped: 'cap', error: '' }
+      if (outOfTime()) return { removed: removed, remaining: true, stopped: 'time', error: '' }
+      const res = await col.where({ shopId: shop }).limit(PAGE_LIMIT).get()
+      const docs = docsOf(res)
+      // 边读边删，所以「这一页 0 条」= 真的删完了。不判页数。
+      if (!docs.length) return { removed: removed, remaining: false, stopped: '', error: '' }
+      for (let i = 0; i < docs.length; i++) {
+        const id = String((docs[i] && docs[i]._id) || '')
+        if (!id) {
+          // 没有 _id 就删不掉，而下一轮同一条又会被查出来 —— 不停下就是死循环
+          //（cap 兜得住，但那是把预算烧在一条烂数据上）。
+          return {
+            removed: removed, remaining: true, stopped: 'error',
+            error: '集合里有一条没有 _id 的文档，删不掉：shopId=' + shop
+          }
+        }
+        await col.doc(id).remove()
+        removed += 1
+        if (removed >= cap || outOfTime()) break
+      }
+    }
+  } catch (error) {
+    return {
+      removed: removed,
+      remaining: true,
+      stopped: 'error',
+      error: String((error && error.message) || error || '')
+    }
+  }
+}
+
 module.exports = {
   COLLECTION: COLLECTION,
   PAGE_LIMIT: PAGE_LIMIT,
@@ -334,7 +437,10 @@ module.exports = {
   LATEST_PURCHASE_KEEP: LATEST_PURCHASE_KEEP,
   TODAY_MAX_RECORDS: TODAY_MAX_RECORDS,
   SALE_RETURNS_MAX: SALE_RETURNS_MAX,
+  PURGE_MAX_RECORDS: PURGE_MAX_RECORDS,
+  PURGE_BUDGET_MS: PURGE_BUDGET_MS,
   recordStore: recordStore,
   recentAndToday: recentAndToday,
-  applyWrites: applyWrites
+  applyWrites: applyWrites,
+  purgeByShop: purgeByShop
 }
