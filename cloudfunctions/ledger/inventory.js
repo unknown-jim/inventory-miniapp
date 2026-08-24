@@ -2262,7 +2262,10 @@ function backfillReturnedQty(records, converted) {
   })
 }
 
-function migrateRecordShape(records) {
+// 归并的分组结果。「哪几条老记录会被并成一条」这条规则**只有这一份定义**，
+// migrateRecordShape 和 utils/ledger-shard.js 的分片规划都从这里取：
+// recordGroups(records)[i] 和 migrateRecordShape(records)[i] 逐位对应。
+function recordGroups(records) {
   const groups = []
   const byKey = Object.create(null)
   ;(records || []).forEach(function (item, at) {
@@ -2283,6 +2286,11 @@ function migrateRecordShape(records) {
     byKey[key] = group
     groups.push(group)
   })
+  return groups
+}
+
+function migrateRecordShape(records) {
+  const groups = recordGroups(records)
 
   const converted = groups.map(function (group) {
     return !group.ready
@@ -3254,6 +3262,7 @@ module.exports = {
   findSaleLine: findSaleLine,
   orderProductTitle: orderProductTitle,
   needsRecordMigration: needsRecordMigration,
+  recordGroups: recordGroups,
   migrateRecordShape: migrateRecordShape,
   receivableAt: receivableAt,
   applyPayment: applyPayment,

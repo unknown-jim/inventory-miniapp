@@ -111,6 +111,10 @@
       {
         "type": "file",
         "value": "utils/reprice-hint.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/ledger-shard.js"
       }
     ]
   },

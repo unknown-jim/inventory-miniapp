@@ -18,6 +18,30 @@ npm run test:ui
 
 脚本自己用 `cli auto` 把工具拉起来、开自动化端口 9420，跑完再 `close` 掉。端口上若还留着上一次的会话，会先把工具整个退掉再重开——同一个端口连不同 worktree 的项目是抢不过来的，以前就这么测成了另一棵树的代码。
 
+### 在任务 worktree 里跑：先补两个没进版本库的文件
+
+在任务工作树（`../inventory-miniapp-worktrees/<短名>`，见 [git-workflow.md](git-workflow.md)）里跑 `npm run test:ui` / `npm run test:all` 之前，除了复制 `node_modules`，**还要把主检出的 `project.private.config.json` 也复制过去**：
+
+```bash
+cp -r /d/work/inventory-miniapp/node_modules ./node_modules
+cp /d/work/inventory-miniapp/project.private.config.json ./
+```
+
+两个文件都在 `.gitignore` 里，所以 `git worktree add` 出来的目录里没有它们。少了 `node_modules` 会当场报模块找不到，好认；少了 `project.private.config.json` 不报错，反而更难查——它钉着 `libVersion: 3.16.2`，以及 `useApiHook` / `useIsolateContext` / `compileHotReLoad` 等一串开发者工具设置。缺了它，工具会按「全新项目」的默认值打开这棵树，UI 测试就以**互不相同**的初始化/超时症状随机挂掉。典型标志是日志里那句：
+
+```text
+[UI] Tool.getInfo 一直没带 SDKVersion，跳过基础库版本校验
+```
+
+实测（2026-08-24，同一份代码，主检出和 worktree 交替跑）：
+
+| 环境 | 结果 |
+|---|---|
+| 主检出 `main` | 连过 2 次 |
+| 缺 `project.private.config.json` 的 worktree | 连挂 3 次，三次症状各不相同：`退不回 tab 页，页面栈太深` / `Connection closed, check if wechat web devTools is still running` / `timeout waiting for automator response` |
+
+三次挂的**没有一条是断言失败**。所以：worktree 里 UI 测试红、而且症状是初始化或超时类（连不上、等不到、页面栈不对）而不是某条断言不符，先查这个文件在不在，别急着当成代码回归去翻 diff。
+
 ## 两条硬约束
 
 ### 1. 页面级选择器查不到自定义组件内部
@@ -53,6 +77,8 @@ await waitFor(sale, async function () { ... }, '商品进购物车')  // 条件
 
 - 单步默认 30 秒，`WECHAT_AUTOMATOR_STEP_TIMEOUT` 覆盖
 - 整轮默认 15 分钟，`WECHAT_AUTOMATOR_RUN_TIMEOUT` 覆盖
+- 整个脚本默认 25 分钟，`WECHAT_AUTOMATOR_SCRIPT_TIMEOUT` 覆盖（整轮那道只罩用例本身，起端口、连接卡住时它还没起跑）
+- 收尾关工具默认 20 秒，`WECHAT_AUTOMATOR_CLOSE_TIMEOUT` 覆盖
 - 超时消息带 `label`，直接说清在等什么：`等「出现 .js-seed」超时（30 秒）`
 
 只有纯 sleep（`page.waitFor(800)`）可以直接调，它不存在等不到的情况。
@@ -82,3 +108,24 @@ await waitFor(sale, async function () { ... }, '商品进购物车')  // 条件
 - 同一句刷屏还可能以**另一副面孔**出现（2026-08-24 复现）：`cli.bat` 本体就是 UTF-8 编码 + 中文注释 + 中途 `chcp 65001`，某些机器状态（疑似工具更新后 cmd 与代码页失同步）下 cmd 丢了解析位置，`setlocal` 无限递归——拿 `cli.bat --help` 在安装目录里就能复现，与仓库内容无关，摘 `PATH` 也救不了。**绕法**：自己写一份 GBK 编码、**不含 `chcp`**、CRLF 行尾的等价 bat（照抄原文件的 exe 探测、`ELECTRON_RUN_AS_NODE`、`BOOTSTRAP_JS` 那几段，只去掉切代码页），放临时目录，跑测试时 `WECHAT_CLI=<这份bat的绝对路径> npm run test:ui`。关键点：GBK 编码让中文安装路径在默认 CP936 的 cmd 下稳定解析，整份文件从头到尾一个代码页，就没有中途失同步的窗口
 - `automator.launch()` 不能用：Node 18.20.2 / 20.12.2 起禁止不带 shell 地 spawn `.bat`，而且报错会被转述成误导性的「cliPath 不对」。脚本改成自己经 `cmd.exe` 起端口再 `connect`
 - `wx.showModal` 是系统弹窗，自动化点不到内部按钮，用 `mockWxMethod` 自动确认
+- 在任务 worktree 里跑，却没从主检出复制 `project.private.config.json`——挂的样子是随机的初始化/超时，不是断言失败，见上面「在任务 worktree 里跑：先补两个没进版本库的文件」
+
+### 失败之后先清残留，再重试
+
+一次失败会自我放大：留下来的东西会让下一轮在**随机步骤**报
+`Connection closed, check if wechat web devTools is still running`，看起来像新的回归，其实是上一轮的尾巴。
+
+脚本这边已经做到：任何退出路径（断言失败、超时、连接断开、未捕获异常）都会走同一个收尾——
+给 `close()` 掐表、无论成败都补一次 `disconnect()`、`close()` 关不掉工具就再用 `cli quit` 兜一次、
+收掉没退的 `cli` 子进程，最后确保进程真的退出（收尾自己卡住也有硬看门狗）。
+
+工具已经卡死时这些仍可能不管用。重试之前先确认：
+
+```powershell
+Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -like '*ui.test.js*' }
+Get-Process 微信开发者工具
+```
+
+前者查出来就 `Stop-Process`（它还占着到 9420 的 WebSocket），后者查出来就手动关掉工具（它还占着 9420 端口）。
+
+脚本**不**替你按镜像名杀进程：`WeChatAppEx` 是微信本体也在用的进程，按名字杀会连着把用户正在用的微信小程序一起干掉，误伤代价比留个残留大。所以自动化只做「用工具自己的 `cli quit` 好好关」，剩下的交给人。
