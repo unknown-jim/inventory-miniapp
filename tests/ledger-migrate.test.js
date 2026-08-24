@@ -2714,9 +2714,13 @@ function receivableOf(accounts, customerId) {
     assert.strictEqual(snap.bookId, 'b1', 'D10b：' + item.name + ' —— 该带的 bookId 还是要带')
   })
   // 反向：老文档那份数组仍然必须原样带走。上面两条只说「空的不要写」，
-  // 光靠它们，把 `snapshot.records = cloneList(legacy)` 整行删掉也照样绿 ——
-  // 而删掉它，升级前备份（clearedBackup / 迁移前账本）那批流水就在封存那一刻丢了，
-  // 那是它们的唯一副本。两个方向一起锁，改动才没有静默的出路。
+  // 少了这一条，**把数组悄悄截短**（`cloneList(legacy).slice(1)` 那一类）全仓
+  // 没有一条断言逮得到（实测）—— 而升级前备份（clearedBackup / 迁移前账本）
+  // 那批流水，快照里这一份就是唯一副本，静默少一行就是永久丢一行。
+  //
+  // 把整行 `snapshot.records = cloneList(legacy)` 删掉倒是会被 D9 的自检先抓到
+  // （实测红在 D9「快照还带着被抄过来的老数组」）—— 别把这条的价值记成「防删整行」，
+  // 它真正独有的牙是**防截短**。两个方向一起锁，改动才没有静默的出路。
   const d10bLegacy = apply.snapshotLists({ bookId: 'b2', records: legacyCorpus() }, 123)
   assert.ok(Object.prototype.hasOwnProperty.call(d10bLegacy, 'records'),
     'D10b：老文档的非空 records 数组必须原样带进快照（它是那批流水的唯一副本）')
