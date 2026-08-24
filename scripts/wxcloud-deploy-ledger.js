@@ -6,6 +6,15 @@ env.loadDotEnv(root)
 const ENV_ID = env.readEnvId(root)
 const NAME = 'ledger'
 const FN_DIR = path.join(root, 'cloudfunctions', 'ledger')
+// 函数的资源配置**只有 cloudfunctions/ledger/config.json 一份定义**，这里读它。
+// 曾经在本文件里另写死过一份 memorySize: 256 / timeout: 20，代价是：线上为了让
+// 3.6 MB 账本的 initMigration 跑得完（20 秒实测超时）手工调成 60 秒 / 512 MB，
+// 下一次部署又被这里按 20 / 256 覆盖回去，migrateRecords 当场重新超时——而
+// 部署日志里看不出发生过覆盖。缺字段就抛，不许拿 undefined 去部署。
+const FN_CONFIG = require(path.join(FN_DIR, 'config.json'))
+if (typeof FN_CONFIG.memorySize !== 'number' || typeof FN_CONFIG.timeout !== 'number') {
+  throw new Error('cloudfunctions/ledger/config.json 里缺 memorySize / timeout')
+}
 const HelloWorldCode =
   'UEsDBBQACAAIALB+WU4AAAAAAAAAAAAAAAAIABAAaW5kZXguanNVWAwAAZ9zXPuec1z1ARQAdY7BCsIwEETv+Yoll6ZQ+wOhnv0DD+IhxkWC664kWwmI/27V3IpzGuYNw3RzQSiaU9TOG6x3yVrGW0gMEzh8IOsAUVixfkwgOoV47WHawtPAooUVIRxJLs7ukEhgL5nOtl/h79qf+GBZeIM1FbXHdac9aKC9cDwTDfCb9eblzRtQSwcI6+pcr4AAAADOAAAAUEsBAhUDFAAIAAgAsH5ZTuvqXK+AAAAAzgAAAAgADAAAAAAAAAAAQKSBAAAAAGluZGV4LmpzVVgIAAGfc1z7nnNcUEsFBgAAAAABAAEAQgAAAMYAAAAAAA=='
 
@@ -111,8 +120,8 @@ async function main() {
       code: { zipFile: HelloWorldCode },
       handler: 'index.main',
       description: '按店隔离的云记账',
-      memorySize: 256,
-      timeout: 20,
+      memorySize: FN_CONFIG.memorySize,
+      timeout: FN_CONFIG.timeout,
       environment: { variables: [] },
       role: 'TCB_QcsRole',
       runtime: 'Nodejs16.13',
@@ -130,8 +139,8 @@ async function main() {
     namespace: ENV_ID,
     region: region,
     functionName: NAME,
-    memorySize: 256,
-    timeout: 20,
+    memorySize: FN_CONFIG.memorySize,
+    timeout: FN_CONFIG.timeout,
     installDependency: true
   })
   await waitActive(wx.api, region)

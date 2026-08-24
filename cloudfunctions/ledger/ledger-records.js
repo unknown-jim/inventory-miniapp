@@ -57,7 +57,13 @@ const TODAY_MAX_RECORDS = 2000
 //      的事。真要给出路，得单开一条「不重算只删」的运维通道，那是另一件事。
 //   ② 真正的约束不是这个数，而是**单次事务的写入量**：整体重算会连带重写全部
 //      退货单，写放大 = ledgers 1 + 目标 1 + N。200 是按「现实里不会有这么多」
-//      拍的，不是拿真环境验证过的安全值，部署前要实测再定。
+//      拍的。**2026-08-24 在演示店 mt33kfi77idxpw 实测过了：N = 90（单事务写
+//      92 条）确定性失败**，两次都报 index.js 那句「库存刚被别人改过，请再提交」；
+//      函数耗时 12.3 / 11.5 秒（上限 60 秒）、内存 155 / 138 MB（上限 512 MB），
+//      事务原子回滚、一条都没写进去。所以**真实上限远低于 200，这个常量当前形同
+//      虚设**：够不着它，先撞事务。撞到哪一条限制仍未知——底层错误被 index.js
+//      吞掉了（那边已加 console.error，拿到原文之后再回来把这个数改对）。
+//      在改对之前，别把 200 当成「验证过安全」的值引用。
 const SALE_RETURNS_MAX = 200
 
 function docsOf(res) {
@@ -214,9 +220,28 @@ function recordStore(ctx, bookId, shopId) {
     }
   }
 
+  // 写入的 data **不许带 `_id`**：文档 id 已经由 `col.doc(id)` 指定，data 里再
+  // 出现一次，真实云开发直接拒绝——
+  //   document.set:fail -501007 invalid parameters. 不能更新_id的值
+  // `ledgers` / `shops` / `members` / `ledger_clears` 四条写路径早就在 index.js 的
+  // cloneData 里剥掉了 `_id`，只有这一条没剥——因为它是 2b-1 才加的，而
+  // **`ledger_records` 的写在此之前从没在真云上跑过**，第一次跑就是账本升级
+  // 的 writePhase，当场 -501007。
+  //
+  // 剥掉不影响迁移校验 V7：V7 比的是**读回来的**文档的 `_id`，那是数据库按
+  // `doc(id)` 自己填的，和 `apply.recordDocId(book, id)` 恒等。
+  //
+  // 这一类错误测试抓不到过一次：tests/memory-db.js 的 MemoryDoc.set 不但不拒绝
+  // 带 `_id` 的 data，还主动补一个，于是 3000 步随机记账、变异测试、真实数据
+  // 复演全在替身上跑绿。那边现在会抛错了，别再把它改回去。
   async function set(record) {
     const doc = apply.toRecordDoc(record, book, shop)
-    await col.doc(doc._id).set({ data: doc })
+    const data = {}
+    Object.keys(doc).forEach(function (key) {
+      if (key === '_id') return
+      data[key] = doc[key]
+    })
+    await col.doc(doc._id).set({ data: data })
   }
 
   // 只删本事务里刚读到过的记录，删不掉要让事务失败：
