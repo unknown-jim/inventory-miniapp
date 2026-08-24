@@ -18,6 +18,30 @@ npm run test:ui
 
 脚本自己用 `cli auto` 把工具拉起来、开自动化端口 9420，跑完再 `close` 掉。端口上若还留着上一次的会话，会先把工具整个退掉再重开——同一个端口连不同 worktree 的项目是抢不过来的，以前就这么测成了另一棵树的代码。
 
+### 全新 worktree 的第一次冷启动会真的发一次云调用
+
+「UI 测试跑在内存模式、所以不碰云」这句话**有一个真实的例外**，而且它就在每一轮的最开头。
+
+短路的前提是**标志已经在 storage 里**：
+
+- `utils/store.js` 的 `isMemoryMode()` 读的是 `wx.getStorageSync('inv_test_memory_ledger')`；
+  `initCloud()` 第一行就是 `if (isMemoryMode()) return { ok: true, mode: 'memory' }`。
+- 写这个标志的是 `tests/ui.test.js` 的 `resetStorage()`，而它在 **automator 连上之后**才跑
+  （在 `seedFromHome` 里）。
+- 在那之前小程序已经启动过一次了：`app.js` 的 `onLaunch` 调 `store.initCloud()`，
+  `onShow` 调 `store.checkMaintenance()`（它走 `request('whoami', ...)`）。
+
+老 worktree 里标志是上一轮留下的，所以两条都短路、确实不发云调用。
+**但全新 worktree 的开发者工具 storage 是干净的**，那一次冷启动就会真的 `wx.cloud.init`
+并发一次真实的 `whoami` 云调用。`checkMaintenance` 的失败被 try/catch 吞掉，
+**结果层面无害**（断言不会因此变红），但它意味着：
+
+- 别在别人跑 UI 测试的时候部署云函数。函数替换窗口（`status Updating → Active`）里，
+  那一次冷启动调用的耗时 / 成败会变成对方分辨不出来的变量。**2026-08-25 真发生过**：
+  一边在追一个随机性失败、一边以为「不碰 9420 就不影响你」而部署了，废掉一轮。
+  共享资源不只有端口，还有**生产环境的服务端行为**。
+- 云环境不可达时，全新 worktree 的第 1 轮会多花一个超时的时间才进入内存模式。
+
 ### 在任务 worktree 里跑：先补两个没进版本库的文件
 
 在任务工作树（`../inventory-miniapp-worktrees/<短名>`，见 [git-workflow.md](git-workflow.md)）里跑 `npm run test:ui` / `npm run test:all` 之前，除了复制 `node_modules`，**还要把主检出的 `project.private.config.json` 也复制过去**：
