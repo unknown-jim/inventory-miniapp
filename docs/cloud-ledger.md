@@ -109,7 +109,7 @@
 
 **为什么不是 owner-gated**（2b-4 之前是，改掉的理由）：owner 门守错了对象。它拦住平台运营方——这套系统按会员费卖给多家店，运营方要给每一家跑迁移，而运营方通常不是任何一家店的成员，挨个切店主微信号不可扩展，也不可能让交了会员费的店主自己打开开发者工具敲 Console；它却放行每一个店主——`dropLegacy` 跑完就没有 O(1) 回滚、`mode:'rollback'` 会把迁移后记的账从读路径抹掉、`recomputeAggregates` 按集合现状重折叠，而后果由平台方兜。白名单两头同时变对：**对运营方放行、对所有租户关死**。门是 **fail-closed** 的：`getPlatformAdmin` 把「文档不存在」和「读失败」都折成 `null`，两种一律拒绝——读不出来就拒绝，比读不出来就放行安全得多；代价是一次瞬时读失败让运维动作暂时不可用，重试即可。
 
-**上线硬依赖：`platform_admins` 必须在部署新云函数之前建好并写入运营方 openid。** 顺序反了的后果：新代码一上线，三个运维 action 对**所有人**拒绝（fail-closed 的必然结果），而那正是要用它们迁移的时刻——全店已经因为 `apiVersion` 门停摆，却谁也跑不了迁移。正确顺序：① 运营方在开发者工具 Console 调 `whoami` 拿到自己的 openid（这个 action 在线上老版本就有、且免版本门，现在就能做）→ ② 一条命令把建集合、写文档、核对权限做完：`node scripts/wxcloud-ensure-platform-admin.js <openid>`（照 `wxcloud-ensure-indexes.js` 的形状写的幂等脚本，内部是 `@wxcloud/cli` 的 `flexdbCreateTable` / `flexdbPutItem` / ACL 那套；`tag` 的推导 `databases[0].instanceId || ENV_ID` 复用 `wxcloud-ensure-indexes.js` 导出的 `resolveDb`，全仓只有这一份定义）→ ③ 才部署新云函数。`deleteShop` **保持 owner-gated 不变**：那是租户对自己店的操作，不是平台运维。
+**上线硬依赖：`platform_admins` 必须在部署新云函数之前建好并写入运营方 openid。** 顺序反了的后果：新代码一上线，三个运维 action 对**所有人**拒绝（fail-closed 的必然结果），而那正是要用它们迁移的时刻——全店已经因为 `apiVersion` 门停摆，却谁也跑不了迁移。正确顺序：① 运营方在开发者工具 Console 调 `whoami` 拿到自己的 openid（这个 action 在线上老版本就有、且免版本门，现在就能做）→ ② 一条命令把建集合、写文档、核对权限做完：`node scripts/wxcloud-ensure-platform-admin.js <openid>`（照 `wxcloud-ensure-indexes.js` 的形状写的幂等脚本，内部是 `@wxcloud/cli` 的 `flexdbCreateTable` / `flexdbPutItem` / ACL 那套；`tag` 的推导 `databases[0].instanceId || ENV_ID` 复用 `wxcloud-ensure-indexes.js` 导出的 `resolveDb`。**注意：`resolveDb` 本身只有一份，但那行推导本体在全仓有两份**——`wxcloud-ensure-indexes.js:123` 和 `wxcloud-deploy-ledger.js:154` 各写了一次 `(db && db.instanceId) || ENV_ID`，部署脚本没走 `resolveDb`。改那行推导要**两处一起改**。（`wxcloud-ensure-acl.js` 里也有个叫 `tag` 的东西，那是 **ACL 标签** `ADMINONLY`，同名不同物，别弄混））→ ③ 才部署新云函数。`deleteShop` **保持 owner-gated 不变**：那是租户对自己店的操作，不是平台运维。
 
 **恢复路**：万一 `platform_admins` 空了 / 被删了导致锁死，重跑同一条命令 `node scripts/wxcloud-ensure-platform-admin.js <openid>` 把那条文档插回去即可，**不需要重新部署云函数**——门每次调用都现读集合，读到就放行。
 
@@ -166,7 +166,7 @@ do {
 
 - **写在事务外，cursor 用事务内 CAS 推进。** 单事务写入条数上限是未实测项；写路径已经被 `assertRecordsReady` 冻结、`_id` 确定、`set()` 幂等、源数组不变，事务在这里买不到任何东西，却会把那个未知量变成真约束。
 - **`writing → verifying` 单独占一次调用。** 「事务内能否读到自己刚写的数据」同样未实测；分两次调用，校验读的一定是已提交数据。
-- **`mode:'rollback'` 的守卫，事务内只用 `where().orderBy().limit().get()`，绝不用 `count()`。** `transaction.collection().where().count()` 在这个仓里一次都没跑过；而 `where().orderBy().limit().get()` **已经有在事务里跑的调用点**：**改或删**一张进货单发 `latestPurchases`（`where({bookId,type,productId,skuId}).orderBy('sortKey','desc').limit(2).get()`），**改或删**一张退货单、以及改一张有退货的销售单发 `returnsOfSale`（`where({bookId,saleOrderId}).orderBy('sortKey','asc').limit(201).get()`）——两条都在记账事务里的 `apply.prepareMutation` 发出。**新增那三条一次都不发**（实测 `addPurchase` / `addSale` / `addReturn` 在事务内发出的 `where` 查询数都是 **0**，`addReturn` 只发一次 `doc().get()` 捞被退销售单）：`recordsNeeded` 只在 `updateRecord` / `deleteRecord` 上返回非空的 `purchases` / `saleReturns`。所以准确的说法是——这条形状在事务里不可用时，**改单和删单一笔都做不了**（不是「一笔进货都记不了」），于是阶段 1 的测试店**只有改过或删过单据才验得到它**。回滚是全店停摆窗口里唯一的紧急出路，**出路本身失效比守卫不生效更糟**，所以那里一个新的未知量都不许引入。真要数总条数就在**事务外**数（那条形状当晚已经跑过：每家店迁移前的 `checkAggregates` 第一件事就是它）。
+- **`mode:'rollback'` 的守卫，事务内只用 `where().orderBy().limit().get()`，绝不用 `count()`。** `transaction.collection().where().count()` 在这个仓里一次都没跑过；而 `where().orderBy().limit().get()` **已经有在事务里跑的调用点**：**改或删**一张进货单发 `latestPurchases`（`where({bookId,type,productId,skuId}).orderBy('sortKey','desc').limit(2).get()`），**改或删**一张退货单、以及改一张有退货的销售单发 `returnsOfSale`（`where({bookId,saleOrderId}).orderBy('sortKey','asc').limit(201).get()`）——两条都在记账事务里的 `apply.prepareMutation` 发出。**新增那三条一次都不发**（实测 `addPurchase` / `addSale` / `addReturn` 在事务内发出的 `where` 查询数都是 **0**，`addReturn` 只发一次 `doc().get()` 捞被退销售单）：`recordsNeeded` 只在 `updateRecord` / `deleteRecord` 上返回非空的 `purchases` / `saleReturns`。所以准确的说法是——这条形状在事务里不可用时，**改单和删单一笔都做不了**（不是「一笔进货都记不了」），于是阶段 1 的演示店 `mt33kfi77idxpw`**只有改过或删过单据才验得到它**。回滚是全店停摆窗口里唯一的紧急出路，**出路本身失效比守卫不生效更糟**，所以那里一个新的未知量都不许引入。真要数总条数就在**事务外**数（那条形状当晚已经跑过：每家店迁移前的 `checkAggregates` 第一件事就是它）。
 
 **不需要第二个冻结开关。** 写路径从新云函数部署那一刻起就被 `assertRecordsReady` 挡住了（`recordsPending = records.length > 0 && !recordsMigratedAt`），不要再加一个 `ledgers.migration.state`——两个冻结口径迟早会打架。
 
@@ -232,7 +232,7 @@ payload: { mode: 'snapshots', limit?: 50 }
 >
 > **店的先后顺序**（重名的两家务必按 `shopId` 认，不要按店名认）：
 > 1. `mt33kfi77idxpw`（运营方自有演示店）——彩排和两条真云实测全在它身上跑
-> 2. `mt3231n3ixeenv`（卓祥服饰，0 条流水、1 份老快照）——第一个真实店，也是**唯一能在低风险下验 `mode:'snapshots'`** 的地方（自有演示店没有清空快照，这条它盖不到）
+> 2. `mt3231n3ixeenv`（卓祥服饰，0 条流水、1 份老快照）——第一个真实店，也是**不额外造数据的话，唯一能在低风险下验 `mode:'snapshots'`** 的地方（自有演示店没有清空快照，这条它盖不到——要盖就得先在演示店里人造一次「清空数据」把快照造出来，那是另一份风险）
 > 3. `msxeubh4c6d5f9`（应收 549 万那家，2 份老快照）——**最后动**
 
 
@@ -240,17 +240,50 @@ payload: { mode: 'snapshots', limit?: 50 }
 
   已做完（记录于 2026-08-24）：运营方 openid 已写进 `msxeubh4c6d5f9`（聚友纺织，549 万应收那家）和 `mt3231n3ixeenv`（卓祥服饰），都是 `staff`；`mt33kfi77idxpw`（另一家聚友纺织）运营方本来就是 `owner`，未改动。三位店主原有的 owner 记录一条没动。
 
-→ **在测试店上把回滚彩排一遍**（本机测不到的就这一段）：`migrateRecords` 到 `done` → 在 app 里记一笔 1 元销售 → 调 `{mode:'rollback'}` **必须被拒**，错误里报得出 `foreignCount` ≥ 1 → 再调 `{mode:'rollback', force:true}` **必须成功**，回包里 `forced:true`、`discarded:1`、`probeError` 和 `countError` 都是空串 → 最后用 `{newBook:true}` 迁回去。**最后这一步不要用 `{restart:true}`**：彩排记的那笔 1 元测试账留在集合里就是残骸、又不是这次要写的那批的子集，`restart` 重写完必撞校验（那笔账 `createdAt` 最新、排在倒序最前，逐页比对整排错开——报错单以 V7 / V2 打头、V1「集合里多出这条」垫在末尾；内存替身上实测 7 项 = V7×4 + V2×2 + V1×1——店停在 `failed`、`recordsMigratedAt` 一直是 0）；而回滚之后写路径是冻着的（见上面 `mode:'rollback'` 那条），那条账在 app 里删不掉，所以只能换账套——这正是上面「**残骸来路不明就直接 `newBook`，不要试 `restart`**」那条规矩的实例。**这三步任意一步不对就停在阶段 1，不要进阶段 2**：当晚的紧急出路只有这一条，它是不是好的，只能在这里知道。**彩排还有一个它结构性看不见的失败模式**：测试店是运营方自己 `createShop` 建的，他在那家店里既是 owner 又在白名单——「运营方不是该店成员」这一段彩排怎么跑都是绿的。阶段 2 里走 `requireMember` 的那几步能不能跑，只能靠上面「把运营方加进 `members`」那一步保证，不能指望彩排发现；这个失败模式第一次现形是在 T 日打烊后、全店已因 `apiVersion` 门停摆的时候，没有第二次机会。
+→ **在演示店 `mt33kfi77idxpw`上把回滚彩排一遍**（本机测不到的就这一段）：`migrateRecords` 到 `done` → 在 app 里记一笔 1 元销售 → 调 `{mode:'rollback'}` **必须被拒**，错误里报得出 `foreignCount` ≥ 1 → 再调 `{mode:'rollback', force:true}` **必须成功**，回包里 `forced:true`、`discarded:1`、`probeError` 和 `countError` 都是空串 → 最后用 `{newBook:true}` 迁回去。**最后这一步不要用 `{restart:true}`**：彩排记的那笔 1 元测试账留在集合里就是残骸、又不是这次要写的那批的子集，`restart` 重写完必撞校验（那笔账 `createdAt` 最新、排在倒序最前，逐页比对整排错开——报错单以 V7 / V2 打头、V1「集合里多出这条」垫在末尾；内存替身上实测 7 项 = V7×4 + V2×2 + V1×1——店停在 `failed`、`recordsMigratedAt` 一直是 0）；而回滚之后写路径是冻着的（见上面 `mode:'rollback'` 那条），那条账在 app 里删不掉，所以只能换账套——这正是上面「**残骸来路不明就直接 `newBook`，不要试 `restart`**」那条规矩的实例。**这三步任意一步不对就停在阶段 1，不要进阶段 2**：当晚的紧急出路只有这一条，它是不是好的，只能在这里知道。**彩排还有一个它结构性看不见的失败模式**：演示店是运营方自己 `createShop` 建的，他在那家店里既是 owner 又在白名单——「运营方不是该店成员」这一段彩排怎么跑都是绿的。阶段 2 里走 `requireMember` 的那几步能不能跑，只能靠上面「把运营方加进 `members`」那一步保证，不能指望彩排发现；这个失败模式第一次现形是在 T 日打烊后、全店已因 `apiVersion` 门停摆的时候，没有第二次机会。
 
-→ 测试店走完整流程时**必须包含「改一张进货单（或删掉它）」和「改一张退货单（或删掉它）」**——导出副本里没有现成的单可改（真实导出：549 万那家 0 张进货单、三家店 0 张退货单），要先在测试店里**记一笔进货、一笔销售、一笔退货**（退货必须挂在销售单上，所以销售那笔也得先记），再来改或删它们。这一步**是在验守卫的依赖，不是在验业务**，别省：事务里那两条 `where().orderBy().limit().get()`（`latestPurchases` / `returnsOfSale`）**只有 `updateRecord` / `deleteRecord` 才会发**，光记进货和退货一条都发不出来（实测 `addPurchase` / `addSale` / `addReturn` 在事务内的 `where` 查询数都是 0）。上面那次 `{mode:'rollback'}` 被拒只证明了 `pageDocs` 在**回滚事务**里能跑；这一步才证明**记账事务**里也能跑，两件事都得有。
+→ 演示店 `mt33kfi77idxpw`走完整流程时**必须包含「改一张进货单（或删掉它）」和「改一张退货单（或删掉它）」**——导出副本里没有现成的单可改（真实导出：549 万那家 0 张进货单、三家店 0 张退货单），要先在演示店里**记一笔进货、一笔销售、一笔退货**（退货必须挂在销售单上，所以销售那笔也得先记），再来改或删它们。这一步**是在验守卫的依赖，不是在验业务**，别省：事务里那两条 `where().orderBy().limit().get()`（`latestPurchases` / `returnsOfSale`）**只有 `updateRecord` / `deleteRecord` 才会发**，光记进货和退货一条都发不出来（实测 `addPurchase` / `addSale` / `addReturn` 在事务内的 `where` 查询数都是 0）。上面那次 `{mode:'rollback'}` 被拒只证明了 `pageDocs` 在**回滚事务**里能跑；这一步才证明**记账事务**里也能跑，两件事都得有。
 
 → **【真云实测①：事务内 `where + orderBy + limit`（`pageDocs` 还带 `_.lt` 游标）】**这条链是新引入的依赖，本机永远验不出来——`tests/memory-db.js` 的替身什么都支持。基线（`7b27b9f`）的事务里出现过的是 `doc().get()/set()/remove()`、不带修饰的 `where().get()`、和一条 `where().limit().get()`（deleteShop 清 `ledger_clears`）；**`orderBy` 和 `_.lt` 在事务里一次都没出现过**，是新云函数才引入的。触发它的操作要**逐个点名跑**，别只写「走完整流程」：改或删**进货单**（`latestPurchases`）、改或删**退货单**（`returnsOfSale`）、改**有退货的销售单**（同 `returnsOfSale`）、对着全店跑一次 **`recomputeAggregates`**（事务内 `readAllDocs` 一页页 `pageDocs`）。云端事务不支持 `orderBy` / `_.lt` 的任何一个修饰符，这四种操作就全线报错。
 
-→ **【真云实测②：单事务写入条数上限 + 事务超时】**两个量都没实测过（`ledger-records.js` 的 `SALE_RETURNS_MAX` 注释自己也写着「200 是拍的，部署前要实测再定」），而 `config.json` 的 `timeout` 是 20 秒。① 造一张挂着**几十张退货单**的销售单，改一次它的单价——这个事务要写 `ledgers` 1 + 目标 1 + 全部退货单 N，看它过不过、耗时多少；② 对着测试店的全量流水跑一次 `recomputeAggregates`——它在**一个事务里**做最多 `RECOMPUTE_MAX_RECORDS` 5000 条 / 50 次串行分页查询，看会不会撞超时。
 
-→ 顺便在测试店上把 `dropLegacy` 按**上线清单自己的顺序**跑一遍：迁完 → 记一笔 1 元销售 → 删掉 → `{mode:'dropLegacy'}` **必须成功**，验收看回包里 **`shortfall` 为 0**（也就是 `collectionCount ≥ mergedCount`）。**别要求两个条数相等**：这家测试店在最后一次迁移**之后**记的账只进集合、不进老数组——为上一条造的进货 / 销售 / 退货单只要没删掉就会留在当前账套里，`collectionCount` 偏大是正常的（实测：归并 6 条 + 3 张测试单 = 集合 9 条）。回滚彩排那笔 1 元测试账也永久留在集合里，但它记在后来被 `{newBook:true}` 换掉的旧账套里，不进这两个数。真正的闸是「集合非空」而不是条数相等（见上面 `mode:'dropLegacy'` 那条），集合里**缺**了老数组该有的账才回在 `shortfall` 里（大于 0 就停下来查）。跑完这家店就没有 O(1) 回滚了，所以**只在测试店上跑**。
+> **【已实测】2026-08-24 在演示店 `mt33kfi77idxpw`（3.6 MB 账本、8129 条老流水、归并 4694 单）上跑出来的数，下面这几条不再是未知量：**
+>
+> | 测的东西 | 结果 |
+> |---|---|
+> | `migrateRecords` 写入，每批 500 条 | **30–34 秒**（末批 194 条 18.9 秒），共 9 批 |
+> | `migrateRecords` 校验，每页 | **11.5–13.6 秒**，共 **47 页** |
+> | `checkAggregates`（只读） | **7.7 秒** |
+> | `recomputeAggregates({dryRun:true})` | **7.9 秒**，`diffs: []` |
+> | 改一张挂 90 张退货单的销售单单价（单事务写 92 条） | **确定性失败**，两次 |
+>
+> 两条结论：
+>
+> 1. **`recomputeAggregates` 的 47 页串行查询不是问题**（7.9 秒，连旧的 20 秒都够）。真正吃时间的是迁移写入。
+> 2. **单事务写 92 条过不去**，两次都报 index.js 那句「库存刚被别人改过，请再提交」；函数耗时 12.3 / 11.5 秒（上限 60 秒）、内存 155 / 138 MB（上限 512 MB），**超时和内存都排除**，事务原子回滚、一条都没写进去。**原始错误已经拿到**（部署带 `console.error` 的版本后重跑，从 CLS 里捣出来的）：
+>
+> ```
+> document.set:fail -501001 resource system error.
+> [ResourceUnavailable.TransactionNotExist]
+> Transaction does not exist on the server,
+> transaction must be commit or abort in 30 seconds.
+> ```
+>
+> 失败点是**事务被服务端丢弃**：第 N 次 `document.set` 发出去时，那个事务在服务端已经不存在了。
+> **但不要把它当成「跑满 30 秒被掉」**：三次失败的函数耗时是 12.3 / 11.5 / **16.4 秒**，
+> 都远不到 30 秒。那句「must be commit or abort in 30 seconds」是错误码自带的通用提示文案，
+> 不代表真的过了 30 秒——更可能是**条数或体积**把事务提前打掉了，`TransactionNotExist`
+> 只是它现形的方式。真实边界在哪里尚未查清。所以 **`SALE_RETURNS_MAX = 200` 当前形同虚设**：够不着它，先撞事务。
+>
+> **这不阻塞迁移**：迁移写入走的是事务**外**路径（`writePhase` 用 `db.recordsCtx()`），所以 4694 条才能分批搬完；只有 `updateRecord` / `deleteRecord` 碰到「一张销售单挂很多退货单」才会撞上。
 
-**阶段 2（T 日打烊后，从第 2 步起所有店一起停摆）**：`npm test` 绿 → `npm run sync:ledger-inventory` → `node scripts/wxcloud-deploy-ledger.js` → 开发者工具打开新版源码、**运营方**（`platform_admins` 里那个 openid，阶段 1 已建好）登录——迁移夜跑这三个 action 的是运营方，不再是各家店主。**但当晚清单不是每一步都走白名单**：三个运维 action（`checkAggregates` / `migrateRecords` 各 mode / `recomputeAggregates`——最后一个在下面回滚段落里，聚合漂了才跑）过 `requirePlatformAdmin`，运营方在名单里即可；其余每一步（`getSlip`、`getLedger`、记 1 元测试账、删掉它）过的是 `requireMember`，运营方必须是**该店**成员（阶段 1 已提前加为 `staff`），不是就报「不是该店成员」。逐店步骤用〔白名单〕/〔店成员〕标注执行人。每家的 `shopId` 从阶段 0 导出的 `ledgers` 全表 `_id` 里取——`listShops` 只列调用者自己是成员的店，运营方在阶段 1 加 `members` 之前调它回 `[]`（实测），加过之后能列出这几家，但 id 一律以导出为准 → 逐店：`checkAggregates`**〔白名单〕**（`mergedCount` 与阶段 0 报告**一致**、`collectionCount === 0`；**零记录的店是例外**——`records` 为空且没迁过，云上走「已迁移」分支，报告形状不同、**没有 `mergedCount` 字段**、还报 `migrated: true`（其实 `recordsMigratedAt` 是 0），照清单核对时别卡在这一条）→ 记下 2–3 张老送货单的 `getSlip` 结果**〔店成员〕** → 循环 `migrateRecords` 到 `done`**〔白名单〕** → `getLedger` 核对 `totals` 和两个客户**〔店成员〕**（等于报告里的 `after`、**无 `aggregatesStale`**）→ **重跑那几张 `getSlip`，必须逐张相等〔店成员〕** → **预检 P11 报了有没转的快照的店，跑 `migrateRecords` 的 `mode:'snapshots'` 到 `state === 'done'` 且 `failed === 0`〔白名单〕**（漏跑 = 这家店的「恢复清空前数据」从能点变成永久报错）→ 记一笔 1 元测试销售确认写路径解冻、再删掉**〔店成员〕** → 账本文档 > 3 MB 的店跑 `dropLegacy`**〔白名单〕** → 全部绿了再发布小程序并逐店真机确认已更新。
+> **【架构上限】`migrateRecords` 每推进一个 chunk 就重写一次整个 `ledgers` 文档，而那个文档里装着正在被搬的老数组本身。** 于是每一批 500 条的代价里都含着一次 3.6 MB 的写回，**账本越大迁移越慢——而账本大正是要迁移的理由**。实测：3.6 MB 的店每批 30–34 秒，20 秒的旧配置**一个 chunk 都跑不完**（这就是 `config.json` 现在是 `timeout: 60` / `memorySize: 512` 的原因）。再大一个量级的账本会撞到 60 秒，到那时得改结构（比如把游标从 `ledgers` 里搬出去），而不是继续调大 `timeout`。
+
+→ **【真云实测②：单事务写入条数上限 + 事务超时】**两个量都没实测过（`ledger-records.js` 的 `SALE_RETURNS_MAX` 注释自己也写着「200 是拍的，部署前要实测再定」），而 `config.json` 的 `timeout` 是 20 秒。① 造一张挂着**几十张退货单**的销售单，改一次它的单价——这个事务要写 `ledgers` 1 + 目标 1 + 全部退货单 N，看它过不过、耗时多少；② 对着演示店 `mt33kfi77idxpw`的全量流水跑一次 `recomputeAggregates`——它在**一个事务里**做最多 `RECOMPUTE_MAX_RECORDS` 5000 条 / 50 次串行分页查询，看会不会撞超时。
+
+→ 顺便在演示店 `mt33kfi77idxpw`上把 `dropLegacy` 按**上线清单自己的顺序**跑一遍：迁完 → 记一笔 1 元销售 → 删掉 → `{mode:'dropLegacy'}` **必须成功**，验收看回包里 **`shortfall` 为 0**（也就是 `collectionCount ≥ mergedCount`）。**别要求两个条数相等**：这家演示店在最后一次迁移**之后**记的账只进集合、不进老数组——为上一条造的进货 / 销售 / 退货单只要没删掉就会留在当前账套里，`collectionCount` 偏大是正常的（实测：归并 6 条 + 3 张测试单 = 集合 9 条）。回滚彩排那笔 1 元测试账也永久留在集合里，但它记在后来被 `{newBook:true}` 换掉的旧账套里，不进这两个数。真正的闸是「集合非空」而不是条数相等（见上面 `mode:'dropLegacy'` 那条），集合里**缺**了老数组该有的账才回在 `shortfall` 里（大于 0 就停下来查）。跑完这家店就没有 O(1) 回滚了，所以**只在演示店上跑**。
+
+**阶段 2（T 日打烊后，从第 2 步起所有店一起停摆）**：`npm test` 绿 → `npm run sync:ledger-inventory` → `node scripts/wxcloud-deploy-ledger.js` → **回到「阶段 1 的后半段」（上面那一段）把演示店 `mt33kfi77idxpw` 的彩排和两条真云实测先跑完——那几步必须在部署之后才能做，所以它们就在今晚、就在这一步之后；**不跑彩排就直接进「逐店」，等于带着一条没验证过的紧急出路去动真实店**（彩排验的就是全店停摆窗口里唯一那条出路） → 开发者工具打开新版源码、**运营方**（`platform_admins` 里那个 openid，阶段 1 已建好）登录——迁移夜跑这三个 action 的是运营方，不再是各家店主。**但当晚清单不是每一步都走白名单**：三个运维 action（`checkAggregates` / `migrateRecords` 各 mode / `recomputeAggregates`——最后一个在下面回滚段落里，聚合漂了才跑）过 `requirePlatformAdmin`，运营方在名单里即可；其余每一步（`getSlip`、`getLedger`、记 1 元测试账、删掉它）过的是 `requireMember`，运营方必须是**该店**成员（阶段 1 已提前加为 `staff`），不是就报「不是该店成员」。逐店步骤用〔白名单〕/〔店成员〕标注执行人。每家的 `shopId` 从阶段 0 导出的 `ledgers` 全表 `_id` 里取——`listShops` 只列调用者自己是成员的店，运营方在阶段 1 加 `members` 之前调它回 `[]`（实测），加过之后能列出这几家，但 id 一律以导出为准 → **逐店的顺序不允许改（重名的两家务必按 `shopId` 认，不要按店名认）：① `mt33kfi77idxpw` 演示店（彩排，已在上一步跑完）→ ② `mt3231n3ixeenv` 卓祥服饰（第一个真实店）→ ③ `msxeubh4c6d5f9` 应收 549 万那家（**最后动**）** → 逐店：`checkAggregates`**〔白名单〕**（`mergedCount` 与阶段 0 报告**一致**、`collectionCount === 0`；**零记录的店是例外**——`records` 为空且没迁过，云上走「已迁移」分支，报告形状不同、**没有 `mergedCount` 字段**、还报 `migrated: true`（其实 `recordsMigratedAt` 是 0），照清单核对时别卡在这一条）→ 记下 2–3 张老送货单的 `getSlip` 结果**〔店成员〕** → 循环 `migrateRecords` 到 `done`**〔白名单〕** → `getLedger` 核对 `totals` 和两个客户**〔店成员〕**（等于报告里的 `after`、**无 `aggregatesStale`**）→ **重跑那几张 `getSlip`，必须逐张相等〔店成员〕** → **预检 P11 报了有没转的快照的店，跑 `migrateRecords` 的 `mode:'snapshots'` 到 `state === 'done'` 且 `failed === 0`〔白名单〕**（漏跑 = 这家店的「恢复清空前数据」从能点变成永久报错）→ 记一笔 1 元测试销售确认写路径解冻、再删掉**〔店成员〕** → 账本文档 > 3 MB 的店跑 `dropLegacy`**〔白名单〕** → 全部绿了再发布小程序并逐店真机确认已更新。
 
 **回滚**：某店 `failed` → 不动，该店停摆，无错账；某店 `done` 后发现不对 → `mode:'rollback'`（O(1)，该店**仍停摆**——只有读退回老路径，写仍被 `assertRecordsReady` 冻着；集合里的文档留着，**重跑必须带 `restart: true`**，回滚前记过账就连 `restart` 也会撞 V7/V2、只能 `newBook: true`；**迁完之后已经记过账就会被拒绝**，那些账只在集合里，回滚看不见它们——真要回滚得先另行备份再带 `force: true`；反过来，迁完之后**只删过单**的店回滚会**放行**，被删的单在老路径上复活，守卫不管这一侧）；整体不对 → 部署阶段 0 存档的旧函数包（已跑过 `dropLegacy` / 清空 / 恢复的店回不去）；聚合漂了 → `recomputeAggregates`。
 
