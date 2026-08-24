@@ -190,7 +190,25 @@ exports.main = async function (event) {
       // 下一张送货单印 0.00 的前欠。门在 ledger-core.js 的 dispatch 顶部。
       apiVersion: event && event.apiVersion,
       payload: (event && event.payload) || {},
-      db: createDb()
+      db: createDb(),
+      storage: {
+        // 商品图清理：云函数以管理端身份删文件。错误在这里吞干净——ledger-core 只
+        // await，这条路上任何失败都不许变成客户端可见的「记账失败」（最坏只是留
+        // 一个孤儿文件）。为什么必须挂在事务提交之后，见 ledger-core.js dispatch
+        // 里「唯一的 sanctioned 例外」那段注释。
+        deleteFiles: async function (fileIds) {
+          try {
+            // deleteFile 单次上限 50 个（微信云存储）。restoreCleared 可能一次作废
+            // 清空后新记的几十张商品图，超了整批报错被吞，这批文件就永久留在
+            // 存储里——按页删掉。
+            for (let i = 0; i < fileIds.length; i += 50) {
+              await cloud.deleteFile({ fileList: fileIds.slice(i, i + 50) })
+            }
+          } catch (error) {
+            console.warn('[ledger] 商品图清理失败（只留孤儿文件，不影响账）', error)
+          }
+        }
+      }
     })
     return Object.assign({ ok: true }, result)
   } catch (error) {

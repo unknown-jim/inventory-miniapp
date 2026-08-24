@@ -80,6 +80,42 @@ assert.strictEqual(updated.stock, 10)
 assert.strictEqual(updated.costPrice, 3)
 assert.strictEqual(updated.name, '纯牛奶 250ml')
 
+// 商品图 image：云存储 fileID，空串 = 无图；老数据没有该字段由读端兜底
+assert.strictEqual(sampleProduct().image, '', '不传 image 时是空串')
+const imaged = inv.createProduct({
+  name: '带图牛奶',
+  costPrice: 1,
+  salePrice: 2,
+  stock: 3,
+  image: '  cloud://env-1.bucket-2/shops/s-1/products/a.jpg  '
+}, 1000, 'p-img')
+assert.strictEqual(imaged.image, 'cloud://env-1.bucket-2/shops/s-1/products/a.jpg',
+  'image 透传并 trim')
+assert.throws(function () {
+  inv.createProduct({
+    name: '超长图',
+    costPrice: 1,
+    salePrice: 2,
+    stock: 1,
+    image: 'cloud://' + new Array(601).join('x')
+  }, 1000, 'p-long-img')
+}, /商品图地址过长/)
+assert.strictEqual(
+  inv.updateProduct(imaged, { name: '带图牛奶改' }, 2000).image,
+  'cloud://env-1.bucket-2/shops/s-1/products/a.jpg',
+  'input.image 缺省时保留 existing.image')
+assert.strictEqual(
+  inv.updateProduct(imaged, {
+    name: '带图牛奶改',
+    image: 'cloud://env-1.bucket-2/shops/s-1/products/b.jpg'
+  }, 2000).image,
+  'cloud://env-1.bucket-2/shops/s-1/products/b.jpg',
+  'input.image 传入时覆盖')
+assert.strictEqual(
+  inv.updateProduct(imaged, { name: '带图牛奶改', image: '' }, 2000).image,
+  '',
+  'image 传空串等于清除')
+
 const purchased = inv.applyPurchase([created], [], {
   productId: 'p1',
   qty: 5,
