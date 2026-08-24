@@ -493,4 +493,23 @@ const partialSlipText = textsOf(slipImage.layoutSlip(partialSlip))
 assert.ok(partialSlipText.indexOf('应收') >= 0)
 assert.ok(partialSlipText.indexOf('实收') >= 0)
 
+assert.strictEqual(slipImage.dataUrlPayload('data:image/png;base64,abc'), 'abc')
+assert.strictEqual(slipImage.dataUrlPayload('nope'), '')
+
+const hiDpr = slipImage.exportScales(1700, 1955, 3)
+assert.strictEqual(hiDpr.length, 3)
+assert.strictEqual(hiDpr[0], 3)
+assert.strictEqual(hiDpr[1], 1)
+assert.ok(hiDpr[2] < 1)
+assert.ok(Math.ceil(1955 * hiDpr[2]) <= slipImage.CANVAS_2D_SAFE_PX)
+assert.ok(Math.ceil(1700 * hiDpr[2]) <= slipImage.CANVAS_2D_SAFE_PX)
+
+const loDpr = slipImage.exportScales(1700, 1955, 1)
+assert.strictEqual(loDpr.length, 2)
+assert.strictEqual(loDpr[0], 1)
+assert.ok(loDpr[1] < 1)
+
+const small = slipImage.exportScales(1000, 1000, 3)
+assert.deepStrictEqual(small, [3, 1])
+
 console.log('slip-image tests passed')
