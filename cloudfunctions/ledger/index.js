@@ -63,6 +63,32 @@ function createDb() {
         return null
       }
     },
+    // 平台级维护开关。**语义和上面 getPlatformAdmin 正好相反**：那边读不出来一律
+    // 当「不是运营方」→ 拒绝（fail-closed），这边读不出来一律当「没在维护」→ 放行
+    // （fail-open）。不是前后不一致，是两道门拒绝的东西代价不在一个量级：
+    // platform_admins 读失败时拒绝的是**运维动作**（运维暂时不可用，重试即可）；
+    // 维护门读失败时若拒绝，拒绝的是**店里做生意**（所有店一起停业，而且那时候
+    // 没人能进去关掉这个开关——它自己就成了故障放大器）。详见 ledger-core.js 的
+    // readMaintenance。
+    // 「文档不存在」也走这条路：集合还没建、开关从来没开过，都是「没在维护」。
+    async getMaintenance() {
+      try {
+        const res = await db.collection('platform_config').doc('maintenance').get()
+        return res.data || null
+      } catch (error) {
+        return null
+      }
+    },
+    // 诊断路径**不吞异常**：运维方需要能分辨「开关是关的」和「开关读不出来」。
+    // 拦截路径（getMaintenance）为了 fail-open 把两者折成同一个 null，
+    // 这里必须把真相还给调用者。
+    async getMaintenanceRaw() {
+      const res = await db.collection('platform_config').doc('maintenance').get()
+      return res.data || null
+    },
+    async setMaintenance(doc) {
+      await db.collection('platform_config').doc('maintenance').set({ data: cloneData(doc) })
+    },
     // 事务外读一份清空快照。只有账本升级的 mode:'snapshots' 用得上：它要先在
     // 事务外把快照里的流水逐条写进集合（写完再开事务盖 bookId），所以得先能
     // 在事务外看见这份文档。记账路径读快照仍然只走事务里的 tx.getClearSnapshot。
@@ -226,9 +252,14 @@ exports.main = async function (event) {
     })
     return Object.assign({ ok: true }, result)
   } catch (error) {
-    return {
+    const out = {
       ok: false,
       error: (error && error.message) || '记账失败'
     }
+    // 维护期间**失败的回包也要带**维护标志：客户端据此弹「后台维护中」，
+    // 而不是把它显示成一条普通的记账失败。标志由 ledger-core.js 的 dispatch
+    // 挂在 error 上（见那里的 withMaintenance）。
+    if (error && error.maintenance) out.maintenance = error.maintenance
+    return out
   }
 }

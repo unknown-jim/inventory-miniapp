@@ -84,6 +84,8 @@ function newHarness(options) {
     storage: {},
     toasts: [],
     calls: [],
+    // wx.showModal 收到的参数（utils/maintenance.js 的维护弹窗在这里落地）
+    modals: [],
     // { [action]: { times, message } }，times 次之内直接拒绝，模拟网络抖动
     failures: {},
     // 落盘全部失败（storage 满 / 单 key 超 1 MB）
@@ -91,7 +93,11 @@ function newHarness(options) {
     // 改写服务端回包，用来模拟畸形回包
     rewrite: null,
     // 返回一个 promise 就把这次回包按住，直到它 resolve（造在飞的旧响应）
-    gate: null
+    gate: null,
+    // wx.showModal 同步抛错（15f 用）
+    modalThrows: false,
+    // wx.showModal 回 fail（屏上已经有一个弹窗时微信就是这么回的，15g 用）
+    modalFails: false
   }
 
   h.wx = {
@@ -108,7 +114,17 @@ function newHarness(options) {
     showLoading: function () {},
     hideLoading: function () {},
     showToast: function (o) { h.toasts.push(o) },
-    showModal: function () {},
+    // **必须调 complete**：utils/maintenance.js 的 showing 靠它复位，
+    // 不调的话第二个弹窗永远被「在屏上」挡掉。
+    // modalThrows 造「wx.showModal 同步抛错」：弹窗绝不能有本事把一次
+    // 已经成功的记账报成失败（见下面 15f）。
+    showModal: function (o) {
+      h.modals.push(o)
+      if (h.modalThrows) throw new Error('showModal 炸了')
+      // 微信的顺序是先 fail 后 complete
+      if (h.modalFails && o && o.fail) o.fail({ errMsg: 'showModal:fail' })
+      if (o && o.complete) o.complete({})
+    },
     setNavigationBarTitle: function () {},
     navigateTo: function () {},
     cloud: {
@@ -138,7 +154,11 @@ function newHarness(options) {
           const packed = { result: Object.assign({ ok: true }, shaped) }
           return held ? held.then(function () { return packed }) : packed
         }, function (error) {
+          // 和 cloudfunctions/ledger/index.js 的 exports.main 同形状：
+          // 失败分支也要把 error.maintenance 抬进回包（维护开着时写被拒，
+          // 客户端靠这个字段弹维护窗，而不是把维护当普通记账失败）
           const packed = { result: { ok: false, error: (error && error.message) || '记账失败' } }
+          if (error && error.maintenance) packed.result.maintenance = error.maintenance
           return held ? held.then(function () { return packed }) : packed
         })
       }
@@ -1696,6 +1716,145 @@ require.cache[require.resolve('../utils/cloud-config')].exports = {
     assert.ok(fatOnceCalls[0].payload.token === undefined, '不带 token：走的是一次性上传')
     assert.strictEqual(takeWarns(/超过单片上限/).length, 1,
       '整本只切出一片但那片超限，oversized 告警必须照打（它排在 early return 之前）')
+  }
+
+  // -------------------------------------------------------------------------
+  // 15) 维护模式：客户端整条链路（回包携带 → 弹窗）。
+  //
+  //     服务端那半边钉在 tests/maintenance.test.js；这里钉的是
+  //     utils/store.js 的 callCloud 收不收标志、utils/maintenance.js 的
+  //     弹窗去重、以及 App.onShow 那一次 checkMaintenance。
+  //     每一节开头 reset()：maintenance 是模块级状态，不重置会跨用例串。
+  // -------------------------------------------------------------------------
+  {
+    // a) 回包携带 → 弹窗：维护开着时一次普通读就能把维护状态带回来
+    require('../utils/maintenance').reset()
+    const h = newHarness({ ids: idFactory('w1') })
+    await openShop(h, '维护店一')
+    h.db.maintenance = { _id: 'maintenance', on: true, message: '今晚 22:00-23:00 升级' }
+    const store = loadStore(h)
+    await store.ensureReady()   // getLedger 是放行的读，回包自带 maintenance
+    const modal = h.modals.find(function (o) { return o.title === '后台维护中' })
+    assert.ok(modal, '普通读的回包携带维护状态，客户端要弹「后台维护中」')
+    assert.strictEqual(modal.content, '今晚 22:00-23:00 升级')
+  }
+
+  {
+    // b) 去重：同一状态下连续多次请求只弹一次
+    require('../utils/maintenance').reset()
+    const h = newHarness({ ids: idFactory('w2') })
+    await openShop(h, '维护店二')
+    h.db.maintenance = { _id: 'maintenance', on: true, message: '同一条维护文案' }
+    const store = loadStore(h)
+    await store.ensureReady()
+    for (let i = 0; i < 3; i++) {
+      await store.listRecords({ limit: 5 })
+    }
+    assert.strictEqual(
+      h.modals.filter(function (o) { return o.title === '后台维护中' }).length,
+      1,
+      '同一状态下连续多次请求只弹一次（shownKey 去重）'
+    )
+  }
+
+  {
+    // c) 关掉之后不再弹；再打开又能弹一次（关掉那次的回包把去重记忆清掉了）
+    require('../utils/maintenance').reset()
+    const h = newHarness({ ids: idFactory('w3') })
+    await openShop(h, '维护店三')
+    h.db.maintenance = { _id: 'maintenance', on: true, message: '同一条维护文案' }
+    const store = loadStore(h)
+    await store.ensureReady()
+    assert.strictEqual(h.modals.length, 1, '前提：开着时弹过一次')
+    h.db.maintenance.on = false
+    await store.listRecords({ limit: 5 })
+    assert.strictEqual(h.modals.length, 1, '维护关掉之后不再弹')
+    h.db.maintenance.on = true
+    await store.listRecords({ limit: 5 })
+    assert.strictEqual(h.modals.length, 2,
+      '同一条文案重新打开也要再弹——关掉那次的回包把 shownKey 清掉了')
+    assert.strictEqual(h.modals[1].content, '同一条维护文案')
+  }
+
+  {
+    // d) 写被拒时也弹：走的是失败回包那条路（callCloud 的 .then 在 throw 之前
+    //    先 note）。先 reset 清掉去重记忆并清空 modals，保证这一屏里唯一可能的
+    //    弹窗只能来自 saveProduct 的失败回包——ensureReady 已短路，不再发读请求。
+    require('../utils/maintenance').reset()
+    const h = newHarness({ ids: idFactory('w4') })
+    await openShop(h, '维护店四')
+    h.db.maintenance = { _id: 'maintenance', on: true, message: '维护中不许写' }
+    const store = loadStore(h)
+    await store.ensureReady()
+    require('../utils/maintenance').reset()
+    h.modals.length = 0
+    await rejects(function () {
+      return store.saveProduct({ name: '新货', costPrice: 1, salePrice: 2, stock: 1 })
+    }, /维护中不许写/)
+    assert.strictEqual(h.modals.length, 1, '写被拒的失败回包也要弹维护窗')
+    assert.strictEqual(h.modals[0].title, '后台维护中')
+    assert.strictEqual(h.modals[0].content, '维护中不许写')
+  }
+
+  {
+    // e) store.checkMaintenance()：App.onShow 补的那一次。
+    //    维护开着 → 返回 true 并弹窗；云调用失败 → 返回 false 且不弹（fail-open）。
+    require('../utils/maintenance').reset()
+    const h = newHarness({ ids: idFactory('w5') })
+    await openShop(h, '维护店五')
+    h.db.maintenance = { _id: 'maintenance', on: true, message: '切回前台也要弹' }
+    const store = loadStore(h)
+    assert.strictEqual(await store.checkMaintenance(), true, '维护开着时返回 true')
+    assert.strictEqual(h.modals.length, 1, '并且弹窗')
+    h.modals.length = 0
+    h.failures.whoami = { times: 1, message: '网络抖动' }
+    assert.strictEqual(await store.checkMaintenance(), false, '云调用失败时返回 false')
+    assert.strictEqual(h.modals.length, 0, '断网时不弹任何东西（fail-open）')
+    h.failures.whoami = { times: 0 }
+  }
+
+  {
+    // f) 弹窗炸了不许否定一次成功的提交。
+    //
+    //    note() 处在每一次云调用成功路径的正中间。没有 try/catch 时，
+    //    wx.showModal 同步抛错会穿到 callCloud 的 .catch(mapCloudError)，
+    //    把一次**已经写进库**的记账报成失败——店员会再点一次，同一笔账落两遍。
+    //    这是 ledger-core.js 事务段那条「提交之后不许再有可能失败的一步」
+    //    要防的同一类事故，只不过换到了客户端这一侧。
+    require('../utils/maintenance').reset()
+    const h = newHarness({ ids: idFactory('w6') })
+    await openShop(h, '维护店六')
+    h.db.maintenance = { _id: 'maintenance', on: true, message: '弹窗会炸' }
+    const store = loadStore(h)
+    h.modalThrows = true
+    // 读放行的 action：库里确实成功了，弹窗炸掉也不许把它报成失败
+    await store.ensureReady()
+    assert.strictEqual(h.modals.length, 1, '前提：确实试着弹了')
+    assert.ok(store.isReady(), '弹窗抛错不许让一次成功的请求变成失败')
+    h.modalThrows = false
+  }
+
+  {
+    // g) 没弹出来就不算弹过。
+    //
+    //    微信在屏上已经有一个 modal 时（比如 app.js 的 onUpdateReady 那个更新
+    //    提示），会对第二个 showModal 回 fail。若不在 fail 里把去重记忆清掉，
+    //    这一版维护文案会被记成「弹过了」，此后同一版**再也不弹**——而维护
+    //    窗口和更新提示恰恰是最容易撞在一起的两件事（升级窗口里两者都会出现）。
+    require('../utils/maintenance').reset()
+    const h = newHarness({ ids: idFactory('w7') })
+    await openShop(h, '维护店七')
+    h.db.maintenance = { _id: 'maintenance', on: true, message: '第一次会被挡掉' }
+    const store = loadStore(h)
+    h.modalFails = true
+    await store.ensureReady()
+    assert.strictEqual(h.modals.length, 1, '试着弹了一次，但被微信挡掉')
+    h.modalFails = false
+    await store.checkMaintenance()
+    assert.strictEqual(h.modals.length, 2, '同一版文案必须还能再弹一次（没弹出来就不算弹过）')
+    // 这次真弹出来了，再来一次就该被去重挡住
+    await store.checkMaintenance()
+    assert.strictEqual(h.modals.length, 2, '真弹出来之后照旧去重，不叠第三个')
   }
 
   console.log('store.test.js ok')

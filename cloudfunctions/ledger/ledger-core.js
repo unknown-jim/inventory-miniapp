@@ -400,6 +400,87 @@ function needsApiVersion(action) {
     || isPlatformAction(action) || isMutation(action)
 }
 
+// ---------------------------------------------------------------------------
+// 平台级维护开关（集合 platform_config 的 maintenance 文档）。
+//
+// 它**不是**账本升级的冻结开关（docs/cloud-ledger.md「不要做」里禁的那个仍然禁）。
+// 两个口径不重叠：assertRecordsReady 是**按店**、**自动**、口径来自这本账自己的
+// 迁移状态；维护开关是**平台级**、**手动**、不编码任何一家店的迁移状态。
+// 账本升级仍然只用 assertRecordsReady，不许改成读这个开关。
+// ---------------------------------------------------------------------------
+
+// 维护期间仍然放行的只读 action。**白名单，不是黑名单**：以后新增的 action
+// 默认落在「维护期不许」那一侧，写错的方向是安全的那一侧。
+// 读放行是有意的：维护期店里仍然能查账、查库存、翻流水、看送货单，只是不能记。
+//
+// **这道门管的是云函数，管不到客户端直连云存储的那条路**：商品图是客户端
+// wx.cloud.uploadFile 直传的（utils/product-image.js），维护期店员选了图仍然传得上去，
+// 只是紧接着的 saveProduct 会被这里拦掉，于是存储里留一个孤儿文件。
+// 不产生错账（账本的写被拦死了），和仓里已经接受的那类孤儿文件同一档，不必修，
+// 但别以为这道门覆盖了「所有写」——它覆盖的是**所有会改账的写**。
+const MAINTENANCE_READS = [
+  'whoami', 'listShops', 'listMembers', 'getLedger', 'getSlip', 'getRecord', 'listRecords'
+]
+
+// 维护期间照常放行的运维 action：它们**就是**维护窗口里要做的事，
+// 而且已经由 platform_admins 白名单（fail-closed）守着。
+// **setMaintenance 必须在这一侧**——否则开关一旦打开就再也关不掉，
+// 而「维护窗口里最需要的就是能随时关掉」。
+const MAINTENANCE_ACTIONS = ['getMaintenance', 'setMaintenance']
+
+// 放行的第三类走 isPlatformAction 而**不是** isOpsAction：后者只有账本升级那三个，
+// 会把 purgeDeletedShopRecords（删店之后接着清流水，2b-3）挡在维护窗口外面 ——
+// 而那恰恰是维护窗口里会做的事，且它同样只有平台运营方调得动。判据跟着
+// isPlatformAction 走，以后再加平台运维 action 时这里自动跟上，不用记得回来改。
+function allowedDuringMaintenance(action) {
+  return MAINTENANCE_READS.indexOf(action) >= 0
+    || MAINTENANCE_ACTIONS.indexOf(action) >= 0
+    || isPlatformAction(action)
+}
+
+const MAINTENANCE_DEFAULT_MESSAGE = '系统正在维护，暂时不能记账。维护结束后会自动恢复，请稍后再试。'
+
+function maintenanceOn(doc) {
+  return !!(doc && doc.on === true)
+}
+
+// 回传给客户端的形状。只给客户端需要的两个字段，不把 updatedBy 这类内部信息发出去。
+function publicMaintenance(doc) {
+  return {
+    on: true,
+    message: String((doc && doc.message) || '') || MAINTENANCE_DEFAULT_MESSAGE
+  }
+}
+
+// 读一次开关。**任何失败都折成 null（= 没在维护）**——fail-open，理由见
+// index.js 的 getMaintenance 注释和 docs/cloud-ledger.md 的「维护模式」。
+// 这里连「拦不拦写」也是 fail-open，而且这是**单独判断过**的，不是顺手跟着弹窗走的：
+//   · 读失败和「维护是否真的开着」互相独立，读失败在非维护期发生的次数远多于维护期；
+//   · fail-closed 的后果是所有店一起做不了生意，从店员视角和真维护无法区分；
+//   · 维护窗口里真正保护数据完整性的不是这道门——ledgers/{shopId} 的事务是全店写的
+//     唯一串行化点，搬家期间的硬围栏是 assertRecordsReady。这道门是**减少无谓写入**的闸，
+//     把它当最后一道防线来设计，会同时得到一条不可靠的防线和一个高频的误伤。
+// 残余风险如实记着：维护开着 + 这一次读恰好失败 + 恰好有人提交 = 一笔写会落进去。
+// 三件事同时发生，后果由上面两道真围栏兜。
+//
+// **不缓存**：每次 dispatch 现读。缓存会让「关掉维护」延迟一个 TTL，而随时能关掉
+// 是这个功能最重要的性质。本仓的量下这次读可以忽略；真到了要省它的量级，
+// 旋钮是加 TTL 缓存并接受关闭延迟。
+async function readMaintenance(db) {
+  if (!db || !db.getMaintenance) return null
+  try {
+    const doc = await db.getMaintenance()
+    return maintenanceOn(doc) ? doc : null
+  } catch (error) {
+    return null
+  }
+}
+
+function withMaintenance(error, doc) {
+  if (error && doc) error.maintenance = publicMaintenance(doc)
+  return error
+}
+
 async function membersOfShop(db, tx, shopId) {
   if (tx && tx.listMembersByShop) {
     return tx.listMembersByShop(shopId)
@@ -445,7 +526,7 @@ async function purgeDeletedShopRecords(db, shopId, payload) {
   return Object.assign({ shopId: String(shopId) }, got)
 }
 
-async function dispatch(input) {
+async function dispatchAction(input) {
   const db = input.db
   const openid = String((input && input.openid) || '')
   const action = String((input && input.action) || '')
@@ -524,6 +605,36 @@ async function dispatch(input) {
       await tx.putLedger(shopId, ledger)
       return { shop: publicShop(shop, 'owner') }
     })
+  }
+
+  // 平台级维护开关的读写。**平台运营方白名单**（和账本升级三个动作同一道门）。
+  // 客户端一个入口都没有：从开发者工具 Console 调
+  //   wx.cloud.callFunction({ name:'ledger', data:{ action:'setMaintenance',
+  //     payload:{ on:true, message:'今晚 22:00-23:00 升级' } } })
+  // **不放进 needsApiVersion**：版本门的两条理由（会不会回传账本、是不是不可逆动作）
+  // 这两个 action 都不占，而且更重要——维护窗口里最需要的就是能随时关掉，
+  // 不能把关闭开关的路挡在一道以后可能收紧的版本门后面。
+  if (MAINTENANCE_ACTIONS.indexOf(action) >= 0) {
+    await requirePlatformAdmin(db, openid)
+    if (action === 'getMaintenance') {
+      // 诊断路径**不吞异常**：运维方要能分辨「开关是关的」和「开关读不出来」。
+      // 拦截路径（readMaintenance）为了 fail-open 把两者折成同一个「没在维护」。
+      const doc = db.getMaintenanceRaw ? await db.getMaintenanceRaw() : await db.getMaintenance()
+      return {
+        maintenanceConfig: doc || null,
+        on: maintenanceOn(doc)
+      }
+    }
+    const on = payload.on === true
+    const next = {
+      _id: 'maintenance',
+      on: on,
+      message: String(payload.message || ''),
+      updatedAt: now,
+      updatedBy: openid
+    }
+    await db.setMaintenance(next)
+    return { maintenanceConfig: next, on: on }
   }
 
   const shopId = String((input && input.shopId) || payload.shopId || '')
@@ -948,6 +1059,47 @@ async function dispatch(input) {
   }
 }
 
+// 维护门 + 回包携带的唯一入口。**写拦截在这里，不在客户端**：弹窗只是 UX，
+// 真正的门在服务端——即使有人用老客户端、或者弹窗没弹出来，写照样进不去。
+//
+// 回包携带的机制（需求 2「已经在用小程序的用户也要弹」）：维护开着时，
+// **每一个回包**（成功的和失败的）都带上 maintenance 字段。用户只要还在操作
+// （翻页、开单、查账），下一次请求就把维护状态带回来，客户端立刻弹窗，零额外往返。
+// **不要改成轮询。**
+//
+// 诚实边界：一个用户盯着静态页面完全不动、一个请求都不发，收不到弹窗。
+// 覆盖不是 100%——但这不构成风险，他在不发请求的情况下也写不进任何东西。
+// utils/maintenance.js 那头还有一句 App.onShow 的补充检查，同一条边界写在那里。
+//
+// 维护**关着**时（含开关读失败）：这个函数除了多一次小集合的 doc().get()，
+// 对回包**一个字节都不改**——不加 maintenance 键。所以「维护关着时行为与今天完全
+// 一致」这句是字面成立的，测试也按字面钉（hasOwnProperty('maintenance') === false）。
+async function dispatch(input) {
+  const db = input && input.db
+  const action = String((input && input.action) || '')
+  const doc = await readMaintenance(db)
+  if (!doc) return dispatchAction(input)
+  // action 为空时不由维护门管：让 dispatchAction 去报它自己的「缺少操作」，
+  // 不要把一个格式错误的请求说成是维护中。
+  if (action && !allowedDuringMaintenance(action)) {
+    throw withMaintenance(new Error(publicMaintenance(doc).message), doc)
+  }
+  try {
+    const result = await dispatchAction(input)
+    // **两个维护 action 自己的回包不挂标志。** doc 是进 dispatch 那一刻读到的，
+    // 而 setMaintenance 很可能刚把它改掉——挂上去就是一份过期状态：运营方
+    // 调 setMaintenance({on:false}) 关掉维护，回包却还写着 maintenance.on = true。
+    // 今天没人被坑到（运营方从 devtools Console 调，不走 utils/store.js 的
+    // callCloud，note() 不会被触发），但只要以后有人把它接进客户端，
+    // 关掉开关的那一刻自己就会被弹一个「后台维护中」，而且那份过期状态还会
+    // 占住去重用的 shownKey。getMaintenance 一并跳过：它的回包里已经有权威状态。
+    if (MAINTENANCE_ACTIONS.indexOf(action) >= 0) return result
+    return Object.assign({}, result, { maintenance: publicMaintenance(doc) })
+  } catch (error) {
+    throw withMaintenance(error, doc)
+  }
+}
+
 // 本机账本上传：服务端的分片接收端。
 //
 // 客户端不带 token 就是老的一次性上传（2b-1 的小程序仍然这么调）；带 token 就是
@@ -1127,6 +1279,10 @@ module.exports = {
   API_VERSION: API_VERSION,
   PLATFORM_ACTIONS: PLATFORM_ACTIONS,
   dispatch: dispatch,
+  MAINTENANCE_READS: MAINTENANCE_READS,
+  MAINTENANCE_ACTIONS: MAINTENANCE_ACTIONS,
+  MAINTENANCE_DEFAULT_MESSAGE: MAINTENANCE_DEFAULT_MESSAGE,
+  allowedDuringMaintenance: allowedDuringMaintenance,
   publicListsOf: publicListsOf,
   attachRecent: attachRecent,
   withBookId: withBookId,
