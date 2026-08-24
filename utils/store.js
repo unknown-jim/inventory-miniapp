@@ -293,6 +293,20 @@ function mapCloudError(error) {
     return error
   }
   const msg = String((error && (error.errMsg || error.message)) || '')
+  // 下面这条 /conflict|transaction/ 会把 TransactionNotExist 一起吃掉，
+  // **这是有意的，别在这里加前置分支把它拆出来**：
+  //
+  // 服务端敢拆，是因为它拿得到 (错误文本, 事务耗时) 两个入参 —— 没到 30 秒就炸
+  // 才判「单事务写入量超限」那一类（ledger-core.js 的 classifyTransactionError）。
+  // **客户端拿不到事务耗时**，少了判据就不该判：一次真跑满 30 秒的超时和一次
+  // 写入量超限，在这里长得一模一样，而两者该给的建议正相反。
+  //
+  // 而且这条路上本来也见不到原始的 TransactionNotExist：云函数已经在
+  // index.js 的 runTransaction catch 里把它拆成「这张单牵连的记录太多，一次改不完」
+  // 或「库存刚被别人改过，请再提交」了，客户端从 result.error 收到的是拆好的那句，
+  // 会被上面第一条白名单（含「提交」二字）或末尾的 `return error` 原样放行。
+  // 这里只兜**没经过云函数改写**的 SDK 层错误，那种没有耗时可量，归进可重试
+  // 是正确的保守选择 —— 和 classifyTransactionError 在 elapsedMs 缺失时一致。
   if (/conflict|transaction/i.test(msg)) {
     return new Error('库存刚被别人改过，请再提交')
   }

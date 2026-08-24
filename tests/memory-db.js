@@ -317,6 +317,11 @@ MemoryDb.prototype.runTransaction = async function (fn) {
     this._rev += 1
     return result
   }
+  // 这句模拟的是两类事务失败里的**真冲突**：重试的每一轮里都有别的写入者先提交
+  // （_rev 一直变），后到的被回滚 —— 重试会成功的那一类。另一类「单事务写入量
+  // 超限」（TransactionNotExist，重试永远不会成功）只有真云上有，在
+  // cloudfunctions/ledger/index.js 的 runTransaction catch 里按事务耗时拆，
+  // 内存替身造不出它，这里的文案保持和服务端冲突类一致。
   throw new Error('库存刚被别人改过，请再提交')
 }
 

@@ -1233,6 +1233,31 @@ require.cache[require.resolve('../utils/cloud-config')].exports = {
   }
 
   // -------------------------------------------------------------------------
+  // 13b) 首页阻断位走话术层：ensureReady 抛技术原文时，blockedMessage 必须是
+  //      utils/messages.js 的店员话术，不是把「流水升级」这种词端给店员。
+  //      抛出去的 error 本身没被改（mapCloudError 原样放行），换的只是显示那层。
+  // -------------------------------------------------------------------------
+  {
+    const h = newHarness({ ids: idFactory('m13') })
+    await openShop(h, '话术店')
+    h.failures.getLedger = { times: 99, message: '本店账本还没完成流水升级，暂时不能记账' }
+    const store = loadStore(h)
+    assert.strictEqual(await store.ready(), false, '前提：getLedger 失败，ready() 是 false')
+    const page = mountPage(loadPage(INDEX_PATH))
+    await page.onShow()
+    assert.strictEqual(page.data.blocked, true, '首页要落到阻断位')
+    assert.ok(
+      page.data.blockedMessage.indexOf('流水升级') < 0,
+      '阻断位不许把「流水升级」四个字端给店员，实际显示：' + page.data.blockedMessage
+    )
+    assert.strictEqual(
+      page.data.blockedMessage,
+      '本店的账目正在后台整理，整理期间不能记账。查账、查库存、翻流水都不受影响。请稍后再试；如果一直是这样，请联系店主。'
+    )
+    h.failures.getLedger = { times: 0 }
+  }
+
+  // -------------------------------------------------------------------------
   // 14) 本机账本分片上传（2b-3）
   //
   //     切法本身会改钱：把退货单和它的被退销售单切到两片里，
@@ -1855,6 +1880,42 @@ require.cache[require.resolve('../utils/cloud-config')].exports = {
     // 这次真弹出来了，再来一次就该被去重挡住
     await store.checkMaintenance()
     assert.strictEqual(h.modals.length, 2, '真弹出来之后照旧去重，不叠第三个')
+  }
+
+  {
+    // 16) 云函数拆好的两句事务话术，客户端**原样放行**，不再改写一次。
+    //
+    //     走的是真实链路（callCloud → mapCloudError → 抛给页面），不是源码字符串
+    //     断言：从前这里钉的是「utils/store.js 里含 TransactionNotExist」，
+    //     而那个词现在只出现在注释里，等于在核对注释措辞。
+    //
+    //     为什么客户端不该再拆一次：服务端敢拆是因为它拿得到事务耗时；客户端
+    //     拿不到，少了判据就不该判 —— 一次真跑满 30 秒的超时和一次写入量超限
+    //     在这里长得一模一样，而两者该给的建议正相反。
+    const core2 = require('../cloudfunctions/ledger/ledger-core')
+    const staff = require('../utils/messages')
+    const both = [core2.TX_TOO_BIG_MESSAGE, core2.TX_CONFLICT_MESSAGE]
+    for (let i = 0; i < both.length; i++) {
+      const text = both[i]
+      // 一句一个夹具：失败会作废 readyState，同一个夹具跑第二轮时 ensureReady
+      // 会先炸在上一轮的错误上，测的就不是这一轮那句话了
+      const h = newHarness({ ids: idFactory('tx' + i) })
+      await openShop(h, '事务话术店' + i)
+      const store = loadStore(h)
+      h.wx.cloud.callFunction = function () {
+        return Promise.resolve({ result: { ok: false, error: text } })
+      }
+      let caught = null
+      try {
+        await store.saveProduct({ name: '事务话术', costPrice: 1, salePrice: 2, stock: 1 })
+      } catch (error) {
+        caught = error
+      }
+      assert.ok(caught, '前提：这次提交失败了')
+      assert.strictEqual(caught.message, text, '客户端不许再改写云函数拆好的话术：' + text)
+      assert.strictEqual(staff.forStaff(caught).matched, true,
+        '拆好的话术必须有对应的店员话术规则：' + text)
+    }
   }
 
   console.log('store.test.js ok')
