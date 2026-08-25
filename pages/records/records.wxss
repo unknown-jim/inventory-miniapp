@@ -46,7 +46,7 @@
   color: #64748B;
 }
 
-/* 触底不触发时的手动兜底。高度用共用 .btn-ghost（--tap-sm），这里只管间距。 */
+/* 触底不触发时的手动兜底。高度用共用 .btn-ghost（--tap-md），这里只管间距。 */
 .load-more {
   margin-top: var(--space-md);
 }

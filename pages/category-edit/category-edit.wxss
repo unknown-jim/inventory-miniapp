@@ -17,10 +17,10 @@
 
 .axis-title {
   margin-bottom: 12rpx;
-  min-height: var(--tap-sm);
-  line-height: var(--tap-sm);
+  min-height: var(--tap-min);
+  line-height: var(--tap-min);
   font-weight: 600;
-  font-size: var(--fs-md);
+  font-size: var(--fs-body);
 }
 
 .add-spec {

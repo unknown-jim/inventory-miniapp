@@ -5,8 +5,8 @@
   padding: 18rpx 20rpx;
   background: #ECFDF5;
   color: #0F766E;
-  border-radius: 12rpx;
-  font-size: var(--fs-sm);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-label);
   font-weight: 600;
 }
 
@@ -43,10 +43,10 @@
 
 .axis-title {
   margin-bottom: 12rpx;
-  min-height: var(--tap-sm);
-  line-height: var(--tap-sm);
+  min-height: var(--tap-min);
+  line-height: var(--tap-min);
   font-weight: 600;
-  font-size: var(--fs-md);
+  font-size: var(--fs-body);
 }
 
 .add-spec {
@@ -79,7 +79,7 @@
 
 .link {
   color: #0F766E;
-  font-size: var(--fs-sm);
+  font-size: var(--fs-label);
 }
 
 .name-chips {
@@ -117,9 +117,9 @@
   justify-content: center;
   min-height: var(--tap-lg);
   border: 2rpx dashed #CBD5E1;
-  border-radius: 12rpx;
+  border-radius: var(--radius-sm);
   color: #64748B;
-  font-size: var(--fs-sm);
+  font-size: var(--fs-label);
 }
 
 .image-box {
@@ -131,7 +131,7 @@
 .image-preview {
   width: 112rpx;
   height: 112rpx;
-  border-radius: 8rpx;
+  border-radius: var(--radius-xs);
   background: #F1F5F4;
 }
 

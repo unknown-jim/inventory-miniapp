@@ -5,7 +5,7 @@
 .meta {
   margin: -8rpx 0 24rpx;
   color: #C2410C;
-  font-size: var(--fs-sm);
+  font-size: var(--fs-label);
 }
 
 .spec-block .field {
@@ -19,7 +19,7 @@
 .customer-meta {
   margin: -8rpx 0 24rpx;
   color: #64748B;
-  font-size: var(--fs-sm);
+  font-size: var(--fs-label);
 }
 
 .field-head {
@@ -35,7 +35,7 @@
 
 .link {
   color: #0F766E;
-  font-size: var(--fs-sm);
+  font-size: var(--fs-label);
 }
 
 .total,
@@ -52,7 +52,7 @@
 .total-num,
 .profit-num {
   margin-top: 8rpx;
-  font-size: var(--fs-xl);
+  font-size: var(--fs-display);
   font-weight: 700;
 }
 
@@ -75,7 +75,7 @@
 .line-amount {
   margin-bottom: 16rpx;
   color: #64748B;
-  font-size: var(--fs-sm);
+  font-size: var(--fs-label);
 }
 
 .add-btn {
@@ -123,16 +123,16 @@
   background: rgba(15, 23, 42, 0.45);
   display: flex;
   align-items: flex-end;
-  z-index: 1000;
+  z-index: var(--z-overlay);
 }
 
 .sheet {
   width: 100%;
   background: #FFFFFF;
-  border-radius: 24rpx 24rpx 0 0;
+  border-radius: var(--radius-xl) var(--radius-xl) 0 0;
   padding: 28rpx 24rpx 12rpx;
   position: relative;
-  z-index: 1001;
+  z-index: var(--z-sheet);
 }
 
 .sheet-head {
@@ -147,7 +147,7 @@
 }
 
 .sheet-title {
-  font-size: var(--fs-lg);
+  font-size: var(--fs-title);
   font-weight: 600;
   margin-bottom: 16rpx;
 }
@@ -164,7 +164,7 @@
 .sheet-thumb {
   width: 72rpx;
   height: 72rpx;
-  border-radius: 6rpx;
+  border-radius: var(--radius-xs);
   flex-shrink: 0;
   margin-right: var(--gap);
   background: #f3f4f6;
@@ -195,7 +195,7 @@
 
 .paid-note {
   margin-top: 16rpx;
-  font-size: var(--fs-sm);
+  font-size: var(--fs-label);
   font-weight: 600;
 }
 

@@ -23,18 +23,18 @@
   background: rgba(15, 23, 42, 0.45);
   display: flex;
   align-items: flex-end;
-  z-index: 1000;
+  z-index: var(--z-overlay);
 }
 
 .sheet {
   width: 100%;
   background: #FFFFFF;
-  border-radius: 24rpx 24rpx 0 0;
-  padding: 28rpx 24rpx 12rpx;
+  border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+  padding: 28rpx 24rpx calc(12rpx + var(--safe-bottom));
 }
 
 .sheet-title {
-  font-size: var(--fs-lg);
+  font-size: var(--fs-title);
   font-weight: 600;
   margin-bottom: 16rpx;
 }

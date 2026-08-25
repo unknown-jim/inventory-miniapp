@@ -11,14 +11,14 @@
 }
 
 .item-name {
-  font-size: var(--fs-lg);
+  font-size: var(--fs-title);
   font-weight: 600;
 }
 
 .price-row {
   margin-top: 16rpx;
   color: #0F766E;
-  font-size: var(--fs-sm);
+  font-size: var(--fs-label);
   font-weight: 600;
 }
 
@@ -43,10 +43,10 @@
   padding: 0 28rpx;
   height: var(--tap-md);
   line-height: var(--tap-md);
-  font-size: var(--fs-lg);
+  font-size: var(--fs-title);
   background: #0F766E;
   color: #FFFFFF;
-  border-radius: 40rpx;
+  border-radius: var(--radius-round);
   font-weight: 600;
   box-shadow: 0 12rpx 24rpx rgba(15, 118, 110, 0.28);
 }

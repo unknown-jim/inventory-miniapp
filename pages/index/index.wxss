@@ -8,7 +8,7 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  min-height: var(--tap-sm);
+  min-height: var(--tap-min);
   margin-bottom: var(--space-md);
   border-bottom: 1rpx solid rgba(255, 255, 255, 0.16);
 }
@@ -16,14 +16,14 @@
 .hero-shop-name {
   flex: 1;
   min-width: 0;
-  font-size: var(--fs-lg);
+  font-size: var(--fs-title);
   word-break: break-word;
 }
 
 .hero-shop-go {
   flex-shrink: 0;
   margin-left: var(--gap);
-  font-size: var(--fs-sm);
+  font-size: var(--fs-label);
   opacity: 0.78;
 }
 
@@ -34,13 +34,13 @@
 }
 
 .hero-kicker {
-  font-size: var(--fs-xs);
+  font-size: var(--fs-caption);
   opacity: 0.78;
 }
 
 .hero-title {
   margin-top: 8rpx;
-  font-size: var(--fs-hero);
+  font-size: var(--fs-display);
   font-weight: 700;
 }
 
@@ -50,7 +50,7 @@
 
 .hero-profit-num {
   margin-top: 8rpx;
-  font-size: var(--fs-hero);
+  font-size: var(--fs-display);
   font-weight: 700;
 }
 
@@ -86,7 +86,7 @@
 
 .debt-banner-num {
   margin-top: 8rpx;
-  font-size: var(--fs-xl);
+  font-size: var(--fs-display);
   font-weight: 700;
   color: #C2410C;
 }
@@ -137,5 +137,5 @@
 
 .link {
   color: #0F766E;
-  font-size: var(--fs-sm);
+  font-size: var(--fs-label);
 }

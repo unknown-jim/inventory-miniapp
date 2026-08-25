@@ -2,9 +2,9 @@
   margin: 16rpx 0;
   padding: 20rpx 24rpx;
   background: #F8FAF9;
-  border-radius: 14rpx;
+  border-radius: var(--radius-md);
   word-break: break-all;
-  font-size: var(--fs-sm);
+  font-size: var(--fs-label);
 }
 
 .copy-btn {
@@ -24,7 +24,7 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  min-height: var(--tap-sm);
+  min-height: var(--tap-min);
   padding: 24rpx 0;
 }
 
@@ -42,7 +42,7 @@
 }
 
 .item-name {
-  font-size: var(--fs-lg);
+  font-size: var(--fs-title);
   font-weight: 600;
   margin-bottom: 8rpx;
 }
@@ -55,7 +55,7 @@
   flex-shrink: 0;
   margin-left: var(--gap);
   color: #64748B;
-  font-size: var(--fs-sm);
+  font-size: var(--fs-label);
 }
 
 .fold-body {

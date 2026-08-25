@@ -12,7 +12,7 @@
 
 .debt-num {
   margin: 8rpx 0 12rpx;
-  font-size: var(--fs-hero);
+  font-size: var(--fs-display);
   font-weight: 700;
   color: #0F766E;
 }
@@ -65,18 +65,18 @@
 }
 
 /* 明细取不到时的「重试」。和 index / products 的 .link 同一套，
-   字号不低于 --fs-sm，可点高度靠 .quiet 卡片的内边距撑住。 */
+   字号不低于 --fs-label，可点高度靠 .quiet 卡片的内边距撑住。 */
 .link {
   margin-left: var(--space-xs);
   color: #0F766E;
-  font-size: var(--fs-sm);
+  font-size: var(--fs-label);
 }
 
 .save-btn {
   margin: 32rpx 0 16rpx;
 }
 
-/* 往来明细触底不触发时的手动兜底。高度用共用 .btn-ghost（--tap-sm），
+/* 往来明细触底不触发时的手动兜底。高度用共用 .btn-ghost（--tap-md），
    这里只管间距。 */
 .ledger-more {
   margin: var(--space-md) 0;
@@ -95,18 +95,18 @@
   background: rgba(15, 23, 42, 0.45);
   display: flex;
   align-items: flex-end;
-  z-index: 20;
+  z-index: var(--z-dropdown);
 }
 
 .sheet {
   width: 100%;
   background: #FFFFFF;
-  border-radius: 24rpx 24rpx 0 0;
-  padding: 28rpx 24rpx 48rpx;
+  border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+  padding: 28rpx 24rpx calc(48rpx + var(--safe-bottom));
 }
 
 .sheet-title {
-  font-size: var(--fs-lg);
+  font-size: var(--fs-title);
   font-weight: 600;
   margin-bottom: 12rpx;
 }

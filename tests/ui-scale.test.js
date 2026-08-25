@@ -25,8 +25,20 @@ assert.ok(
 )
 
 const appWxss = read('app.wxss')
-assert.ok(appWxss.indexOf('--fs-md:') >= 0, 'app.wxss should define type tokens')
-assert.ok(appWxss.indexOf('--tap-lg:') >= 0, 'app.wxss should define tap tokens')
+;[
+  '--fs-caption:', '--fs-label:', '--fs-body:', '--fs-title:', '--fs-amount:',
+  '--fs-amount-lg:', '--fs-display:', '--fs-hero:', '--tap-min:', '--tap-md:',
+  '--tap-lg:', '--radius-xl:', '--z-overlay:', '--safe-bottom:'
+].forEach(function (token) {
+  assert.ok(appWxss.indexOf(token) >= 0, 'app.wxss should define ' + token)
+})
+;[
+  '--fs-xs: var(--fs-caption)', '--fs-sm: var(--fs-label)', '--fs-md: var(--fs-body)',
+  '--fs-lg: var(--fs-title)', '--fs-xl: var(--fs-display)', '--tap-sm: var(--tap-min)',
+  '--chip-min: var(--tap-min)'
+].forEach(function (alias) {
+  assert.ok(appWxss.indexOf(alias) >= 0, 'app.wxss should keep legacy alias ' + alias)
+})
 assert.ok(appWxss.indexOf('--space-xs:') >= 0, 'app.wxss should define --space-xs')
 assert.ok(appWxss.indexOf('--space-sm:') >= 0, 'app.wxss should define --space-sm')
 assert.ok(appWxss.indexOf('--space-md:') >= 0, 'app.wxss should define --space-md')
@@ -46,9 +58,9 @@ assert.ok(appWxss.indexOf('.seg') >= 0, 'app.wxss should define .seg')
 assert.ok(appWxss.indexOf('.page.ui-std') < 0, 'app.wxss should not define ui-std')
 assert.ok(appWxss.indexOf('.page.ui-xl') < 0, 'app.wxss should not define ui-xl')
 
-const xsMatch = appWxss.match(/--fs-xs:\s*(\d+)rpx/)
-assert.ok(xsMatch, 'app.wxss should define --fs-xs in rpx')
-const minFont = Number(xsMatch[1])
+const captionMatch = appWxss.match(/--fs-caption:\s*(\d+)rpx/)
+assert.ok(captionMatch, 'app.wxss should define --fs-caption in rpx')
+const minFont = Number(captionMatch[1])
 
 const indexWxml = read('pages/index/index.wxml')
 assert.ok(indexWxml.indexOf('显示大小') < 0, 'home page should not expose 显示大小')
@@ -224,13 +236,13 @@ wxssFiles.forEach(function (file) {
 assert.strictEqual(
   tinyHits.length,
   0,
-  'operation UI should not use font-size below --fs-xs (' + minFont + 'rpx):\n' + tinyHits.join('\n')
+  'operation UI should not use font-size below --fs-caption (' + minFont + 'rpx):\n' + tinyHits.join('\n')
 )
 
 const productsWxss = read('pages/products/products.wxss')
 assert.ok(
-  productsWxss.indexOf('min-height: var(--tap-sm)') >= 0,
-  'products.wxss card should use min-height: var(--tap-sm)'
+  productsWxss.indexOf('min-height: var(--tap-min)') >= 0,
+  'products.wxss card should use min-height: var(--tap-min)'
 )
 assert.ok(productsWxss.indexOf('goods-grid') >= 0, 'products.wxss should layout a two-column grid')
 assert.ok(productsWxss.indexOf('width: 112rpx') < 0, 'products.wxss should not keep the small left thumbnail')
