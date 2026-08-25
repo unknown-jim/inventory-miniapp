@@ -1,7 +1,7 @@
 .openid {
   margin: 16rpx 0;
   padding: 20rpx 24rpx;
-  background: #F8FAF9;
+  background: var(--c-surface);
   border-radius: var(--radius-md);
   word-break: break-all;
   font-size: var(--fs-label);
@@ -29,7 +29,7 @@
 }
 
 .list-item {
-  border-bottom: 1rpx solid #F1F5F4;
+  border-bottom: 1rpx solid var(--c-line);
 }
 
 .list-item:last-child {
@@ -54,13 +54,13 @@
 .cell-go {
   flex-shrink: 0;
   margin-left: var(--gap);
-  color: #64748B;
+  color: var(--c-muted);
   font-size: var(--fs-label);
 }
 
 .fold-body {
   padding-top: var(--space-md);
-  border-top: 1rpx solid #F1F5F4;
+  border-top: 1rpx solid var(--c-line);
 }
 
 .seed-btn {

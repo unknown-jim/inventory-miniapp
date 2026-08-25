@@ -1,6 +1,6 @@
 .readonly {
   line-height: var(--tap-md);
-  color: #64748B;
+  color: var(--c-muted);
 }
 
 .last {

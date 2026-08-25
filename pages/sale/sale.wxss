@@ -4,7 +4,7 @@
 
 .meta {
   margin: -8rpx 0 24rpx;
-  color: #C2410C;
+  color: var(--c-warn);
   font-size: var(--fs-label);
 }
 
@@ -18,7 +18,7 @@
 
 .customer-meta {
   margin: -8rpx 0 24rpx;
-  color: #64748B;
+  color: var(--c-muted);
   font-size: var(--fs-label);
 }
 
@@ -34,7 +34,7 @@
 }
 
 .link {
-  color: #0F766E;
+  color: var(--c-primary);
   font-size: var(--fs-label);
 }
 
@@ -57,11 +57,11 @@
 }
 
 .total-num {
-  color: #C2410C;
+  color: var(--c-warn);
 }
 
 .profit-num {
-  color: #0F766E;
+  color: var(--c-primary);
 }
 
 .tip {
@@ -74,7 +74,7 @@
 
 .line-amount {
   margin-bottom: 16rpx;
-  color: #64748B;
+  color: var(--c-muted);
   font-size: var(--fs-label);
 }
 
@@ -97,7 +97,7 @@
   justify-content: space-between;
   align-items: center;
   padding: 18rpx 0;
-  border-bottom: 1rpx solid #F1F5F4;
+  border-bottom: 1rpx solid var(--c-line);
 }
 
 .cart-item:last-child {
@@ -120,7 +120,7 @@
   right: 0;
   bottom: 0;
   left: 0;
-  background: rgba(15, 23, 42, 0.45);
+  background: var(--c-mask);
   display: flex;
   align-items: flex-end;
   z-index: var(--z-overlay);
@@ -128,7 +128,7 @@
 
 .sheet {
   width: 100%;
-  background: #FFFFFF;
+  background: var(--c-card);
   border-radius: var(--radius-xl) var(--radius-xl) 0 0;
   padding: 28rpx 24rpx 12rpx;
   position: relative;
@@ -158,7 +158,7 @@
 
 .sheet-item {
   padding: 22rpx 0;
-  border-bottom: 1rpx solid #F1F5F4;
+  border-bottom: 1rpx solid var(--c-line);
 }
 
 .sheet-thumb {
@@ -167,7 +167,7 @@
   border-radius: var(--radius-xs);
   flex-shrink: 0;
   margin-right: var(--gap);
-  background: #f3f4f6;
+  background: var(--c-surface);
 }
 
 .sheet-body {
@@ -200,13 +200,13 @@
 }
 
 .paid-note.debt {
-  color: #C2410C;
+  color: var(--c-warn);
 }
 
 .paid-note.over {
-  color: #DC2626;
+  color: var(--c-danger);
 }
 
 .paid-note.done {
-  color: #0F766E;
+  color: var(--c-primary);
 }

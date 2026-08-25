@@ -20,7 +20,7 @@
   right: 0;
   bottom: 0;
   left: 0;
-  background: rgba(15, 23, 42, 0.45);
+  background: var(--c-mask);
   display: flex;
   align-items: flex-end;
   z-index: var(--z-overlay);
@@ -28,7 +28,7 @@
 
 .sheet {
   width: 100%;
-  background: #FFFFFF;
+  background: var(--c-card);
   border-radius: var(--radius-xl) var(--radius-xl) 0 0;
   padding: 28rpx 24rpx calc(12rpx + var(--safe-bottom));
 }
@@ -48,7 +48,7 @@
   justify-content: space-between;
   align-items: center;
   padding: 22rpx 0;
-  border-bottom: 1rpx solid #F1F5F4;
+  border-bottom: 1rpx solid var(--c-line);
 }
 
 .item-name {

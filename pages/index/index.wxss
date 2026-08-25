@@ -1,6 +1,6 @@
 .hero {
-  background: linear-gradient(160deg, #115E59 0%, #0F766E 58%, #0D9488 100%);
-  color: #ECFDF5;
+  background: var(--grad-hero);
+  color: var(--c-hero-ink);
   padding: 36rpx 32rpx 28rpx;
 }
 
@@ -10,7 +10,7 @@
   align-items: center;
   min-height: var(--tap-min);
   margin-bottom: var(--space-md);
-  border-bottom: 1rpx solid rgba(255, 255, 255, 0.16);
+  border-bottom: 1rpx solid var(--c-hero-line);
 }
 
 .hero-shop-name {
@@ -57,7 +57,7 @@
 .hero .stat-grid {
   margin-top: var(--space-xl);
   padding-top: var(--space-lg);
-  border-top: 1rpx solid rgba(255, 255, 255, 0.16);
+  border-top: 1rpx solid var(--c-hero-line);
 }
 
 .hero-press {
@@ -70,11 +70,11 @@
 
 .stat .muted,
 .hero-profit .muted {
-  color: rgba(236, 253, 245, 0.72);
+  color: var(--c-hero-ink-soft);
 }
 
 .stat-alert .stat-num {
-  color: #FECACA;
+  color: var(--c-hero-danger);
 }
 
 .debt-banner {
@@ -88,7 +88,7 @@
   margin-top: 8rpx;
   font-size: var(--fs-display);
   font-weight: 700;
-  color: #C2410C;
+  color: var(--c-warn);
 }
 
 .seed-btn {
@@ -102,7 +102,7 @@
 .empty-card,
 .quiet {
   text-align: center;
-  color: #64748B;
+  color: var(--c-muted);
 }
 
 .list-card {
@@ -114,7 +114,7 @@
   justify-content: space-between;
   align-items: center;
   padding: 24rpx 0;
-  border-bottom: 1rpx solid #F1F5F4;
+  border-bottom: 1rpx solid var(--c-line);
 }
 
 .list-item:last-child {
@@ -136,6 +136,6 @@
 }
 
 .link {
-  color: #0F766E;
+  color: var(--c-primary);
   font-size: var(--fs-label);
 }

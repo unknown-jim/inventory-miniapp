@@ -1,6 +1,6 @@
 .readonly {
   line-height: var(--tap-md);
-  color: #64748B;
+  color: var(--c-muted);
 }
 
 .last {
@@ -17,7 +17,7 @@
 
 .line {
   padding: 20rpx 0;
-  border-top: 1rpx solid #F1F5F4;
+  border-top: 1rpx solid var(--c-line);
 }
 
 .line:first-of-type {

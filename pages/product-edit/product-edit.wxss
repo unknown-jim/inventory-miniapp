@@ -3,8 +3,8 @@
   justify-content: space-between;
   margin-bottom: 24rpx;
   padding: 18rpx 20rpx;
-  background: #ECFDF5;
-  color: #0F766E;
+  background: var(--c-ok-soft);
+  color: var(--c-primary);
   border-radius: var(--radius-sm);
   font-size: var(--fs-label);
   font-weight: 600;
@@ -12,7 +12,7 @@
 
 .readonly {
   line-height: var(--tap-md);
-  color: #64748B;
+  color: var(--c-muted);
 }
 
 .last {
@@ -78,7 +78,7 @@
 }
 
 .link {
-  color: #0F766E;
+  color: var(--c-primary);
   font-size: var(--fs-label);
 }
 
@@ -88,7 +88,7 @@
 
 .sku-card {
   padding: 20rpx 0;
-  border-top: 1rpx solid #F1F5F4;
+  border-top: 1rpx solid var(--c-line);
 }
 
 .sku-card:first-of-type {
@@ -116,9 +116,9 @@
   align-items: center;
   justify-content: center;
   min-height: var(--tap-lg);
-  border: 2rpx dashed #CBD5E1;
+  border: 2rpx dashed var(--c-line-strong);
   border-radius: var(--radius-sm);
-  color: #64748B;
+  color: var(--c-muted);
   font-size: var(--fs-label);
 }
 
@@ -132,7 +132,7 @@
   width: 112rpx;
   height: 112rpx;
   border-radius: var(--radius-xs);
-  background: #F1F5F4;
+  background: var(--c-line);
 }
 
 .image-ops {
@@ -141,5 +141,5 @@
 }
 
 .danger {
-  color: #DC2626;
+  color: var(--c-danger);
 }

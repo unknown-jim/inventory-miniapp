@@ -18,7 +18,7 @@
 }
 
 .link {
-  color: #0F766E;
+  color: var(--c-primary);
   font-size: var(--fs-label);
 }
 
@@ -42,7 +42,7 @@
   height: 0;
   padding-top: 100%;
   overflow: hidden;
-  background: #f3f4f6;
+  background: var(--c-surface);
 }
 
 .thumb-img {
@@ -60,7 +60,7 @@
   top: 50%;
   transform: translate(-50%, -50%);
   font-size: var(--fs-display);
-  color: #9ca3af;
+  color: var(--c-faint);
 }
 
 .goods-info {
@@ -89,9 +89,9 @@
   height: var(--tap-md);
   line-height: var(--tap-md);
   font-size: var(--fs-title);
-  background: #0F766E;
-  color: #FFFFFF;
+  background: var(--c-primary);
+  color: var(--c-inverse);
   border-radius: var(--radius-round);
   font-weight: 600;
-  box-shadow: 0 12rpx 24rpx rgba(15, 118, 110, 0.28);
+  box-shadow: var(--shadow-raised);
 }

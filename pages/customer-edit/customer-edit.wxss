@@ -14,11 +14,11 @@
   margin: 8rpx 0 12rpx;
   font-size: var(--fs-display);
   font-weight: 700;
-  color: #0F766E;
+  color: var(--c-primary);
 }
 
 .debt-num.on {
-  color: #C2410C;
+  color: var(--c-warn);
 }
 
 .collect-btn {
@@ -38,7 +38,7 @@
   justify-content: space-between;
   align-items: center;
   padding: 24rpx 0;
-  border-bottom: 1rpx solid #F1F5F4;
+  border-bottom: 1rpx solid var(--c-line);
 }
 
 .list-item:last-child {
@@ -61,14 +61,14 @@
 
 .quiet {
   text-align: center;
-  color: #64748B;
+  color: var(--c-muted);
 }
 
 /* 明细取不到时的「重试」。和 index / products 的 .link 同一套，
    字号不低于 --fs-label，可点高度靠 .quiet 卡片的内边距撑住。 */
 .link {
   margin-left: var(--space-xs);
-  color: #0F766E;
+  color: var(--c-primary);
   font-size: var(--fs-label);
 }
 
@@ -92,7 +92,7 @@
   right: 0;
   bottom: 0;
   left: 0;
-  background: rgba(15, 23, 42, 0.45);
+  background: var(--c-mask);
   display: flex;
   align-items: flex-end;
   z-index: var(--z-dropdown);
@@ -100,7 +100,7 @@
 
 .sheet {
   width: 100%;
-  background: #FFFFFF;
+  background: var(--c-card);
   border-radius: var(--radius-xl) var(--radius-xl) 0 0;
   padding: 28rpx 24rpx calc(48rpx + var(--safe-bottom));
 }
