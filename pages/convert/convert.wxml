@@ -61,27 +61,25 @@
 
   <button class="btn-primary save-btn" bindtap="submit" hidden="{{showPicker}}">确认改规格</button>
 
-  <view wx:if="{{showPicker}}" class="mask" bindtap="closePicker">
-    <view class="sheet" catchtap="closePickerKeep">
-      <view class="sheet-title">选择商品</view>
-      <input class="search" placeholder="搜索商品" value="{{keyword}}" bindinput="onSearch" />
-      <scroll-view scroll-y class="sheet-list">
-        <view
-          class="sheet-item"
-          wx:for="{{filtered}}"
-          wx:key="id"
-          data-id="{{item.id}}"
-          bindtap="onPick"
-        >
-          <view>
-            <view class="item-name">{{item.name}}</view>
-            <view class="muted">
-              <block wx:if="{{item.specTag}}">{{item.specTag}} · </block>库存 {{item.stock}}
-            </view>
+  <sheet wx:if="{{showPicker}}" lift bind:close="closePicker">
+    <view class="sheet-title">选择商品</view>
+    <input class="search" placeholder="搜索商品" value="{{keyword}}" bindinput="onSearch" />
+    <scroll-view scroll-y class="sheet-list">
+      <view
+        class="sheet-item"
+        wx:for="{{filtered}}"
+        wx:key="id"
+        data-id="{{item.id}}"
+        bindtap="onPick"
+      >
+        <view>
+          <view class="item-name">{{item.name}}</view>
+          <view class="muted">
+            <block wx:if="{{item.specTag}}">{{item.specTag}} · </block>库存 {{item.stock}}
           </view>
         </view>
-        <view wx:if="{{!filtered.length}}" class="empty">没有带规格的商品</view>
-      </scroll-view>
-    </view>
-  </view>
+      </view>
+      <view wx:if="{{!filtered.length}}" class="empty">没有带规格的商品</view>
+    </scroll-view>
+  </sheet>
 </view>

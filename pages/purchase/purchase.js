@@ -78,8 +78,6 @@ Page({
     this.setData({ showPicker: false })
   },
 
-  closePickerKeep() {},
-
   onPick(e) {
     this.selectProduct(e.currentTarget.dataset.id)
     this.closePicker()

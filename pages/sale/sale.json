@@ -2,6 +2,7 @@
   "navigationBarTitleText": "销售出库",
   "usingComponents": {
     "page-loading": "/components/page-loading/index",
+    "sheet": "/components/sheet/index",
     "slip-overlay": "/components/slip-overlay/index"
   }
 }

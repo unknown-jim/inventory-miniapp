@@ -1,6 +1,7 @@
 {
   "navigationBarTitleText": "客户",
   "usingComponents": {
+    "fab": "/components/fab/index",
     "page-loading": "/components/page-loading/index"
   }
 }

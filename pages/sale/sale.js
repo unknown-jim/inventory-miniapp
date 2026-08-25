@@ -160,8 +160,6 @@ Page({
     this.setData({ showCustomerPicker: false })
   },
 
-  closePickerKeep() {},
-
   onPick(e) {
     this.selectProduct(e.currentTarget.dataset.id)
     this.closePicker()

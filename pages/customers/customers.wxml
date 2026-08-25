@@ -31,6 +31,6 @@
     </view>
   </view>
 
-  <view class="fab" bindtap="goAdd">+ 新增</view>
+  <fab text="+ 新增" bind:press="goAdd" />
   </block>
 </view>

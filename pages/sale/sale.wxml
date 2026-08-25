@@ -123,62 +123,58 @@
 
   <button class="btn-primary save-btn js-sale-submit" bindtap="submit" hidden="{{showPicker || showCustomerPicker || showSlip}}">确认出库</button>
 
-  <view wx:if="{{showPicker}}" class="mask" bindtap="closePicker">
-    <view class="sheet" catchtap="closePickerKeep">
-      <view class="sheet-title">选择商品</view>
-      <input class="search" placeholder="搜索商品" value="{{keyword}}" bindinput="onSearch" />
-      <scroll-view scroll-y class="sheet-list">
-        <view
-          class="sheet-item js-product-item"
-          wx:for="{{filtered}}"
-          wx:key="id"
-          data-id="{{item.id}}"
-          bindtap="onPick"
-        >
-          <image wx:if="{{item.image && !item.imageFailed}}" class="sheet-thumb" src="{{item.image}}" mode="aspectFill" lazy-load binderror="onSheetThumbError" data-index="{{index}}" />
-          <view class="sheet-body">
-            <view class="item-name">{{item.name}}</view>
-            <view class="muted">
-              <block wx:if="{{item.specTag}}">{{item.specTag}} · </block>货号 {{item.sku || '未填'}} · 库存 {{item.stock}}
-            </view>
+  <sheet wx:if="{{showPicker}}" bind:close="closePicker">
+    <view class="sheet-title">选择商品</view>
+    <input class="search" placeholder="搜索商品" value="{{keyword}}" bindinput="onSearch" />
+    <scroll-view scroll-y class="sheet-list">
+      <view
+        class="sheet-item js-product-item"
+        wx:for="{{filtered}}"
+        wx:key="id"
+        data-id="{{item.id}}"
+        bindtap="onPick"
+      >
+        <image wx:if="{{item.image && !item.imageFailed}}" class="sheet-thumb" src="{{item.image}}" mode="aspectFill" lazy-load binderror="onSheetThumbError" data-index="{{index}}" />
+        <view class="sheet-body">
+          <view class="item-name">{{item.name}}</view>
+          <view class="muted">
+            <block wx:if="{{item.specTag}}">{{item.specTag}} · </block>货号 {{item.sku || '未填'}} · 库存 {{item.stock}}
           </view>
-          <text class="muted">售价 ¥{{item.saleText}}</text>
         </view>
-        <view wx:if="{{!filtered.length}}" class="empty">没有匹配商品</view>
-      </scroll-view>
-    </view>
-  </view>
-
-  <view wx:if="{{showCustomerPicker}}" class="mask" bindtap="closeCustomerPicker">
-    <view class="sheet" catchtap="closePickerKeep">
-      <view class="sheet-head">
-        <view class="sheet-title">选择客户</view>
-        <text class="link" catchtap="goAddCustomer">新增</text>
+        <text class="muted">售价 ¥{{item.saleText}}</text>
       </view>
-      <input class="search" placeholder="搜索客户" value="{{customerKeyword}}" bindinput="onCustomerSearch" />
-      <scroll-view scroll-y class="sheet-list">
-        <view class="sheet-item js-walkin" bindtap="clearCustomer">
-          <view>
-            <view class="item-name">散客</view>
-            <view class="muted">不填写客户，送货单不显示收货人</view>
-          </view>
-        </view>
-        <view
-          class="sheet-item js-customer-item"
-          wx:for="{{filteredCustomers}}"
-          wx:key="id"
-          data-id="{{item.id}}"
-          bindtap="onPickCustomer"
-        >
-          <view>
-            <view class="item-name">{{item.name}}</view>
-            <view class="muted">{{item.phone || '未填电话'}} · {{item.address || '未填地址'}}</view>
-          </view>
-        </view>
-        <view wx:if="{{!filteredCustomers.length}}" class="empty">没有匹配客户</view>
-      </scroll-view>
+      <view wx:if="{{!filtered.length}}" class="empty">没有匹配商品</view>
+    </scroll-view>
+  </sheet>
+
+  <sheet wx:if="{{showCustomerPicker}}" bind:close="closeCustomerPicker">
+    <view class="sheet-head">
+      <view class="sheet-title">选择客户</view>
+      <text class="link" catchtap="goAddCustomer">新增</text>
     </view>
-  </view>
+    <input class="search" placeholder="搜索客户" value="{{customerKeyword}}" bindinput="onCustomerSearch" />
+    <scroll-view scroll-y class="sheet-list">
+      <view class="sheet-item js-walkin" bindtap="clearCustomer">
+        <view>
+          <view class="item-name">散客</view>
+          <view class="muted">不填写客户，送货单不显示收货人</view>
+        </view>
+      </view>
+      <view
+        class="sheet-item js-customer-item"
+        wx:for="{{filteredCustomers}}"
+        wx:key="id"
+        data-id="{{item.id}}"
+        bindtap="onPickCustomer"
+      >
+        <view>
+          <view class="item-name">{{item.name}}</view>
+          <view class="muted">{{item.phone || '未填电话'}} · {{item.address || '未填地址'}}</view>
+        </view>
+      </view>
+      <view wx:if="{{!filteredCustomers.length}}" class="empty">没有匹配客户</view>
+    </scroll-view>
+  </sheet>
 
   <slip-overlay
     show-slip="{{showSlip}}"

@@ -1,0 +1,1 @@
+<view class="fab {{lift ? 'fab--lift' : ''}}" bindtap="onTap">{{text}}</view>

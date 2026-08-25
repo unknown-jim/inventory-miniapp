@@ -89,6 +89,7 @@ await waitFor(sale, async function () { ... }, '商品进购物车')  // 条件
 
 - [ ] 新增或改名 `js-` 钩子后，`grep` 过 `tests/ui.test.js`
 - [ ] 把页面里的块抽成自定义组件后，确认该块上的 `js-` 钩子在测试里**全部失效**了——要么把断言改走页面数据，要么把钩子留在页面模板一侧（`record-edit` 的「导出送货单」按钮 `.js-export-slip` 就还在页面里，所以还能直接点）
+- [ ] 钩子挂在**组件宿主节点**上的模式（`sheet` 弹层壳的 `.js-pay-sheet` / `.js-opening-sheet`：宿主带 `wx:if` 和 class，内容走默认 slot 留在页面模板）依赖组件**不开 `virtualHost`**——开了就没有宿主节点，钩子静默失效且无编译报错
 - [ ] 跑过一次 `npm run test:ui`
 
 ## 一次真实事故

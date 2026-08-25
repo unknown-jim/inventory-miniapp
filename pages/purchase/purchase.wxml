@@ -56,30 +56,28 @@
 
   <button class="btn-primary save-btn" bindtap="submit" hidden="{{showPicker}}">确认入库</button>
 
-  <view wx:if="{{showPicker}}" class="mask" bindtap="closePicker">
-    <view class="sheet" catchtap="closePickerKeep">
-      <view class="sheet-title">选择商品</view>
-      <input class="search" placeholder="搜索商品" value="{{keyword}}" bindinput="onSearch" />
-      <scroll-view scroll-y class="sheet-list">
-        <view
-          class="sheet-item"
-          wx:for="{{filtered}}"
-          wx:key="id"
-          data-id="{{item.id}}"
-          bindtap="onPick"
-        >
-          <image wx:if="{{item.image && !item.imageFailed}}" class="sheet-thumb" src="{{item.image}}" mode="aspectFill" lazy-load binderror="onSheetThumbError" data-index="{{index}}" />
-          <view class="sheet-body">
-            <view class="item-name">{{item.name}}</view>
-            <view class="muted">
-              <block wx:if="{{item.specTag}}">{{item.specTag}} · </block>货号 {{item.sku || '未填'}} · 库存 {{item.stock}}
-            </view>
+  <sheet wx:if="{{showPicker}}" bind:close="closePicker">
+    <view class="sheet-title">选择商品</view>
+    <input class="search" placeholder="搜索商品" value="{{keyword}}" bindinput="onSearch" />
+    <scroll-view scroll-y class="sheet-list">
+      <view
+        class="sheet-item"
+        wx:for="{{filtered}}"
+        wx:key="id"
+        data-id="{{item.id}}"
+        bindtap="onPick"
+      >
+        <image wx:if="{{item.image && !item.imageFailed}}" class="sheet-thumb" src="{{item.image}}" mode="aspectFill" lazy-load binderror="onSheetThumbError" data-index="{{index}}" />
+        <view class="sheet-body">
+          <view class="item-name">{{item.name}}</view>
+          <view class="muted">
+            <block wx:if="{{item.specTag}}">{{item.specTag}} · </block>货号 {{item.sku || '未填'}} · 库存 {{item.stock}}
           </view>
-          <text class="muted">进价 ¥{{item.costText}}</text>
         </view>
-        <view wx:if="{{!filtered.length}}" class="empty">没有匹配商品</view>
-      </scroll-view>
-    </view>
-  </view>
+        <text class="muted">进价 ¥{{item.costText}}</text>
+      </view>
+      <view wx:if="{{!filtered.length}}" class="empty">没有匹配商品</view>
+    </scroll-view>
+  </sheet>
   </block>
 </view>

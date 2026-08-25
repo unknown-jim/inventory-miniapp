@@ -19,21 +19,6 @@
   margin-top: 24rpx;
 }
 
-.fab {
-  position: fixed;
-  right: 32rpx;
-  bottom: calc(48rpx + var(--safe-bottom));
-  padding: 0 28rpx;
-  height: var(--tap-md);
-  line-height: var(--tap-md);
-  font-size: var(--fs-title);
-  background: var(--c-primary);
-  color: var(--c-inverse);
-  border-radius: var(--radius-round);
-  font-weight: 600;
-  box-shadow: var(--shadow-raised);
-}
-
 .page {
   padding-bottom: 140rpx;
 }

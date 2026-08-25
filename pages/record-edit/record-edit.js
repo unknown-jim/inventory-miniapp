@@ -388,8 +388,6 @@ Page({
     this.setData({ showCustomerPicker: false })
   },
 
-  closePickerKeep() {},
-
   onCustomerSearch(e) {
     this.applyCustomerFilter(e.detail.value)
   },

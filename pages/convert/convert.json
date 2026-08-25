@@ -1,4 +1,6 @@
 {
   "navigationBarTitleText": "改规格",
-  "usingComponents": {}
+  "usingComponents": {
+    "sheet": "/components/sheet/index"
+  }
 }

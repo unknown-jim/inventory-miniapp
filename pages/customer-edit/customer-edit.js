@@ -175,8 +175,6 @@ Page({
     this.setData({ showPay: false })
   },
 
-  keepPay() {},
-
   async submitPay() {
     try {
       await store.addPayment({
@@ -204,8 +202,6 @@ Page({
   closeOpening() {
     this.setData({ showOpening: false })
   },
-
-  keepOpening() {},
 
   async submitOpening() {
     try {

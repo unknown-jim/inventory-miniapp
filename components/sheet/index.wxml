@@ -1,0 +1,5 @@
+<view class="mask" bindtap="onMaskTap">
+  <view class="sheet" catchtap="stopTap" style="padding-bottom: {{lift ? 'calc(' + padBottom + 'rpx + var(--safe-bottom))' : padBottom + 'rpx'}}">
+    <slot />
+  </view>
+</view>

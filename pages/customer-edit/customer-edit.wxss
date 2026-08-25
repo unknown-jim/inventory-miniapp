@@ -86,25 +86,6 @@
   margin-bottom: 16rpx;
 }
 
-.mask {
-  position: fixed;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  left: 0;
-  background: var(--c-mask);
-  display: flex;
-  align-items: flex-end;
-  z-index: var(--z-dropdown);
-}
-
-.sheet {
-  width: 100%;
-  background: var(--c-card);
-  border-radius: var(--radius-xl) var(--radius-xl) 0 0;
-  padding: 28rpx 24rpx calc(48rpx + var(--safe-bottom));
-}
-
 .sheet-title {
   font-size: var(--fs-title);
   font-weight: 600;

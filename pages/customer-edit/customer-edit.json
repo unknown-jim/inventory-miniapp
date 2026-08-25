@@ -1,4 +1,6 @@
 {
   "navigationBarTitleText": "客户",
-  "usingComponents": {}
+  "usingComponents": {
+    "sheet": "/components/sheet/index"
+  }
 }
