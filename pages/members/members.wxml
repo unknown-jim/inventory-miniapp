@@ -6,8 +6,7 @@
   </view>
   <view class="card member-card" wx:for="{{members}}" wx:key="id">
     <block wx:if="{{item.editing}}">
-      <view class="field">
-        <view class="field-label">称呼</view>
+      <field label="称呼">
         <input
           class="field-input"
           maxlength="32"
@@ -16,7 +15,7 @@
           bindinput="onEditName"
           placeholder="店里怎么叫，可选"
         />
-      </view>
+      </field>
       <view class="action-strip">
         <button class="btn-primary" data-openid="{{item.openid}}" bindtap="saveDisplayName">保存</button>
         <button class="btn-ghost" bindtap="cancelEditName">取消</button>
@@ -43,14 +42,12 @@
   </view>
 
   <view wx:if="{{isOwner}}" class="card">
-    <view class="field">
-      <view class="field-label">店员身份</view>
+    <field label="店员身份">
       <input class="field-input" value="{{newOpenid}}" bindinput="onNewOpenid" placeholder="粘贴店员发来的身份" />
-    </view>
-    <view class="field">
-      <view class="field-label">称呼</view>
+    </field>
+    <field label="称呼">
       <input class="field-input" maxlength="32" value="{{newDisplayName}}" bindinput="onNewDisplayName" placeholder="店里怎么叫，可选" />
-    </view>
+    </field>
     <button class="btn-primary" bindtap="addMember">添加店员</button>
   </view>
   <view wx:else class="card quiet">

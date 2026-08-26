@@ -1,22 +1,9 @@
-.readonly {
-  line-height: var(--tap-md);
-  color: var(--c-muted);
-}
-
-.last {
-  margin-bottom: 0;
-}
-
 .tip {
   margin: 0 0 24rpx;
 }
 
 .save-btn {
   margin: 32rpx 0 16rpx;
-}
-
-.spec-block .field {
-  margin-bottom: 8rpx;
 }
 
 .spec-block .chips {

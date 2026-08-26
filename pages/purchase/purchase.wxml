@@ -2,14 +2,10 @@
   <page-loading wx:if="{{pageLoading}}" />
   <block wx:else>
   <view class="card">
-    <view class="field">
-      <view class="field-label">商品</view>
-      <view class="field-input picker" bindtap="openPicker">{{productName}}</view>
-    </view>
+    <field label="商品" mode="picker" value="{{productName}}" bindtap="openPicker" />
     <view class="meta">当前库存 {{stockText}}<text wx:if="{{blankProcess}}">（待加工）</text></view>
     <view class="spec-block" wx:if="{{hasSpecs && !blankProcess}}">
-      <view class="field" wx:if="{{colors.length}}">
-        <view class="field-label">{{specAxis1}}</view>
+      <field label="{{specAxis1}}" dense wx:if="{{colors.length}}">
         <view class="chips">
           <view
             class="chip {{item.on ? 'on' : ''}}"
@@ -19,9 +15,8 @@
             bindtap="pickColor"
           >{{item.value}}</view>
         </view>
-      </view>
-      <view class="field" wx:if="{{sizes.length}}">
-        <view class="field-label">{{specAxis2}}</view>
+      </field>
+      <field label="{{specAxis2}}" dense wx:if="{{sizes.length}}">
         <view class="chips">
           <view
             class="chip {{item.on ? 'on' : ''}}"
@@ -31,22 +26,19 @@
             bindtap="pickSize"
           >{{item.value}} {{item.stock}}</view>
         </view>
-      </view>
+      </field>
     </view>
     <view class="field-row">
-      <view class="field half">
-        <view class="field-label">数量</view>
+      <field label="数量" class="half">
         <input class="field-input" type="digit" data-field="qty" value="{{qty}}" bindinput="onField" placeholder="0" hidden="{{showPicker}}" />
-      </view>
-      <view class="field half">
-        <view class="field-label">本次进价</view>
+      </field>
+      <field label="本次进价" class="half">
         <input class="field-input" type="digit" data-field="unitPrice" value="{{unitPrice}}" bindinput="onField" placeholder="0.00" hidden="{{showPicker}}" />
-      </view>
+      </field>
     </view>
-    <view class="field">
-      <view class="field-label">备注</view>
+    <field label="备注">
       <input class="field-input" data-field="remark" value="{{remark}}" bindinput="onField" placeholder="可选" hidden="{{showPicker}}" />
-    </view>
+    </field>
     <view class="total">
       <text>进货金额</text>
       <text class="total-num">¥{{amountText}}</text>

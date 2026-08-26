@@ -1,4 +1,6 @@
 {
   "navigationBarTitleText": "种类模板",
-  "usingComponents": {}
+  "usingComponents": {
+    "field": "/components/field/index"
+  }
 }

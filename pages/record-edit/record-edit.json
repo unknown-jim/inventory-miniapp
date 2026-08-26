@@ -1,6 +1,7 @@
 {
   "navigationBarTitleText": "流水详情",
   "usingComponents": {
+    "field": "/components/field/index",
     "sheet": "/components/sheet/index",
     "slip-overlay": "/components/slip-overlay/index"
   }

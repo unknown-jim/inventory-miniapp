@@ -1,0 +1,6 @@
+<view class="field {{last ? 'last' : ''}} {{dense ? 'dense' : ''}}">
+  <view wx:if="{{label}}" class="field-label">{{label}}</view>
+  <view wx:if="{{mode === 'readonly'}}" class="field-input readonly">{{value || fallback}}</view>
+  <view wx:elif="{{mode === 'picker'}}" class="field-input picker">{{value}}</view>
+  <slot wx:else />
+</view>

@@ -10,11 +10,6 @@
   font-weight: 600;
 }
 
-.readonly {
-  line-height: var(--tap-md);
-  color: var(--c-muted);
-}
-
 .last {
   margin-bottom: 0;
 }
@@ -36,7 +31,8 @@
   margin-bottom: 20rpx;
 }
 
-.field.last + .spec-desc {
+/* 紧跟卡片内最后一个 field 的说明文字（field 组件化后 last 不再是页面兄弟类） */
+.spec-desc.tight {
   margin-top: 12rpx;
   margin-bottom: 0;
 }

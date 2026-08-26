@@ -1,6 +1,7 @@
 {
   "navigationBarTitleText": "进货入库",
   "usingComponents": {
+    "field": "/components/field/index",
     "page-loading": "/components/page-loading/index",
     "sheet": "/components/sheet/index"
   }

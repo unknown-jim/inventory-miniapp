@@ -1,4 +1,6 @@
 {
   "navigationBarTitleText": "库存调整",
-  "usingComponents": {}
+  "usingComponents": {
+    "field": "/components/field/index"
+  }
 }

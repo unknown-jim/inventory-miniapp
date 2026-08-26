@@ -1,12 +1,3 @@
-.readonly {
-  line-height: var(--tap-md);
-  color: var(--c-muted);
-}
-
-.last {
-  margin-bottom: 0;
-}
-
 .list-card {
   margin-top: 16rpx;
 }

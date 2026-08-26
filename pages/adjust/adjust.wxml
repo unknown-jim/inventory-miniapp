@@ -1,20 +1,13 @@
 <view class="page">
   <view class="card">
-    <view class="field">
-      <view class="field-label">商品</view>
-      <view class="field-input readonly">{{productName}}</view>
-    </view>
-    <view class="field">
-      <view class="field-label">当前件数</view>
-      <view class="field-input readonly">{{stockText}}</view>
-    </view>
+    <field label="商品" mode="readonly" value="{{productName}}" />
+    <field label="当前件数" mode="readonly" value="{{stockText}}" />
     <view class="muted tip">只改这一个格子的件数，不是整单盘点。</view>
     <view class="muted tip">{{hintText}}</view>
     <view class="muted tip" wx:if="{{blankProcess}}">待加工和现货要分开调，各改各的格。</view>
 
     <view class="spec-block" wx:if="{{hasSpecs}}">
-      <view class="field">
-        <view class="field-label">调整哪一格</view>
+      <field label="调整哪一格" dense>
         <view class="chips">
           <view
             class="chip {{item.on ? 'on' : ''}}"
@@ -24,19 +17,17 @@
             bindtap="pickCell"
           >{{item.specText}} {{item.stock}}</view>
         </view>
-      </view>
+      </field>
     </view>
 
-    <view class="field">
-      <view class="field-label">方向</view>
+    <field label="方向">
       <view class="seg">
         <view class="seg-item {{direction === 'in' ? 'on' : ''}}" data-direction="in" bindtap="setDirection">入库</view>
         <view class="seg-item {{direction === 'out' ? 'on' : ''}}" data-direction="out" bindtap="setDirection">出库</view>
       </view>
-    </view>
+    </field>
 
-    <view class="field">
-      <view class="field-label">原因</view>
+    <field label="原因">
       <view class="chips">
         <view
           class="chip {{item.on ? 'on' : ''}}"
@@ -46,16 +37,14 @@
           bindtap="pickReason"
         >{{item.label}}</view>
       </view>
-    </view>
+    </field>
 
-    <view class="field">
-      <view class="field-label">数量</view>
+    <field label="数量">
       <input class="field-input" type="digit" data-field="qty" value="{{qty}}" bindinput="onField" placeholder="0" />
-    </view>
-    <view class="field last">
-      <view class="field-label">备注</view>
+    </field>
+    <field label="备注" last>
       <input class="field-input" data-field="remark" value="{{remark}}" bindinput="onField" placeholder="{{remarkPlaceholder}}" />
-    </view>
+    </field>
   </view>
 
   <button class="btn-primary save-btn" bindtap="submit">确认调整</button>

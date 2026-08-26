@@ -1,18 +1,16 @@
 <view class="page">
   <view class="card">
-    <view class="field">
-      <view class="field-label">种类名称</view>
+    <field label="种类名称">
       <input class="field-input" data-field="name" value="{{name}}" bindinput="onField" placeholder="例如 纺织、日用" />
-    </view>
-    <view class="field last">
-      <view class="field-label">默认商品类型</view>
+    </field>
+    <field label="默认商品类型" last>
       <view class="seg">
         <view class="seg-item {{productKind === 'plain' ? 'on' : ''}}" data-kind="plain" bindtap="setProductKind">普通</view>
         <view class="seg-item {{productKind === 'blank' ? 'on' : ''}}" data-kind="blank" bindtap="setProductKind">待加工</view>
         <view class="seg-item {{productKind === 'finished' ? 'on' : ''}}" data-kind="finished" bindtap="setProductKind">分规格现货</view>
       </view>
       <view class="muted spec-desc">选这个种类时，会带出下面的待选项。建档后仍可改。</view>
-    </view>
+    </field>
   </view>
 
   <view class="card spec-card">

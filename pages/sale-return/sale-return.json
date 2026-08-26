@@ -1,4 +1,6 @@
 {
   "navigationBarTitleText": "退货入库",
-  "usingComponents": {}
+  "usingComponents": {
+    "field": "/components/field/index"
+  }
 }

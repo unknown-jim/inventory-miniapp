@@ -21,10 +21,9 @@
     </view>
 
     <view class="card">
-      <view class="field">
-        <view class="field-label">创建一家店</view>
+      <field label="创建一家店">
         <input class="field-input" value="{{newShopName}}" bindinput="onShopName" placeholder="店铺名称" />
-      </view>
+      </field>
       <button class="btn-primary" bindtap="createShop">创建并进入</button>
     </view>
 
@@ -86,10 +85,9 @@
         <view class="cell-go">{{showCreate ? '收起' : '展开'}}</view>
       </view>
       <view wx:if="{{showCreate}}" class="fold-body">
-        <view class="field">
-          <view class="field-label">店铺名称</view>
+        <field label="店铺名称">
           <input class="field-input" value="{{newShopName}}" bindinput="onShopName" placeholder="店铺名称" />
-        </view>
+        </field>
         <button class="btn-primary" bindtap="createShop">创建并进入</button>
       </view>
     </view>

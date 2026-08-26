@@ -1,0 +1,35 @@
+.field {
+  margin-bottom: var(--space-lg);
+}
+
+.field.last {
+  margin-bottom: 0;
+}
+
+.field.dense {
+  margin-bottom: var(--space-xs);
+}
+
+.field-label {
+  color: var(--c-muted);
+  font-size: var(--fs-label);
+  margin-bottom: var(--space-sm);
+}
+
+.field-input {
+  height: var(--tap-md);
+  padding: 0 var(--space-lg);
+  box-sizing: border-box;
+  background: var(--c-surface);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-body);
+}
+
+.field-input.readonly {
+  line-height: var(--tap-md);
+  color: var(--c-muted);
+}
+
+.field-input.picker {
+  line-height: var(--tap-md);
+}

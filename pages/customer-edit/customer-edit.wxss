@@ -1,7 +1,3 @@
-.last {
-  margin-bottom: 8rpx;
-}
-
 .tip {
   margin-top: 0;
 }

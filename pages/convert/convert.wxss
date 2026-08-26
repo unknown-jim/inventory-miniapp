@@ -1,11 +1,3 @@
-.last {
-  margin-bottom: 0;
-}
-
-.picker {
-  line-height: var(--tap-md);
-}
-
 .tip {
   margin: 0 0 24rpx;
 }

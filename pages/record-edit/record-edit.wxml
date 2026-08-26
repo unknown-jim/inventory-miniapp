@@ -1,55 +1,30 @@
 <view class="page">
   <view class="card">
-    <view class="field" wx:if="{{isAdjust}}">
-      <view class="field-label">方向</view>
-      <view class="field-input readonly">{{directionText}}</view>
-    </view>
-    <view class="field" wx:else>
-      <view class="field-label">类型</view>
-      <view class="field-input readonly">{{typeText}}</view>
-    </view>
-    <view class="field" wx:if="{{isPay || isOpening}}">
-      <view class="field-label">客户</view>
-      <view class="field-input readonly">{{customerName}}</view>
-    </view>
-    <view class="field" wx:if="{{!isPay && !isOpening && !isOut}}">
-      <view class="field-label">商品</view>
-      <view class="field-input readonly">{{productName}}</view>
-    </view>
-    <view class="field" wx:if="{{specText && !isOut}}">
-      <view class="field-label">规格</view>
-      <view class="field-input readonly">{{specText}}</view>
-    </view>
-    <view class="field last">
-      <view class="field-label">时间</view>
-      <view class="field-input readonly">{{timeText}}</view>
-    </view>
+    <field label="方向" mode="readonly" value="{{directionText}}" wx:if="{{isAdjust}}" />
+    <field label="类型" mode="readonly" value="{{typeText}}" wx:else />
+    <field label="客户" mode="readonly" value="{{customerName}}" wx:if="{{isPay || isOpening}}" />
+    <field label="商品" mode="readonly" value="{{productName}}" wx:if="{{!isPay && !isOpening && !isOut}}" />
+    <field label="规格" mode="readonly" value="{{specText}}" wx:if="{{specText && !isOut}}" />
+    <field label="时间" mode="readonly" value="{{timeText}}" last />
   </view>
 
   <view class="card form-card" wx:if="{{isPay || isOpening}}">
-    <view class="field">
-      <view class="field-label">{{isOpening ? '期初欠款' : '收款金额'}}</view>
+    <field label="{{isOpening ? '期初欠款' : '收款金额'}}">
       <input wx:if="{{editing}}" class="field-input" type="digit" data-field="amount" value="{{amount}}" bindinput="onField" placeholder="0.00" hidden="{{showCustomerPicker}}" />
       <view wx:else class="field-input readonly">{{amount}}</view>
-    </view>
-    <view class="field last">
-      <view class="field-label">备注</view>
+    </field>
+    <field label="备注" last>
       <input wx:if="{{editing}}" class="field-input" data-field="remark" value="{{remark}}" bindinput="onField" placeholder="可选" hidden="{{showCustomerPicker}}" />
       <view wx:else class="field-input readonly">{{remark}}</view>
-    </view>
+    </field>
   </view>
 
   <view class="card form-card" wx:elif="{{isOut}}">
-    <view class="field">
-      <view class="field-label">客户</view>
-      <view wx:if="{{editing}}" class="field-input picker" bindtap="openCustomerPicker">{{customerName}}</view>
-      <view wx:else class="field-input readonly">{{customerName}}</view>
-    </view>
+    <field label="客户" mode="{{editing ? 'picker' : 'readonly'}}" value="{{customerName}}" bindtap="openCustomerPicker" />
     <view class="customer-meta" wx:if="{{customerPhone || customerAddress}}">
       {{customerPhone}}<text wx:if="{{customerPhone && customerAddress}}"> · </text>{{customerAddress}}
     </view>
-    <view class="field">
-      <view class="field-label">经手人</view>
+    <field label="经手人">
       <input wx:if="{{editing}}" class="field-input" maxlength="32" value="{{operatorName}}" bindinput="onOperatorName" placeholder="可选" hidden="{{showCustomerPicker || showSlip}}" />
       <view wx:else class="field-input readonly">{{operatorName || '—'}}</view>
       <view wx:if="{{editing && members.length}}" class="muted field-hint">点选本店成员，也可手写</view>
@@ -62,22 +37,20 @@
           bindtap="pickOperator"
         >{{item.label}}</view>
       </view>
-    </view>
+    </field>
     <view class="order-lines">
       <view class="line-block" wx:for="{{lines}}" wx:key="id">
         <view class="item-name">{{item.productName}}</view>
         <view class="muted" wx:if="{{item.hasSpec}}">{{item.specText}}</view>
         <view class="field-row">
-          <view class="field half">
-            <view class="field-label">数量</view>
+          <field label="数量" class="half">
             <input wx:if="{{editing}}" class="field-input" type="digit" data-id="{{item.id}}" data-field="qty" value="{{item.qty}}" bindinput="onLineField" placeholder="0" hidden="{{showCustomerPicker}}" />
             <view wx:else class="field-input readonly">{{item.qty}}</view>
-          </view>
-          <view class="field half">
-            <view class="field-label">售价</view>
+          </field>
+          <field label="售价" class="half">
             <input wx:if="{{editing}}" class="field-input" type="digit" data-id="{{item.id}}" data-field="unitPrice" value="{{item.unitPrice}}" bindinput="onLineField" placeholder="0.00" hidden="{{showCustomerPicker}}" />
             <view wx:else class="field-input readonly">{{item.unitPrice}}</view>
-          </view>
+          </field>
         </view>
         <view class="meta">进价快照 ¥{{item.costText}} · 本行毛利 ¥{{item.profitText}}</view>
       </view>
@@ -86,23 +59,21 @@
       <text>本单应收</text>
       <text class="total-num">¥{{amountText}}</text>
     </view>
-    <view class="field">
-      <view class="field-label">本单实收</view>
+    <field label="本单实收">
       <input wx:if="{{editing}}" class="field-input js-paid" type="digit" value="{{paidAmount}}" bindinput="onPaidInput" placeholder="0.00" hidden="{{showCustomerPicker || showSlip}}" />
       <view wx:else class="field-input readonly">{{paidAmount}}</view>
       <view class="chips" wx:if="{{editing}}">
         <view class="chip js-paid-full" bindtap="fillPaidFull">收满 ¥{{amountText}}</view>
         <view class="chip js-paid-none" bindtap="fillPaidNone">一分未收</view>
       </view>
-    </view>
+    </field>
     <view class="paid-note over" wx:if="{{paidOver}}">实收比应收多 ¥{{overText}}，多收的钱请单独记收款</view>
     <view class="paid-note debt" wx:elif="{{hasNewDebt}}">本单欠款 ¥{{debtText}}</view>
     <view class="paid-note done" wx:else>本单已收讫</view>
-    <view class="field last">
-      <view class="field-label">备注</view>
+    <field label="备注" last>
       <input wx:if="{{editing}}" class="field-input" data-field="remark" value="{{remark}}" bindinput="onField" placeholder="可选" hidden="{{showCustomerPicker}}" />
       <view wx:else class="field-input readonly">{{remark}}</view>
-    </view>
+    </field>
   </view>
 
   <view class="card form-card" wx:elif="{{isReturn && isMulti}}">
@@ -110,11 +81,10 @@
       <view class="line-block" wx:for="{{lines}}" wx:key="id">
         <view class="item-name">{{item.productName}}</view>
         <view class="muted" wx:if="{{item.hasSpec}}">{{item.specText}}</view>
-        <view class="field">
-          <view class="field-label">退货数量</view>
+        <field label="退货数量">
           <input wx:if="{{editing}}" class="field-input" type="digit" data-id="{{item.id}}" data-field="qty" value="{{item.qty}}" bindinput="onLineField" placeholder="0" hidden="{{showCustomerPicker}}" />
           <view wx:else class="field-input readonly">{{item.qty}}</view>
-        </view>
+        </field>
         <view class="meta">退货单价 ¥{{item.priceText}} · 进价快照 ¥{{item.costText}} · 本行冲减毛利 ¥{{item.profitText}}</view>
       </view>
     </view>
@@ -122,16 +92,14 @@
       <text>本单金额</text>
       <text class="total-num">¥{{amountText}}</text>
     </view>
-    <view class="field last">
-      <view class="field-label">备注</view>
+    <field label="备注" last>
       <input wx:if="{{editing}}" class="field-input" data-field="remark" value="{{remark}}" bindinput="onField" placeholder="可选" hidden="{{showCustomerPicker}}" />
       <view wx:else class="field-input readonly">{{remark}}</view>
-    </view>
+    </field>
   </view>
 
   <view class="card form-card" wx:elif="{{isAdjust}}">
-    <view class="field">
-      <view class="field-label">原因</view>
+    <field label="原因">
       <view wx:if="{{editing}}" class="chips">
         <view
           class="chip {{item.on ? 'on' : ''}}"
@@ -142,42 +110,37 @@
         >{{item.label}}</view>
       </view>
       <view wx:else class="field-input readonly">{{typeText}}</view>
-    </view>
-    <view class="field">
-      <view class="field-label">数量</view>
+    </field>
+    <field label="数量">
       <input wx:if="{{editing}}" class="field-input" type="digit" data-field="qty" value="{{qty}}" bindinput="onField" placeholder="0" hidden="{{showCustomerPicker}}" />
       <view wx:else class="field-input readonly">{{qty}}</view>
-    </view>
-    <view class="field last">
-      <view class="field-label">备注</view>
+    </field>
+    <field label="备注" last>
       <input wx:if="{{editing}}" class="field-input" data-field="remark" value="{{remark}}" bindinput="onField" placeholder="{{reason === 'other' ? '必填，说明原因' : '可选'}}" hidden="{{showCustomerPicker}}" />
       <view wx:else class="field-input readonly">{{remark}}</view>
-    </view>
+    </field>
   </view>
 
   <view class="card form-card" wx:else>
     <view class="field-row">
-      <view class="field {{isConvert ? 'last' : 'half'}}">
-        <view class="field-label">数量</view>
+      <field label="数量" class="{{isConvert ? '' : 'half'}}" last="{{isConvert}}">
         <input wx:if="{{editing}}" class="field-input" type="digit" data-field="qty" value="{{qty}}" bindinput="onField" placeholder="0" hidden="{{showCustomerPicker}}" />
         <view wx:else class="field-input readonly">{{qty}}</view>
-      </view>
-      <view class="field half" wx:if="{{!isConvert}}">
-        <view class="field-label">{{isIn ? '进价' : '退货单价'}}</view>
+      </field>
+      <field label="{{isIn ? '进价' : '退货单价'}}" class="half" wx:if="{{!isConvert}}">
         <input wx:if="{{editing && !isReturn}}" class="field-input" type="digit" data-field="unitPrice" value="{{unitPrice}}" bindinput="onField" placeholder="0.00" hidden="{{showCustomerPicker}}" />
         <view wx:else class="field-input readonly">{{unitPrice}}</view>
-      </view>
+      </field>
     </view>
     <view class="meta" wx:if="{{isReturn}}">进价快照 ¥{{costText}} · 本行毛利 ¥{{profitText}}</view>
     <view class="total">
       <text>金额</text>
       <text class="total-num">¥{{amountText}}</text>
     </view>
-    <view class="field last">
-      <view class="field-label">备注</view>
+    <field label="备注" last>
       <input wx:if="{{editing}}" class="field-input" data-field="remark" value="{{remark}}" bindinput="onField" placeholder="可选" hidden="{{showCustomerPicker}}" />
       <view wx:else class="field-input readonly">{{remark}}</view>
-    </view>
+    </field>
   </view>
 
   <view class="muted tip" wx:if="{{isOpening}}">期初欠款不改库存，也不计入销售和毛利。</view>

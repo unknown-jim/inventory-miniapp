@@ -1,15 +1,7 @@
-.picker {
-  line-height: var(--tap-md);
-}
-
 .meta {
   margin: -8rpx 0 24rpx;
   color: var(--c-primary);
   font-size: var(--fs-label);
-}
-
-.spec-block .field {
-  margin-bottom: 8rpx;
 }
 
 .spec-block .chips {

@@ -2,15 +2,6 @@
   margin-top: 16rpx;
 }
 
-.readonly {
-  line-height: var(--tap-md);
-  color: var(--c-muted);
-}
-
-.picker {
-  line-height: var(--tap-md);
-}
-
 .customer-meta {
   margin: -8rpx 0 24rpx;
   color: var(--c-muted);
@@ -59,10 +50,6 @@
 
 .tip {
   margin: 16rpx 8rpx 0;
-}
-
-.last {
-  margin-bottom: 0;
 }
 
 .export-btn {

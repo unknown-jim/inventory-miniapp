@@ -1,13 +1,7 @@
 <view class="page">
   <view class="card">
-    <view class="field">
-      <view class="field-label">客户</view>
-      <view class="field-input readonly">{{customerName}}</view>
-    </view>
-    <view class="field last">
-      <view class="field-label">原单时间</view>
-      <view class="field-input readonly">{{timeText}}</view>
-    </view>
+    <field label="客户" mode="readonly" value="{{customerName}}" />
+    <field label="原单时间" mode="readonly" value="{{timeText}}" last />
   </view>
 
   <view class="card list-card">
@@ -16,8 +10,7 @@
       <view class="item-name">{{item.productName}}</view>
       <view class="muted" wx:if="{{item.specText}}">{{item.specText}}</view>
       <view class="muted">已卖 {{item.soldText}} · 已退 {{item.returnedText}} · 可退 {{item.remainText}}</view>
-      <view class="field last">
-        <view class="field-label">本次退货数量</view>
+      <field label="本次退货数量" last>
         <input
           class="field-input"
           type="digit"
@@ -26,12 +19,11 @@
           bindinput="onQty"
           placeholder="0"
         />
-      </view>
+      </field>
     </view>
-    <view class="field last">
-      <view class="field-label">备注</view>
+    <field label="备注" last>
       <input class="field-input" data-field="remark" value="{{remark}}" bindinput="onRemark" placeholder="可选" />
-    </view>
+    </field>
   </view>
 
   <button class="btn-primary save-btn" bindtap="submit">确认退货</button>
