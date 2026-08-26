@@ -4,21 +4,14 @@
   </block>
 
   <block wx:elif="{{!configured}}">
-    <view class="card empty">
-      <view class="empty-title">还不能记账</view>
-      <view class="muted">{{blockedMessage}}</view>
-    </view>
+    <empty card title="还不能记账" desc="{{blockedMessage}}" />
   </block>
 
   <block wx:elif="{{!shops.length && !hasCurrentShop}}">
-    <view wx:if="{{shopsLoadError}}" class="card empty">
-      <view class="muted">店铺列表没加载成功。可以重试，或先创建、把身份发给老板。</view>
+    <empty wx:if="{{shopsLoadError}}" card desc="店铺列表没加载成功。可以重试，或先创建、把身份发给老板。">
       <button class="btn-ghost copy-btn" bindtap="retryShops">重试</button>
-    </view>
-    <view wx:else class="card empty">
-      <view class="empty-title">还没有店铺</view>
-      <view class="muted">自己创建一个，或把身份发给老板，加进店里就能记账。</view>
-    </view>
+    </empty>
+    <empty wx:else card title="还没有店铺" desc="自己创建一个，或把身份发给老板，加进店里就能记账。" />
 
     <view class="card">
       <field label="创建一家店">
@@ -36,47 +29,44 @@
   </block>
 
   <block wx:else>
-    <view wx:if="{{shopsLoadError}}" class="card empty">
-      <view class="muted">{{shops.length ? '店铺列表没刷新成功，下面仍是上次看到的店。' : '店铺列表没加载成功。'}}</view>
+    <empty wx:if="{{shopsLoadError}}" card desc="{{shops.length ? '店铺列表没刷新成功，下面仍是上次看到的店。' : '店铺列表没加载成功。'}}">
       <button class="btn-ghost copy-btn" bindtap="retryShops">重试</button>
-    </view>
+    </empty>
     <view wx:if="{{hasCurrentShop}}" class="card current-shop">
       <view class="item-name">{{shopName || '未命名店铺'}}</view>
       <view class="muted">
         <block wx:if="{{currentRoleText}}">{{currentRoleText}} · </block>当前
       </view>
     </view>
-    <view wx:else class="card empty">
-      <view class="muted">点下面一家店进入，才能记账。</view>
-    </view>
+    <empty wx:else card desc="点下面一家店进入，才能记账。" />
 
     <view wx:if="{{hasCurrentShop}}" class="section-title">
       <text>本店</text>
     </view>
     <view wx:if="{{hasCurrentShop}}" class="card list-card">
-      <view class="list-item" bindtap="goMembers">
-        <view class="item-name">成员名单</view>
-        <view class="cell-go">›</view>
-      </view>
+      <cell go min-tap bindtap="goMembers">
+        <view slot="main" class="item-name">成员名单</view>
+      </cell>
     </view>
 
     <view wx:if="{{shops.length}}" class="section-title">
       <text>我加入的店</text>
     </view>
     <view wx:if="{{shops.length}}" class="card list-card">
-      <view
-        class="list-item"
+      <cell
+        class="cell-row"
+        min-tap
         wx:for="{{shops}}"
         wx:key="id"
         data-id="{{item.id}}"
         data-name="{{item.name}}"
         bindtap="selectShop"
       >
-        <view class="item-main">
+        <view slot="main">
           <view class="item-name">{{item.name}}</view>
           <view class="muted">{{item.role === 'owner' ? '店主' : '店员'}}<block wx:if="{{item.current}}"> · 当前</block></view>
         </view>
-      </view>
+      </cell>
     </view>
 
     <view class="card">

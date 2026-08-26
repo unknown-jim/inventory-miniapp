@@ -433,3 +433,13 @@ button::after {
   color: var(--c-inverse);
   font-weight: 600;
 }
+
+/* 列表行分隔线画在宿主上：cell 组件内部根节点的 :last-child 永远指向组件自己的独子，
+   末行去线只能靠页面侧的宿主节点（见 handoffs ui-redesign-round4 机制说明） */
+.cell-row {
+  border-bottom: 1rpx solid var(--c-line);
+}
+
+.cell-row:last-child {
+  border-bottom: none;
+}

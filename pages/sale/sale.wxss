@@ -41,10 +41,10 @@
   text-align: right;
 }
 
+/* 字号归 amount 组件（display 角色 48rpx）；这里只留距、字重、颜色 */
 .total-num,
 .profit-num {
   margin-top: 8rpx;
-  font-size: var(--fs-display);
   font-weight: 700;
 }
 

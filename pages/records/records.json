@@ -1,4 +1,8 @@
 {
   "navigationBarTitleText": "进销流水",
-  "usingComponents": {}
+  "usingComponents": {
+    "amount": "/components/amount/index",
+    "cell": "/components/cell/index",
+    "empty": "/components/empty/index"
+  }
 }

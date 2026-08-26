@@ -84,9 +84,9 @@
   margin-top: 8rpx;
 }
 
+/* 字号归 amount 组件（display 角色 48rpx）；这里只留色、距、字重 */
 .debt-banner-num {
   margin-top: 8rpx;
-  font-size: var(--fs-display);
   font-weight: 700;
   color: var(--c-warn);
 }
@@ -99,7 +99,6 @@
   margin-top: 16rpx;
 }
 
-.empty-card,
 .quiet {
   text-align: center;
   color: var(--c-muted);
@@ -109,30 +108,10 @@
   padding: 8rpx 28rpx;
 }
 
-.list-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 24rpx 0;
-  border-bottom: 1rpx solid var(--c-line);
-}
-
-.list-item:last-child {
-  border-bottom: none;
-}
-
+/* 行壳、分隔线（.cell-row）、右列对齐归 cell 组件与 app.wxss */
 .item-name {
   font-weight: 600;
   margin-bottom: 8rpx;
-}
-
-.item-right {
-  text-align: right;
-}
-
-.amount {
-  margin-top: 8rpx;
-  font-weight: 600;
 }
 
 .link {

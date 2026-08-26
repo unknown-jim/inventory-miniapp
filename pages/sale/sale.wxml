@@ -90,11 +90,11 @@
     <view class="total">
       <view>
         <view class="muted">本单应收</view>
-        <view class="total-num">¥{{amountText}}</view>
+        <amount class="total-num" role="display" text="{{amountText}}" />
       </view>
       <view class="right">
         <view class="muted">预估毛利</view>
-        <view class="profit-num">¥{{profitText}}</view>
+        <amount class="profit-num" role="display" text="{{profitText}}" />
       </view>
     </view>
     <field label="本单实收" class="paid-field">
@@ -133,7 +133,7 @@
         </view>
         <text class="muted">售价 ¥{{item.saleText}}</text>
       </view>
-      <view wx:if="{{!filtered.length}}" class="empty">没有匹配商品</view>
+      <empty wx:if="{{!filtered.length}}" desc="没有匹配商品" />
     </scroll-view>
   </sheet>
 
@@ -162,7 +162,7 @@
           <view class="muted">{{item.phone || '未填电话'}} · {{item.address || '未填地址'}}</view>
         </view>
       </view>
-      <view wx:if="{{!filteredCustomers.length}}" class="empty">没有匹配客户</view>
+      <empty wx:if="{{!filteredCustomers.length}}" desc="没有匹配客户" />
     </scroll-view>
   </sheet>
 

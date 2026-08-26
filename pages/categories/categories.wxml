@@ -6,11 +6,9 @@
     bindinput="onSearch"
   />
 
-  <view wx:if="{{!list.length}}" class="card empty">
-    <view class="empty-title">还没有种类模板</view>
-    <view class="muted">种类只用来带出名称和规格待选项，可改、可删、可再加。不是库存分类。</view>
+  <empty wx:if="{{!list.length}}" card title="还没有种类模板" desc="种类只用来带出名称和规格待选项，可改、可删、可再加。不是库存分类。">
     <button class="btn-primary seed-btn" bindtap="goAdd">新增种类</button>
-  </view>
+  </empty>
 
   <view class="card goods-card" wx:for="{{list}}" wx:key="id" data-id="{{item.id}}" bindtap="goEdit">
     <view class="goods-top">

@@ -1,0 +1,5 @@
+<view class="cell {{minTap ? 'cell--tap' : ''}}">
+  <view class="cell-main"><slot name="main" /></view>
+  <view class="cell-side"><slot name="side" /></view>
+  <text wx:if="{{go}}" class="cell-go">›</text>
+</view>

@@ -41,7 +41,7 @@
     </field>
     <view class="total">
       <text>进货金额</text>
-      <text class="total-num">¥{{amountText}}</text>
+      <amount class="total-num" role="display" text="{{amountText}}" />
     </view>
     <view class="muted tip">{{blankProcess ? '进货记入待加工库存。销售时再选规格；规格格和待加工库存不是一回事。' : (hasSpecs ? '本次进价会更新该规格的进价，之后销售按新进价算毛利。' : '本次进价会更新该商品的进价，之后销售按新进价算毛利。')}}</view>
   </view>
@@ -68,7 +68,7 @@
         </view>
         <text class="muted">进价 ¥{{item.costText}}</text>
       </view>
-      <view wx:if="{{!filtered.length}}" class="empty">没有匹配商品</view>
+      <empty wx:if="{{!filtered.length}}" desc="没有匹配商品" />
     </scroll-view>
   </sheet>
   </block>

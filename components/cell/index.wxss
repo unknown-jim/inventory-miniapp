@@ -1,0 +1,31 @@
+/* 宿主节点按块级排（旧 .list-item 是块级 view，多行 wx:for 必须逐行占满整行，
+   分隔线（页面侧 .cell-row 的 border-bottom）也要画在块级盒上） */
+:host {
+  display: block;
+}
+
+.cell {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-md);
+  padding: 24rpx 0;
+}
+
+.cell--tap {
+  min-height: var(--tap-min);
+}
+
+.cell-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.cell-side {
+  text-align: right;
+}
+
+.cell-go {
+  color: var(--c-faint);
+  font-size: var(--fs-label);
+}

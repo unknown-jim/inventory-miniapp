@@ -30,7 +30,7 @@
   <block wx:if="{{isEdit}}">
     <view class="card debt-card">
       <view class="muted">当前欠款</view>
-      <view class="debt-num {{hasDebt ? 'on' : ''}}">¥{{receivableText}}</view>
+      <amount class="debt-num {{hasDebt ? 'on' : ''}}" role="display" text="{{receivableText}}" />
       <view class="muted">累计销售 {{saleCount}} 笔 · ¥{{saleAmountText}}</view>
       <button wx:if="{{hasDebt}}" class="btn-primary collect-btn js-pay-open" bindtap="openPay" hidden="{{showPay || showOpening}}">收款</button>
       <button class="btn-ghost opening-btn js-opening" bindtap="openOpening" hidden="{{showPay || showOpening}}">记期初欠款</button>
@@ -40,16 +40,16 @@
       <text>往来记录</text>
     </view>
     <view wx:if="{{ledger.length}}" class="card list-card">
-      <view class="list-item" wx:for="{{ledger}}" wx:key="id" data-id="{{item.id}}" bindtap="goRecord">
-        <view>
+      <cell class="cell-row" wx:for="{{ledger}}" wx:key="id" data-id="{{item.id}}" bindtap="goRecord">
+        <view slot="main">
           <view class="item-name">{{item.productName}}</view>
           <view class="muted">{{item.timeText}}<text wx:if="{{item.isOut}}"> · {{item.qtyText}} 件</text><text wx:if="{{item.isMulti}}"> · {{item.lineCount}} 种</text></view>
         </view>
-        <view class="item-right">
+        <view slot="side">
           <text class="tag {{item.tagClass}}">{{item.typeText}}</text>
-          <view class="amount">¥{{item.amountText}}</view>
+          <amount role="row" text="{{item.amountText}}" />
         </view>
-      </view>
+      </cell>
     </view>
     <view wx:elif="{{ledgerUnavailable}}" class="card quiet">往来明细没取到。上面的欠款和累计销售来自服务端，是准的。<text class="link" bindtap="retryLedger">重试</text></view>
     <view wx:elif="{{ledgerLoading}}" class="card quiet">正在加载…</view>

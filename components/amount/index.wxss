@@ -1,0 +1,41 @@
+/* 宿主与内部 text 都按块级排：旧的 .amount / .stat-num / .total-num 都是块级 view，
+   块级才能在 cell 右列里与 tag 分行堆叠、margin-top 才生效（text 默认行内） */
+:host {
+  display: block;
+}
+
+.amount-el {
+  display: block;
+}
+
+.amount-el--row {
+  margin-top: 8rpx;
+  font-size: var(--fs-amount);
+  font-weight: 600;
+}
+
+.amount-el--hero {
+  font-size: var(--fs-hero);
+  font-weight: 700;
+}
+
+.amount-el--hero.md {
+  font-size: var(--fs-hero-md);
+}
+
+.amount-el--hero.sm {
+  font-size: var(--fs-hero-sm);
+}
+
+.amount-el--stat {
+  font-size: var(--fs-amount-lg);
+  font-weight: 700;
+}
+
+.amount-el--stat.sm {
+  font-size: var(--fs-amount-lg-sm);
+}
+
+.amount-el--display {
+  font-size: var(--fs-display);
+}

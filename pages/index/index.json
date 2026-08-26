@@ -1,6 +1,9 @@
 {
   "navigationBarTitleText": "今日看板",
   "usingComponents": {
+    "amount": "/components/amount/index",
+    "cell": "/components/cell/index",
+    "empty": "/components/empty/index",
     "page-loading": "/components/page-loading/index"
   }
 }

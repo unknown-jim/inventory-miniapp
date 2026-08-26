@@ -19,21 +19,13 @@
   padding: 8rpx 28rpx;
 }
 
-.list-item,
+/* 列表行壳归 cell 组件；fold-head 是折叠头不是列表行，规则保留 */
 .fold-head {
   display: flex;
   justify-content: space-between;
   align-items: center;
   min-height: var(--tap-min);
   padding: 24rpx 0;
-}
-
-.list-item {
-  border-bottom: 1rpx solid var(--c-line);
-}
-
-.list-item:last-child {
-  border-bottom: none;
 }
 
 .item-main {

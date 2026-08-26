@@ -2,19 +2,19 @@
   <view class="card stat-grid">
     <view class="stat">
       <view class="muted">进货金额</view>
-      <view class="stat-num">¥{{purchaseAmount}}</view>
+      <amount class="stat-num" role="stat" text="{{purchaseAmount}}" />
     </view>
     <view class="stat">
       <view class="muted">销售金额</view>
-      <view class="stat-num warm">¥{{salesAmount}}</view>
+      <amount class="stat-num warm" role="stat" text="{{salesAmount}}" />
     </view>
     <view class="stat">
       <view class="muted">销售毛利</view>
-      <view class="stat-num">¥{{profit}}</view>
+      <amount class="stat-num" role="stat" text="{{profit}}" />
     </view>
     <view class="stat">
       <view class="muted">客户欠款</view>
-      <view class="stat-num warm">¥{{receivable}}</view>
+      <amount class="stat-num warm" role="stat" text="{{receivable}}" />
     </view>
   </view>
 
@@ -30,11 +30,11 @@
     <view class="chip {{type === 'adjust' ? 'on' : ''}}" data-type="adjust" bindtap="setType">调整</view>
   </view>
 
-  <view wx:if="{{loaded && !list.length}}" class="card empty">还没有流水</view>
+  <empty wx:if="{{loaded && !list.length}}" card desc="还没有流水" />
 
   <view class="card list-card" wx:if="{{list.length}}">
-    <view class="list-item js-record-item {{item.isOut ? 'js-record-out' : ''}}" wx:for="{{list}}" wx:key="id" data-id="{{item.id}}" bindtap="onRecordTap">
-      <view>
+    <cell class="cell-row js-record-item {{item.isOut ? 'js-record-out' : ''}}" wx:for="{{list}}" wx:key="id" data-id="{{item.id}}" bindtap="onRecordTap">
+      <view slot="main">
         <view class="item-name">{{item.productName}}</view>
         <view class="muted" wx:if="{{item.hasSpec}}">{{item.specText}}</view>
         <view class="muted">
@@ -45,13 +45,13 @@
         <view wx:if="{{item.isOut && item.hasDebt}}" class="muted">已收 ¥{{item.paidText}} · 欠 ¥{{item.debtText}}</view>
         <view wx:if="{{item.remark}}" class="muted">{{item.remark}}</view>
       </view>
-      <view class="item-right">
+      <view slot="side">
         <text class="tag {{item.tagClass}}">{{item.typeText}}</text>
-        <view wx:if="{{!item.isAdjust}}" class="amount">¥{{item.amountText}}</view>
+        <amount wx:if="{{!item.isAdjust}}" role="row" text="{{item.amountText}}" />
           <view wx:if="{{item.isOut}}" class="muted">毛利 ¥{{item.profitText}}</view>
           <view wx:elif="{{item.isReturn}}" class="muted">冲减毛利 ¥{{item.profitText}}</view>
       </view>
-    </view>
+    </cell>
   </view>
 
   <view wx:if="{{loading}}" class="card quiet">正在加载…</view>

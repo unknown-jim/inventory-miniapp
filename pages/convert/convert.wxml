@@ -71,7 +71,7 @@
           </view>
         </view>
       </view>
-      <view wx:if="{{!filtered.length}}" class="empty">没有带规格的商品</view>
+      <empty wx:if="{{!filtered.length}}" desc="没有带规格的商品" />
     </scroll-view>
   </sheet>
 </view>

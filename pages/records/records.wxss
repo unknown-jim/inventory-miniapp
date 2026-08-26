@@ -1,3 +1,4 @@
+/* 字号、字重、¥ 前缀归 amount 组件；这里只留颜色和外距 */
 .stat-num {
   margin-top: var(--space-xs);
   color: var(--c-primary);
@@ -15,29 +16,10 @@
   padding: 8rpx 28rpx;
 }
 
-.list-item {
-  display: flex;
-  justify-content: space-between;
-  padding: 24rpx 0;
-  border-bottom: 1rpx solid var(--c-line);
-}
-
-.list-item:last-child {
-  border-bottom: none;
-}
-
+/* 行壳、分隔线（.cell-row）、右列对齐归 cell 组件与 app.wxss */
 .item-name {
   font-weight: 600;
   margin-bottom: 8rpx;
-}
-
-.item-right {
-  text-align: right;
-}
-
-.amount {
-  margin-top: 8rpx;
-  font-weight: 600;
 }
 
 /* 触底加载的两条脚注。和 index / customer-edit 的 .quiet 同一套灰。 */

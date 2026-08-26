@@ -16,21 +16,11 @@
     <text class="link" bindtap="goRecords">流水</text>
   </view>
 
-  <view wx:if="{{!list.length}}" class="card empty">
-    <block wx:if="{{keyword}}">
-      <view class="empty-title">没有匹配的商品</view>
-      <view class="muted">换个名称、货号或条码再搜。</view>
-    </block>
-    <block wx:elif="{{onlyAlert}}">
-      <view class="empty-title">暂时没有需要补货的商品</view>
-      <view class="muted">预警数量在编辑商品里改。点「全部」看所有商品。</view>
-    </block>
-    <block wx:else>
-      <view class="empty-title">还没有商品</view>
-      <view class="muted">先新增商品，再做进货和销售。</view>
-      <button class="btn-primary seed-btn" bindtap="goAdd">新增商品</button>
-    </block>
-  </view>
+  <empty wx:if="{{!list.length && keyword}}" card title="没有匹配的商品" desc="换个名称、货号或条码再搜。" />
+  <empty wx:elif="{{!list.length && onlyAlert}}" card title="暂时没有需要补货的商品" desc="预警数量在编辑商品里改。点「全部」看所有商品。" />
+  <empty wx:elif="{{!list.length}}" card title="还没有商品" desc="先新增商品，再做进货和销售。">
+    <button class="btn-primary seed-btn" bindtap="goAdd">新增商品</button>
+  </empty>
 
   <view wx:else class="goods-grid">
     <view class="card goods-card" wx:for="{{list}}" wx:key="id" data-id="{{item.id}}" bindtap="goEdit">

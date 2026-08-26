@@ -4,11 +4,9 @@
   </block>
 
   <block wx:elif="{{blocked}}">
-    <view class="card empty-card">
-      <view class="empty-title">还不能记账</view>
-      <view class="muted">{{blockedMessage}}</view>
+    <empty card title="还不能记账" desc="{{blockedMessage}}">
       <button class="btn-primary seed-btn" bindtap="goShop">创建或选择店铺</button>
-    </view>
+    </empty>
   </block>
 
   <block wx:else>
@@ -24,7 +22,8 @@
       </view>
       <view class="hero-profit">
         <view class="muted">今日毛利</view>
-        <view class="hero-profit-num">{{todayAvailable ? '¥' + todayProfit : '—'}}</view>
+        <amount wx:if="{{todayAvailable}}" class="hero-profit-num" role="hero" text="{{todayProfit}}" />
+        <view wx:else class="hero-profit-num">—</view>
       </view>
     </view>
     <view class="stat-grid">
@@ -37,7 +36,8 @@
         <view class="muted">库存总量</view>
       </view>
       <view class="stat" hover-class="hero-press" bindtap="goTodaySales">
-        <view class="stat-num">{{todaySalesAmount}}</view>
+        <amount wx:if="{{todayAvailable}}" class="stat-num" role="stat" text="{{todaySalesAmount}}" />
+        <view wx:else class="stat-num">—</view>
         <view class="muted">今日销售额</view>
       </view>
       <view class="stat {{alertCount ? 'stat-alert' : ''}}" hover-class="hero-press" bindtap="goAlerts">
@@ -54,17 +54,15 @@
   <view wx:if="{{hasReceivable}}" class="card debt-banner" bindtap="goCustomers">
     <view>
       <view class="muted">客户欠款</view>
-      <view class="debt-banner-num">¥{{totalReceivable}}</view>
+      <amount class="debt-banner-num" role="display" text="{{totalReceivable}}" />
     </view>
     <text class="link">去收款</text>
   </view>
 
-  <view wx:if="{{isEmpty}}" class="card empty-card">
-    <view class="empty-title">还没有商品</view>
-    <view class="muted">可以先填一份示例数据，看看进货、销售、预警和毛利怎么记。</view>
+  <empty wx:if="{{isEmpty}}" card title="还没有商品" desc="可以先填一份示例数据，看看进货、销售、预警和毛利怎么记。">
     <button class="btn-primary seed-btn js-seed" bindtap="seedDemo">填充示例数据</button>
     <button class="btn-ghost" bindtap="goAddProduct">新增商品</button>
-  </view>
+  </empty>
 
   <block wx:else>
     <view class="section-title">
@@ -72,23 +70,23 @@
       <text class="link" bindtap="goInventory">全部库存</text>
     </view>
     <view wx:if="{{alerts.length}}" class="card list-card">
-      <view
-        class="list-item"
+      <cell
+        class="cell-row"
         wx:for="{{alerts}}"
         wx:key="id"
         data-id="{{item.id}}"
         bindtap="onAlertTap"
       >
-        <view>
+        <view slot="main">
           <view class="item-name">{{item.name}}</view>
           <view class="muted">
             <block wx:if="{{item.hasSpecs}}">{{item.specHint || item.specTag}} · </block>货号 {{item.sku || '未填'}} · 预警 ≤ {{item.alertQty}}
           </view>
         </view>
-        <view class="item-right">
+        <view slot="side">
           <text class="tag tag-alert">库存 {{item.stock}}</text>
         </view>
-      </view>
+      </cell>
     </view>
     <view wx:else class="card quiet">暂时没有需要补货的商品</view>
 
@@ -97,17 +95,17 @@
       <text class="link" bindtap="goRecords">查看全部</text>
     </view>
     <view wx:if="{{recent.length}}" class="card list-card">
-      <view class="list-item" wx:for="{{recent}}" wx:key="id" data-id="{{item.id}}" bindtap="onRecordTap">
-        <view>
+      <cell class="cell-row" wx:for="{{recent}}" wx:key="id" data-id="{{item.id}}" bindtap="onRecordTap">
+        <view slot="main">
           <view class="item-name">{{item.productName}}</view>
           <view class="muted">{{item.timeText}}<block wx:if="{{item.hasSpec}}"> · {{item.specText}}</block><block wx:if="{{item.isOut}}"> · {{item.qtyText}} 件</block><block wx:if="{{item.isMulti}}"> · {{item.lineCount}} 种</block><text wx:if="{{item.customerText}}"> · {{item.customerText}}</text></view>
         </view>
-        <view class="item-right">
+        <view slot="side">
           <text class="tag {{item.tagClass}}">{{item.typeText}}</text>
-          <view class="amount">¥{{item.amountText}}</view>
+          <amount role="row" text="{{item.amountText}}" />
           <view wx:if="{{item.isOut || item.isReturn}}" class="muted">毛利 ¥{{item.profitText}}</view>
         </view>
-      </view>
+      </cell>
     </view>
     <view wx:else class="card quiet">还没有进货或销售记录</view>
   </block>

@@ -57,7 +57,7 @@
     </view>
     <view class="total">
       <text>本单应收</text>
-      <text class="total-num">¥{{amountText}}</text>
+      <amount class="total-num" role="display" text="{{amountText}}" />
     </view>
     <field label="本单实收">
       <input wx:if="{{editing}}" class="field-input js-paid" type="digit" value="{{paidAmount}}" bindinput="onPaidInput" placeholder="0.00" hidden="{{showCustomerPicker || showSlip}}" />
@@ -90,7 +90,7 @@
     </view>
     <view class="total">
       <text>本单金额</text>
-      <text class="total-num">¥{{amountText}}</text>
+      <amount class="total-num" role="display" text="{{amountText}}" />
     </view>
     <field label="备注" last>
       <input wx:if="{{editing}}" class="field-input" data-field="remark" value="{{remark}}" bindinput="onField" placeholder="可选" hidden="{{showCustomerPicker}}" />
@@ -135,7 +135,7 @@
     <view class="meta" wx:if="{{isReturn}}">进价快照 ¥{{costText}} · 本行毛利 ¥{{profitText}}</view>
     <view class="total">
       <text>金额</text>
-      <text class="total-num">¥{{amountText}}</text>
+      <amount class="total-num" role="display" text="{{amountText}}" />
     </view>
     <field label="备注" last>
       <input wx:if="{{editing}}" class="field-input" data-field="remark" value="{{remark}}" bindinput="onField" placeholder="可选" hidden="{{showCustomerPicker}}" />
@@ -180,7 +180,7 @@
           <view class="muted">{{item.phone || '未填电话'}} · {{item.address || '未填地址'}}</view>
         </view>
       </view>
-      <view wx:if="{{!filteredCustomers.length}}" class="empty">没有匹配客户</view>
+      <empty wx:if="{{!filteredCustomers.length}}" desc="没有匹配客户" />
     </scroll-view>
   </sheet>
 

@@ -1,0 +1,1 @@
+<text class="amount-el amount-el--{{role}}{{size}}">¥{{text}}</text>

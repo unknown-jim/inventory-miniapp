@@ -20,8 +20,8 @@
   font-weight: 600;
 }
 
+/* 字号归 amount 组件（display 角色 48rpx）；这里只留颜色 */
 .total-num {
-  font-size: var(--fs-display);
   color: var(--c-primary);
 }
 

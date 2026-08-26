@@ -1,0 +1,29 @@
+/* 宿主按块级排：卡片式用法把页面 .card 挂在宿主上，卡盒必须占满整行（旧 .card.empty 是块级 view） */
+:host {
+  display: block;
+}
+
+.empty {
+  padding: 80rpx var(--space-lg);
+  text-align: center;
+  color: var(--c-muted);
+}
+
+.empty-title {
+  font-size: var(--fs-title);
+  color: var(--c-ink);
+  margin-bottom: var(--space-sm);
+}
+
+.empty-desc {
+  color: var(--c-muted);
+  font-size: var(--fs-label);
+}
+
+/* 卡片外观只画背景/圆角/投影，不写 padding：内边距由上面的 .empty 继续生效，
+   与旧单节点（.card.empty 同节点、.empty 的 padding 赢层叠）等价 */
+.empty--card {
+  background: var(--c-card);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-card);
+}
