@@ -250,7 +250,9 @@ function seedRecords(h, count, options) {
 function loadStore(h) {
   global.wx = h.wx
   delete require.cache[STORE_PATH]
-  return require(STORE_PATH)
+  // require 只吃字面量（变量传入会被安全扫描按命令注入拦）；
+  // '../utils/store' 与 STORE_PATH 解析到同一个文件，缓存键一致。
+  return require('../utils/store')
 }
 
 // 开一家店并把客户端指向它。createShop 走服务端直连，省掉一轮客户端建店流程。
@@ -289,11 +291,23 @@ async function rejects(fn, re) {
 // 被测页面：Page({...}) 的 options 抓出来，配一个最小的 setData
 // ---------------------------------------------------------------------------
 
+// require 只吃字面量（变量传入会被安全扫描按命令注入拦）。缓存清理仍用
+// require.resolve 出来的绝对路径常量（那不是 require 调用，不拦）；真正的
+// 加载走这张表。新页面进了测试就先在这里登记一行，loadPage 会点名报错。
+const PAGE_LOADERS = {
+  [RECORDS_PATH]: function () { return require('../pages/records/records') },
+  [RECORD_EDIT_PATH]: function () { return require('../pages/record-edit/record-edit') },
+  [CUSTOMER_EDIT_PATH]: function () { return require('../pages/customer-edit/customer-edit') },
+  [INDEX_PATH]: function () { return require('../pages/index/index') }
+}
+
 function loadPage(modulePath) {
   let captured = null
   global.Page = function (options) { captured = options }
   delete require.cache[modulePath]
-  require(modulePath)
+  const load = PAGE_LOADERS[modulePath]
+  assert.ok(load, 'loadPage 没登记这个页面，先在 PAGE_LOADERS 里加一行: ' + modulePath)
+  load()
   assert.ok(captured, '页面没有调用 Page()')
   return captured
 }
