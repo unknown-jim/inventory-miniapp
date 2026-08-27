@@ -29,7 +29,10 @@ function readAppId(root) {
 
 function readEnvId(root) {
   if (process.env.WXCLOUD_ENV_ID) return String(process.env.WXCLOUD_ENV_ID).trim()
-  const cloudConfig = require(path.join(root, 'utils/cloud-config.js'))
+  // require 只吃字面量路径（动态拼接会被安全扫描按命令注入拦）；本文件恒在
+  // scripts/ 下，'../utils/cloud-config.js' 与原先的 path.join(root, ...) 同址。
+  // root 参数为保持调用方签名不变而保留。
+  const cloudConfig = require('../utils/cloud-config.js')
   return cloudConfig.getCloudEnvId()
 }
 

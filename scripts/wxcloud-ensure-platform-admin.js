@@ -2,6 +2,7 @@ const path = require('path')
 const env = require('./wxcloud-env')
 const indexes = require('./wxcloud-ensure-indexes')
 const acl = require('./wxcloud-ensure-acl')
+const wxload = require('./wxcloud-load-cli')
 
 const root = path.join(__dirname, '..')
 const COLLECTION = 'platform_admins'
@@ -39,22 +40,10 @@ function parseArgs(argv) {
   return out
 }
 
-// loadWxcloud / ensureLogin 与 wxcloud-ensure-indexes.js / wxcloud-ensure-acl.js
-// 里是同一份（那边没导出，本仓惯例是各持一份副本）；resolveDb 直接复用
-// wxcloud-ensure-indexes.js 导出的那份，tag 的推导（databases[0].instanceId
-// || ENV_ID）只有一处定义。
-function loadWxcloud() {
-  const cliRoot = path.join(process.env.APPDATA || '', 'npm', 'node_modules', '@wxcloud', 'cli')
-  try {
-    return {
-      api: require(path.join(cliRoot, 'lib/api/cloudapi/src/index')),
-      initCloudAPI: require(path.join(cliRoot, 'lib/api/adapter')).initCloudAPI,
-      readLoginState: require(path.join(cliRoot, 'lib/utils/auth')).readLoginState
-    }
-  } catch (error) {
-    throw new Error('未找到 @wxcloud/cli。先执行 npm install -g @wxcloud/cli，再 node scripts/wxcloud-login.js')
-  }
-}
+// loadWxcloud 走 wxcloud-load-cli.js 的共享份；ensureLogin 不跟去（spawnSync
+// 的写法过不了写入侧安全钩子，见共享模块顶注），仍是本地副本；resolveDb
+// 直接复用 wxcloud-ensure-indexes.js 导出的那份，tag 的推导（databases[0]
+// .instanceId || ENV_ID）只有一处定义。
 
 async function ensureLogin(wx) {
   try {
@@ -179,7 +168,7 @@ async function main() {
   }
   env.loadDotEnv(root)
   env.requirePrivateKey()
-  const wx = loadWxcloud()
+  const wx = wxload.loadWxcloud()
   const state = await ensureLogin(wx)
   wx.initCloudAPI(state.appid)
   const db = await indexes.resolveDb(wx)

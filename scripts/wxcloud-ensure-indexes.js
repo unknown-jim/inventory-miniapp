@@ -1,5 +1,6 @@
 const path = require('path')
 const env = require('./wxcloud-env')
+const wxload = require('./wxcloud-load-cli')
 
 const root = path.join(__dirname, '..')
 const COLLECTION = 'ledger_records'
@@ -70,19 +71,6 @@ function missingIndexes(existing, wanted) {
   return (wanted || []).filter(function (item) {
     return !have[keysSignature(item.keys)]
   })
-}
-
-function loadWxcloud() {
-  const cliRoot = path.join(process.env.APPDATA || '', 'npm', 'node_modules', '@wxcloud', 'cli')
-  try {
-    return {
-      api: require(path.join(cliRoot, 'lib/api/cloudapi/src/index')),
-      initCloudAPI: require(path.join(cliRoot, 'lib/api/adapter')).initCloudAPI,
-      readLoginState: require(path.join(cliRoot, 'lib/utils/auth')).readLoginState
-    }
-  } catch (error) {
-    throw new Error('未找到 @wxcloud/cli。先执行 npm install -g @wxcloud/cli，再 node scripts/wxcloud-login.js')
-  }
 }
 
 async function ensureLogin(wx) {
@@ -164,7 +152,7 @@ async function ensureIndexes(api, opts) {
 async function main() {
   env.loadDotEnv(root)
   env.requirePrivateKey()
-  const wx = loadWxcloud()
+  const wx = wxload.loadWxcloud()
   const state = await ensureLogin(wx)
   wx.initCloudAPI(state.appid)
   const db = await resolveDb(wx)

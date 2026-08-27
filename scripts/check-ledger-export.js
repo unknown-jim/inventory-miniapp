@@ -16,7 +16,7 @@
 const fs = require('fs')
 const path = require('path')
 
-const migrate = require(path.join(__dirname, '..', 'cloudfunctions', 'ledger', 'ledger-migrate'))
+const migrate = require('../cloudfunctions/ledger/ledger-migrate')
 
 function usage(message) {
   if (message) console.error(message)

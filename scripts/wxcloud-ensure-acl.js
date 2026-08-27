@@ -1,6 +1,7 @@
 const path = require('path')
 const env = require('./wxcloud-env')
 const indexes = require('./wxcloud-ensure-indexes')
+const wxload = require('./wxcloud-load-cli')
 
 const root = path.join(__dirname, '..')
 
@@ -37,19 +38,6 @@ function collectionsNeedingAcl(currentByName, wanted, tag) {
   return names.filter(function (name) {
     return String((currentByName && currentByName[name]) || '') !== expect
   })
-}
-
-function loadWxcloud() {
-  const cliRoot = path.join(process.env.APPDATA || '', 'npm', 'node_modules', '@wxcloud', 'cli')
-  try {
-    return {
-      api: require(path.join(cliRoot, 'lib/api/cloudapi/src/index')),
-      initCloudAPI: require(path.join(cliRoot, 'lib/api/adapter')).initCloudAPI,
-      readLoginState: require(path.join(cliRoot, 'lib/utils/auth')).readLoginState
-    }
-  } catch (error) {
-    throw new Error('未找到 @wxcloud/cli。先执行 npm install -g @wxcloud/cli，再 node scripts/wxcloud-login.js')
-  }
 }
 
 async function ensureLogin(wx) {
@@ -212,7 +200,7 @@ async function ensureStorageAcl(api, opts) {
 async function main() {
   env.loadDotEnv(root)
   env.requirePrivateKey()
-  const wx = loadWxcloud()
+  const wx = wxload.loadWxcloud()
   const state = await ensureLogin(wx)
   wx.initCloudAPI(state.appid)
   const db = await indexes.resolveDb(wx)

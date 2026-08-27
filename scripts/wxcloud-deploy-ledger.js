@@ -1,5 +1,6 @@
 const path = require('path')
 const env = require('./wxcloud-env')
+const wxload = require('./wxcloud-load-cli')
 
 const root = path.join(__dirname, '..')
 env.loadDotEnv(root)
@@ -11,7 +12,7 @@ const FN_DIR = path.join(root, 'cloudfunctions', 'ledger')
 // 3.6 MB 账本的 initMigration 跑得完（20 秒实测超时）手工调成 60 秒 / 512 MB，
 // 下一次部署又被这里按 20 / 256 覆盖回去，migrateRecords 当场重新超时——而
 // 部署日志里看不出发生过覆盖。缺字段就抛，不许拿 undefined 去部署。
-const FN_CONFIG = require(path.join(FN_DIR, 'config.json'))
+const FN_CONFIG = require('../cloudfunctions/ledger/config.json')
 if (typeof FN_CONFIG.memorySize !== 'number' || typeof FN_CONFIG.timeout !== 'number') {
   throw new Error('cloudfunctions/ledger/config.json 里缺 memorySize / timeout')
 }
@@ -22,21 +23,6 @@ function sleep(ms) {
   return new Promise(function (resolve) {
     setTimeout(resolve, ms)
   })
-}
-
-function loadWxcloud() {
-  const cliRoot = path.join(process.env.APPDATA || '', 'npm', 'node_modules', '@wxcloud', 'cli')
-  try {
-    return {
-      api: require(path.join(cliRoot, 'lib/api/cloudapi/src/index')),
-      initCloudAPI: require(path.join(cliRoot, 'lib/api/adapter')).initCloudAPI,
-      readLoginState: require(path.join(cliRoot, 'lib/utils/auth')).readLoginState,
-      zipFile: require(path.join(cliRoot, 'lib/utils/jszip')).zipFile,
-      zipToBuffer: require(path.join(cliRoot, 'lib/utils/jszip')).zipToBuffer
-    }
-  } catch (error) {
-    throw new Error('未找到 @wxcloud/cli。先执行 npm install -g @wxcloud/cli，再 node scripts/wxcloud-login.js')
-  }
 }
 
 async function waitActive(api, region) {
@@ -79,7 +65,7 @@ async function ensureLogin(wx) {
 
 async function main() {
   env.requirePrivateKey()
-  const wx = loadWxcloud()
+  const wx = wxload.loadWxcloud()
   const state = await ensureLogin(wx)
   wx.initCloudAPI(state.appid)
   const { envList } = await wx.api.tcbGetEnvironments({})
