@@ -12,6 +12,7 @@
 6. [docs/ui-scale.md](docs/ui-scale.md)：操作界面字号、点击区域、密度规则。
 7. [docs/cloud-ledger.md](docs/cloud-ledger.md)：云函数记账、多店隔离、环境 ID、禁止客户端直连业务库。
 8. [docs/ui-test.md](docs/ui-test.md)：UI 自动化测试怎么跑、为什么查不到自定义组件里的东西、等待为什么必须带超时。改页面 `js-` 钩子、抽组件或改 `tests/ui.test.js` 时必读。
+9. [docs/design-file.md](docs/design-file.md)：设计稿（Ardot 云文件）的组织结构、演示账取数纪律、MCP 改稿的坑。改设计稿或按稿实现 UI 前必读。
 
 ## 硬约束（摘要）
 
@@ -46,6 +47,13 @@
 - 能不能换某一根轴、先改再卖还是当场改：现场规矩，不要写成软件限制。
 - 给操作便利（种类模板带出待选项、多规格可同价），不要给行业裁判。详见 [docs/accounting-vs-policy.md](docs/accounting-vs-policy.md)。
 - 操作界面不要写小于 `--fs-xs` 的字号、不要写小于 `--tap-sm` 的可点高度。新页面用 `app.wxss` 共用布局类，根节点 `class="page"`。送货单除外。详见 [docs/ui-scale.md](docs/ui-scale.md)。
+
+### 设计稿
+
+- 高保真稿是 Ardot 云文件，地址与结构约定见 [docs/design-file.md](docs/design-file.md)。一行 = 一个流程，新内容归位到所属流程行，不留「补丁堆」组。
+- 样张数字一律取自稿内「演示账对照表」，不许自编；改规则同步改表。
+- 「去收款」桥只在仍有剩余欠款时出现，冲完即清不带桥。
+- 用 MCP 改稿遇文本写入拼接脏数据时，按 [docs/design-file.md](docs/design-file.md) 的变量绑定通道绕过；改组件公共子节点前先查实例。
 
 ### 测试
 
