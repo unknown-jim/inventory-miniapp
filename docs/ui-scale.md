@@ -22,7 +22,7 @@
 | `--fs-caption` | 24rpx | 12 | 角标、tag 文字、时间戳 |
 | `--fs-label` | 26rpx | 13 | 字段标签、行内副说明 |
 | `--fs-body` | 28rpx | 14 | 正文、输入框、列表主文案 |
-| `--fs-title` | 34rpx | 17 | 卡片标题、页内区块标题 |
+| `--fs-title` | 32rpx | 16 | 卡片标题、页内区块标题（2026-08-28 三方裁定标题归 16，与设计稿 `font/size/title` 同源） |
 | `--fs-amount` | 32rpx | 16 | 列表行金额 |
 | `--fs-amount-lg` | 40rpx | 20 | 汇总块金额 |
 | `--fs-display` | 48rpx | 24 | 客户欠款、单据合计 |
@@ -39,8 +39,9 @@
 | 看板 hero | ≤10 | `--fs-hero` 80rpx / 40px |
 | | 11–13 | `--fs-hero-md` 68rpx / 34px |
 | | ≥14 | `--fs-hero-sm` 56rpx / 28px |
-| 半宽统计块 `.stat-num` | ≤9 | `--fs-amount-lg` 40rpx / 20px |
-| | ≥10 | `--fs-amount-lg-sm` 32rpx / 16px |
+| 半宽统计块 `.stat-num` | ≤9 | `--fs-display` 48rpx / 24px |
+| | 10–12 | `--fs-amount-lg` 40rpx / 20px |
+| | ≥13 | `--fs-amount-lg-sm` 32rpx / 16px |
 | 列表行金额、客户欠款红字 | 任意 | 不降档，现有字号够用 |
 
 「可见字符数」= `util.money()` 输出加上 `¥` 后的 `length`，含千分位逗号和小数点。
