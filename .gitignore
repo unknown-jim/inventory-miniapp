@@ -9,3 +9,6 @@ project.private.config.json
 
 # 智谱 Z Code CLI 本地配置
 .zcode/
+
+# Mimosa 安全扫描插件的本地状态（hook 基线、扫描历史等）
+.mimosa/
