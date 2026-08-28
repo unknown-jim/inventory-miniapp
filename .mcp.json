@@ -5,6 +5,9 @@
       "args": [
         "mcp"
       ]
+    },
+    "ardot": {
+      "url": "http://127.0.0.1:50501/api/v1/mcp"
     }
   }
 }
