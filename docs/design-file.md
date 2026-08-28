@@ -38,7 +38,7 @@ https://ardot.tencent.com/file/718738891083099
 - 小字灰一律绑 text/muted（62% 黑）；禁用 = fill/action-disabled + text/disabled；红色的三种语义（欠款金额 / 危险动作 / 库存预警）见 STRING 变量 color/red-semantics。
 - 品牌青绿只做非语义场合的小剂量点缀（毛利 stat 数字、空态插画描边、border/focus 聚焦）；主行动一律黑，tabBar 不上品牌色——这两条是历轮评审的刻意决策，不要回退。
 
-## MCP 改稿的坑（2026-08-28 实战记录）
+## MCP 改稿的坑（2026-08-28 实战记录；8–10 为 2026-08-29 补）
 
 用 Ardot MCP 的 `batch_edit` 改稿时踩过这些，复查时可少走弯路：
 
@@ -49,6 +49,9 @@ https://ardot.tencent.com/file/718738891083099
 5. **竖排里 `fill_container` 的子节点 Move 进横排后**，width 会解析成固定值，撑爆容器裁掉兄弟节点；Move 之后重设一次 `fill_container`。
 6. **别名变量（VARIABLE_ALIAS）在 fill 简写路径不解析**（如 fill/brand-accent），会回落默认色并报 warning；要绑 Primitive 本体或写完整 `fills` 数组。
 7. `capture_layout` 开 `problemsOnly` 时，大 Row 报 oversized container 是画布常态（Row 本身是 fill_container）；要盯的是 `OUTSIDE_PARENT` 和 `MissingContent`。
+8. **变量绑定通道不是无副作用通道**：给组件子节点 `U(content: "$:FixText:xxx")` 干净，但绑定会继承进所有实例，把实例原有的 characters 字面量覆盖冲掉（实测一次冲掉 stat/block 8 实例 24 个文字槽加两处流水行金额）。绑之前先列实例、核对哪些实例带 characters 覆盖；被冲的实例按改前取证的原值逐个绑回各自的变量。同理要警惕：改组件默认样张前先想清楚实例都覆盖了什么。
+9. **往组件里插 svg 子框，子框会被放到远处坐标**：`I(组件, {type: "frame", svg: ...})` 建出的子框 x/y 实测落在其他画布位置（如 1619,18948），组件和全部实例因此渲染空白。插入后立刻把子框 x/y 归零；判定「新节点截图空白」先读 `absoluteBoundingBox` 再定性，不要想当然归咎渲染缓存。
+10. **截图渲染滞后于节点数据**：`capture_screenshot` 可能长时间显示旧内容（旧文案、旧样式、甚至别的变体的字），新写入的节点尤其明显。对数与样式判定一律以 `batch_read` 实时数据为准，截图异常先查数据再定性——2026-08-29 两轮审计共 6 条「发现」因此作废。反过来，数据正确但渲染卡死不追（同一文案长期显示旧值）时，给该节点走一次变量绑定通道可强制渲染器重解析。
 
 ## 过程文档不进仓库
 
