@@ -277,6 +277,22 @@ orderPicker.openOrderPicker().then(function () {
     assert.ok(wxss.indexOf(token) >= 0, '面板应当消费 ' + token)
   })
 
+  // 组件不许开 virtualHost：开了页面侧就没有宿主节点，automator 从页面够不到组件里
+  // 的任何东西（tests/ui.test.js 在 slip-overlay 上实测过 page.$$ / >>> / selectComponent
+  // 全是 0），tests/ui.test.js 里那一整组面板用例会当场失效。面板本体 position: fixed
+  // 不占流，留着宿主节点不影响排版。
+  const sheetJs = read('components/record-sheet/index.js')
+  assert.ok(
+    !/virtualHost\s*:\s*true/.test(sheetJs),
+    'record-sheet 不许开 virtualHost：开了 UI 测试就够不到面板里的任何元素'
+  )
+  ;['pages/index/index.wxml', 'pages/records/records.wxml'].forEach(function (rel) {
+    assert.ok(
+      read(rel).indexOf('<record-sheet id="record-sheet"') >= 0,
+      rel + ' 的 <record-sheet> 要带 id="record-sheet"：UI 测试靠它取组件实例读 data'
+    )
+  })
+
   const appWxss = read('app.wxss')
   ;['--fs-caption', '--fs-label', '--fs-body', '--fs-title', '--tap-min'].forEach(function (token) {
     assert.ok(appWxss.indexOf(token + ':') >= 0, 'app.wxss 缺少 ui-scale.md 的 ' + token)

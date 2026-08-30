@@ -63,5 +63,5 @@
        下一批流水升级成 tab 之后这里不用改。 -->
   <view class="record-fab js-record-fab" hover-class="record-fab-press" bindtap="openRecordSheet">＋</view>
 
-  <record-sheet show="{{showRecordSheet}}" bindclose="closeRecordSheet" />
+  <record-sheet id="record-sheet" show="{{showRecordSheet}}" bindclose="closeRecordSheet" />
 </view>

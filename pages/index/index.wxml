@@ -116,5 +116,5 @@
   </block>
   </block>
 
-  <record-sheet show="{{showRecordSheet}}" bindclose="closeRecordSheet" />
+  <record-sheet id="record-sheet" show="{{showRecordSheet}}" bindclose="closeRecordSheet" />
 </view>

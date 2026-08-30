@@ -859,6 +859,302 @@ async function seedFromHome(miniProgram) {
   return home
 }
 
+// ---------------------------------------------------------------------------
+// 「记一笔」面板（components/record-sheet）。
+//
+// 面板的状态全在自定义组件实例上 —— 页面 data 里只有一个 showRecordSheet，
+// 五行动作、二级、三个 picker 的列表都在组件里。所以这里统一从宿主节点
+// #record-sheet 取组件实例读它的 data，DOM 点击走 >>> 跨组件选择器。
+//
+// 组件**没有开 virtualHost**，就是为了让这两条路都通。开了页面侧连宿主节点都没有：
+// slip-overlay 就是这么被逼得只能核对页面 data 的（见 waitSlipOpen 上方那段）。
+// 谁要是给 record-sheet 加回 virtualHost，下面这些用例会立刻在 recordSheetHost
+// 这一步报错，不会静默失效。
+// ---------------------------------------------------------------------------
+
+const MAIN_ROW_LABELS = ['销售', '进货', '收款', '退货', '库存修正']
+
+function inSheet(selector) {
+  return '#record-sheet >>> ' + selector
+}
+
+async function recordSheetHost(page) {
+  const host = await page.$('#record-sheet')
+  if (!host) {
+    throw new Error('页面 ' + page.path + ' 上找不到 #record-sheet 宿主节点：'
+      + '组件是不是又开了 virtualHost？开了页面侧就够不到组件里的任何东西')
+  }
+  return host
+}
+
+async function waitSheetData(host, predicate, label) {
+  const deadline = Date.now() + WAIT_TIMEOUT
+  for (;;) {
+    const data = await host.data()
+    if (predicate(data)) return data
+    if (Date.now() >= deadline) {
+      throw new Error('等记一笔面板数据超时（' + label + '，' + WAIT_TIMEOUT + 'ms）')
+    }
+    await sleep(300)
+  }
+}
+
+async function closeRecordSheetIfOpen(page) {
+  const data = await page.data()
+  if (!data || data.showRecordSheet !== true) return
+  await tapWhen(page, inSheet('.js-rs-cancel'))
+  await waitForData(page, function (d) {
+    return d && d.showRecordSheet === false
+  }, '关掉面板')
+}
+
+// 每次都从「面板是关着的」起步：入口按钮在遮罩底下，automator 的 tap 是直接派事件、
+// 不管有没有被盖住，面板开着时再点一次入口不会重置 step，后面等 step === 'main' 会挂死。
+async function openRecordSheet(page, entrySelector, label) {
+  await closeRecordSheetIfOpen(page)
+  await tapWhen(page, entrySelector)
+  await waitForData(page, function (d) {
+    return d && d.showRecordSheet === true
+  }, label + '：面板打开')
+  const host = await recordSheetHost(page)
+  await waitSheetData(host, function (d) {
+    return d && d.step === 'main'
+  }, label + '：面板停在一级')
+  await waitFor(page, inSheet('.rs-sheet'), label + '：出现 .rs-sheet')
+  return host
+}
+
+async function sheetRowLabels(page) {
+  const nodes = await page.$$(inSheet('.rs-row .rs-label'))
+  const texts = []
+  for (let i = 0; i < nodes.length; i++) {
+    texts.push(String(await nodes[i].text() || '').trim())
+  }
+  return texts
+}
+
+async function assertSheetFitsWindow(miniProgram, page, where) {
+  const windowHeight = await miniProgram.evaluate(function () {
+    return wx.getSystemInfoSync().windowHeight
+  })
+  const el = await page.$(inSheet('.rs-sheet'))
+  if (!el) throw new Error('找不到 .rs-sheet')
+  const size = await el.size()
+  assert.ok(
+    size.height <= windowHeight + 1,
+    where + '：面板比可视区还高（' + Math.round(size.height) + 'px > ' + windowHeight
+      + 'px），.rs-sheet 的 max-height 没夹住内容'
+  )
+}
+
+// 放在 seedFromHome 之后、别的用例之前是**有意的**：收款 picker 只列有欠款的客户、
+// 退货 picker 只列还能退的销售单，而 runPaySheet 会把欠款收干净、runOpeningSheet
+// 会再加一笔期初。种子刚灌完那一刻是这两个 picker 唯一确定的前提。
+// 全程只看不提交：进到落点页确认一眼就退回来，不动账。
+async function runRecordSheet(miniProgram) {
+  step('看板：点「＋ 记一笔」开面板，核对五行动作的文案与顺序')
+  let home = await goto(miniProgram, 'switchTab', '/pages/index/index', '看板')
+  await waitPageReady(home)
+  await openRecordSheet(home, '.js-record-entry', '看板入口')
+
+  const labels = await sheetRowLabels(home)
+  assert.deepStrictEqual(
+    labels,
+    MAIN_ROW_LABELS,
+    '面板一级五行的文案或顺序和设计稿 sheet/记一笔(7:165) 对不上，渲染出来的是 '
+      + JSON.stringify(labels)
+  )
+  await assertSheetFitsWindow(miniProgram, home, '一级面板')
+
+  step('面板：三条关闭通道（底部取消 / 点遮罩 / grabber 下滑）')
+  await tapWhen(home, inSheet('.js-rs-cancel'))
+  await waitForData(home, function (d) {
+    return d && d.showRecordSheet === false
+  }, '「取消」关掉面板')
+
+  await openRecordSheet(home, '.js-record-entry', '重开')
+  await tapWhen(home, inSheet('.js-rs-mask'))
+  await waitForData(home, function (d) {
+    return d && d.showRecordSheet === false
+  }, '点遮罩关掉面板')
+
+  await runRecordSheetGrabber(miniProgram, home)
+
+  step('面板 › 库存修正：展开二级（稿上三行，本批交付两行）')
+  const adjHost = await openRecordSheet(home, '.js-record-entry', '库存修正')
+  await tapWhen(home, inSheet('.js-rs-adjust'))
+  await waitSheetData(adjHost, function (d) {
+    return d && d.step === 'adjust'
+  }, '展开库存修正二级')
+  const options = await home.$$(inSheet('.rs-option'))
+  // 稿上 sheet/库存修正(4:42) 是三行。第三行「盘一遍这个商品」要的是 Screen/02b
+  // 那个整页盘点，代码里没有落点，本批**整行不画**（画布规范 9:36：样张与规则打架时
+  // 当轮改掉，不许挂禁用件）。Screen/02b 落地补回第三行时，这个 2 要跟着改成 3。
+  assert.strictEqual(
+    options.length,
+    2,
+    '库存修正二级应当是两行（这是本批的已知偏差，不是漏了）：实际渲染出 ' + options.length + ' 行'
+  )
+
+  home = await runRecordSheetPayPicker(miniProgram, home)
+  home = await runRecordSheetReturnPicker(miniProgram, home)
+  home = await runRecordSheetProductPicker(miniProgram, home)
+  await runRecordSheetFabEntry(miniProgram)
+}
+
+// grabber 下滑。先按真事件派一次；automator 的 element.trigger 只保证送 detail，
+// touches / changedTouches 这两个顶层字段能不能带过去没有契约，所以派完不硬断言，
+// 没关就退回直接调组件方法验判据本身，并如实记下走的是哪条路。
+// 「bindtouchstart 到底有没有接上 onGrabStart」由 tests/record-sheet.test.js 静态钉着。
+async function runRecordSheetGrabber(miniProgram, home) {
+  const host = await openRecordSheet(home, '.js-record-entry', '重开')
+  const grabber = await home.$(inSheet('.rs-grabber-wrap'))
+  if (!grabber) throw new Error('找不到 .rs-grabber-wrap')
+  let closedBy = ''
+  try {
+    await grabber.trigger('touchstart', { touches: [{ clientY: 100 }], changedTouches: [{ clientY: 100 }] })
+    await grabber.trigger('touchend', { touches: [], changedTouches: [{ clientY: 300 }] })
+    await waitForData(home, function (d) {
+      return d && d.showRecordSheet === false
+    }, 'grabber 下滑关掉面板')
+    closedBy = 'trigger 派真事件'
+  } catch (error) {
+    await host.callMethod('onGrabStart', { touches: [{ clientY: 100 }] })
+    await host.callMethod('onGrabEnd', { changedTouches: [{ clientY: 300 }] })
+    await waitForData(home, function (d) {
+      return d && d.showRecordSheet === false
+    }, 'grabber 下滑关掉面板（callMethod 兜底）')
+    closedBy = 'callMethod 直调（trigger 带不动 changedTouches）'
+  }
+  step('grabber 下滑关闭：验到了，走的是 ' + closedBy)
+}
+
+async function runRecordSheetPayPicker(miniProgram, home) {
+  step('面板 › 收款：只列有欠款的客户、按欠款倒序，点一行进该客户的收款态')
+  const host = await openRecordSheet(home, '.js-record-entry', '收款')
+  await tapWhen(home, inSheet('.js-rs-pay'))
+  const data = await waitSheetData(host, function (d) {
+    return d && d.step === 'customer' && d.loading === false
+  }, '收款 picker 读完客户')
+
+  assert.ok(
+    data.customers && data.customers.length > 0,
+    '收款 picker 是空的：种子里应当有欠款客户（runPaySheet 靠的是同一个前提）'
+  )
+  data.customers.forEach(function (item) {
+    assert.ok(
+      Number(item.receivable) > 0,
+      '收款 picker 列出了没有欠款的客户「' + item.name + '」，设计稿 n8 明写只列有欠款的'
+    )
+  })
+  for (let i = 1; i < data.customers.length; i++) {
+    assert.ok(
+      Number(data.customers[i - 1].receivable) >= Number(data.customers[i].receivable),
+      '收款 picker 没有按欠款从多到少排：' + JSON.stringify(data.customers.map(function (c) {
+        return [c.name, c.receivable]
+      }))
+    )
+  }
+
+  await tapWhen(home, inSheet('.js-rs-customer'))
+  const edit = await waitForPage(miniProgram, 'pages/customer-edit/customer-edit', '客户编辑页')
+  // 落点带的是 ?id=<客户id>&pay=1，收款层应当自己打开。不提交，看一眼就退。
+  await waitFor(edit, '.js-pay-sheet', '收款层自动打开')
+  return await goBackTo(miniProgram, '看板')
+}
+
+async function runRecordSheetReturnPicker(miniProgram, home) {
+  step('面板 › 退货：只列还能退的销售单，点一行进退货页并带出原单行')
+  const host = await openRecordSheet(home, '.js-record-entry', '退货')
+  await tapWhen(home, inSheet('.js-rs-return'))
+  const data = await waitSheetData(host, function (d) {
+    return d && d.step === 'order' && d.loading === false
+  }, '退货 picker 读完销售单')
+
+  assert.ok(
+    data.orders && data.orders.length > 0,
+    '退货 picker 是空的：种子里 4 张销售单一张都没退过，应当全部可退'
+  )
+  data.orders.forEach(function (row) {
+    // 退过一部分标「可退 N 件」，从未退过只说「未退过」（设计稿 n5）
+    assert.ok(
+      /可退 \d/.test(row.returnText) || row.returnText.indexOf('未退过') >= 0,
+      '退货行第三行既不是「可退 N 件」也不是「未退过」：' + row.returnText
+    )
+    assert.ok(row.subText.indexOf('销售单 ') >= 0, '退货行缺单号：' + row.subText)
+  })
+
+  await tapWhen(home, inSheet('.js-rs-order'))
+  const ret = await waitForPage(miniProgram, 'pages/sale-return/sale-return', '退货页')
+  // 稿上 n5：先选原单再退，不开空白退货单。带不出原单行就等于开了空白单。
+  await waitForData(ret, function (d) {
+    return d && d.lines && d.lines.length > 0
+  }, '退货页带出了原单行')
+  return await goBackTo(miniProgram, '看板')
+}
+
+async function runRecordSheetProductPicker(miniProgram, home) {
+  step('面板 › 库存修正 › 数量对不上：先选商品，并量一下 picker 列表有没有被 max-height 夹住')
+  const host = await openRecordSheet(home, '.js-record-entry', '数量对不上')
+  await tapWhen(home, inSheet('.js-rs-adjust'))
+  await waitSheetData(host, function (d) {
+    return d && d.step === 'adjust'
+  }, '进二级')
+  await tapWhen(home, inSheet('.js-rs-qty'))
+  const data = await waitSheetData(host, function (d) {
+    return d && d.step === 'product' && d.loading === false
+  }, '商品 picker 读完商品')
+  assert.ok(data.products && data.products.length > 0, '商品 picker 是空的')
+
+  // .rs-list 用的是 max-height 而不是仓库惯用的固定 height —— 这是本 PR 自己标出来的
+  // 风险点。量真实渲染高度来判，不去猜 rpx 怎么换算。
+  const listEl = await home.$(inSheet('.rs-list'))
+  if (!listEl) throw new Error('找不到 picker 的 .rs-list')
+  const listSize = await listEl.size()
+  const rows = await home.$$(inSheet('.rs-pick'))
+  let rowSum = 0
+  for (let i = 0; i < rows.length; i++) {
+    rowSum += (await rows[i].size()).height
+  }
+  if (rowSum > listSize.height + 1) {
+    step('picker 列表结论：' + rows.length + ' 行合计 ' + Math.round(rowSum)
+      + 'px，容器被夹到 ' + Math.round(listSize.height) + 'px —— max-height 生效，要滚动才看得全')
+  } else {
+    step('picker 列表结论：本轮 ' + rows.length + ' 行合计 ' + Math.round(rowSum)
+      + 'px 没超过容器 ' + Math.round(listSize.height) + 'px，max-height 这一档没被验到')
+  }
+  await assertSheetFitsWindow(miniProgram, home, '商品 picker')
+
+  await tapWhen(home, inSheet('.js-rs-product'))
+  const adjust = await waitForPage(miniProgram, 'pages/adjust/adjust', '库存调整页')
+  // adjust 不带 id 会 toast「请从商品编辑进入」再退回来。能停在这一页并且拿到
+  // productId，才证明 picker 真的把商品带过去了 —— 这正是简报原方案会死掉的地方。
+  await waitForData(adjust, function (d) {
+    return d && d.productId
+  }, '调整页拿到了 productId')
+  return await goBackTo(miniProgram, '看板')
+}
+
+async function runRecordSheetFabEntry(miniProgram) {
+  step('流水页：右下角 FAB 打开的是同一张面板')
+  // 流水页现在还不是 tabBar 页，所以走 navigateTo。tabBar 5→4 那批把流水升成 tab
+  // 之后，这里要改成 switchTab（和组件里 _goTab 那两处一起改）。
+  const records = await goto(miniProgram, 'navigateTo', '/pages/records/records', '流水页')
+  await waitFor(records, '.js-record-fab', '出现 .js-record-fab')
+  await openRecordSheet(records, '.js-record-fab', '流水页 FAB')
+  const labels = await sheetRowLabels(records)
+  assert.deepStrictEqual(
+    labels,
+    MAIN_ROW_LABELS,
+    '流水页 FAB 打开的面板和看板那张不一致（两个入口必须是同一个组件）：' + JSON.stringify(labels)
+  )
+  await tapWhen(records, inSheet('.js-rs-cancel'))
+  await waitForData(records, function (d) {
+    return d && d.showRecordSheet === false
+  }, '流水页关掉面板')
+  await goBackTo(miniProgram, '看板')
+}
+
 async function runSalePickerAndSlip(miniProgram) {
   step('销售：点选商品、客户，一分未收出库，核对送货单')
   const sale = await goto(miniProgram, 'switchTab', '/pages/sale/sale', '销售页')
@@ -1209,6 +1505,7 @@ async function run() {
   // 恰好是最容易卡住不回的那一类。
   await withTimeout((async function () {
     await seedFromHome(miniProgram)
+    await runRecordSheet(miniProgram)
     await runSalePickerAndSlip(miniProgram)
     await runRecordSlipExport(miniProgram)
     await runOpeningSheet(miniProgram)
@@ -1519,8 +1816,11 @@ reWaitForPage.lastIndex = 0
 while ((hit = reWaitForPage.exec(routeSource)) !== null) waitForPageTargets.push(hit[1])
 assert.strictEqual(
   waitForPageTargets.length,
-  4,
-  '自检：waitForPage 的字面量调用点应当正好 4 处（4 处 tap 触发的跳转），实为 '
+  7,
+  // 4 处是原有的；另外 3 处是「记一笔」面板三个 picker 的落点
+  //（customer-edit / sale-return / adjust）—— 面板的全部意义就是把人送到这三页，
+  // 所以这三次跳转是它的核心断言，不是顺手加的。
+  '自检：waitForPage 的字面量调用点应当正好 7 处（原有 4 处 tap 跳转 + 记一笔面板三个 picker 的落点），实为 '
     + waitForPageTargets.length + ' 处：' + JSON.stringify(waitForPageTargets)
     + ' —— 数目对不上说明要么正则失效了（钉子④是假绿的），要么调用点增减了，两种都要人看一眼'
 )
@@ -1530,8 +1830,9 @@ reGoto.lastIndex = 0
 while ((hit = reGoto.exec(routeSource)) !== null) gotoTargets.push(hit[1])
 assert.strictEqual(
   gotoTargets.length,
-  8,
-  '自检：goto 的字面量调用点应当正好 8 处，实为 ' + gotoTargets.length + ' 处：'
+  10,
+  // 8 处是原有的；另外 2 处是 runRecordSheet 进看板和 runRecordSheetFabEntry 进流水页
+  '自检：goto 的字面量调用点应当正好 10 处（原有 8 处 + 记一笔面板的看板、流水页两个入口），实为 ' + gotoTargets.length + ' 处：'
     + JSON.stringify(gotoTargets)
     + ' —— 数目对不上说明要么正则失效了（钉子④是假绿的），要么调用点增减了，两种都要人看一眼'
 )

@@ -13,8 +13,13 @@ const DISMISS_PX = 40
 
 Component({
   options: {
-    styleIsolation: 'apply-shared',
-    virtualHost: true
+    // **不要加 virtualHost**。开了它页面侧就没有宿主节点，automator 从页面
+    // 够不到组件里的任何东西 —— tests/ui.test.js 在 slip-overlay 上实测过：
+    // page.$$('.js-slip')、'slip-overlay >>> .js-slip'、selectComponent 全是 0，
+    // 那条用例只好改成核对页面 data。面板的状态（step / 三个 picker 的列表）
+    // 全在组件自己身上，页面 data 里只有一个 showRecordSheet，退不回去。
+    // 宿主节点是空块，面板本体 position: fixed 不占流，加上它不影响任何排版。
+    styleIsolation: 'apply-shared'
   },
   properties: {
     show: {
