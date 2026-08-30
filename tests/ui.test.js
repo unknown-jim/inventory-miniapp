@@ -1143,21 +1143,70 @@ async function runRecordSheetProductPicker(miniProgram, home) {
 
   // .rs-list 用的是 max-height 而不是仓库惯用的固定 height —— 这是本 PR 自己标出来的
   // 风险点。量真实渲染高度来判，不去猜 rpx 怎么换算。
-  const listEl = await waitInSheet(host, '.rs-list', 'picker 列表')
-  const listSize = await listEl.size()
-  const rows = await host.$$('.rs-pick')
-  let rowSum = 0
-  for (let i = 0; i < rows.length; i++) {
-    rowSum += (await rows[i].size()).height
-  }
-  if (rowSum > listSize.height + 1) {
+  const baseList = await waitInSheet(host, '.rs-list', 'picker 列表')
+  const baseSize = await baseList.size()
+  const baseRows = await host.$$('.rs-pick')
+  step('picker 列表（种子原样）：' + baseRows.length + ' 行，容器 '
+    + Math.round(baseSize.height) + 'px')
+
+  // 种子只有 6 个商品、合计约 270px，撑不破 640rpx 的上限 —— 首轮跑出来的结论就是
+  // 「max-height 这一档没被验到」。所以这里临时把商品表塞长，把它真正验掉，
+  // **验完原样还回去**：后面 runSalePickerAndSlip 要按顺序点第一个商品，
+  // 不能被假商品污染。内存模式下 store.getProducts() 每次直接读 inv_products，
+  // 所以塞完调一次组件的 refreshProducts 就能重新读到。
+  const savedProducts = await miniProgram.evaluate(function (n) {
+    const before = wx.getStorageSync('inv_products') || []
+    const extra = []
+    for (let i = 0; i < n; i++) {
+      extra.push({ id: 'ui-fill-' + i, name: '撑高用商品 ' + i })
+    }
+    wx.setStorageSync('inv_products', before.concat(extra))
+    return before
+  }, 24)
+  try {
+    await host.callMethod('refreshProducts')
+    const padded = await waitSheetData(host, function (d) {
+      return d && d.products && d.products.length > baseRows.length
+    }, '商品表塞长后 picker 重新读到')
+
+    const listEl = await waitInSheet(host, '.rs-list', 'picker 列表')
+    const listSize = await listEl.size()
+    const rows = await host.$$('.rs-pick')
+    let rowSum = 0
+    for (let i = 0; i < rows.length; i++) {
+      rowSum += (await rows[i].size()).height
+    }
+    assert.ok(
+      rowSum > listSize.height + 1,
+      'picker 列表没被 max-height 夹住：' + rows.length + ' 行合计 ' + Math.round(rowSum)
+        + 'px，容器却有 ' + Math.round(listSize.height) + 'px —— 列表会把面板顶穿'
+    )
+    // 夹住之后还得真的能滚，否则被夹掉的那些行永远点不到。
+    // scrollHeight 只有 ScrollViewElement 才有（automator out/Element.js 按 tagName 分发）；
+    // 拿不到就如实记一句，不假装验过。
+    let scrollNote = '（scrollHeight 取不到，没验滚动）'
+    if (typeof listEl.scrollHeight === 'function') {
+      const scrollHeight = await listEl.scrollHeight()
+      assert.ok(
+        scrollHeight > listSize.height + 1,
+        'picker 列表夹住了却滚不动：scrollHeight ' + Math.round(scrollHeight)
+          + 'px 不大于可视高 ' + Math.round(listSize.height) + 'px'
+      )
+      scrollNote = '，scrollHeight ' + Math.round(scrollHeight) + 'px —— 能滚'
+    }
+    await assertSheetFitsWindow(miniProgram, host, '商品 picker（' + padded.products.length + ' 行）')
     step('picker 列表结论：' + rows.length + ' 行合计 ' + Math.round(rowSum)
-      + 'px，容器被夹到 ' + Math.round(listSize.height) + 'px —— max-height 生效，要滚动才看得全')
-  } else {
-    step('picker 列表结论：本轮 ' + rows.length + ' 行合计 ' + Math.round(rowSum)
-      + 'px 没超过容器 ' + Math.round(listSize.height) + 'px，max-height 这一档没被验到')
+      + 'px，容器夹到 ' + Math.round(listSize.height) + 'px' + scrollNote)
+  } finally {
+    // 还原必须在 finally 里：上面任何一条断言挂掉都不能把假商品留给后面的用例
+    await miniProgram.evaluate(function (before) {
+      wx.setStorageSync('inv_products', before)
+    }, savedProducts)
+    await host.callMethod('refreshProducts')
+    await waitSheetData(host, function (d) {
+      return d && d.products && d.products.length === baseRows.length
+    }, '商品表还原')
   }
-  await assertSheetFitsWindow(miniProgram, host, '商品 picker')
 
   await tapInSheet(host, '.js-rs-product')
   const adjust = await waitForPage(miniProgram, 'pages/adjust/adjust', '库存调整页')
