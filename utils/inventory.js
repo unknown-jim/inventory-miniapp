@@ -2979,6 +2979,10 @@ function getDashboard(products, recent, now, skus, totals, today) {
 //
 // settledAmount 与 recordTerms 里的是同一个表达式（销售单取实收、退货单取退现金，
 // 都夹在单据金额内），所以这两个数与全店欠款不可能各算一套。
+//
+// G1（预收）落地后这句要改：recordTerms 改读 creditedAmount（= settledAmount +
+// prepayUsed），今日实收**仍读 settledAmount** —— 预收是昨天收的钱，不进今天的抽屉。
+// 两者那时同源但不同口径，别再当成一个表达式。口径见 docs/accounting-vs-policy.md。
 function todayTotals(records, dayStart) {
   const start = toNumber(dayStart)
   let salesCents = 0
