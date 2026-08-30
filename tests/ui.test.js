@@ -863,10 +863,22 @@ async function seedFromHome(miniProgram) {
 // 「记一笔」面板（components/record-sheet）。
 //
 // 面板的状态全在自定义组件实例上 —— 页面 data 里只有一个 showRecordSheet，
-// 五行动作、二级、三个 picker 的列表都在组件里。所以这里统一从宿主节点
-// #record-sheet 取组件实例读它的 data，DOM 点击走 >>> 跨组件选择器。
+// 五行动作、二级、三个 picker 的列表都在组件里。所以这里从宿主节点 #record-sheet
+// 取组件实例，读它的 data，并**在这个实例上**查子元素。
 //
-// 组件**没有开 virtualHost**，就是为了让这两条路都通。开了页面侧连宿主节点都没有：
+// 【不要用页面级的 '>>>'】首跑就栽在这上面：'#record-sheet >>> .rs-row .rs-label'
+// 返回 1 个节点，text() 是整个面板拼成的一串（含标题「记一笔」和底部「取消」）——
+// 它**静默降级成了宿主本身**，不报错。'>>>' 右边只吃单个简单选择器，吃不了两级
+// 后代链。排错清单第 9 条记的是同一类坑的另一面（virtualHost 组件页面级完全够不着）。
+//
+// 【为什么组件实例上就行】automator 源码 out/Element.js：
+//     class CustomElement extends Element
+//     async $(e){...this.send("Element.getElement",{selector:e})...}
+//     async $$(e){...this.send("Element.getElements",{selector:e})...}
+// 两个查询都以**该元素**为作用域下发，后代链正常。Element.create 在 nodeId 存在时
+// 返回 CustomElement，自定义组件的宿主正是这种。
+//
+// 组件**没有开 virtualHost**，就是为了让这条路通。开了页面侧连宿主节点都没有：
 // slip-overlay 就是这么被逼得只能核对页面 data 的（见 waitSlipOpen 上方那段）。
 // 谁要是给 record-sheet 加回 virtualHost，下面这些用例会立刻在 recordSheetHost
 // 这一步报错，不会静默失效。
@@ -874,15 +886,15 @@ async function seedFromHome(miniProgram) {
 
 const MAIN_ROW_LABELS = ['销售', '进货', '收款', '退货', '库存修正']
 
-function inSheet(selector) {
-  return '#record-sheet >>> ' + selector
-}
-
 async function recordSheetHost(page) {
   const host = await page.$('#record-sheet')
   if (!host) {
     throw new Error('页面 ' + page.path + ' 上找不到 #record-sheet 宿主节点：'
       + '组件是不是又开了 virtualHost？开了页面侧就够不到组件里的任何东西')
+  }
+  if (typeof host.$$ !== 'function' || typeof host.data !== 'function') {
+    throw new Error('#record-sheet 拿到的不是自定义组件实例（没有 $$ / data）：'
+      + 'automator 只在 nodeId 存在时才建 CustomElement，宿主节点可能没渲染出来')
   }
   return host
 }
@@ -899,10 +911,52 @@ async function waitSheetData(host, predicate, label) {
   }
 }
 
+// 面板里的元素一律走这两个，别退回页面级选择器（理由见上面那段）。
+async function waitInSheet(host, selector, label) {
+  const deadline = Date.now() + WAIT_TIMEOUT
+  for (;;) {
+    const el = await host.$(selector)
+    if (el) return el
+    if (Date.now() >= deadline) {
+      throw new Error('等面板里的元素超时（' + (label || selector) + '，选择器 '
+        + selector + '，' + WAIT_TIMEOUT + 'ms）')
+    }
+    await sleep(300)
+  }
+}
+
+async function tapInSheet(host, selector) {
+  const el = await waitInSheet(host, selector, '出现 ' + selector)
+  await el.tap()
+}
+
+async function sheetRowLabels(host) {
+  const nodes = await host.$$('.rs-row .rs-label')
+  const texts = []
+  for (let i = 0; i < nodes.length; i++) {
+    texts.push(String(await nodes[i].text() || '').trim())
+  }
+  return texts
+}
+
+async function assertSheetFitsWindow(miniProgram, host, where) {
+  const windowHeight = await miniProgram.evaluate(function () {
+    return wx.getSystemInfoSync().windowHeight
+  })
+  const el = await waitInSheet(host, '.rs-sheet', '面板本体')
+  const size = await el.size()
+  assert.ok(
+    size.height <= windowHeight + 1,
+    where + '：面板比可视区还高（' + Math.round(size.height) + 'px > ' + windowHeight
+      + 'px），.rs-sheet 的 max-height 没夹住内容'
+  )
+}
+
 async function closeRecordSheetIfOpen(page) {
   const data = await page.data()
   if (!data || data.showRecordSheet !== true) return
-  await tapWhen(page, inSheet('.js-rs-cancel'))
+  const host = await recordSheetHost(page)
+  await tapInSheet(host, '.js-rs-cancel')
   await waitForData(page, function (d) {
     return d && d.showRecordSheet === false
   }, '关掉面板')
@@ -920,31 +974,8 @@ async function openRecordSheet(page, entrySelector, label) {
   await waitSheetData(host, function (d) {
     return d && d.step === 'main'
   }, label + '：面板停在一级')
-  await waitFor(page, inSheet('.rs-sheet'), label + '：出现 .rs-sheet')
+  await waitInSheet(host, '.rs-sheet', label + '：出现 .rs-sheet')
   return host
-}
-
-async function sheetRowLabels(page) {
-  const nodes = await page.$$(inSheet('.rs-row .rs-label'))
-  const texts = []
-  for (let i = 0; i < nodes.length; i++) {
-    texts.push(String(await nodes[i].text() || '').trim())
-  }
-  return texts
-}
-
-async function assertSheetFitsWindow(miniProgram, page, where) {
-  const windowHeight = await miniProgram.evaluate(function () {
-    return wx.getSystemInfoSync().windowHeight
-  })
-  const el = await page.$(inSheet('.rs-sheet'))
-  if (!el) throw new Error('找不到 .rs-sheet')
-  const size = await el.size()
-  assert.ok(
-    size.height <= windowHeight + 1,
-    where + '：面板比可视区还高（' + Math.round(size.height) + 'px > ' + windowHeight
-      + 'px），.rs-sheet 的 max-height 没夹住内容'
-  )
 }
 
 // 放在 seedFromHome 之后、别的用例之前是**有意的**：收款 picker 只列有欠款的客户、
@@ -955,25 +986,25 @@ async function runRecordSheet(miniProgram) {
   step('看板：点「＋ 记一笔」开面板，核对五行动作的文案与顺序')
   let home = await goto(miniProgram, 'switchTab', '/pages/index/index', '看板')
   await waitPageReady(home)
-  await openRecordSheet(home, '.js-record-entry', '看板入口')
+  const host = await openRecordSheet(home, '.js-record-entry', '看板入口')
 
-  const labels = await sheetRowLabels(home)
+  const labels = await sheetRowLabels(host)
   assert.deepStrictEqual(
     labels,
     MAIN_ROW_LABELS,
     '面板一级五行的文案或顺序和设计稿 sheet/记一笔(7:165) 对不上，渲染出来的是 '
       + JSON.stringify(labels)
   )
-  await assertSheetFitsWindow(miniProgram, home, '一级面板')
+  await assertSheetFitsWindow(miniProgram, host, '一级面板')
 
   step('面板：三条关闭通道（底部取消 / 点遮罩 / grabber 下滑）')
-  await tapWhen(home, inSheet('.js-rs-cancel'))
+  await tapInSheet(host, '.js-rs-cancel')
   await waitForData(home, function (d) {
     return d && d.showRecordSheet === false
   }, '「取消」关掉面板')
 
-  await openRecordSheet(home, '.js-record-entry', '重开')
-  await tapWhen(home, inSheet('.js-rs-mask'))
+  const maskHost = await openRecordSheet(home, '.js-record-entry', '重开')
+  await tapInSheet(maskHost, '.js-rs-mask')
   await waitForData(home, function (d) {
     return d && d.showRecordSheet === false
   }, '点遮罩关掉面板')
@@ -982,11 +1013,11 @@ async function runRecordSheet(miniProgram) {
 
   step('面板 › 库存修正：展开二级（稿上三行，本批交付两行）')
   const adjHost = await openRecordSheet(home, '.js-record-entry', '库存修正')
-  await tapWhen(home, inSheet('.js-rs-adjust'))
+  await tapInSheet(adjHost, '.js-rs-adjust')
   await waitSheetData(adjHost, function (d) {
     return d && d.step === 'adjust'
   }, '展开库存修正二级')
-  const options = await home.$$(inSheet('.rs-option'))
+  const options = await adjHost.$$('.rs-option')
   // 稿上 sheet/库存修正(4:42) 是三行。第三行「盘一遍这个商品」要的是 Screen/02b
   // 那个整页盘点，代码里没有落点，本批**整行不画**（画布规范 9:36：样张与规则打架时
   // 当轮改掉，不许挂禁用件）。Screen/02b 落地补回第三行时，这个 2 要跟着改成 3。
@@ -1002,29 +1033,33 @@ async function runRecordSheet(miniProgram) {
   await runRecordSheetFabEntry(miniProgram)
 }
 
-// grabber 下滑。先按真事件派一次；automator 的 element.trigger 只保证送 detail，
-// touches / changedTouches 这两个顶层字段能不能带过去没有契约，所以派完不硬断言，
-// 没关就退回直接调组件方法验判据本身，并如实记下走的是哪条路。
+// grabber 下滑。走 Element.touchstart / touchend 而**不是** element.trigger：
+// automator 源码 out/Element.js 里 trigger 只塞 detail
+//     async trigger(e,t){const s={type:e};isUndef(t)||(s.detail=t);...}
+// 带不了 touches / changedTouches，而组件的判据读的正是这两个顶层字段。
+// touchstart(e={}) / touchend(e={}) 是把整个对象直接下发的，能带。
+// 万一工具那侧仍然不认，退回直接调组件方法验判据本身，并如实记下走的是哪条路；
 // 「bindtouchstart 到底有没有接上 onGrabStart」由 tests/record-sheet.test.js 静态钉着。
 async function runRecordSheetGrabber(miniProgram, home) {
   const host = await openRecordSheet(home, '.js-record-entry', '重开')
-  const grabber = await home.$(inSheet('.rs-grabber-wrap'))
-  if (!grabber) throw new Error('找不到 .rs-grabber-wrap')
+  const grabber = await waitInSheet(host, '.rs-grabber-wrap', 'grabber')
+  const from = { identifier: 0, pageX: 187, pageY: 400, clientX: 187, clientY: 400 }
+  const to = { identifier: 0, pageX: 187, pageY: 560, clientX: 187, clientY: 560 }
   let closedBy = ''
   try {
-    await grabber.trigger('touchstart', { touches: [{ clientY: 100 }], changedTouches: [{ clientY: 100 }] })
-    await grabber.trigger('touchend', { touches: [], changedTouches: [{ clientY: 300 }] })
+    await grabber.touchstart({ touches: [from], changedTouches: [from] })
+    await grabber.touchend({ touches: [], changedTouches: [to] })
     await waitForData(home, function (d) {
       return d && d.showRecordSheet === false
     }, 'grabber 下滑关掉面板')
-    closedBy = 'trigger 派真事件'
+    closedBy = 'touchstart/touchend 派真事件'
   } catch (error) {
-    await host.callMethod('onGrabStart', { touches: [{ clientY: 100 }] })
-    await host.callMethod('onGrabEnd', { changedTouches: [{ clientY: 300 }] })
+    await host.callMethod('onGrabStart', { touches: [from] })
+    await host.callMethod('onGrabEnd', { changedTouches: [to] })
     await waitForData(home, function (d) {
       return d && d.showRecordSheet === false
     }, 'grabber 下滑关掉面板（callMethod 兜底）')
-    closedBy = 'callMethod 直调（trigger 带不动 changedTouches）'
+    closedBy = 'callMethod 直调（工具侧没把 changedTouches 带进事件）'
   }
   step('grabber 下滑关闭：验到了，走的是 ' + closedBy)
 }
@@ -1032,7 +1067,7 @@ async function runRecordSheetGrabber(miniProgram, home) {
 async function runRecordSheetPayPicker(miniProgram, home) {
   step('面板 › 收款：只列有欠款的客户、按欠款倒序，点一行进该客户的收款态')
   const host = await openRecordSheet(home, '.js-record-entry', '收款')
-  await tapWhen(home, inSheet('.js-rs-pay'))
+  await tapInSheet(host, '.js-rs-pay')
   const data = await waitSheetData(host, function (d) {
     return d && d.step === 'customer' && d.loading === false
   }, '收款 picker 读完客户')
@@ -1056,7 +1091,7 @@ async function runRecordSheetPayPicker(miniProgram, home) {
     )
   }
 
-  await tapWhen(home, inSheet('.js-rs-customer'))
+  await tapInSheet(host, '.js-rs-customer')
   const edit = await waitForPage(miniProgram, 'pages/customer-edit/customer-edit', '客户编辑页')
   // 落点带的是 ?id=<客户id>&pay=1，收款层应当自己打开。不提交，看一眼就退。
   await waitFor(edit, '.js-pay-sheet', '收款层自动打开')
@@ -1066,7 +1101,7 @@ async function runRecordSheetPayPicker(miniProgram, home) {
 async function runRecordSheetReturnPicker(miniProgram, home) {
   step('面板 › 退货：只列还能退的销售单，点一行进退货页并带出原单行')
   const host = await openRecordSheet(home, '.js-record-entry', '退货')
-  await tapWhen(home, inSheet('.js-rs-return'))
+  await tapInSheet(host, '.js-rs-return')
   const data = await waitSheetData(host, function (d) {
     return d && d.step === 'order' && d.loading === false
   }, '退货 picker 读完销售单')
@@ -1084,7 +1119,7 @@ async function runRecordSheetReturnPicker(miniProgram, home) {
     assert.ok(row.subText.indexOf('销售单 ') >= 0, '退货行缺单号：' + row.subText)
   })
 
-  await tapWhen(home, inSheet('.js-rs-order'))
+  await tapInSheet(host, '.js-rs-order')
   const ret = await waitForPage(miniProgram, 'pages/sale-return/sale-return', '退货页')
   // 稿上 n5：先选原单再退，不开空白退货单。带不出原单行就等于开了空白单。
   await waitForData(ret, function (d) {
@@ -1096,11 +1131,11 @@ async function runRecordSheetReturnPicker(miniProgram, home) {
 async function runRecordSheetProductPicker(miniProgram, home) {
   step('面板 › 库存修正 › 数量对不上：先选商品，并量一下 picker 列表有没有被 max-height 夹住')
   const host = await openRecordSheet(home, '.js-record-entry', '数量对不上')
-  await tapWhen(home, inSheet('.js-rs-adjust'))
+  await tapInSheet(host, '.js-rs-adjust')
   await waitSheetData(host, function (d) {
     return d && d.step === 'adjust'
   }, '进二级')
-  await tapWhen(home, inSheet('.js-rs-qty'))
+  await tapInSheet(host, '.js-rs-qty')
   const data = await waitSheetData(host, function (d) {
     return d && d.step === 'product' && d.loading === false
   }, '商品 picker 读完商品')
@@ -1108,10 +1143,9 @@ async function runRecordSheetProductPicker(miniProgram, home) {
 
   // .rs-list 用的是 max-height 而不是仓库惯用的固定 height —— 这是本 PR 自己标出来的
   // 风险点。量真实渲染高度来判，不去猜 rpx 怎么换算。
-  const listEl = await home.$(inSheet('.rs-list'))
-  if (!listEl) throw new Error('找不到 picker 的 .rs-list')
+  const listEl = await waitInSheet(host, '.rs-list', 'picker 列表')
   const listSize = await listEl.size()
-  const rows = await home.$$(inSheet('.rs-pick'))
+  const rows = await host.$$('.rs-pick')
   let rowSum = 0
   for (let i = 0; i < rows.length; i++) {
     rowSum += (await rows[i].size()).height
@@ -1123,9 +1157,9 @@ async function runRecordSheetProductPicker(miniProgram, home) {
     step('picker 列表结论：本轮 ' + rows.length + ' 行合计 ' + Math.round(rowSum)
       + 'px 没超过容器 ' + Math.round(listSize.height) + 'px，max-height 这一档没被验到')
   }
-  await assertSheetFitsWindow(miniProgram, home, '商品 picker')
+  await assertSheetFitsWindow(miniProgram, host, '商品 picker')
 
-  await tapWhen(home, inSheet('.js-rs-product'))
+  await tapInSheet(host, '.js-rs-product')
   const adjust = await waitForPage(miniProgram, 'pages/adjust/adjust', '库存调整页')
   // adjust 不带 id 会 toast「请从商品编辑进入」再退回来。能停在这一页并且拿到
   // productId，才证明 picker 真的把商品带过去了 —— 这正是简报原方案会死掉的地方。
@@ -1141,14 +1175,14 @@ async function runRecordSheetFabEntry(miniProgram) {
   // 之后，这里要改成 switchTab（和组件里 _goTab 那两处一起改）。
   const records = await goto(miniProgram, 'navigateTo', '/pages/records/records', '流水页')
   await waitFor(records, '.js-record-fab', '出现 .js-record-fab')
-  await openRecordSheet(records, '.js-record-fab', '流水页 FAB')
-  const labels = await sheetRowLabels(records)
+  const host = await openRecordSheet(records, '.js-record-fab', '流水页 FAB')
+  const labels = await sheetRowLabels(host)
   assert.deepStrictEqual(
     labels,
     MAIN_ROW_LABELS,
     '流水页 FAB 打开的面板和看板那张不一致（两个入口必须是同一个组件）：' + JSON.stringify(labels)
   )
-  await tapWhen(records, inSheet('.js-rs-cancel'))
+  await tapInSheet(host, '.js-rs-cancel')
   await waitForData(records, function (d) {
     return d && d.showRecordSheet === false
   }, '流水页关掉面板')
@@ -1957,6 +1991,13 @@ function printChecklist() {
   console.error('8. wx.showModal 是系统弹窗，自动化点不到内部按钮，脚本里用 mockWxMethod 自动确认')
   console.error('9. 送货单弹层在 virtualHost 自定义组件里，页面级选择器够不着（page.$$ / >>> /')
   console.error('   selectComponent 实测都是 0），用例核对的是页面数据里的 slip，别再写回 .js-slip')
+  console.error('9b. 自定义组件里的元素，一律走组件实例自己的 $ / $$：先用页面查宿主 id 拿到')
+  console.error('    CustomElement，再在它上面查子元素。不要用页面级的「选择器 >>> 子选择器」——')
+  console.error('    >>> 右边只吃单个简单选择器，吃不了两级后代链，而且吃不下时不报错：实测')
+  console.error('    「宿主 >>> .rs-row .rs-label」静默降级成宿主本身，返回 1 个节点、')
+  console.error('    text() 是整个面板拼成的一串。记一笔面板那组用例首跑就栽在这里。')
+  console.error('    依据：automator out/Element.js 里 CustomElement extends Element，两个查询都走')
+  console.error('    Element.getElement(s) 且以该元素为作用域，后代链正常')
   console.error('10. 重试之前先确认没有上一轮的残留。脚本收尾会断开连接、必要时 cli quit，但工具')
   console.error('    卡死时这两步都可能不管用，而残留会直接毁掉下一轮：留下的开发者工具占着自动化')
   console.error('    端口，新一轮连上的是上一轮的会话，于是在随机步骤报 Connection closed。查和清：')
