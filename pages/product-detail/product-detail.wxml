@@ -1,0 +1,43 @@
+<view class="page">
+  <page-loading wx:if="{{pageLoading}}" />
+  <block wx:else>
+  <view class="card main-card">
+    <view class="thumb" bindtap="previewThumb">
+      <image class="thumb-img" wx:if="{{image && !imageFailed}}" src="{{image}}" mode="aspectFill" binderror="onThumbError" />
+      <view class="thumb-empty" wx:else>
+        <text class="thumb-text">{{thumbText}}</text>
+      </view>
+    </view>
+    <view class="main-col">
+      <view class="name">{{name}}</view>
+      <view class="price">¥{{priceText}}</view>
+      <view wx:if="{{metaText}}" class="meta">{{metaText}}</view>
+    </view>
+  </view>
+
+  <view class="card stock-card">
+    <view class="stock-title">库存全景</view>
+    <view wx:if="{{hasSpecs}}" class="gate-row" bindtap="goAdjust">
+      <text class="gate-hint">点规格改件数 · 换规格 / 盘点</text>
+      <view class="gate-chevron"></view>
+    </view>
+    <view class="stock-cell" wx:for="{{stockRows}}" wx:key="id" bindtap="goAdjust">
+      <view wx:if="{{item.blank}}" class="blank-dot-wrap">
+        <view class="blank-dot"></view>
+      </view>
+      <text class="cell-label {{item.blank ? 'cell-label-blank' : ''}}">{{item.label}}</text>
+      <text class="cell-qty {{item.blank ? 'cell-qty-blank' : ''}}">{{item.qtyText}}</text>
+      <view class="cell-chevron"></view>
+    </view>
+  </view>
+
+  <view class="actions">
+    <button class="btn-primary" bindtap="goSale">去销售</button>
+    <view class="action-strip">
+      <button class="btn-ghost" bindtap="goPurchase">去进货</button>
+      <button class="btn-ghost" bindtap="goPrice">调价</button>
+      <button class="btn-ghost" bindtap="goEditProduct">编辑商品</button>
+    </view>
+  </view>
+  </block>
+</view>

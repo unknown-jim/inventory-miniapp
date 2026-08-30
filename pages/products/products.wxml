@@ -33,7 +33,7 @@
   </view>
 
   <view wx:else class="goods-grid">
-    <view class="card goods-card" wx:for="{{list}}" wx:key="id" data-id="{{item.id}}" bindtap="goEdit">
+    <view class="card goods-card" wx:for="{{list}}" wx:key="id" data-id="{{item.id}}" bindtap="goDetail">
       <view class="goods-thumb" wx:if="{{item.image && !item.imageFailed}}">
         <image class="thumb-img" src="{{item.image}}" mode="aspectFill" lazy-load binderror="onThumbError" data-index="{{index}}" />
       </view>
