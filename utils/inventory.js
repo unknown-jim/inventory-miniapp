@@ -2941,6 +2941,7 @@ function getDashboard(products, recent, now, skus, totals, today) {
     todayUnreceivedAmount: todayAvailable ? today.unreceivedAmount : null,
     todayProfit: todayAvailable ? today.profit : null,
     todayInAmount: todayAvailable ? today.inAmount : null,
+    todayInCount: todayAvailable ? today.inCount : null,
     totalReceivable: totals ? totals.receivable : 0,
     alertCount: alerts.length,
     alerts: alerts,
@@ -2949,7 +2950,10 @@ function getDashboard(products, recent, now, skus, totals, today) {
 }
 
 // 「今日五数」的定义：应收（= 销售额，扣退货）/ 实收 / 未收 / 毛利 / 进货额，
-// 截至 dayStart 及之后的记录。
+// 截至 dayStart 及之后的记录。进货额另带一个笔数（stat 上是「今日进货 ¥2,875
+// 共 3 笔」）：**笔 = 单据，不是行也不是件** —— 对照表里 25 件的样张进货单算
+// 一笔，销售侧同口径（王姐 352 是 2 个商品行 3 件，记 1 笔），与 recordTerms
+// 的 saleCount 单位一致。
 // 用 cents/yuan 累加（recordTerms 那一套整数分算法），不用 round2 反复叠加浮点 ——
 // 理由和 recordTerms 顶部注释一致：金额都是 round2() 的输出，先转分再累加与先
 // 累加再 round2 在这类输入上必然同解；不这样做就会重演那条已钉住的浮点分歧。
@@ -2983,6 +2987,7 @@ function todayTotals(records, dayStart) {
   let returnRefundCents = 0
   let profitCents = 0
   let inCents = 0
+  let inCount = 0
   ;(records || []).forEach(function (record) {
     if (toNumber(record && record.createdAt) < start) return
     const type = record && record.type
@@ -2996,6 +3001,7 @@ function todayTotals(records, dayStart) {
       profitCents += cents(record.profit)
     } else if (type === 'in') {
       inCents += cents(record.amount)
+      inCount += 1
     }
   })
   const dueCents = salesCents - returnsCents
@@ -3005,7 +3011,8 @@ function todayTotals(records, dayStart) {
     receivedAmount: yuan(receivedCents),
     unreceivedAmount: yuan(dueCents - receivedCents),
     profit: yuan(profitCents),
-    inAmount: yuan(inCents)
+    inAmount: yuan(inCents),
+    inCount: inCount
   }
 }
 

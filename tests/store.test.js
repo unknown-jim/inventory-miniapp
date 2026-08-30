@@ -1108,7 +1108,8 @@ require.cache[require.resolve('../utils/cloud-config')].exports = {
         receivedAmount: dash.todayReceivedAmount,
         unreceivedAmount: dash.todayUnreceivedAmount,
         profit: dash.todayProfit,
-        inAmount: dash.todayInAmount
+        inAmount: dash.todayInAmount,
+        inCount: dash.todayInCount
       },
       inventory.todayTotals(paged, inventory.startOfDay(Date.now())),
       '内存模式的今日五数必须等于 todayTotals 对全量的折叠'

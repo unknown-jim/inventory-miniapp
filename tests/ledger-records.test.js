@@ -2599,10 +2599,11 @@ function totalStock(skus, productId) {
   // 因此整笔回推成现金 —— 80 张销售单全额收到（800），20 张退货单全额退现金（100），
   // 所以实收 800 − 100 = 700、未收 700 − 700 = 0。
   assert.deepStrictEqual(a5Valid.today, {
-    salesAmount: 700, receivedAmount: 700, unreceivedAmount: 0, profit: 280, inAmount: 240
+    salesAmount: 700, receivedAmount: 700, unreceivedAmount: 0,
+    profit: 280, inAmount: 240, inCount: 30
   },
     'today 手算：80×10 − 20×5 = 700；实收 80×10 − 20×5 = 700、未收 0；'
-    + '80×4 − 20×2 = 280；30×8 = 240'
+    + '80×4 − 20×2 = 280；30×8 = 240，进货 30 笔'
     + '（恰好落在 dayStart 上的那条也必须算进「今天」）')
 
   // 今日流水超过 TODAY_MAX_RECORDS 且翻不到边界：必须报算不出来，today 给

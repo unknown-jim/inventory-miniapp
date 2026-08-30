@@ -2430,6 +2430,8 @@ assert.strictEqual(t3.receivedAmount, 3860, '演示账 hero 今日实收')
 assert.strictEqual(t3.unreceivedAmount, 260, '演示账 hero 今日未收')
 assert.strictEqual(t3.profit, 1180, '演示账今日毛利')
 assert.strictEqual(t3.inAmount, 2875, '演示账今日进货')
+assert.strictEqual(t3.inCount, 3,
+  '演示账今日进货 3 笔 —— 笔 = 单据，对照表里 25 件的样张进货单算一笔')
 assert.strictEqual(inv.round2(t3.receivedAmount + t3.unreceivedAmount), t3.salesAmount,
   '恒等式：实收 + 未收 = 应收')
 
@@ -2518,10 +2520,29 @@ const t3Dash = inv.getDashboard([], [], T3_DAY, undefined, null, t3)
 assert.strictEqual(t3Dash.todayReceivedAmount, 3860)
 assert.strictEqual(t3Dash.todayUnreceivedAmount, 260)
 assert.strictEqual(t3Dash.todaySalesAmount, 4120, 'hero 的「今日应收」就是这个字段')
+assert.strictEqual(t3Dash.todayInCount, 3)
 const t3DashNull = inv.getDashboard([], [], T3_DAY)
 assert.strictEqual(t3DashNull.todayReceivedAmount, null,
   '今日算不出来时实收给 null，页面显示「—」而不是 0')
 assert.strictEqual(t3DashNull.todayUnreceivedAmount, null)
+assert.strictEqual(t3DashNull.todayInCount, null, '笔数算不出来也给 null，不是 0')
+
+// (h) 进货笔数的单位是**单据**，不是行、不是件：一张 3 行的进货单记 1 笔。
+// 这条钉的就是对照表那句「共 3 笔……其中样张进货单 25 件 ¥2,375.00」——
+// 25 件那张算一笔，与 recordTerms 的 saleCount 同单位。
+const t3MultiLineIn = inv.todayTotals([
+  {
+    id: 'P-multi', type: 'in', amount: 600, profit: 0, createdAt: T3_DAY + 3600000,
+    lines: [
+      { lineId: 'l1', qty: 10, unitPrice: 20, amount: 200 },
+      { lineId: 'l2', qty: 10, unitPrice: 20, amount: 200 },
+      { lineId: 'l3', qty: 10, unitPrice: 20, amount: 200 }
+    ]
+  },
+  t3In('P-single', 100, T3_DAY + 7200000)
+], T3_DAY)
+assert.strictEqual(t3MultiLineIn.inAmount, 700)
+assert.strictEqual(t3MultiLineIn.inCount, 2, '3 行的进货单 + 1 行的进货单 = 2 笔，不是 4 笔')
 
 // (g) 恒等式的随机复算：整数分累加 +「未收 = 应收 − 实收」由构造成立，
 // 任何一天的任何一组销售 / 退货都不该拆散它。
