@@ -2911,7 +2911,7 @@ function deleteRecord(products, records, id, now, skus, ctx) {
 // 2b-2b：首页看板不再吃「整本流水」。
 //
 //   recent —— 服务端按 sortKey 倒序给的**一页**，只用来列「最近流水」。
-//   today  —— 服务端按客户端给的 dayStart 现算的今日三项（todayTotals），
+//   today  —— 服务端按客户端给的 dayStart 现算的今日五数（todayTotals），
 //             算不出来时传 null，页面显示「—」而**不是 0**（0 是会被当真的错数）。
 //   totals —— accounts / aggregate 的投影，全店欠款的唯一来源。
 //
@@ -2934,9 +2934,14 @@ function getDashboard(products, recent, now, skus, totals, today) {
       return sum + toNumber(item.stock)
     }, 0)),
     todayAvailable: todayAvailable,
+    // 看板 hero 的「今日应收」就是 todaySalesAmount，不另开一个字段：同一个数
+    // 两个标签（四宫格时代叫「今日销售」），开两份就多一处要对账的地方。
     todaySalesAmount: todayAvailable ? today.salesAmount : null,
+    todayReceivedAmount: todayAvailable ? today.receivedAmount : null,
+    todayUnreceivedAmount: todayAvailable ? today.unreceivedAmount : null,
     todayProfit: todayAvailable ? today.profit : null,
     todayInAmount: todayAvailable ? today.inAmount : null,
+    todayInCount: todayAvailable ? today.inCount : null,
     totalReceivable: totals ? totals.receivable : 0,
     alertCount: alerts.length,
     alerts: alerts,
@@ -2944,39 +2949,74 @@ function getDashboard(products, recent, now, skus, totals, today) {
   }
 }
 
-// 「今日三项」的定义：销售额（扣退货）/毛利/进货额，截至 dayStart 及之后的记录。
+// 「今日五数」的定义：应收（= 销售额，扣退货）/ 实收 / 未收 / 毛利 / 进货额，
+// 截至 dayStart 及之后的记录。进货额另带一个笔数（stat 上是「今日进货 ¥2,875
+// 共 3 笔」）：**笔 = 单据，不是行也不是件** —— 对照表里 25 件的样张进货单算
+// 一笔，销售侧同口径（王姐 352 是 2 个商品行 3 件，记 1 笔），与 recordTerms
+// 的 saleCount 单位一致。
 // 用 cents/yuan 累加（recordTerms 那一套整数分算法），不用 round2 反复叠加浮点 ——
 // 理由和 recordTerms 顶部注释一致：金额都是 round2() 的输出，先转分再累加与先
 // 累加再 round2 在这类输入上必然同解；不这样做就会重演那条已钉住的浮点分歧。
-// 2b-2b 起 getDashboard 的今日三项就来自这里（服务端算，客户端一行都不算）。
+// 2b-2b 起 getDashboard 的今日数就来自这里（服务端算，客户端一行都不算）。
 //
 // **存量亚分金额的店，首页数字会跳一次**：老 getDashboard 用 round2 浮点累加，
 // 这里用整数分累加，在亚分金额上必然分岔（1000 × 0.001 → 老 1 新 0；
 // 2 × 0.005 → 老 0.02 新 0.01）。这是仓库里已钉住的 D2 分歧，方案有意选了
 // 分口径；迁移预检要顺带查一遍哪些店有亚分金额。
+//
+// 实收 / 未收的口径（G3，展开写在 docs/accounting-vs-policy.md「看板今日五数」）：
+//     今日实收 = Σ今日销售单实收 − Σ今日退货单退现金
+//     今日未收 = Σ今日销售单欠款 − Σ今日退货单冲欠
+// 两个数都**只吃销售单和退货单**：收款（pay）与期初欠款（opening）不进。
+// 理由是看板 hero 把三个数并排画成一句话（今日实收 ¥3,860.00 / 今日应收
+// ¥4,120.00 · 其中未收 ¥260.00），店主一定会做那个加法，所以
+//     实收 + 未收 ≡ 应收（= salesAmount）
+// 必须逐分成立。收款没有应收可配，掺进来这句话当场变假。「今天收了昨天的欠款」
+// 因此不在这三个数里 —— 它走看板的欠款横幅（totals.receivable），不是丢了。
+//
+// 未收用「应收 − 实收」写，不用 Σ(应收−实收) 写：两式代数相等，但前者让恒等式
+// 由构造成立，后面谁再动分支也拆不散。
+//
+// settledAmount 与 recordTerms 里的是同一个表达式（销售单取实收、退货单取退现金，
+// 都夹在单据金额内），所以这两个数与全店欠款不可能各算一套。
+//
+// G1（预收）落地后这句要改：recordTerms 改读 creditedAmount（= settledAmount +
+// prepayUsed），今日实收**仍读 settledAmount** —— 预收是昨天收的钱，不进今天的抽屉。
+// 两者那时同源但不同口径，别再当成一个表达式。口径见 docs/accounting-vs-policy.md。
 function todayTotals(records, dayStart) {
   const start = toNumber(dayStart)
   let salesCents = 0
+  let saleSettledCents = 0
   let returnsCents = 0
+  let returnRefundCents = 0
   let profitCents = 0
   let inCents = 0
+  let inCount = 0
   ;(records || []).forEach(function (record) {
     if (toNumber(record && record.createdAt) < start) return
     const type = record && record.type
     if (type === 'out') {
       salesCents += cents(record.amount)
+      saleSettledCents += cents(settledAmount(record))
       profitCents += cents(record.profit)
     } else if (type === 'return') {
       returnsCents += cents(record.amount)
+      returnRefundCents += cents(settledAmount(record))
       profitCents += cents(record.profit)
     } else if (type === 'in') {
       inCents += cents(record.amount)
+      inCount += 1
     }
   })
+  const dueCents = salesCents - returnsCents
+  const receivedCents = saleSettledCents - returnRefundCents
   return {
-    salesAmount: yuan(salesCents - returnsCents),
+    salesAmount: yuan(dueCents),
+    receivedAmount: yuan(receivedCents),
+    unreceivedAmount: yuan(dueCents - receivedCents),
     profit: yuan(profitCents),
-    inAmount: yuan(inCents)
+    inAmount: yuan(inCents),
+    inCount: inCount
   }
 }
 
