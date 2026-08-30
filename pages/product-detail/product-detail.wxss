@@ -1,0 +1,153 @@
+/* 只读详情页。共用类（.card、.btn-primary、.btn-ghost、.action-strip）来自 app.wxss，这里只写本页布局。 */
+
+.main-card {
+  display: flex;
+  align-items: center;
+  gap: var(--space-lg);
+  margin-bottom: var(--space-md);
+}
+
+.thumb {
+  position: relative;
+  width: 192rpx;
+  height: 192rpx;
+  flex-shrink: 0;
+  border-radius: 16rpx;
+  overflow: hidden;
+  background: #f3f4f6;
+}
+
+.thumb-img {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.thumb-text {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  font-size: var(--fs-hero);
+  color: #9ca3af;
+}
+
+.main-col {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.name {
+  font-size: var(--fs-title);
+  font-weight: 600;
+}
+
+.price {
+  font-size: var(--fs-amount-lg);
+  font-weight: 700;
+}
+
+.meta {
+  font-size: var(--fs-caption);
+  color: #64748B;
+}
+
+.stock-card {
+  margin-bottom: var(--space-md);
+}
+
+.stock-title {
+  font-size: var(--fs-title);
+  font-weight: 600;
+  margin-bottom: var(--space-md);
+}
+
+/* 库存修正门：分规格商品才有「点规格 / 换规格 / 盘点」的可选项，普通商品不显示。 */
+.gate-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  min-height: var(--tap-min);
+  margin-bottom: var(--space-md);
+}
+
+.gate-hint {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-body);
+  color: #64748B;
+}
+
+.gate-chevron {
+  width: 16rpx;
+  height: 16rpx;
+  border-right: 4rpx solid #9CA3AF;
+  border-top: 4rpx solid #9CA3AF;
+  transform: rotate(45deg);
+  flex-shrink: 0;
+}
+
+.stock-cell {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  min-height: var(--tap-min);
+  box-sizing: border-box;
+  padding: var(--space-md) var(--space-sm);
+}
+
+.blank-dot-wrap {
+  width: 32rpx;
+  height: 32rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+/* 半成品行的靛蓝标记：只上图标不上彩底（彩底在本套规则里 = 不可点的状态标识）。 */
+.blank-dot {
+  width: 14rpx;
+  height: 14rpx;
+  background: #4338CA;
+  border-radius: 2rpx;
+  transform: rotate(45deg);
+}
+
+.cell-label {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-body);
+}
+
+.cell-label-blank {
+  font-weight: 500;
+}
+
+.cell-qty {
+  font-size: var(--fs-body);
+  font-weight: 500;
+}
+
+.cell-qty-blank {
+  font-weight: 600;
+}
+
+.cell-chevron {
+  width: 14rpx;
+  height: 14rpx;
+  border-right: 3rpx solid #9CA3AF;
+  border-top: 3rpx solid #9CA3AF;
+  transform: rotate(45deg);
+  flex-shrink: 0;
+}
+
+.actions .action-strip {
+  margin-top: var(--space-md);
+}

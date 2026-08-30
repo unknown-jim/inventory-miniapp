@@ -74,8 +74,9 @@ Page({
     wx.navigateTo({ url: '/pages/product-edit/product-edit' })
   },
 
-  goEdit(e) {
-    wx.navigateTo({ url: '/pages/product-edit/product-edit?id=' + e.currentTarget.dataset.id })
+  // 点卡片进只读详情；编辑入口挪到详情页（列表直进编辑容易误改，操作界面密度规则的裁定）。
+  goDetail(e) {
+    wx.navigateTo({ url: '/pages/product-detail/product-detail?id=' + e.currentTarget.dataset.id })
   },
 
   goRecords() {
