@@ -12,13 +12,13 @@
     <button class="btn-primary seed-btn" bindtap="goAdd">新增种类</button>
   </view>
 
-  <view class="card goods-card" wx:for="{{list}}" wx:key="id" data-id="{{item.id}}" bindtap="goEdit">
+  <view class="card goods-card js-category-item" wx:for="{{list}}" wx:key="id" data-id="{{item.id}}" bindtap="goEdit">
     <view class="goods-top">
-      <view class="item-name">{{item.name}}</view>
+      <view class="item-name js-category-name">{{item.name}}</view>
       <text class="tag {{item.productKind === 'blank' ? 'tag-blank' : (item.productKind === 'finished' ? 'tag-spec' : 'tag-ok')}}">{{item.kindTag}}</text>
     </view>
     <view class="muted">{{item.summary}}</view>
   </view>
 
-  <view class="fab" bindtap="goAdd">+ 新增</view>
+  <view class="fab js-category-add" bindtap="goAdd">+ 新增</view>
 </view>

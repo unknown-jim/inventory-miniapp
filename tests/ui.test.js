@@ -19,14 +19,18 @@ const basePort = 9420
 const portTimeout = Number(process.env.WECHAT_AUTOMATOR_PORT_TIMEOUT || 180000)
 const connectTimeout = Number(process.env.WECHAT_AUTOMATOR_CONNECT_TIMEOUT || 60000)
 const stepTimeout = Number(process.env.WECHAT_AUTOMATOR_STEP_TIMEOUT || 30000)
-const runTimeout = Number(process.env.WECHAT_AUTOMATOR_RUN_TIMEOUT || 900000)
+// 整轮看门狗。2026-08-31 这一批把用例从 9 段加到 17 段（进货 / 退货 / 库存调整 /
+// 换规格 / 商品详情 / 商品编辑 / 种类模板 / 建店成员），路由次数和页面加载都翻了倍，
+// 15 分钟不够用了 —— 看门狗一开火，报的是「整轮 UI 用例超时」，指不出是哪一步，
+// 排查成本比多等十分钟高得多。所以随用例规模一起抬。
+const runTimeout = Number(process.env.WECHAT_AUTOMATOR_RUN_TIMEOUT || 1800000)
 // 单次 automator.connect 的上限。要比 patchCheckVersion 里那 30 轮等待（最坏约 3 分钟）
 // 宽，否则会把本来能连上的情况判死。
 const connectAttemptTimeout = Number(process.env.WECHAT_AUTOMATOR_CONNECT_ATTEMPT_TIMEOUT || 240000)
 const closeTimeout = Number(process.env.WECHAT_AUTOMATOR_CLOSE_TIMEOUT || 20000)
 // 整个脚本的上限，比 runTimeout 再外面一层：runTimeout 只罩着用例本身，起端口和连接
 // 这些前置步骤卡住时它根本没起跑。
-const scriptTimeout = Number(process.env.WECHAT_AUTOMATOR_SCRIPT_TIMEOUT || 1500000)
+const scriptTimeout = Number(process.env.WECHAT_AUTOMATOR_SCRIPT_TIMEOUT || 2700000)
 // 收尾之后留给进程自己退的宽限。给到 10 秒是量出来的：收尾做完之后，Windows 还要几秒
 // 才把 cli 子进程那边的句柄放干净（实测约 5 秒），太短会让兜底看门狗在正常收场时也开火。
 const exitGrace = Number(process.env.WECHAT_AUTOMATOR_EXIT_GRACE || 10000)
@@ -95,11 +99,144 @@ function portOpen(port) {
   })
 }
 
-// cli.bat 是 GBK 编码的，第一行 `chcp 65001` 把控制台切到 UTF-8 之后，cmd 会按切页前
-// 的字节偏移接着读这个文件，于是把一行注释的后半截当成命令执行——那半截正好以 `CLI`
-// 开头。开发者工具的安装目录若在 PATH 上，这个 `CLI` 就解析回 cli.bat 自己，无限递归，
-// cmd 一直刷「Maximum setlocal recursion level reached.」，端口永远起不来。
-// 把安装目录从子进程的 PATH 上摘掉，那半截注释就找不到命令、只报一句错，真正的命令照跑。
+// ---------------------------------------------------------------------------
+// Windows 启动分支：**不经 cmd.exe / cli.bat**，直接 spawn 开发者工具的 Electron。
+//
+// 【老写法坏在哪】cli.bat 第 3 行是 `chcp 65001 >nul`，把控制台切到 UTF-8；文件本身
+// 带一堆中文注释。某些机器状态下 cmd 会在切页处丢掉解析位置，把一行注释的后半截当命令
+// 执行 —— 那半截正好以 `CLI` 开头（bat 里有 `set "CLI=%~dp0resources\...\index.js"`，
+// 变量名就叫 CLI）。
+//
+// 【为什么「摘 PATH」这条老修复对现在这版无效】误解析发生在 bat 第 7 行 `cd /d "%~dp0"`
+// **之后** —— 此刻 cwd 就是安装目录，而 cmd 解析裸命令时**先查当前目录、再查 PATH**。
+// 于是 `CLI` 解析回同目录的 cli.bat 自己，无限递归，刷屏
+// 「Maximum setlocal recursion level reached.」，端口永远起不来。
+// 把安装目录从子进程 PATH 上摘掉**摘不掉 cwd 这一跳**，所以那条修复只在
+// 「误解析发生在 cd 之前」或「cwd 不是安装目录」时才管用。
+//
+// 【顺带修正一处旧记载】旧注释和 docs/ui-test.md 都写着「cli.bat 是 GBK 编码的」。
+// 2026-08-31 实测这台机器上的 cli.bat 是 **UTF-8**（前 64 字节里 `按` = e6 8c 89），
+// CRLF 行尾。工具升级换过版本，所以「写一份 GBK 的等价 bat」那条绕法也是针对旧版的。
+//
+// 【复现状态，如实说】2026-08-31 在这台机器上**没能复现**递归风暴。直接跑
+// `cli.bat --help` 五种组合（cwd=安装目录 / cwd=仓库根 × 安装目录在不在 PATH 上 ×
+// 先 chcp 936 / 先 chcp 65001）全部干净退出，输出各 1841 字节，`setlocal recursion`
+// 命中 0 次。所以下面这段**不是**"修一个复现过的 bug"，而是把 cmd.exe + .bat +
+// 代码页 + `%~dp0` + PATH 这一整层已知脆弱面拿掉 —— cli.bat 一共只干三件事，
+// 在 Node 里做完全等价，而且顺带绕掉了 Node 不许 spawn .bat 的那条限制。
+// 老路仍然留着当兜底（下面 runCli 的 else 分支），并且在它的输出里认递归风暴，
+// 把「刷屏 + 永不返回」变成一句指得出原因的报错。
+//
+// 【cli.bat 干的三件事】
+//   ① 在安装目录里找那个 >50MB 的 Electron exe（排除 node.exe 等六个名字）
+//   ② ELECTRON_RUN_AS_NODE=1，并把调用方的 CD 传成环境变量 cwd
+//   ③ <electron> -e <BOOTSTRAP_JS> <安装目录>\resources\app.asar.unpacked\js\common\cli\index.js <args>
+//
+// 【参数从 cli.bat 里解析，不写死】写死就是转写，工具一升级就悄悄错（本项目已经
+// 因为转写栽过好几次）。解析不出来才回落到下面这份内置默认值。用 latin1 读文件：
+// 要匹配的 token 全是 ASCII，文件是 GBK 还是 UTF-8 都不影响，中文注释的字节掺不进来。
+// ---------------------------------------------------------------------------
+
+// 内置默认值：只有 cli.bat 读不到 / 格式变了才用得上。和 2026-08-31 实测的那版一致。
+const CLI_FALLBACK = {
+  bootstrap: "const e=process.argv[1],a=process.argv.slice(2).filter(function(x){return x!=='--electron'});"
+    + 'if(!process.env.cwd)process.env.cwd=process.cwd();'
+    + "process.argv=[process.execPath,'--ms-enable-electron-run-as-node',e,'--electron'].concat(a);require(e)",
+  cliRel: path.join('resources', 'app.asar.unpacked', 'js', 'common', 'cli', 'index.js'),
+  exeMin: 50000000,
+  exeSkip: ['node.exe', 'node-18.exe', 'wxfilewatcher.exe', 'wxfilewatcher_x64.exe',
+    'notification_helper.exe', 'wechatdevtools.exe']
+}
+
+// 解析 cli.bat 里那四样东西。任何一样解析不出来就整体回落，不做"半份解析半份默认"——
+// 那样出错时分不清用的是哪一半。
+function parseCliBat(cliPath) {
+  let src = ''
+  try {
+    src = fs.readFileSync(cliPath, 'latin1')
+  } catch (error) {
+    return null
+  }
+  const bootstrap = (src.match(/set\s+"BOOTSTRAP_JS=([\s\S]*?)"\s*\r?\n/) || [])[1]
+  const cliRel = (src.match(/set\s+"CLI=%~dp0([^"]*)"/) || [])[1]
+  const exeMin = Number((src.match(/%%~zF\s+GTR\s+(\d+)/i) || [])[1])
+  const exeSkip = []
+  const re = /"%%~nxF"\s*==\s*"([^"]+)"/g
+  let hit = null
+  while ((hit = re.exec(src)) !== null) exeSkip.push(hit[1].toLowerCase())
+  if (!bootstrap || !cliRel || !exeMin || !exeSkip.length) return null
+  return { bootstrap: bootstrap, cliRel: cliRel, exeMin: exeMin, exeSkip: exeSkip }
+}
+
+// 解析一次就够，结论（走的哪条路、认出来的是哪个 exe）打进日志，产物里能核实。
+let directLaunch
+let directLaunchLogged = false
+
+function resolveDirectLaunch(cliPath) {
+  if (!isWindows) return { ok: false, why: '非 Windows，cli 本身就是可执行脚本' }
+  if (process.env.WECHAT_CLI_DIRECT === '0') {
+    return { ok: false, why: 'WECHAT_CLI_DIRECT=0，按要求强制走 cmd.exe + cli.bat 老路' }
+  }
+  const parsed = parseCliBat(cliPath)
+  const spec = parsed || CLI_FALLBACK
+  const from = parsed ? '从 cli.bat 解析' : '内置默认值（cli.bat 没解析出来）'
+  const installDir = path.resolve(path.dirname(cliPath))
+  const indexJs = path.join(installDir, spec.cliRel)
+  if (!fs.existsSync(indexJs)) {
+    return { ok: false, why: '找不到 CLI 入口 ' + indexJs }
+  }
+  let names = []
+  try {
+    names = fs.readdirSync(installDir)
+  } catch (error) {
+    return { ok: false, why: '读不到安装目录 ' + installDir + '：' + errText(error) }
+  }
+  const candidates = names.filter(function (name) {
+    if (!/\.exe$/i.test(name)) return false
+    if (spec.exeSkip.indexOf(name.toLowerCase()) >= 0) return false
+    try {
+      return fs.statSync(path.join(installDir, name)).size > spec.exeMin
+    } catch (error) {
+      return false
+    }
+  })
+  if (!candidates.length) {
+    return { ok: false, why: '安装目录里没有 >' + spec.exeMin + ' 字节的 Electron exe（排除表 '
+      + spec.exeSkip.join('/') + '）' }
+  }
+  return {
+    ok: true,
+    installDir: installDir,
+    electron: path.join(installDir, candidates[0]),
+    indexJs: indexJs,
+    bootstrap: spec.bootstrap,
+    note: from + '；exe 候选 ' + JSON.stringify(candidates)
+  }
+}
+
+function directLaunchFor(cliPath) {
+  if (directLaunch === undefined) {
+    directLaunch = resolveDirectLaunch(cliPath)
+  }
+  if (!directLaunchLogged) {
+    directLaunchLogged = true
+    if (directLaunch.ok) {
+      step('CLI 走直接调用（不经 cmd.exe / cli.bat）：' + directLaunch.electron
+        + '（' + directLaunch.note + '）')
+    } else {
+      step('CLI 回落到 cmd.exe + cli.bat 老路：' + directLaunch.why)
+    }
+  }
+  return directLaunch
+}
+
+// Node 从 18.20.2 / 20.12.2（CVE-2024-27980 的修复）起不再允许不带 shell 地 spawn
+// .bat / .cmd，会直接抛 EINVAL。automator 的 launch() 正是这么拉起 cli.bat 的，
+// 而且它把这个 spawn 错误转述成「cliPath 不对」，把人往错方向带。所以不用 launch()。
+// 直接调用这条路连 .bat 都不碰，那条限制自然不存在；兜底那条经 cmd.exe 走，也绕开了。
+//
+// 兜底路上仍然把安装目录从 PATH 上摘掉（childEnv）：它拦不住「cwd 那一跳」（见上），
+// 但对「误解析发生在 cd /d 之前」的那种形态还是有用的，留着不亏。
 function childEnv(cliPath) {
   const installDir = path.resolve(path.dirname(cliPath)).toLowerCase()
   const env = Object.assign({}, process.env)
@@ -115,32 +252,60 @@ function childEnv(cliPath) {
   return env
 }
 
-// Node 从 18.20.2 / 20.12.2（CVE-2024-27980 的修复）起不再允许不带 shell 地 spawn
-// .bat / .cmd，会直接抛 EINVAL。automator 的 launch() 正是这么拉起 cli.bat 的，
-// 而且它把这个 spawn 错误转述成「cliPath 不对」，把人往错方向带。
-// 所以这里自己经 cmd.exe 起自动化端口，再用 automator.connect 接上去。
+// 递归风暴的字面签名。命中就当场报错，别让它刷满 portTimeout（3 分钟）再报一句
+// 「等 cli auto 结束超时」——那句话完全指不出原因，上一个人就是这么被带偏的。
+const RECURSION_SIGN = 'setlocal recursion level reached'
+
 function runCli(cliPath, args) {
-  const command = isWindows ? (process.env.ComSpec || 'cmd.exe') : cliPath
-  const commandArgs = isWindows ? ['/c', cliPath].concat(args) : args
+  const direct = directLaunchFor(cliPath)
+  let command
+  let commandArgs
+  let options
+  if (direct.ok) {
+    command = direct.electron
+    commandArgs = ['-e', direct.bootstrap, direct.indexJs].concat(args)
+    options = {
+      // cli.bat 是 `set "cwd=%CD%"` 之后才 `cd /d "%~dp0"` 的：工作目录换成安装目录，
+      // 但把调用方的 CD 留在环境变量 cwd 里给 bootstrap 用。这里照抄这个语义 ——
+      // 少设 cwd 这个环境变量的话，bootstrap 里那句 `if(!process.env.cwd)` 会把
+      // 安装目录当成调用方目录。
+      cwd: direct.installDir,
+      env: Object.assign({}, process.env, {
+        ELECTRON_RUN_AS_NODE: '1',
+        cwd: process.cwd()
+      })
+    }
+  } else {
+    command = isWindows ? (process.env.ComSpec || 'cmd.exe') : cliPath
+    commandArgs = isWindows ? ['/c', cliPath].concat(args) : args
+    options = { env: childEnv(cliPath) }
+  }
   const chunks = []
   const started = {
     error: null,
     exitCode: null,
+    recursion: false,
+    direct: !!direct.ok,
     output: function () {
       const text = chunks.join('').trim()
       return text ? '\nCLI 输出：\n' + text : ''
     }
   }
-  const child = childProcess.spawn(command, commandArgs, {
+  const child = childProcess.spawn(command, commandArgs, Object.assign({
     stdio: ['ignore', 'pipe', 'pipe'],
-    windowsHide: true,
-    env: childEnv(cliPath)
-  })
+    windowsHide: true
+  }, options))
   started.child = child
   liveCli.add(started)
   // 进度和 √ auto 都走 stderr，出错时要一起打出来。
-  child.stdout.on('data', function (chunk) { chunks.push(String(chunk)) })
-  child.stderr.on('data', function (chunk) { chunks.push(String(chunk)) })
+  const take = function (chunk) {
+    const text = String(chunk)
+    // 刷屏时别把几十 MB 全攒在内存里，前 200 段够看清是什么了。
+    if (chunks.length < 200) chunks.push(text)
+    if (text.toLowerCase().indexOf(RECURSION_SIGN) >= 0) started.recursion = true
+  }
+  child.stdout.on('data', take)
+  child.stderr.on('data', take)
   child.on('error', function (error) { started.error = error })
   child.on('exit', function (code) { started.exitCode = code })
   // 从名册里划掉要等 close 而不是 exit：进程退了不等于那两个管道关了（实测 cli auto
@@ -176,6 +341,18 @@ async function waitCli(label, started, timeout) {
   for (;;) {
     if (started.error) {
       throw new Error('跑 cli ' + label + ' 失败: ' + started.error.message + started.output())
+    }
+    // 递归风暴不会自己结束，等满 portTimeout 只会换来一句指不出原因的「超时」。
+    // 只可能出现在 cmd.exe + cli.bat 那条兜底路上——直接调用根本不经 cmd 解析。
+    if (started.recursion) {
+      throw new Error('cli ' + label + ' 撞上了 cli.bat 的 setlocal 递归风暴：cmd 在 chcp 之后'
+        + '丢了解析位置，把注释后半截当命令跑，而那半截以 CLI 开头、又在 cd /d "%~dp0" 之后'
+        + '（cwd = 安装目录，cmd 先查当前目录）于是解析回 cli.bat 自己。'
+        + (started.direct
+          ? '（本轮走的是直接调用，出现这句说明判断写错了，请贴现场）'
+          : '（本轮回落到了 cmd.exe + cli.bat 老路。直接调用那条不经 cmd 解析，'
+            + '看上面那行「CLI 回落到…」说明为什么没走成，把它修好即可绕开）')
+        + started.output())
     }
     if (started.exitCode != null) return started.exitCode
     if (Date.now() >= deadline) {
@@ -356,24 +533,81 @@ async function waitGone(page, selector) {
   }, '消失 ' + selector)
 }
 
-// 送货单弹层的 wxml 在自定义组件 components/slip-overlay 里，组件还开了 virtualHost，
-// 于是页面侧压根没有它的宿主节点：page.$$('.js-slip')、'slip-overlay >>> .js-slip'、
-// 页面 selectComponent('slip-overlay') 实测全是 0。所以这里不查 DOM，改核对页面数据里
-// 的 slip —— 组件模板就是逐字段渲染这个对象的。
-// 代价：绑定写错（数据对、屏幕上不显示）这版用例查不出来，那种要靠截图看。
+// ---------------------------------------------------------------------------
+// 送货单弹层（components/slip-overlay）。
+//
+// 【这一段 2026-08-31 从「核对 data」升回了「核对渲染」】
+// 之前组件开着 virtualHost，页面侧压根没有它的宿主节点：page.$$('.js-slip')、
+// 'slip-overlay >>> .js-slip'、页面 selectComponent('slip-overlay') 实测**全是 0**，
+// 所以那一版只能核对页面 data 里的 slip 对象。代价是明摆着的：组件模板里把
+// {{slip.paidText}} 写成 {{slip.paid}} 这种绑定错误，**数据对、屏幕上不显示**，
+// 那版用例一点反应都没有。
+//
+// 现在 virtualHost 摘掉了（理由写在 components/slip-overlay/index.js 里），页面上
+// 有 <slip-overlay id="slip-overlay">，于是走和「记一笔」面板同一条路：
+// 先 page.$('#slip-overlay') 拿 CustomElement，再**在这个实例上**查子元素。
+//
+// 【不要退回页面级的 '>>>'】排错清单 9b 记的就是这个坑：'>>>' 右边只吃单个简单
+// 选择器，吃不下两级后代链时**不报错**，静默降级成宿主本身，返回 1 个错节点、
+// text() 是整块拼成的一串 —— 绿着骗人。组件实例上的 $ / $$ 没有这个问题
+//（automator out/Element.js：CustomElement extends Element，两个查询都以该元素
+// 为作用域下发）。
+// ---------------------------------------------------------------------------
+async function slipHost(page) {
+  const host = await page.$('#slip-overlay')
+  if (!host) {
+    throw new Error('页面 ' + page.path + ' 上找不到 #slip-overlay 宿主节点：'
+      + '组件是不是又开了 virtualHost？开了页面侧就够不到弹层里的任何东西，'
+      + '这条用例只能退回核对页面 data（见 components/slip-overlay/index.js 顶部那段）')
+  }
+  if (typeof host.$ !== 'function' || typeof host.$$ !== 'function') {
+    throw new Error('#slip-overlay 拿到的不是自定义组件实例（没有 $ / $$）：'
+      + 'automator 只在 nodeId 存在时才建 CustomElement，宿主节点可能没渲染出来')
+  }
+  return host
+}
+
+async function waitInSlip(host, selector, label) {
+  const deadline = Date.now() + WAIT_TIMEOUT
+  for (;;) {
+    const el = await host.$(selector)
+    if (el) return el
+    if (Date.now() >= deadline) {
+      throw new Error('等送货单里的元素超时（' + (label || selector) + '，选择器 '
+        + selector + '，' + WAIT_TIMEOUT + 'ms）')
+    }
+    await sleep(300)
+  }
+}
+
+// 弹出的判据是**两条都要**：页面 data 说开了，而且弹层根节点真的渲染出来了。
+// 只等 data 的话，wx:if 那一层写错（showSlip 传不进组件）就查不出来。
 async function waitSlipOpen(page, label) {
   await waitFor(page, async function () {
     const data = await page.data()
     return !!(data && data.showSlip && data.slip)
-  }, label + '弹出')
+  }, label + '弹出（页面 data）')
+  const host = await slipHost(page)
+  await waitInSlip(host, '.js-slip', label + '弹层根节点渲染出来')
+  return host
 }
 
+// 关闭走**点真的那颗按钮**，不再 callMethod('closeSlip')。
+// callMethod 只证明页面方法好使，证不出「完成」这颗按钮接没接上 onClose →
+// triggerEvent('close') → 页面 closeSlip 这条链；而组件抽出去之后，断的正是这种链
+//（2026-08-18 的 bf8f6d7 就是这么断的）。
 async function closeSlip(page, label) {
-  await page.callMethod('closeSlip')
+  const host = await slipHost(page)
+  const btn = await waitInSlip(host, '.js-slip-close', label + '的「完成」按钮')
+  await btn.tap()
   await waitFor(page, async function () {
     const data = await page.data()
     return data && data.showSlip === false
   }, label + '关闭')
+  await waitFor(page, async function () {
+    const list = await page.$$('#slip-overlay .js-slip')
+    return list.length === 0
+  }, label + '弹层节点消失')
 }
 
 function assertSlip(slip, label) {
@@ -384,6 +618,42 @@ function assertSlip(slip, label) {
   assert.ok(slip.shopName.indexOf('测试店') >= 0, label + '没有店名: ' + slip.shopName)
   assert.ok(slip.operatorText.indexOf('测试店主') >= 0, label + '没有经手人: ' + slip.operatorText)
   assert.ok(slip.operatorText.indexOf('ui-test-openid') < 0, label + '不应印 openid: ' + slip.operatorText)
+}
+
+// 屏幕上真的印出来的那几行，逐格和页面 data 里的 slip 对上。
+// **这一条才是「核对渲染」**：assertSlip 只看数据，绑定写错它一点反应都没有。
+async function assertSlipRendered(page, slip, label) {
+  const host = await slipHost(page)
+  const textOf = async function (selector, what) {
+    const el = await waitInSlip(host, selector, label + ' 的' + what)
+    return String(await el.text() || '').trim()
+  }
+
+  assert.strictEqual(await textOf('.js-slip-title', '标题'), '送货单',
+    label + '：弹层标题不对')
+  assert.strictEqual(await textOf('.js-slip-shop', '店名'), String(slip.shopName),
+    label + '：屏幕上的店名和 data 里的 shopName 对不上')
+  assert.strictEqual(await textOf('.js-slip-operator', '经手人'), String(slip.operatorText),
+    label + '：屏幕上的经手人和 data 里的 operatorText 对不上')
+  // 实收那格模板是 ¥{{slip.paidText}}，少了 ¥ 或者绑错字段都要在这里红。
+  assert.strictEqual(await textOf('.js-slip-paid', '实收'), '¥' + String(slip.paidText),
+    label + '：屏幕上的实收和 data 里的 paidText 对不上')
+  if (slip.hasCustomer) {
+    assert.strictEqual(await textOf('.js-slip-customer', '收货人'), String(slip.customerName),
+      label + '：屏幕上的收货人和 data 里的 customerName 对不上')
+  }
+
+  const nameNodes = await host.$$('.js-slip-product')
+  const onScreen = []
+  for (let i = 0; i < nameNodes.length; i++) {
+    onScreen.push(String(await nameNodes[i].text() || '').trim())
+  }
+  assert.deepStrictEqual(
+    onScreen,
+    slip.lines.map(function (line) { return String(line.productName) }),
+    label + '：屏幕上的商品明细和 data 里的 lines 对不上（少一行 = wx:for 没渲染全，'
+      + '顺序不同 = 绑错了字段）'
+  )
 }
 
 async function resetStorage(miniProgram) {
@@ -869,7 +1139,8 @@ async function seedFromHome(miniProgram) {
 // 【不要用页面级的 '>>>'】首跑就栽在这上面：'#record-sheet >>> .rs-row .rs-label'
 // 返回 1 个节点，text() 是整个面板拼成的一串（含标题「记一笔」和底部「取消」）——
 // 它**静默降级成了宿主本身**，不报错。'>>>' 右边只吃单个简单选择器，吃不了两级
-// 后代链。排错清单第 9 条记的是同一类坑的另一面（virtualHost 组件页面级完全够不着）。
+// 后代链。排错清单 9 / 9b 记的是同一类坑的两面：开着 virtualHost = 页面侧根本没有宿主
+// 节点（真的 0）；没开 = 宿主在、>>> 锚得上然后静默降级（返回错节点、绿着骗人）。
 //
 // 【为什么组件实例上就行】automator 源码 out/Element.js：
 //     class CustomElement extends Element
@@ -879,7 +1150,8 @@ async function seedFromHome(miniProgram) {
 // 返回 CustomElement，自定义组件的宿主正是这种。
 //
 // 组件**没有开 virtualHost**，就是为了让这条路通。开了页面侧连宿主节点都没有：
-// slip-overlay 就是这么被逼得只能核对页面 data 的（见 waitSlipOpen 上方那段）。
+// slip-overlay 曾经就是这么被逼得只能核对页面 data 的；2026-08-31 把它的 virtualHost
+// 也摘了、加上 id="slip-overlay"，那条用例才升回核对渲染（见 slipHost 上方那段）。
 // 谁要是给 record-sheet 加回 virtualHost，下面这些用例会立刻在 recordSheetHost
 // 这一步报错，不会静默失效。
 // ---------------------------------------------------------------------------
@@ -1287,6 +1559,7 @@ async function runSalePickerAndSlip(miniProgram) {
   const slip = (await sale.data()).slip
   assertSlip(slip, '送货单')
   assert.strictEqual(slip.paidText, '0.00', '送货单实收不对: ' + slip.paidText)
+  await assertSlipRendered(sale, slip, '送货单')
   await closeSlip(sale, '送货单')
 }
 
@@ -1307,7 +1580,9 @@ async function runRecordSlipExport(miniProgram) {
   await waitFor(edit, '.js-export-slip', '出现 .js-export-slip')
   await tap(edit, '.js-export-slip')
   await waitSlipOpen(edit, '再次导出的送货单')
-  assertSlip((await edit.data()).slip, '再次导出的送货单')
+  const reSlip = (await edit.data()).slip
+  assertSlip(reSlip, '再次导出的送货单')
+  await assertSlipRendered(edit, reSlip, '再次导出的送货单')
   await closeSlip(edit, '再次导出的送货单')
 
   step('流水：点修改后才能保存，取消回到详情')
@@ -1550,6 +1825,1051 @@ async function runNativeClearModal(miniProgram) {
   await waitFor(backHome, '.js-seed', '出现 .js-seed')
 }
 
+// ===========================================================================
+// 2026-08-31 这一批新增的覆盖：进货 / 退货 / 库存调整 / 换规格 / 商品详情 /
+// 商品编辑 / 种类模板 / 建店与成员。
+//
+// 【每条的验收标准】进得去 + 主要字段渲染出来 + **提交后账面变化正确**。
+// 「只断言页面能打开」的用例一条都不写 —— 那种绿是负资产。
+//
+// 【为什么账面要读 storage，而不是只读页面 data】页面 data 是屏幕上那一份，
+// 提交之后页面可能还没刷新（多数页 onShow 才重读），拿它当账面是碰运气；
+// 内存账本的 storage 才是权威。所以两边都断言：渲染看 DOM / 页面 data，
+// 账面看 storage。只看其中一边，另一边坏了都是绿的。
+// ===========================================================================
+
+// ---- 取数小工具 ----------------------------------------------------------
+
+// 【输入必须确认真的落进了页面 data】2026-08-31 首跑就栽在这上面：换规格那一步
+// 输入完数量直接点提交，提交在页面里抛「改规格数量必须大于 0」被 toast 吞掉，
+// 而那一步的完成信号写的是「等 qty 变回空」—— qty **压根没被写过**，判据当场为真，
+// 用例一路绿着往下走，最后在 200 行之后的库存断言上以「源格没有减掉 1 件」告终，
+// 完全看不出真正的原因在输入那一步。
+//
+// 所以：给得出字段名的调用点一律传 field，输入之后先确认 data[field] 变成了这个值，
+// 落不进去就**在输入这一步**报错。这不是保险，是把失败点挪回它该在的地方。
+async function typeInto(page, selector, value, label, field) {
+  await waitFor(page, selector, '出现 ' + selector + '（' + label + '）')
+  const el = await page.$(selector)
+  if (!el) {
+    throw new Error('找不到输入框 ' + selector + '（' + label + '）')
+  }
+  await el.input(String(value))
+  if (!field) return
+  await waitForData(page, function (d) {
+    return String(d[field]) === String(value)
+  }, label + '：输入的「' + value + '」要落进页面 data.' + field
+    + '（落不进去的话，后面每一步都会以别的样子失败）')
+}
+
+async function textOf(page, selector, label) {
+  await waitFor(page, selector, '出现 ' + selector + '（' + label + '）')
+  const el = await page.$(selector)
+  if (!el) {
+    throw new Error('找不到元素 ' + selector + '（' + label + '）')
+  }
+  return String(await el.text() || '').trim()
+}
+
+async function textsOf(page, selector) {
+  const nodes = await page.$$(selector)
+  const out = []
+  for (let i = 0; i < nodes.length; i++) {
+    out.push(String(await nodes[i].text() || '').trim())
+  }
+  return out
+}
+
+async function tapNth(page, selector, index, label) {
+  await waitFor(page, selector, '出现 ' + selector + '（' + label + '）')
+  const nodes = await page.$$(selector)
+  if (nodes.length <= index) {
+    throw new Error('要点第 ' + index + ' 个 ' + selector + '，但只渲染出 ' + nodes.length
+      + ' 个（' + label + '）')
+  }
+  await nodes[index].tap()
+}
+
+// 四张表只取断言要用的字段。整表搬回来没必要，而且 evaluate 的返回值要过一次
+// JSON 序列化，大对象白白拖慢每一步。
+async function readLists(miniProgram) {
+  return await withTimeout(miniProgram.evaluate(function () {
+    return {
+      products: (wx.getStorageSync('inv_products') || []).map(function (item) {
+        return {
+          id: item.id, name: item.name, stock: Number(item.stock) || 0,
+          costPrice: Number(item.costPrice) || 0, salePrice: Number(item.salePrice) || 0,
+          colors: item.colors || [], sizes: item.sizes || []
+        }
+      }),
+      skus: (wx.getStorageSync('inv_skus') || []).map(function (item) {
+        return {
+          id: item.id, productId: item.productId, color: item.color || '', size: item.size || '',
+          stock: Number(item.stock) || 0, isBlank: !!item.isBlank
+        }
+      }),
+      categories: (wx.getStorageSync('inv_categories') || []).map(function (item) {
+        return { id: item.id, name: item.name, names: item.names || [] }
+      }),
+      shopId: String(wx.getStorageSync('inv_shop_id') || ''),
+      shopName: String(wx.getStorageSync('inv_shop_name') || '')
+    }
+  }), 20000, '读内存账本的四张表')
+}
+
+// 流水同理只取要用的字段：runRecordsLoadMore 之后这张表有几十条，
+// 而且销售单的 lines 可以很长。
+async function readRecords(miniProgram) {
+  return await withTimeout(miniProgram.evaluate(function () {
+    const bookId = wx.getStorageSync('inv_book_id') || wx.getStorageSync('inv_shop_id') || 'ui-test-shop'
+    return (wx.getStorageSync('inv_record_docs') || []).filter(function (doc) {
+      return String(doc.bookId || '') === String(bookId)
+    }).map(function (doc) {
+      return {
+        id: doc.id,
+        type: doc.type,
+        amount: Number(doc.amount) || 0,
+        // paidAmount 缺失和 0 是两回事（settledAmount 的六格分支就靠它分叉），
+        // 所以别用 || 0 抹平。
+        paidAmount: doc.paidAmount == null || doc.paidAmount === '' ? null : Number(doc.paidAmount),
+        profit: Number(doc.profit) || 0,
+        customerId: String(doc.customerId || ''),
+        createdAt: Number(doc.createdAt) || 0,
+        lines: (doc.lines || []).map(function (line) {
+          return {
+            lineId: line.lineId, productId: line.productId, skuId: line.skuId || '',
+            qty: Number(line.qty) || 0, unitPrice: Number(line.unitPrice) || 0
+          }
+        })
+      }
+    }).sort(function (a, b) { return b.createdAt - a.createdAt })
+  }), 20000, '读内存账本的流水')
+}
+
+// 全店聚合（单位分）。库存调整 / 换规格「不进销售额和毛利」这条口径，
+// 用它来判最直接：这几项一分都不许动。
+async function readAggregate(miniProgram) {
+  return await withTimeout(miniProgram.evaluate(function () {
+    return wx.getStorageSync('inv_aggregate') || {}
+  }), 15000, '读全店聚合')
+}
+
+// 提交的完成信号一律用「账本里真的多出了一条这个类型的流水」。
+//
+// **不要**再用「输入框被清空」当完成信号：页面在提交成功时确实会清空输入框，可这个判据
+// 在**输入压根没落进 data**时是恒真的（页面从头到尾就是空的），于是提交失败也照样绿，
+// 失败被推迟到几十行之后的账面断言上，现场完全指不出原因。2026-08-31 首跑换规格那一步
+// 就是这么挂的，教训写在 typeInto 上方。
+//
+// 内存模式下 showToast 是 mock 掉的，页面抛的错在屏幕上根本看不见 —— 所以这里的
+// 超时消息要把「多半是被 toast 吞了」这句话直接说出来。
+async function waitForNewRecord(miniProgram, type, before, label) {
+  const deadline = Date.now() + WAIT_TIMEOUT * 2
+  for (;;) {
+    const now = await readRecords(miniProgram)
+    const fresh = now.filter(function (item) {
+      return item.type === type && !before.some(function (old) { return old.id === item.id })
+    })
+    if (fresh.length === 1) return fresh[0]
+    if (fresh.length > 1) {
+      throw new Error(label + '：一次提交却多出了 ' + fresh.length + ' 条 ' + type + ' 流水')
+    }
+    if (Date.now() >= deadline) {
+      throw new Error('等「' + label + '」超时：账本里没有多出 ' + type + ' 类型的新流水。'
+        + '提交多半在页面里抛错、被 showToast 吞掉了（内存模式下 toast 是 mock 的，'
+        + '屏幕上什么都看不见）。常见原因：某个输入没落进 data、必选项没选。'
+        + '往上翻 [UI] 那几行看提交前读到的字段值')
+    }
+    await sleep(400)
+  }
+}
+
+// 和 waitForNewRecord 同一个道理，只是盯的是四张表而不是流水。
+//
+// **别拿「页面跳走了没有」当提交的完成信号**：页面跳不跳走取决于 save() 有没有抛错，
+// 而抛错会被 mock 掉的 showToast 吃掉。于是「没跳走」这个现象指向两个完全不同的原因
+//（校验没过 / 路由指令被吞），从现场分不开 —— 2026-08-31 第二轮就在这上面卡了一次：
+// 新建种类时页面默认的商品类型是「分规格现货」，没加规格取值，createCategory 抛
+// 「请添加规格」，而用例只等页面跳回列表，报出来的是一句「等进入种类列表超时」。
+// 先等账本、账本对了再等页面，两个原因就分得开了。
+async function waitForLists(miniProgram, predicate, label) {
+  const deadline = Date.now() + WAIT_TIMEOUT * 2
+  for (;;) {
+    const lists = await readLists(miniProgram)
+    if (predicate(lists)) return lists
+    if (Date.now() >= deadline) {
+      throw new Error('等「' + label + '」超时：账本没有出现预期的变化。提交多半在页面里'
+        + '抛错、被 showToast 吞掉了（内存模式下 toast 是 mock 的，屏幕上什么都看不见），'
+        + '常见原因是必填/必选项没满足')
+    }
+    await sleep(400)
+  }
+}
+
+function moneyTerms(terms) {
+  return {
+    salesSum: Number((terms || {}).salesSum) || 0,
+    returnsSum: Number((terms || {}).returnsSum) || 0,
+    purchaseSum: Number((terms || {}).purchaseSum) || 0,
+    profitSum: Number((terms || {}).profitSum) || 0,
+    saleCount: Number((terms || {}).saleCount) || 0
+  }
+}
+
+function findProduct(lists, keyword) {
+  const hit = lists.products.filter(function (item) {
+    return String(item.name).indexOf(keyword) >= 0
+  })
+  assert.strictEqual(hit.length, 1,
+    '种子里叫「' + keyword + '」的商品应当正好一个，实为 ' + hit.length + ' 个：'
+      + JSON.stringify(lists.products.map(function (p) { return p.name })))
+  return hit[0]
+}
+
+function skusOf(lists, productId) {
+  return lists.skus.filter(function (item) {
+    return item.productId === productId
+  })
+}
+
+function latestOfType(records, type) {
+  const hit = records.filter(function (item) { return item.type === type })
+  assert.ok(hit.length > 0, '账本里一条 ' + type + ' 流水都没有')
+  return hit[0]                                  // readRecords 已按 createdAt 倒序
+}
+
+// 客户欠款一律从**客户页真正渲染出来的那一份**取，不去猜 storage 里的投影字段名。
+// 这样既是账面取数，也顺带核对了欠款有没有画在屏幕上。
+async function readCustomerDebts(miniProgram, when) {
+  const list = await goto(miniProgram, 'switchTab', '/pages/customers/customers', '客户页（' + when + '）')
+  await waitPageReady(list)
+  const data = await list.data()
+  const map = {}
+  ;(data.list || []).forEach(function (item) {
+    map[item.id] = Number(item.receivable) || 0
+  })
+  return map
+}
+
+// ---- 进货 -----------------------------------------------------------------
+
+// 进货是店里最高频的主路径之一，之前一条用例都没有。
+// 这里走完整 UI：进货 tab → 打开商品弹层 → 搜到唯一那一个 → 填数量与本次进价 →
+// 确认入库。账面要变三处：库存 +N、**该商品的进价被本次进价改写**（页面上那句
+// 「本次进价会更新该商品的进价」就是这个意思）、多一条 in 流水且金额 = 数量 × 进价。
+//
+// 【本批不覆盖】带规格商品的进货（要先选规格格再填数）。那条路在 record-sheet
+// 的商品 picker 用例里只走到落点，没有提交过。如实记在 PR 里。
+async function runPurchase(miniProgram) {
+  step('进货：选商品、填数量与本次进价、确认入库，核对库存与进价的变化')
+  const before = await readLists(miniProgram)
+  const beforeTerms = moneyTerms(await readAggregate(miniProgram))
+  // 挑一个**不带规格**的种子商品，规格路径是另一条（见上）。
+  const target = findProduct(before, '矿泉水')
+  const qty = 5
+  const unitPrice = 1.25
+  assert.notStrictEqual(target.costPrice, unitPrice,
+    '本次进价必须和原进价不同，否则「进价被改写」这条断言恒真、等于没测')
+
+  const purchase = await goto(miniProgram, 'switchTab', '/pages/purchase/purchase', '进货页')
+  await waitPageReady(purchase)
+  await tapWhen(purchase, '.js-purchase-picker')
+  await waitFor(purchase, '.js-purchase-item', '商品弹层里出现商品行')
+  // 用搜索把列表收敛到唯一一条再点，**不按下标点**：下标依赖列表排序，
+  // 排序一变用例就静默点到别的商品，还是绿的。
+  await typeInto(purchase, '.js-purchase-search', '矿泉水', '商品弹层搜索', 'keyword')
+  await waitForData(purchase, function (d) {
+    return d.filtered && d.filtered.length === 1 && d.filtered[0].id === target.id
+  }, '搜索把商品弹层收敛到唯一那一条')
+  await tap(purchase, '.js-purchase-item')
+  await waitForData(purchase, function (d) {
+    return d.productId === target.id && d.showPicker === false
+  }, '弹层关闭、选中的商品带回主表单')
+
+  // 渲染核对：屏幕上印的就是选中的那个商品和它此刻的库存。
+  assert.strictEqual(await textOf(purchase, '.js-purchase-picker', '商品名'), target.name,
+    '进货页顶上印的商品名和选中的对不上')
+  assert.ok(
+    (await textOf(purchase, '.js-purchase-stock', '当前库存')).indexOf(String(target.stock)) >= 0,
+    '进货页印的当前库存和账本里的 ' + target.stock + ' 对不上'
+  )
+
+  await typeInto(purchase, '.js-purchase-qty', qty, '数量', 'qty')
+  await typeInto(purchase, '.js-purchase-price', unitPrice, '本次进价', 'unitPrice')
+  const amountText = (qty * unitPrice).toFixed(2)
+  await waitForData(purchase, function (d) {
+    return d.amountText === amountText
+  }, '进货金额跟着数量 × 进价算出来（应为 ' + amountText + '）')
+
+  const beforeRecords = await readRecords(miniProgram)
+  await tapWhen(purchase, '.js-purchase-submit')
+  // 完成信号用「账本里真的多了一条进货流水」，不用「数量框被清空」——理由见 waitForNewRecord。
+  const record = await waitForNewRecord(miniProgram, 'in', beforeRecords, '确认入库')
+
+  const after = await readLists(miniProgram)
+  const now = after.products.find(function (item) { return item.id === target.id })
+  assert.ok(now, '进货之后商品不见了')
+  assert.strictEqual(now.stock, target.stock + qty,
+    '进货 ' + qty + ' 件之后库存应当是 ' + (target.stock + qty) + '，实为 ' + now.stock)
+  assert.strictEqual(now.costPrice, unitPrice,
+    '本次进价应当改写该商品的进价（页面上那句提示就是这个意思）：期望 ' + unitPrice
+      + '，实为 ' + now.costPrice)
+
+  assert.strictEqual(record.amount, Number(amountText),
+    '进货流水的金额应当是数量 × 进价 = ' + amountText + '，实为 ' + record.amount)
+  assert.strictEqual(record.lines.length, 1, '进货流水应当只有一行')
+  assert.strictEqual(record.lines[0].productId, target.id, '进货流水记的不是这个商品')
+  assert.strictEqual(record.lines[0].qty, qty, '进货流水的件数不对')
+
+  const afterTerms = moneyTerms(await readAggregate(miniProgram))
+  assert.strictEqual(afterTerms.purchaseSum, beforeTerms.purchaseSum + Math.round(qty * unitPrice * 100),
+    '进货金额没有进全店的 purchaseSum（单位分）')
+  assert.strictEqual(afterTerms.salesSum, beforeTerms.salesSum, '进货不该动销售额')
+  assert.strictEqual(afterTerms.profitSum, beforeTerms.profitSum, '进货不该动毛利')
+}
+
+// ---- 退货 -----------------------------------------------------------------
+
+// 退货是出错最贵的一条：退款要**先冲欠款、冲不完的才退现金**，两头分账。
+// 拆分不变量写在 utils/inventory.js 的 returnCashRefund 上方：
+//     Σ(退货额 − 现金退款) == min(该销售单的欠款 D, Σ退货额)
+// 单张退货单就是 冲欠款 = min(D, r)、退现金 = max(0, r − D)。
+//
+// 所以这里**两条分支各测一次**，而不是造一张人工的「一半一半」单：
+//   · 挂欠的那张（D = 全额）→ 应当全部冲欠款、现金 0；
+//   · 收讫的那张（D = 0）  → 应当全部退现金、欠款一分不动。
+// 两端都钉住，中间的线性区间就没有可藏的地方。
+//
+// 客户欠款的变化由客户页真正渲染的数来判（readCustomerDebts）。
+async function returnWholeOrder(miniProgram, orderId, how) {
+  const beforeLists = await readLists(miniProgram)
+  const beforeRecords = await readRecords(miniProgram)
+  const sale = beforeRecords.find(function (item) { return item.id === orderId })
+  assert.ok(sale, '要退的销售单 ' + orderId + ' 不在账本里')
+  assert.strictEqual(sale.type, 'out', '要退的不是销售单：' + sale.type)
+  // 预收本项目还没实现（客户端明文禁止），所以 D 就是 应收 − 实收，没有第三项。
+  const settled = sale.paidAmount == null ? sale.amount : Math.min(sale.paidAmount, sale.amount)
+  const debt = Math.round((sale.amount - settled) * 100) / 100
+
+  const ret = await waitForPage(miniProgram, 'pages/sale-return/sale-return', '退货页（' + how + '）')
+  await waitForData(ret, function (d) {
+    return d && d.lines && d.lines.length > 0 && d.orderId === orderId
+  }, '退货页带出了原单行（' + how + '）')
+  const retData = await ret.data()
+
+  // 渲染核对：原单每一行都画出来了，客户名也印在上面。
+  const lineNodes = await ret.$$('.js-return-line')
+  assert.strictEqual(lineNodes.length, retData.lines.length,
+    '退货页渲染出来的行数（' + lineNodes.length + '）和 data.lines（' + retData.lines.length
+      + '）对不上')
+  assert.deepStrictEqual(
+    await textsOf(ret, '.js-return-name'),
+    retData.lines.map(function (line) { return String(line.productName) }),
+    '退货页屏幕上的商品名和 data.lines 对不上'
+  )
+  assert.strictEqual(await textOf(ret, '.js-return-customer', '客户'), String(retData.customerName),
+    '退货页印的客户和 data 对不上')
+  const remainText = await textOf(ret, '.js-return-remain', '可退件数')
+  assert.ok(remainText.indexOf('可退') >= 0, '退货页那行没写「可退」：' + remainText)
+
+  // 默认就是全退（sale-return.js 把 qty 预填成 remain），所以这里不改数量，
+  // 直接提交 —— 少一次输入就少一处和真实操作不一致的地方。
+  retData.lines.forEach(function (line) {
+    assert.strictEqual(String(line.qty), String(line.remain),
+      '前提：退货页应当把每行数量预填成可退件数，实为 ' + line.qty + ' / 可退 ' + line.remain)
+  })
+  await tapWhen(ret, '.js-return-submit')
+  // submit 成功之后页面 setTimeout(400) 再 navigateBack，退回上一页即完成信号。
+  await waitFor(ret, async function () {
+    const cur = await pollCurrentPage(miniProgram)
+    return !!(cur && String(cur.path || '') !== 'pages/sale-return/sale-return')
+  }, '退货提交后自己退回上一页（' + how + '）')
+
+  const afterRecords = await readRecords(miniProgram)
+  const created = afterRecords.filter(function (item) {
+    return item.type === 'return' && !beforeRecords.some(function (old) { return old.id === item.id })
+  })
+  assert.strictEqual(created.length, 1,
+    '一次提交应当只生成一张退货单，实为 ' + created.length + ' 张（' + how + '）')
+  const record = created[0]
+  const cash = record.paidAmount == null ? record.amount : record.paidAmount
+  const offset = Math.round((record.amount - cash) * 100) / 100
+
+  assert.strictEqual(offset, Math.min(debt, record.amount),
+    '冲欠款的份额应当是 min(销售单欠款 ' + debt + ', 退货额 ' + record.amount + ') = '
+      + Math.min(debt, record.amount) + '，实为 ' + offset
+      + '（拆分不变量见 utils/inventory.js 的 returnCashRefund 上方）')
+  assert.strictEqual(cash, Math.round(Math.max(0, record.amount - debt) * 100) / 100,
+    '退现金的份额应当是 max(0, 退货额 − 欠款)，实为 ' + cash)
+
+  // 退货原样入库：卖掉的那一格回到哪一格，件数就加回哪一格。
+  const afterLists = await readLists(miniProgram)
+  record.lines.forEach(function (line) {
+    if (line.skuId) {
+      const was = beforeLists.skus.find(function (s) { return s.id === line.skuId })
+      const now = afterLists.skus.find(function (s) { return s.id === line.skuId })
+      assert.ok(was && now, '退货行对应的规格格找不到了：' + line.skuId)
+      assert.strictEqual(now.stock, was.stock + line.qty,
+        '退货没把件数加回原来那一格（' + line.skuId + '）：' + was.stock + ' -> ' + now.stock)
+    } else {
+      const was = beforeLists.products.find(function (p) { return p.id === line.productId })
+      const now = afterLists.products.find(function (p) { return p.id === line.productId })
+      assert.ok(was && now, '退货行对应的商品找不到了：' + line.productId)
+      assert.strictEqual(now.stock, was.stock + line.qty,
+        '退货没把件数加回库存（' + line.productId + '）：' + was.stock + ' -> ' + now.stock)
+    }
+  })
+
+  step('退货（' + how + '）：退货额 ' + record.amount + ' = 冲欠款 ' + offset
+    + ' + 退现金 ' + cash + '（原单欠款 ' + debt + '）')
+  return { customerId: record.customerId, amount: record.amount, cash: cash, offset: offset }
+}
+
+async function runSaleReturn(miniProgram) {
+  step('退货：挂欠单全额冲欠款、收讫单全额退现金，两条分支各走一次')
+  const before = await readCustomerDebts(miniProgram, '退货前')
+  const records = await readRecords(miniProgram)
+
+  // 分支一：挂欠的那张。走完整 UI —— 流水页 → 销售详情 → 「退货入库」。
+  // 取最新那张销售单：它就是 runSalePickerAndSlip 刚做的「一分未收」那单，
+  // D = 全额，所以必然走冲欠款那一支。
+  const credited = latestOfType(records, 'out')
+  assert.ok(credited.paidAmount === 0,
+    '前提：最新那张销售单应当是「一分未收」（runSalePickerAndSlip 做的），实收却是 '
+      + credited.paidAmount + ' —— 用例顺序被改过的话这里要跟着改')
+  const list = await goto(miniProgram, 'navigateTo', '/pages/records/records', '流水页')
+  await waitFor(list, '.js-record-out', '流水里出现销售记录')
+  await tapNth(list, '.js-record-out', 0, '最新一条销售')
+  const detail = await waitForPage(miniProgram, 'pages/record-edit/record-edit', '销售流水详情页')
+  await waitForData(detail, function (d) {
+    return d && d.id === credited.id && d.canReturn === true
+  }, '详情页停在那张挂欠的销售单上、并且可退')
+  await tapWhen(detail, '.js-go-return')
+  const a = await returnWholeOrder(miniProgram, credited.id, '挂欠单')
+  assert.strictEqual(a.cash, 0, '挂欠单全额退货时不该退现金')
+  assert.strictEqual(a.offset, credited.amount, '挂欠单全额退货时应当全部冲欠款')
+  await backToTabRoot(miniProgram)
+
+  // 分支二：收讫的那张。这次**直接带 id 进页面**，不再从流水页点 ——
+  // 要的是「实收 ≥ 应收」这个确定的前提，而流水页第一条是哪一张取决于时间序，
+  // 按下标点就是在赌。UI 入口那一条已经由分支一走过了。
+  const paidOff = records.filter(function (item) {
+    return item.type === 'out' && item.id !== credited.id
+      && item.paidAmount != null && item.paidAmount >= item.amount
+  })[0]
+  assert.ok(paidOff, '前提：种子里应当有收讫的销售单（李记便利那三张），一张都没找到')
+  await goto(miniProgram, 'navigateTo', '/pages/sale-return/sale-return?id=' + paidOff.id, '退货页（收讫单）')
+  const b = await returnWholeOrder(miniProgram, paidOff.id, '收讫单')
+  assert.strictEqual(b.offset, 0, '收讫单退货时没有欠款可冲')
+  assert.strictEqual(b.cash, paidOff.amount, '收讫单退货时应当全额退现金')
+
+  // 欠款的变化：**只减少冲欠款的那部分**，退出去的现金不动欠款。
+  const after = await readCustomerDebts(miniProgram, '退货后')
+  const offsets = {}
+  ;[a, b].forEach(function (one) {
+    offsets[one.customerId] = (offsets[one.customerId] || 0) + one.offset
+  })
+  Object.keys(before).forEach(function (id) {
+    const want = Math.round((before[id] - (offsets[id] || 0)) * 100) / 100
+    assert.strictEqual(
+      Math.round((after[id] || 0) * 100) / 100,
+      want,
+      '客户 ' + id + ' 的欠款应当从 ' + before[id] + ' 只减掉冲欠款的 ' + (offsets[id] || 0)
+        + '（= ' + want + '），实为 ' + after[id]
+        + ' —— 退现金那部分不该动欠款'
+    )
+  })
+}
+
+// ---- 库存调整 -------------------------------------------------------------
+
+// 「只改件数、不进毛利」这条口径最容易写错，而写错了在页面上看不出来 ——
+// 库存照样对，只是销售额和毛利悄悄多了一笔。所以这里的主断言是**全店聚合**：
+// 库存调整只许让 count +1，salesSum / returnsSum / purchaseSum / profitSum 一分不许动。
+// 判据来自 utils/inventory.js 的 recordTerms：adjust_in / adjust_out 对这四项的
+// 贡献写死是 0，本用例就是那份定义的运行时对照。
+//
+// 进页面这里**直接带 id**：从商品详情点进来的那条 UI 路径由 runProductDetail 走，
+// 两条用例各测一件事，别互相耦合。
+async function runAdjust(miniProgram) {
+  step('库存调整：出库 3 件，核对件数减了、销售额与毛利一分没动')
+  const before = await readLists(miniProgram)
+  const beforeTerms = moneyTerms(await readAggregate(miniProgram))
+  const target = findProduct(before, '鸡蛋')
+  const qty = 3
+
+  const adjust = await goto(miniProgram, 'navigateTo',
+    '/pages/adjust/adjust?id=' + target.id, '库存调整页')
+  // adjust 没有 pageLoading 字段（automator-contract 的 NO_PAGE_LOADING 钉着），
+  // 所以等的是它自己的业务字段。
+  await waitForData(adjust, function (d) {
+    return d && d.productId === target.id
+  }, '调整页读到了商品')
+  assert.strictEqual(await textOf(adjust, '.js-adjust-product', '商品名'), target.name,
+    '调整页印的商品名不对')
+  assert.strictEqual(await textOf(adjust, '.js-adjust-stock', '当前件数'), String(target.stock),
+    '调整页印的当前件数和账本对不上')
+
+  await tapWhen(adjust, '.js-adjust-out')
+  await waitForData(adjust, function (d) {
+    return d.direction === 'out'
+  }, '方向切到出库')
+  await typeInto(adjust, '.js-adjust-qty', qty, '调整数量', 'qty')
+  const beforeRecords = await readRecords(miniProgram)
+  await tapWhen(adjust, '.js-adjust-submit')
+  const record = await waitForNewRecord(miniProgram, 'adjust_out', beforeRecords, '确认调整')
+  // 页面上那格「当前件数」也要就地刷新 —— 这是渲染那一半，和上面的账面那一半各管各的。
+  await waitForData(adjust, function (d) {
+    return d.stockText === String(target.stock - qty)
+  }, '提交之后页面上的当前件数刷新成 ' + (target.stock - qty))
+
+  const after = await readLists(miniProgram)
+  const now = after.products.find(function (item) { return item.id === target.id })
+  assert.strictEqual(now.stock, target.stock - qty,
+    '出库 ' + qty + ' 件之后库存应当是 ' + (target.stock - qty) + '，实为 ' + now.stock)
+
+  assert.strictEqual(record.profit, 0, '库存调整的毛利必须是 0，实为 ' + record.profit)
+
+  const afterTerms = moneyTerms(await readAggregate(miniProgram))
+  ;['salesSum', 'returnsSum', 'purchaseSum', 'profitSum'].forEach(function (key) {
+    assert.strictEqual(afterTerms[key], beforeTerms[key],
+      '库存调整动了全店聚合的 ' + key + '（' + beforeTerms[key] + ' -> ' + afterTerms[key]
+        + '）—— 它只该改件数，不进销售额也不进毛利')
+  })
+  assert.strictEqual(afterTerms.saleCount, beforeTerms.saleCount,
+    '库存调整不该被算成一笔销售')
+  await goBackTo(miniProgram, '上一页（库存调整之后）')
+}
+
+// ---- 换规格 ---------------------------------------------------------------
+
+// 换规格的铁律是**件数守恒**：从一格挪到另一格，这个商品的总件数一件不变，
+// 而且同样不进销售额和毛利。所以这里断言三件事：源格 −N、目标格 +N、总数不变。
+async function runConvert(miniProgram) {
+  step('换规格：从一格挪到另一格，核对件数守恒、不进销售额与毛利')
+  const before = await readLists(miniProgram)
+  const beforeTerms = moneyTerms(await readAggregate(miniProgram))
+  const target = findProduct(before, '短袖')
+  const beforeSkus = skusOf(before, target.id).filter(function (item) { return !item.isBlank })
+  assert.ok(beforeSkus.length >= 2, '前提：这个商品要有至少两个规格格')
+
+  const convert = await goto(miniProgram, 'navigateTo', '/pages/convert/convert', '换规格页')
+  await tapWhen(convert, '.js-convert-picker')
+  await waitFor(convert, '.js-convert-item', '商品弹层里出现带规格的商品')
+  await typeInto(convert, '.js-convert-search', '短袖', '换规格商品弹层搜索', 'keyword')
+  await waitForData(convert, function (d) {
+    return d.filtered && d.filtered.length === 1 && d.filtered[0].id === target.id
+  }, '搜索把弹层收敛到唯一那一条')
+  await tap(convert, '.js-convert-item')
+  await waitForData(convert, function (d) {
+    return d.productId === target.id && d.showPicker === false && d.fromOptions.length > 0
+  }, '选中商品、列出可改的现货格')
+
+  const picked = await convert.data()
+  // 源格：选有货的第一格。目标格：**换一个颜色、尺码不变** —— 这样目标格一定存在
+  // （种子里两个颜色 × 两个尺码都建了 sku），而且和源格必然不同。
+  const from = picked.fromOptions[0]
+  const fromSku = before.skus.find(function (item) { return item.id === from.id })
+  assert.ok(fromSku, '源格在账本里找不到：' + from.id)
+  const toColor = picked.colors.filter(function (color) { return color !== fromSku.color })[0]
+  assert.ok(toColor, '前提：这个商品要有至少两个颜色取值')
+  const toSku = beforeSkus.find(function (item) {
+    return item.color === toColor && item.size === fromSku.size
+  })
+  assert.ok(toSku, '目标格（' + toColor + '/' + fromSku.size + '）在账本里不存在')
+
+  await tapNth(convert, '.js-convert-from', picked.fromOptions.indexOf(from), '源格')
+  await waitForData(convert, function (d) {
+    return d.fromSkuId === from.id
+  }, '源格选中')
+  await tapNth(convert, '.js-convert-color', picked.colors.indexOf(toColor), '目标颜色')
+  await waitForData(convert, function (d) {
+    return d.toColor === toColor
+  }, '目标颜色选中')
+  await tapNth(convert, '.js-convert-size', picked.sizes.indexOf(fromSku.size), '目标尺码')
+  await waitForData(convert, function (d) {
+    return d.toSize === fromSku.size
+  }, '目标尺码选中')
+
+  const qty = 1
+  await typeInto(convert, '.js-convert-qty', qty, '换规格数量', 'qty')
+  // 提交之前把决定成败的四个字段打出来。首跑就是在这一步失败的，而当时日志里
+  // 一个字段值都没有，只能从两百行之后的库存断言倒推。
+  const ready = await convert.data()
+  step('换规格提交前：fromSkuId=' + ready.fromSkuId + '（' + fromSku.color + '/' + fromSku.size
+    + '）→ toColor=' + ready.toColor + ' toSize=' + ready.toSize + ' qty=' + JSON.stringify(ready.qty))
+  const beforeRecords = await readRecords(miniProgram)
+  await tapWhen(convert, '.js-convert-submit')
+  const record = await waitForNewRecord(miniProgram, 'convert', beforeRecords, '换规格提交')
+
+  const after = await readLists(miniProgram)
+  const afterSkus = skusOf(after, target.id).filter(function (item) { return !item.isBlank })
+  const sum = function (list) {
+    return list.reduce(function (acc, item) { return acc + item.stock }, 0)
+  }
+  // 断言不符时把整张格子表打出来，别让下一个人只能拿着「5 !== 4」倒推。
+  const table = function (list) {
+    return JSON.stringify(list.map(function (item) {
+      return item.color + '/' + item.size + '=' + item.stock
+    }))
+  }
+  const where = '（改之前 ' + table(beforeSkus) + '，改之后 ' + table(afterSkus)
+    + '，本次 ' + fromSku.color + '/' + fromSku.size + ' → ' + toColor + '/' + fromSku.size + '）'
+  assert.strictEqual(sum(afterSkus), sum(beforeSkus),
+    '换规格必须件数守恒：改之前合计 ' + sum(beforeSkus) + ' 件，改之后 ' + sum(afterSkus) + ' 件' + where)
+  assert.strictEqual(
+    afterSkus.find(function (item) { return item.id === fromSku.id }).stock,
+    fromSku.stock - qty,
+    '源格没有减掉 ' + qty + ' 件' + where)
+  assert.strictEqual(
+    afterSkus.find(function (item) { return item.id === toSku.id }).stock,
+    toSku.stock + qty,
+    '目标格没有加上 ' + qty + ' 件' + where)
+
+  assert.strictEqual(record.profit, 0, '换规格的毛利必须是 0，实为 ' + record.profit)
+  const afterTerms = moneyTerms(await readAggregate(miniProgram))
+  ;['salesSum', 'returnsSum', 'purchaseSum', 'profitSum'].forEach(function (key) {
+    assert.strictEqual(afterTerms[key], beforeTerms[key],
+      '换规格动了全店聚合的 ' + key + ' —— 它只是把件数从一格挪到另一格')
+  })
+  await goBackTo(miniProgram, '上一页（换规格之后）')
+}
+
+// ---- 商品详情（本周刚合的 #93）--------------------------------------------
+
+// 这一屏是 2026-08-30 才合进来的，而且合进来的那次就带了一条让整个工程编译不出来的
+// WXSS 注释 bug（现在由 tests/wxss-wxml.test.js 静态拦着）。这里补运行时的网：
+// 从商品列表点卡片进详情、头卡与库存全景渲染正确、**四个动作按钮各自的落点**。
+//
+// 四个按钮里「去销售」「去进货」走的是 switchTab（product-detail.js 里写明了
+// 这两页现在还是 tabBar 页），switchTab 会把页面栈重置掉 —— 所以这两个放在最后测，
+// 中间需要回到详情页时直接带 id 重进。
+async function runProductDetail(miniProgram) {
+  step('商品详情：从商品列表进详情，核对头卡与库存全景，再逐个验四个动作按钮的落点')
+  const lists = await readLists(miniProgram)
+  const target = findProduct(lists, '短袖')
+
+  const products = await goto(miniProgram, 'switchTab', '/pages/products/products', '商品页')
+  await waitPageReady(products)
+  await typeInto(products, '.js-product-search', '短袖', '商品搜索', 'keyword')
+  await waitForData(products, function (d) {
+    return d.list && d.list.length === 1 && d.list[0].id === target.id
+  }, '搜索把商品列表收敛到唯一那一条')
+  await tap(products, '.js-product-card')
+
+  const detail = await waitForPage(miniProgram, 'pages/product-detail/product-detail', '商品详情页')
+  await waitPageReady(detail)
+  await waitForData(detail, function (d) {
+    return d.productId === target.id
+  }, '详情页读到了商品')
+  const data = await detail.data()
+
+  assert.strictEqual(await textOf(detail, '.js-detail-name', '商品名'), target.name,
+    '详情页头卡的商品名不对')
+  assert.strictEqual(await textOf(detail, '.js-detail-price', '售价'), '¥' + data.priceText,
+    '详情页头卡的售价和 data.priceText 对不上（少了 ¥ 或者绑错字段）')
+  assert.strictEqual(await textOf(detail, '.js-detail-meta', '副行'), String(data.metaText),
+    '详情页头卡的副行和 data.metaText 对不上')
+
+  // 库存全景：每一格都要画出来，而且每格的件数要等于账本里那一格的件数。
+  assert.ok(data.stockRows.length > 0, '带规格的商品，库存全景不该是空的')
+  assert.deepStrictEqual(
+    await textsOf(detail, '.js-detail-cell-label'),
+    data.stockRows.map(function (row) { return String(row.label) }),
+    '库存全景的格名和 data.stockRows 对不上')
+  assert.deepStrictEqual(
+    await textsOf(detail, '.js-detail-cell-qty'),
+    data.stockRows.map(function (row) { return String(row.qtyText) }),
+    '库存全景的件数和 data.stockRows 对不上')
+  const bookSkus = skusOf(lists, target.id).filter(function (item) { return !item.isBlank })
+  const onScreen = (await textsOf(detail, '.js-detail-cell-qty')).map(function (text) {
+    return Number(String(text).replace(/[^0-9.-]/g, ''))
+  })
+  assert.strictEqual(
+    onScreen.reduce(function (a, b) { return a + b }, 0),
+    bookSkus.reduce(function (a, b) { return a + b.stock }, 0),
+    '库存全景各格件数之和和账本里这个商品的各格之和对不上'
+  )
+
+  // 落点①「编辑商品」→ 商品编辑页（navigateTo，能退回来）
+  await tapWhen(detail, '.js-detail-edit')
+  const edit1 = await waitForPage(miniProgram, 'pages/product-edit/product-edit', '商品编辑页（编辑商品）')
+  await waitForData(edit1, function (d) {
+    return d.id === target.id && d.isEdit === true
+  }, '编辑页带上了这个商品的 id')
+  await goBackTo(miniProgram, '商品详情页')
+
+  // 落点②「调价」→ 现在和「编辑商品」同一个落点（product-detail.js 写明了
+  // 锚定价格区由后续批次补），所以这里断言的是「也进得去编辑页」，
+  // 并**如实记着**它现在和上一个按钮落在同一页 —— 哪天真的分开了，这条要跟着改。
+  await tapWhen(detail, '.js-detail-reprice')
+  const edit2 = await waitForPage(miniProgram, 'pages/product-edit/product-edit', '商品编辑页（调价）')
+  await waitForData(edit2, function (d) {
+    return d.id === target.id
+  }, '调价也进到了这个商品的编辑页')
+  await goBackTo(miniProgram, '商品详情页')
+
+  // 落点③ 库存全景的格 → 库存调整页（带 productId）
+  await tapNth(detail, '.js-detail-cell', 0, '库存全景第一格')
+  const adjust = await waitForPage(miniProgram, 'pages/adjust/adjust', '库存调整页（从库存全景进）')
+  await waitForData(adjust, function (d) {
+    return d.productId === target.id
+  }, '调整页拿到了 productId')
+  await goBackTo(miniProgram, '商品详情页')
+
+  // 落点④「去进货」→ switchTab 到进货 tab。**页面栈在这里被重置**，
+  // 所以下一步要回详情只能重新带 id 进。
+  await tapWhen(detail, '.js-detail-purchase')
+  const purchase = await waitForPage(miniProgram, 'pages/purchase/purchase', '进货页（从详情「去进货」）')
+  await waitPageReady(purchase)
+
+  // 落点⑤「去销售」→ switchTab 到销售 tab
+  const again = await goto(miniProgram, 'navigateTo',
+    '/pages/product-detail/product-detail?id=' + target.id, '商品详情页（重进）')
+  await waitPageReady(again)
+  await tapWhen(again, '.js-detail-sale')
+  const sale = await waitForPage(miniProgram, 'pages/sale/sale', '销售页（从详情「去销售」）')
+  await waitPageReady(sale)
+}
+
+// ---- 商品编辑（规格编辑器 + SKU 矩阵）------------------------------------
+
+// 规格编辑器的核心是那张矩阵：颜色 × 尺码，加一个取值就多一行、删一个就少一行。
+// 这条用例把矩阵**当着面改三次**（2×2 → 3×2 → 2×2），每次都核对行数和行名，
+// 再保存、从账本里核对真的落了 4 个规格格，最后删掉自己造的这件商品，
+// 不给后面的用例留垃圾。
+async function runProductEdit(miniProgram) {
+  step('商品编辑：新建带规格的商品，核对 SKU 矩阵随规格取值增减，保存后落盘，再删掉')
+  const before = await readLists(miniProgram)
+  const name = 'UI 规格测试商品'
+  assert.ok(
+    !before.products.some(function (item) { return item.name === name }),
+    '账本里已经有叫「' + name + '」的商品了，上一轮没清干净？'
+  )
+
+  const products = await goto(miniProgram, 'switchTab', '/pages/products/products', '商品页')
+  await waitPageReady(products)
+  await tapWhen(products, '.js-product-add')
+  const edit = await waitForPage(miniProgram, 'pages/product-edit/product-edit', '商品编辑页（新增）')
+  await waitForData(edit, function (d) {
+    return d && d.isEdit === false
+  }, '停在新增模式')
+
+  await typeInto(edit, '.js-pe-name', name, '商品名称', 'name')
+  await typeInto(edit, '.js-pe-cost', '10', '进价', 'costPrice')
+  await typeInto(edit, '.js-pe-sale', '25', '售价', 'salePrice')
+  await tapWhen(edit, '.js-pe-kind-finished')
+  await waitForData(edit, function (d) {
+    return d.productKind === 'finished'
+  }, '商品类型切到「分规格现货」')
+
+  const addSpec = async function (inputSel, addSel, value, axis, fieldName) {
+    await typeInto(edit, inputSel, value, axis + '取值输入框', fieldName)
+    await tapWhen(edit, addSel)
+    await waitForData(edit, function (d) {
+      return (axis === '规格一' ? d.colors : d.sizes).indexOf(value) >= 0
+    }, axis + '加上取值「' + value + '」')
+  }
+  await addSpec('.js-pe-color-input', '.js-pe-color-add', '红', '规格一', 'colorInput')
+  await addSpec('.js-pe-color-input', '.js-pe-color-add', '蓝', '规格一', 'colorInput')
+  await addSpec('.js-pe-size-input', '.js-pe-size-add', 'S', '规格二', 'sizeInput')
+  await addSpec('.js-pe-size-input', '.js-pe-size-add', 'M', '规格二', 'sizeInput')
+
+  // 2×2：矩阵应当正好四行，而且行名就是笛卡尔积。
+  const expectRows = async function (want, when) {
+    await waitForData(edit, function (d) {
+      return d.skuRows && d.skuRows.length === want
+    }, when + '：SKU 矩阵应当有 ' + want + ' 行')
+    const nodes = await edit.$$('.js-pe-sku-row')
+    assert.strictEqual(nodes.length, want,
+      when + '：SKU 矩阵渲染出来 ' + nodes.length + ' 行，data.skuRows 却是 ' + want
+        + ' 行 —— 数据对、屏幕没画出来')
+    const data = await edit.data()
+    assert.deepStrictEqual(
+      await textsOf(edit, '.js-pe-sku-title'),
+      data.skuRows.map(function (row) { return String(row.specText) }),
+      when + '：屏幕上的规格名和 data.skuRows 对不上')
+    return data.skuRows.map(function (row) { return String(row.specText) })
+  }
+  const rows2x2 = await expectRows(4, '两色两码')
+  ;['红', '蓝'].forEach(function (color) {
+    ['S', 'M'].forEach(function (size) {
+      assert.ok(
+        rows2x2.some(function (text) {
+          return text.indexOf(color) >= 0 && text.indexOf(size) >= 0
+        }),
+        '两色两码的矩阵里缺了 ' + color + '/' + size + '：' + JSON.stringify(rows2x2)
+      )
+    })
+  })
+
+  // 3×2：再加一个颜色，矩阵要跟着长两行。
+  await addSpec('.js-pe-color-input', '.js-pe-color-add', '绿', '规格一', 'colorInput')
+  await expectRows(6, '三色两码')
+
+  // 删掉刚加的那个取值（点 chip 上的 ×），矩阵要缩回四行。
+  const chips = await textsOf(edit, '.js-pe-color-chip')
+  const greenAt = chips.findIndex(function (text) { return text.indexOf('绿') >= 0 })
+  assert.ok(greenAt >= 0, '颜色 chip 里找不到刚加的「绿」：' + JSON.stringify(chips))
+  await tapNth(edit, '.js-pe-color-chip', greenAt, '删掉「绿」')
+  await expectRows(4, '删掉一个颜色之后')
+
+  // 【每一格填一个互不相同的件数，再核对它们逐格落盘】
+  // 这一步不是凑数。只断言「落了 4 个规格组合」是**测不出矩阵内容丢失**的：
+  // 组合名是 saveProduct 从 colors × sizes 现推的，跟传进去的 skuRows 无关 ——
+  // 实测把 product-edit.js 保存时的 skuRows 改成 .slice(1)（整整丢掉一行的数据），
+  // 那版用例照样 EXIT=0 全绿。给每格填一个不同的件数、再逐格对回来，才钉得住。
+  const stockOf = {}
+  const rows = (await edit.data()).skuRows
+  for (let i = 0; i < rows.length; i++) {
+    const want = String(i + 1)
+    const inputs = await edit.$$('.js-pe-sku-stock')
+    assert.strictEqual(inputs.length, rows.length,
+      'SKU 矩阵的库存输入框有 ' + inputs.length + ' 个，行数却是 ' + rows.length)
+    await inputs[i].input(want)
+    await waitForData(edit, function (d) {
+      return String(d.skuRows[i].stock) === want
+    }, '第 ' + (i + 1) + ' 格（' + rows[i].specText + '）的库存填成 ' + want)
+    stockOf[String(rows[i].specText)] = Number(want)
+  }
+
+  await tapWhen(edit, '.js-pe-save')
+  // 同 runCategories：先等账本，再等页面。页面跳不跳走取决于 save() 抛没抛错，
+  // 而抛错被 mock 掉的 toast 吃了，只等页面的话两种原因报的是同一句话。
+  const saved = await waitForLists(miniProgram, function (lists) {
+    return lists.products.some(function (item) { return item.name === name })
+  }, '新建的商品落进账本')
+  await waitForPage(miniProgram, 'pages/products/products', '保存后退回商品页')
+
+  const created = saved.products.find(function (item) { return item.name === name })
+  assert.ok(created, '保存之后账本里没有这件商品')
+  assert.strictEqual(created.salePrice, 25, '售价没存进去')
+  const createdSkus = skusOf(saved, created.id).filter(function (item) { return !item.isBlank })
+  assert.strictEqual(createdSkus.length, 4,
+    '两色两码应当落 4 个规格格，实为 ' + createdSkus.length + ' 个：'
+      + JSON.stringify(createdSkus.map(function (s) { return s.color + '/' + s.size })))
+  const combos = createdSkus.map(function (s) { return s.color + '/' + s.size }).sort()
+  assert.deepStrictEqual(combos, ['红/M', '红/S', '蓝/M', '蓝/S'].sort(),
+    '落盘的规格组合不是那四格：' + JSON.stringify(combos))
+  // 逐格把件数对回来。specText 的拼法由 inventory.specText 决定，这里按「两个取值
+  // 都出现在里面」来配对，不去复刻它的分隔符 —— 复刻就是转写，分隔符一改就假绿。
+  Object.keys(stockOf).forEach(function (specText) {
+    const hit = createdSkus.filter(function (item) {
+      return String(specText).indexOf(item.color) >= 0 && String(specText).indexOf(item.size) >= 0
+    })
+    assert.strictEqual(hit.length, 1,
+      '规格「' + specText + '」在落盘的格子里配到 ' + hit.length + ' 个，应当正好 1 个：'
+        + JSON.stringify(combos))
+    assert.strictEqual(hit[0].stock, stockOf[specText],
+      '规格「' + specText + '」的件数没有逐格落盘：编辑器里填的是 ' + stockOf[specText]
+        + '，账本里是 ' + hit[0].stock
+        + '（矩阵里某一行的数据被丢掉时就是这个样子 —— 只对组合名是查不出来的）')
+  })
+
+  // 删掉自己造的这件商品：既覆盖删除路径（wx.showModal 由 mockWxMethod 自动确认），
+  // 也不给后面的用例留垃圾。
+  const back = await goto(miniProgram, 'navigateTo',
+    '/pages/product-edit/product-edit?id=' + created.id, '商品编辑页（删除）')
+  await waitForData(back, function (d) {
+    return d.id === created.id && d.isEdit === true
+  }, '编辑页停在刚建的这件商品上')
+  await tapWhen(back, '.js-pe-remove')
+  const cleaned = await waitForLists(miniProgram, function (lists) {
+    return !lists.products.some(function (item) { return item.id === created.id })
+  }, '这件商品从账本里删掉')
+  await waitForPage(miniProgram, 'pages/products/products', '删除后退回商品页')
+  assert.ok(
+    !cleaned.products.some(function (item) { return item.id === created.id }),
+    '删除之后账本里还留着这件商品'
+  )
+}
+
+// ---- 种类模板 -------------------------------------------------------------
+
+// 种类只是「建档时带出名称和规格待选项」的模板，不是库存分类。这条用例走它的
+// 四件事：列表渲染、改一个（加一条商品名待选项并落盘）、新增一个、把新增的删掉。
+// 进页面走的是真实入口 —— 商品编辑页种类那一行的「管理」。
+async function runCategories(miniProgram) {
+  step('种类模板：列表渲染、编辑加一条待选项、新增一个再删掉')
+  const before = await readLists(miniProgram)
+  assert.ok(before.categories.length >= 2, '前提：种子里应当有两个种类模板')
+
+  const edit = await goto(miniProgram, 'navigateTo', '/pages/product-edit/product-edit', '商品编辑页（进种类管理）')
+  await waitForData(edit, function (d) {
+    return d && d.isEdit === false
+  }, '停在新增模式')
+  await tapWhen(edit, '.js-pe-categories')
+  const list = await waitForPage(miniProgram, 'pages/categories/categories', '种类模板列表')
+  await waitForData(list, function (d) {
+    return d.list && d.list.length === before.categories.length
+  }, '种类列表读完')
+  assert.deepStrictEqual(
+    await textsOf(list, '.js-category-name'),
+    (await list.data()).list.map(function (item) { return String(item.name) }),
+    '种类列表屏幕上的名字和 data.list 对不上')
+
+  // 改一个：加一条商品名待选项，保存，从账本里核对真的落了盘。
+  const first = (await list.data()).list[0]
+  await tapNth(list, '.js-category-item', 0, '第一个种类')
+  const one = await waitForPage(miniProgram, 'pages/category-edit/category-edit', '种类编辑页')
+  await waitForData(one, function (d) {
+    return d.id === first.id
+  }, '种类编辑页带上了 id')
+  const newName = 'UI 待选项'
+  await typeInto(one, '.js-ce-name-input', newName, '商品名待选项输入框', 'nameInput')
+  await tapWhen(one, '.js-ce-name-add')
+  await waitForData(one, function (d) {
+    return (d.names || []).indexOf(newName) >= 0
+  }, '待选项加进列表')
+  assert.ok(
+    (await textsOf(one, '.js-ce-name-chip')).some(function (text) {
+      return text.indexOf(newName) >= 0
+    }),
+    '待选项加进了 data 却没画在屏幕上'
+  )
+  await tapWhen(one, '.js-ce-save')
+  // 先等账本落盘（提交到底成没成），再等页面跳走。顺序反过来的话，校验没过和路由被吞
+  // 会报同一句话 —— 见 waitForLists 上方那段。
+  const afterEdit = await waitForLists(miniProgram, function (lists) {
+    const hit = lists.categories.find(function (item) { return item.id === first.id })
+    return !!(hit && hit.names.indexOf(newName) >= 0)
+  }, '保存后账本里这个种类多出「' + newName + '」这条待选项')
+  await waitForPage(miniProgram, 'pages/categories/categories', '保存后退回种类列表')
+  const savedCat = afterEdit.categories.find(function (item) { return item.id === first.id })
+  assert.ok(savedCat && savedCat.names.indexOf(newName) >= 0,
+    '保存之后账本里这个种类没有「' + newName + '」这条待选项：'
+      + JSON.stringify(savedCat && savedCat.names))
+
+  // 新增一个，再删掉：把「建 / 删」这条路径也走一遍，同时把账本还原成种子的样子。
+  await tapWhen(list, '.js-category-add')
+  const fresh = await waitForPage(miniProgram, 'pages/category-edit/category-edit', '种类编辑页（新增）')
+  await waitForData(fresh, function (d) {
+    return d && d.isEdit === false
+  }, '停在新增模式')
+  // 【必须先把商品类型切成「普通」】页面默认是 finished，而 inventory.createCategory
+  // 对非 plain 的种类要求至少有一个规格取值（否则抛「请添加规格」）。只填名字就保存
+  // 是存不下去的 —— 这条是 2026-08-31 第二轮实测撞出来的，别为了少一步又去掉。
+  await tapWhen(fresh, '.js-ce-kind-plain')
+  await waitForData(fresh, function (d) {
+    return d.productKind === 'plain'
+  }, '商品类型切到「普通」')
+  const catName = 'UI 临时种类'
+  await typeInto(fresh, '.js-ce-name', catName, '种类名称', 'name')
+  await tapWhen(fresh, '.js-ce-save')
+  const added = await waitForLists(miniProgram, function (lists) {
+    return lists.categories.some(function (item) { return item.name === catName })
+  }, '新增的种类落进账本')
+  await waitForPage(miniProgram, 'pages/categories/categories', '新增保存后退回种类列表')
+  const createdCat = added.categories.find(function (item) { return item.name === catName })
+  assert.ok(createdCat, '新增之后账本里没有这个种类')
+  assert.strictEqual(added.categories.length, before.categories.length + 1,
+    '新增之后种类应当多一个')
+
+  // 列表要先刷新出新增的那一条，才谈得上按下标点它 —— 直接 findIndex 会拿到 -1，
+  // 然后在 nodes[-1] 上炸一句看不出原因的 TypeError。
+  await waitForData(list, function (d) {
+    return (d.list || []).some(function (item) { return item.id === createdCat.id })
+  }, '种类列表刷新出刚新增的那一条')
+  const createdAt = (await list.data()).list.findIndex(function (item) {
+    return item.id === createdCat.id
+  })
+  assert.ok(createdAt >= 0, '种类列表里找不到刚新增的那一条')
+  await tapNth(list, '.js-category-item', createdAt, '刚新增的那个种类')
+  const toRemove = await waitForPage(miniProgram, 'pages/category-edit/category-edit', '种类编辑页（删除）')
+  await waitForData(toRemove, function (d) {
+    return d.id === createdCat.id && d.isEdit === true
+  }, '停在刚新增的那个种类上')
+  await tapWhen(toRemove, '.js-ce-remove')
+  const finalLists = await waitForLists(miniProgram, function (lists) {
+    return !lists.categories.some(function (item) { return item.id === createdCat.id })
+  }, '临时种类从账本里删掉')
+  await waitForPage(miniProgram, 'pages/categories/categories', '删除后退回种类列表')
+  assert.strictEqual(finalLists.categories.length, before.categories.length,
+    '删掉临时种类之后应当回到 ' + before.categories.length + ' 个')
+  await backToTabRoot(miniProgram)
+}
+
+// ---- 建店 / 选店 / 成员 ---------------------------------------------------
+
+// 【放在最末尾是有意的】通过 UI 建店会**换账套**（store.js 的 memoryCall
+// createShop 分支：换 shopId、清空内存账本、装一本空账），所以它一跑，前面所有
+// 用例的数据前提就没了。放在 runNativeClearModal 之后，账本本来就已经清空。
+//
+// 【内存模式能测到哪儿，如实说】resetStorage 注入的是内存账本，memoryCall 里：
+//   · listShops 只回**当前这一家**（所以「我加入的店」永远只有一行，
+//     「选店」只能点回自己，验的是 selectShop → ensureReady 这条链没断，
+//     验不了真正的切店）；
+//   · listMembers 固定回一个店主「测试店主」；
+//   · addMember / removeMember / deleteShop 一律抛「本地测试账本不能改成员 / 删店」。
+// 所以成员这一段只验**渲染和权限位**（店主看得到添加店员那张卡），
+// **不验加减成员** —— 那条路在内存模式下根本走不通，硬测只会测出那句抛错。
+async function runShopAndMembers(miniProgram) {
+  step('店铺与成员：核对本店与成员名单的渲染，再通过 UI 建一家新店（会换账套，所以放最后）')
+  const before = await readLists(miniProgram)
+
+  const home = await goto(miniProgram, 'switchTab', '/pages/index/index', '看板')
+  await waitPageReady(home)
+  await tapWhen(home, '.js-shop')
+  const shop = await waitForPage(miniProgram, 'pages/shop/shop', '店铺页')
+  await waitPageReady(shop)
+  await waitForData(shop, function (d) {
+    return d.hasCurrentShop === true && d.shops && d.shops.length > 0
+  }, '店铺页读到了当前店')
+  assert.strictEqual(await textOf(shop, '.js-shop-current', '当前店名'), before.shopName,
+    '店铺页头卡印的店名和账本里的对不上')
+
+  // 选店：内存模式下列表里只有当前这一家，点它验的是 selectShop → ensureReady
+  // 这条链没断（点完仍然停在店铺页、当前店没变），验不了真正的切店。
+  const shopId = (await shop.data()).currentShopId
+  await tapNth(shop, '.js-shop-item', 0, '店铺列表第一行')
+  await waitForData(shop, function (d) {
+    return d.currentShopId === shopId && d.pageLoading === false
+  }, '点当前这家店之后仍然停在这家店上')
+
+  // 成员名单
+  await tapWhen(shop, '.js-shop-members')
+  const members = await waitForPage(miniProgram, 'pages/members/members', '成员名单')
+  await waitPageReady(members)
+  await waitForData(members, function (d) {
+    return d.members && d.members.length > 0
+  }, '成员名单读完')
+  const memberData = await members.data()
+  assert.strictEqual(memberData.members.length, 1,
+    '内存模式的 listMembers 固定回一个店主，实为 ' + memberData.members.length + ' 人')
+  assert.strictEqual(memberData.isOwner, true, '内存模式下当前用户应当是店主')
+  const cards = await members.$$('.js-member-card')
+  assert.strictEqual(cards.length, 1, '成员卡片渲染出 ' + cards.length + ' 张，data 里只有 1 人')
+  assert.ok((await textOf(members, '.js-member-name', '成员称呼')).indexOf('测试店主') >= 0,
+    '成员卡片上没印出称呼「测试店主」')
+  assert.ok((await textOf(members, '.js-member-role', '成员角色')).indexOf('店主') >= 0,
+    '成员卡片上没印出角色「店主」')
+  // 店主才看得到「添加店员」那张卡 —— 这是权限位的渲染，能验；
+  // 真去点添加会撞上「本地测试账本不能改成员」，那条不测（见函数上方）。
+  await waitFor(members, '.js-member-add', '店主看得到「添加店员」按钮')
+  await goBackTo(miniProgram, '店铺页')
+
+  // 建店：展开「再建一家」→ 填名字 → 创建并进入。
+  await tapWhen(shop, '.js-shop-create-toggle')
+  await waitForData(shop, function (d) {
+    return d.showCreate === true
+  }, '展开「再建一家」')
+  const newShopName = 'UI 第二家店'
+  await typeInto(shop, '.js-shop-name', newShopName, '新店名', 'newShopName')
+  await tapWhen(shop, '.js-shop-create')
+  await waitForData(shop, function (d) {
+    return d.shopName === newShopName && d.currentShopId !== shopId && d.pageLoading === false
+  }, '建店之后当前店换成了新店')
+  assert.strictEqual(await textOf(shop, '.js-shop-current', '当前店名'), newShopName,
+    '建店之后头卡没换成新店名')
+
+  const after = await readLists(miniProgram)
+  assert.strictEqual(after.shopName, newShopName, '建店之后 storage 里的店名没换')
+  assert.notStrictEqual(after.shopId, before.shopId, '建店之后 shopId 应当换一个')
+  assert.strictEqual(after.products.length, 0,
+    '新建的店应当是一本空账，却带出了 ' + after.products.length + ' 件商品')
+  await goBackTo(miniProgram, '看板')
+}
+
 async function run() {
   const cliPath = resolveCliPath()
   if (!cliPath) {
@@ -1587,15 +2907,59 @@ async function run() {
   // 新增的两个「加载更多」步骤也必须在看门狗里 —— 它们要滚页面、等列表增长，
   // 恰好是最容易卡住不回的那一类。
   await withTimeout((async function () {
+    // 【WECHAT_UI_ONLY：只跑其中几段，**调试专用**】
+    // 一整轮二十多分钟，为了调一段用例等二十分钟是不值的。所以留一个逗号分隔的白名单，
+    // 段名就是下面 STEPS 里的 key（如 WECHAT_UI_ONLY=convert,purchase）。
+    //
+    // 两条纪律写在这里，别指望人自觉：
+    //   · 种子那一段**永远跑**，白名单管不到它 —— 后面每一段都建立在种子的数据前提上；
+    //   · 只要用了这个开关，日志开头会大声打一行，而且**PR / 验收证据必须是完整一轮**。
+    //     部分绿不能当整轮绿用，那正是「绿的测试不等于有效的测试」的另一种形状。
+    const STEPS = [
+      ['record-sheet', runRecordSheet],
+      ['purchase', runPurchase],
+      ['sale', runSalePickerAndSlip],
+      ['record-slip', runRecordSlipExport],
+      ['return', runSaleReturn],
+      ['adjust', runAdjust],
+      ['convert', runConvert],
+      ['product-detail', runProductDetail],
+      ['product-edit', runProductEdit],
+      ['categories', runCategories],
+      ['opening', runOpeningSheet],
+      ['pay', runPaySheet],
+      ['records-more', runRecordsLoadMore],
+      ['ledger-more', runCustomerLedgerLoadMore],
+      ['clear', runNativeClearModal],
+      ['shop', runShopAndMembers]
+    ]
+    const only = String(process.env.WECHAT_UI_ONLY || '').split(',').map(function (name) {
+      return name.trim()
+    }).filter(Boolean)
+    if (only.length) {
+      const known = STEPS.map(function (pair) { return pair[0] })
+      only.forEach(function (name) {
+        assert.ok(known.indexOf(name) >= 0,
+          'WECHAT_UI_ONLY 里的「' + name + '」不是已知的段名。可用：' + known.join(', '))
+      })
+      step('⚠ WECHAT_UI_ONLY=' + only.join(',') + ' —— 这是**部分**用例，只能用来调试。'
+        + '种子那一段照跑（后面每一段都依赖它）。验收证据必须是不带这个环境变量的完整一轮')
+    }
+
+    // 【顺序不是随便排的，改之前先读这段】
+    //   · runRecordSheet 必须紧跟种子：收款 picker 只列有欠款的客户、退货 picker
+    //     只列还能退的销售单，种子刚灌完那一刻是这两个 picker 唯一确定的前提；
+    //   · runPurchase 放在销售之前：它只动矿泉水的库存和进价，不碰销售用例点的那个商品；
+    //   · runSaleReturn 必须在 runSalePickerAndSlip 之后：它要退的「挂欠单」正是
+    //     那一步做出来的「一分未收」那张（用例里有断言把这个前提钉住）；
+    //   · runProductEdit / runCategories 自己造的东西自己删掉，不给后面留垃圾；
+    //   · runShopAndMembers 必须**最后**：通过 UI 建店会换账套、清空内存账本，
+    //     一跑前面所有用例的数据前提就全没了。
     await seedFromHome(miniProgram)
-    await runRecordSheet(miniProgram)
-    await runSalePickerAndSlip(miniProgram)
-    await runRecordSlipExport(miniProgram)
-    await runOpeningSheet(miniProgram)
-    await runPaySheet(miniProgram)
-    await runRecordsLoadMore(miniProgram)
-    await runCustomerLedgerLoadMore(miniProgram)
-    await runNativeClearModal(miniProgram)
+    for (let i = 0; i < STEPS.length; i++) {
+      if (only.length && only.indexOf(STEPS[i][0]) < 0) continue
+      await STEPS[i][1](miniProgram)
+    }
   })(), runTimeout, '整轮 UI 用例')
   // 触底加载验到了哪一层，最后一行说清楚，别让人翻日志猜。
   // 放在看门狗之外：它是报告不是用例，超时的时候本来也走不到这里。
@@ -1899,11 +3263,12 @@ reWaitForPage.lastIndex = 0
 while ((hit = reWaitForPage.exec(routeSource)) !== null) waitForPageTargets.push(hit[1])
 assert.strictEqual(
   waitForPageTargets.length,
-  7,
-  // 4 处是原有的；另外 3 处是「记一笔」面板三个 picker 的落点
-  //（customer-edit / sale-return / adjust）—— 面板的全部意义就是把人送到这三页，
-  // 所以这三次跳转是它的核心断言，不是顺手加的。
-  '自检：waitForPage 的字面量调用点应当正好 7 处（原有 4 处 tap 跳转 + 记一笔面板三个 picker 的落点），实为 '
+  27,
+  // 4 处是最早的 tap 跳转；3 处是「记一笔」面板三个 picker 的落点
+  //（customer-edit / sale-return / adjust）—— 面板的全部意义就是把人送到这三页；
+  // 剩下 20 处是 2026-08-31 那一批新覆盖（进货 / 退货 / 库存调整 / 换规格 /
+  // 商品详情四个动作按钮 / 商品编辑 / 种类模板 / 建店与成员）各自的落点确认。
+  '自检：waitForPage 的字面量调用点应当正好 27 处，实为 '
     + waitForPageTargets.length + ' 处：' + JSON.stringify(waitForPageTargets)
     + ' —— 数目对不上说明要么正则失效了（钉子④是假绿的），要么调用点增减了，两种都要人看一眼'
 )
@@ -1913,12 +3278,47 @@ reGoto.lastIndex = 0
 while ((hit = reGoto.exec(routeSource)) !== null) gotoTargets.push(hit[1])
 assert.strictEqual(
   gotoTargets.length,
-  10,
-  // 8 处是原有的；另外 2 处是 runRecordSheet 进看板和 runRecordSheetFabEntry 进流水页
-  '自检：goto 的字面量调用点应当正好 10 处（原有 8 处 + 记一笔面板的看板、流水页两个入口），实为 ' + gotoTargets.length + ' 处：'
+  22,
+  // 8 处最早就有；2 处是 runRecordSheet 进看板和 runRecordSheetFabEntry 进流水页；
+  // 12 处是 2026-08-31 那一批新覆盖自己的入口（含 readCustomerDebts 前后两次进客户页）。
+  '自检：goto 的字面量调用点应当正好 22 处，实为 ' + gotoTargets.length + ' 处：'
     + JSON.stringify(gotoTargets)
     + ' —— 数目对不上说明要么正则失效了（钉子④是假绿的），要么调用点增减了，两种都要人看一眼'
 )
+
+// 钉子⑩：Windows 直接调用那条路的**解析**必须真的从本机的 cli.bat 里读出四样东西。
+//
+// 【为什么要钉】runCli 现在不经 cmd.exe：它从 cli.bat 里解析 Electron 探测规则
+//（>N 字节 + 排除名单）、BOOTSTRAP_JS、index.js 相对路径，再自己 spawn。解析不出来时
+// 代码会**静默**回落到内置默认值，再不行才回落到 cmd.exe 老路 —— 回落本身是对的
+//（不能因为工具换了个格式就整轮跑不起来），但「一直在用内置默认值」这件事必须有人看见，
+// 否则工具升级之后我们是拿一份过期的转写在跑，而症状会是别的样子（连不上 / 起不来端口）。
+//
+// 【局限，别高估】它只验解析，不验 spawn 出来的东西真的能跑 —— 那只有真跑一次才知道。
+// 工具没装（找不到 cli）时整条跳过：这是本机环境，不是代码问题，红在这里没有意义。
+;(function nailCliBatParse() {
+  if (!isWindows) return
+  if (process.env.WECHAT_CLI_DIRECT === '0') return
+  const cli = resolveCliPath()
+  if (!cli) {
+    step('钉子⑩：本机找不到开发者工具的 cli，跳过 cli.bat 解析自检')
+    return
+  }
+  const parsed = parseCliBat(cli)
+  assert.ok(
+    parsed,
+    '钉子⑩：从 ' + cli + ' 里解析不出启动参数了（BOOTSTRAP_JS / CLI 入口 / exe 体积门槛 /'
+      + ' exe 排除名单，四样缺一即判失败）。开发者工具多半升级换了 cli.bat 的写法。'
+      + '代码会静默回落到内置默认值（CLI_FALLBACK）继续跑，但那份是 2026-08-31 抄下来的，'
+      + '过期了就会以「连不上 / 端口起不来」的样子发作。请照新版 cli.bat 更新 parseCliBat '
+      + '的正则和 CLI_FALLBACK，别直接删这条钉子。'
+  )
+  assert.ok(
+    parsed.bootstrap.indexOf('process.argv') >= 0 && parsed.bootstrap.indexOf('require(e)') >= 0,
+    '钉子⑩：解析出来的 BOOTSTRAP_JS 不像那段 bootstrap（应当重写 process.argv 再 require 入口），'
+      + '实为：' + JSON.stringify(parsed.bootstrap.slice(0, 120))
+  )
+})()
 
 // 收尾：关掉这次自己开的工具窗口，断开所有自动化连接，收掉还没退的 cli 子进程。
 // 关不掉不该盖掉测试本身的结论，所以每一步的异常都吞掉、只记一行。
@@ -2031,15 +3431,28 @@ function printChecklist() {
   console.error('   若安装位置不同，设置环境变量 WECHAT_CLI 为 cli.bat 的完整路径')
   console.error('4. 工具要允许被 CLI 驱动：设置 → 安全设置 → 服务端口。上面若打印了 CLI 输出，以它为准')
   console.error('5. 若看到成片的「Maximum setlocal recursion level reached」，是 cli.bat 切 UTF-8 代码页后')
-  console.error('   被 cmd 误解析、把注释里的 CLI 当命令又调回自己。脚本已把安装目录从子进程 PATH 摘掉')
+  console.error('   被 cmd 误解析、把注释里的 CLI 当命令又调回自己（bat 里就有 set "CLI=..." 这个变量名）。')
+  console.error('   注意两点更正：① cli.bat 本身现在是 UTF-8 编码不是 GBK（2026-08-31 实测）；')
+  console.error('   ② 「把安装目录从子进程 PATH 摘掉」这条老修复对现在这版**无效** —— 误解析发生在')
+  console.error('   第 7 行 cd /d "%~dp0" 之后，此刻 cwd 就是安装目录，而 cmd 解析裸命令先查当前目录、')
+  console.error('   再查 PATH，摘 PATH 摘不掉 cwd 那一跳。')
+  console.error('   现在的做法是**根本不经 cmd.exe / cli.bat**：从 cli.bat 里解析出 Electron 探测规则、')
+  console.error('   BOOTSTRAP_JS 和 index.js 路径，自己 spawn electron（ELECTRON_RUN_AS_NODE=1）。')
+  console.error('   日志开头那行「CLI 走直接调用 / CLI 回落到 cmd.exe + cli.bat 老路」说的就是走了哪条。')
+  console.error('   要强制走老路（对拍用）设 WECHAT_CLI_DIRECT=0；老路上再撞见递归风暴会当场报错，')
+  console.error('   不会再刷屏刷满 3 分钟才报一句指不出原因的「等 cli auto 结束超时」')
   console.error('6. 端口和超时可用 WECHAT_AUTOMATOR_PORT / _PORT_TIMEOUT / _CONNECT_TIMEOUT /')
-  console.error('   _STEP_TIMEOUT（单步，默认 30 秒）/ _RUN_TIMEOUT（整轮，默认 15 分钟）/')
-  console.error('   _CLOSE_TIMEOUT（收尾关工具，默认 20 秒）/ _SCRIPT_TIMEOUT（整个脚本，默认 25 分钟）覆盖')
+  console.error('   _STEP_TIMEOUT（单步，默认 30 秒）/ _RUN_TIMEOUT（整轮，默认 30 分钟）/')
+  console.error('   _CLOSE_TIMEOUT（收尾关工具，默认 20 秒）/ _SCRIPT_TIMEOUT（整个脚本，默认 45 分钟）覆盖')
   console.error('7. 工具刚打开项目时 Tool.getInfo 不带 SDKVersion，automator 的版本校验会崩，')
   console.error('   脚本里已经等它出现再校验')
   console.error('8. wx.showModal 是系统弹窗，自动化点不到内部按钮，脚本里用 mockWxMethod 自动确认')
-  console.error('9. 送货单弹层在 virtualHost 自定义组件里，页面级选择器够不着（page.$$ / >>> /')
-  console.error('   selectComponent 实测都是 0），用例核对的是页面数据里的 slip，别再写回 .js-slip')
+  console.error('9. 【2026-08-31 已解除】送货单弹层曾经开着 virtualHost，页面级选择器够不着')
+  console.error('   （page.$$ / >>> / selectComponent 实测都是 0），那时用例只能核对页面数据里的 slip。')
+  console.error('   现在 virtualHost 已摘掉、两个引用点带上了 id="slip-overlay"，用例升回核对渲染：')
+  console.error('   走 slipHost(page) 取 CustomElement，再在实例上查 .js-slip-* 子元素（见 9b）。')
+  console.error('   要是这里报「找不到 #slip-overlay 宿主节点」，多半是有人把 virtualHost 加回去了 ——')
+  console.error('   tests/slip-image.test.js 末尾那条静态钉子会先红，先看 npm test')
   console.error('9b. 自定义组件里的元素，一律走组件实例自己的 $ / $$：先用页面查宿主 id 拿到')
   console.error('    CustomElement，再在它上面查子元素。不要用页面级的「选择器 >>> 子选择器」——')
   console.error('    >>> 右边只吃单个简单选择器，吃不了两级后代链，而且吃不下时不报错：实测')
@@ -2047,11 +3460,12 @@ function printChecklist() {
   console.error('    text() 是整个面板拼成的一串。记一笔面板那组用例首跑就栽在这里。')
   console.error('    依据：automator out/Element.js 里 CustomElement extends Element，两个查询都走')
   console.error('    Element.getElement(s) 且以该元素为作用域，后代链正常')
-  console.error('    注意 9 和 9b 是两个坑，别混：slip-overlay 开着 virtualHost，页面侧**根本没有**')
-  console.error('    宿主节点，三种写法都是真的 0；record-sheet 没开，宿主在，>>> 能锚上、')
-  console.error('    然后才降级。所以第 9 条那条用例要从「核对页面 data」升回「核对渲染」，')
-  console.error('    办法是把 slip-overlay 的 virtualHost 摘掉（record-sheet 就是这么做的），')
-  console.error('    不是改选择器写法。那是另一批的活，别在这里顺手动既有用例')
+  console.error('    注意 9 和 9b 是两个不同的坑，别混（这条**仍然有效**，只是两边现在都没开')
+  console.error('    virtualHost 了）：开着 virtualHost 时页面侧**根本没有**宿主节点，三种写法')
+  console.error('    都是真的 0，红得干脆；没开时宿主在、>>> 能锚上、然后静默降级成宿主本身，')
+  console.error('    返回 1 个错节点，绿着骗人。所以「查不到组件里的东西」不能一律按同一个原因查：')
+  console.error('    先看组件的 options 里有没有 virtualHost，再决定是加 id 还是改写法。')
+  console.error('    第 9 条那条用例正是靠「摘 virtualHost + 加 id」升回核对渲染的，不是靠改选择器写法')
   console.error('10. 重试之前先确认没有上一轮的残留。脚本收尾会断开连接、必要时 cli quit，但工具')
   console.error('    卡死时这两步都可能不管用，而残留会直接毁掉下一轮：留下的开发者工具占着自动化')
   console.error('    端口，新一轮连上的是上一轮的会话，于是在随机步骤报 Connection closed。查和清：')

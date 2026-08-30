@@ -1,8 +1,98 @@
 # UI 自动化测试
 
-`npm run test:ui` 用 `miniprogram-automator` 驱动**真实的微信开发者工具**，把六段操作从头点一遍：填充示例数据 → 销售出库并核对送货单 → 流水详情与再次导出 → 期初欠款 → 收款 → 店铺清空。
+## 每一批 UI 改动合并前跑什么（先读这一节）
 
-这是仓库里唯一一条能证明「页面点得动」的测试。`npm test` 那十几项都是纯 Node，跑的是 `utils/` 里的逻辑和静态检查，碰不到渲染层。
+接下来 28 个屏要按新稿一批批改。**每批合并前照下面三步走**，这三步挡的是最贵的两类失败：整个工程编译不出来、以及跨批相互作用。
+
+### 第 1 步 · `npm test`（约 20 秒，不开开发者工具）
+
+**改了 wxss / wxml 就必须跑，而且它值这 20 秒。** 里面的 `tests/wxss-wxml.test.js` 专治 2026-08-30 PR #93 那一类：块注释里写了 `*/`（`.btn-*` 后面紧跟 `/`）→ 注释提前闭合 → 整页 WXSS 编译失败 → **开发者工具不显式报错、整个工程构建不出来** → automator 第一步就抛 `Cannot destructure property 'rawPath' ...`，看着完全像路由或环境问题。那一次花了 4 次真机运行 + 逐文件二分。现在这类问题**跑 `npm test` 立刻红**，还直接指到行号。
+
+同一步里还有几条跟 UI 强相关的静态钉子，红了先看它们，别急着开工具：
+
+| 钉子在哪 | 红了说明 |
+|---|---|
+| `tests/wxss-wxml.test.js` | 块注释 / 大括号 / 标签配对 / `wx:for` 缺 `wx:key` |
+| `tests/slip-image.test.js` 末尾 | 有人给 `slip-overlay` 加回了 `virtualHost`，或宿主的 `id` 没了 |
+| `tests/record-sheet.test.js` 末尾 | 同上，`record-sheet` 那一对 |
+| `tests/automator-contract.test.js` | 页面加了/删了 `pageLoading` 字段，`waitPageReady` 的调用点要跟着改 |
+| `tests/ui-scale.test.js` | 字号 / 热区越出 [ui-scale.md](ui-scale.md) 的档位 |
+
+### 第 2 步 · `npm run test:all`（约 25 分钟，要开开发者工具，**全机器串行**）
+
+跑之前**确认没有别的会话在跑**：自动化端口 9420 全局唯一，两个会话互相把对方的工具退掉，不是排队是相互摧毁。
+
+```bash
+npm run test:all > "$TMPDIR/ui.txt" 2>&1; echo "EXIT=$?"
+```
+
+输出**必须重定向到项目目录之外**（见下面「三条硬约束」后面那条：往项目目录里写文件会触发热重载，小程序被重启、页面栈清回入口页，之后所有等待都等不到目标页，而报错只显示「没跳过去」）。
+
+### 第 3 步 · 撞到红的，先分清是抖动还是回归
+
+**症状是初始化 / 超时 / 连接断（连不上、等不到、页面栈不对），而不是某条断言不符** —— 十有八九是环境，按这个顺序查：
+
+| 现象 | 处理 |
+|---|---|
+| 端口被占 / `Connection closed` 出现在随机步骤 | 上一轮的残留。`Get-Process 微信开发者工具` 手动关掉；`Get-CimInstance Win32_Process -Filter "Name='node.exe'"` 里挂 `ui.test.js` 的 `Stop-Process`。**别按镜像名杀 `WeChatAppEx`**，那是微信本体也在用的 |
+| 「服务端口」没开 | 工具 → 设置 → 安全设置 → 服务端口 |
+| 报「等『页面加载完成 pages/xxx』超时」 | 多半不是没加载完，是那个页面**根本没有 `pageLoading` 字段**，或者上一步走错了页。名单在 `tests/automator-contract.test.js` |
+| `pageMap 缓存返回了陈旧页面对象` 那行日志 | 正常，脚本会自己删缓存重取，不用管 |
+| worktree 里随机挂、症状各不相同 | 少了 `project.private.config.json`，从主检出 `cp` 一份 |
+| 成片 `Maximum setlocal recursion level reached` | 见下面「排查」小节。正常情况下走的是直接调用，根本不经 cmd |
+
+**判不出来就做 baseline 对照**：在改动前的 HEAD 上跑同一条，baseline 也挂就是环境，别在 diff 里找原因。
+
+### 调一段用例时不要跑满 25 分钟
+
+```bash
+WECHAT_UI_ONLY=convert,product-edit npm run test:ui > "$TMPDIR/ui.txt" 2>&1
+```
+
+段名见 `tests/ui.test.js` 里 `STEPS` 那张表。种子那一段永远跑（后面每段都依赖它）。日志会大声打一行说明这是部分用例 —— **验收证据必须是不带这个开关的完整一轮**，部分绿不能当整轮绿用。
+
+### 加新用例时，完成信号别写成「输入框被清空」
+
+这条是 2026-08-31 用两次真实失败换来的，写在这里免得下一批再踩：
+
+- **输入之后要确认值真的落进了 `data`**（`typeInto` 的第五个参数传字段名）。落不进去的话，后面每一步都会以别的样子失败；
+- **提交的完成信号要读账本**（`waitForNewRecord` / `waitForLists`），不要读「输入框被清空」或「页面跳走了」。前者在输入没落进去时**恒真**，后者分不清「校验没过」和「路由被吞」—— 而校验抛的错会被 mock 掉的 `showToast` 吃掉，屏幕上什么都看不见。
+
+---
+
+`npm run test:ui` 用 `miniprogram-automator` 驱动**真实的微信开发者工具**，把这些操作从头点一遍：
+
+| # | 段落 | 主要断言 |
+|---|---|---|
+| 1 | 填充示例数据 | 种子灌进内存账本 |
+| 2 | 「记一笔」面板 | 五行文案与顺序、三条关闭通道、三个 picker 的落点、列表被 `max-height` 夹住并能滚 |
+| 3 | 进货 | 库存 +N、**本次进价改写商品进价**、`in` 流水金额 = 数量 × 进价 |
+| 4 | 销售出库 + 送货单 | 一分未收 → 欠款 = 应收；送货单**逐格核对屏幕上印的字** |
+| 5 | 流水只读 + 再次导出 | 进详情不进修改态、导出的送货单同样核对渲染 |
+| 6 | 退货 | 挂欠单全额冲欠款 / 收讫单全额退现金；欠款只减冲欠款那部分；件数原样入库 |
+| 7 | 库存调整 | 件数减了，而 `salesSum` / `profitSum` / `purchaseSum` / `returnsSum` **一分没动** |
+| 8 | 换规格 | 源格 −N、目标格 +N、**总件数守恒**，同样不进销售额与毛利 |
+| 9 | 商品详情 | 头卡与库存全景逐格核对；四个动作按钮各自的落点 |
+| 10 | 商品编辑 | 规格取值增删时 SKU 矩阵 2×2 → 3×2 → 2×2；保存后真的落 4 个规格格；删除路径 |
+| 11 | 种类模板 | 列表渲染、加一条待选项并落盘、新增再删掉 |
+| 12 | 流水改 / 取消 | 点「修改」才出现保存，取消回详情 |
+| 13 | 客户记期初 / 收款 | 弹层开合与提交 |
+| 14 | 流水分页触底 / 客户往来分页 | 首屏只给一页、翻完不重不漏 |
+| 15 | 店铺清空 | 原生弹窗用 mock 自动确认 |
+| 16 | 建店 / 选店 / 成员 | 成员名单渲染与权限位；**通过 UI 建一家新店**（会换账套，所以放最后） |
+
+这是仓库里唯一一条能证明「页面点得动」的测试。`npm test` 那二十几项都是纯 Node，跑的是 `utils/` 里的逻辑和静态检查，碰不到渲染层。
+
+**但纯 Node 那侧新补了一格**：`tests/wxss-wxml.test.js` 扫全部 `pages/**`、`components/**` 的 wxss/wxml，查块注释配对、大括号平衡、标签配对、`wx:for` 缺 `wx:key`。缘起是 2026-08-30 的 PR #93：商品详情页 WXSS 首行注释里的 `.btn-*` 紧跟 `/`，把块注释提前闭合，整页 WXSS 编译失败、开发者工具**不显式报错**、整个工程构建不出来，automator 第一步就抛 `Cannot destructure property 'rawPath' of 't.getPageMetaByWebviewId(...)' as it is null` —— 看着完全像路由或环境问题，实际花了 4 次真机运行 + 逐文件二分才定位。那一类问题现在两秒钟就红，不必等十分钟开工具。
+
+### 内存模式测不到的两处，如实记着
+
+`resetStorage()` 注入的是内存账本（`utils/store.js` 的 `memoryCall`），有两条路在这个模式下根本走不通，所以用例**故意不测**：
+
+- **加减成员 / 删店**：`addMember` / `removeMember` / `updateMember` / `deleteShop` 一律抛「本地测试账本不能改成员 / 删店」。成员那一段只验渲染和权限位（店主看得到「添加店员」那张卡）。
+- **真正的切店**：`listShops` 只回**当前这一家**，所以「我加入的店」永远只有一行；点它验的是 `selectShop → ensureReady` 这条链没断，验不了从 A 店切到 B 店。
+
+「通过 UI 建店」倒是真的能测：`createShop` 在内存模式下会换 `shopId`、清空账本、装一本空账 —— 也正因为如此，它必须排在整轮的**最后**。
 
 ## 怎么跑
 
@@ -44,14 +134,16 @@ npm run test:ui
 
 ### 在任务 worktree 里跑：先补两个没进版本库的文件
 
-在任务工作树（`../inventory-miniapp-worktrees/<短名>`，见 [git-workflow.md](git-workflow.md)）里跑 `npm run test:ui` / `npm run test:all` 之前，除了复制 `node_modules`，**还要把主检出的 `project.private.config.json` 也复制过去**：
+在任务工作树（`../inventory-miniapp-worktrees/<短名>`，见 [git-workflow.md](git-workflow.md)）里跑 `npm run test:ui` / `npm run test:all` 之前，要补两件没进版本库的东西：装依赖，**外加把主检出的 `project.private.config.json` 复制过去**：
 
 ```bash
-cp -r /d/work/inventory-miniapp/node_modules ./node_modules
+npm install --no-audit --no-fund
 cp /d/work/inventory-miniapp/project.private.config.json ./
 ```
 
-两个文件都在 `.gitignore` 里，所以 `git worktree add` 出来的目录里没有它们。少了 `node_modules` 会当场报模块找不到，好认；少了 `project.private.config.json` 不报错，反而更难查——它钉着 `libVersion: 3.16.2`，以及 `useApiHook` / `useIsolateContext` / `compileHotReLoad` 等一串开发者工具设置。缺了它，工具会按「全新项目」的默认值打开这棵树，UI 测试就以**互不相同**的初始化/超时症状随机挂掉。典型标志是日志里那句：
+依赖**不要**再从主检出 `cp -r node_modules`（这里以前是这么写的）：主检出的 `node_modules` 现在是个空目录，复制过去只得到一个空壳，连非 UI 的 `npm test` 都会红在 `tests/automator-contract.test.js`（`Cannot find module 'miniprogram-automator/package.json'`）。有 `package-lock.json`，`npm install` 两秒装完 77 个包。
+
+两样东西都在 `.gitignore` 里，所以 `git worktree add` 出来的目录里没有它们。缺依赖会当场报模块找不到，好认；少了 `project.private.config.json` 不报错，反而更难查——它钉着 `libVersion: 3.16.2`，以及 `useApiHook` / `useIsolateContext` / `compileHotReLoad` 等一串开发者工具设置。缺了它，工具会按「全新项目」的默认值打开这棵树，UI 测试就以**互不相同**的初始化/超时症状随机挂掉。典型标志是日志里那句：
 
 ```text
 [UI] Tool.getInfo 一直没带 SDKVersion，跳过基础库版本校验
@@ -68,9 +160,9 @@ cp /d/work/inventory-miniapp/project.private.config.json ./
 
 ## 三条硬约束
 
-### 1. 页面级选择器查不到自定义组件内部
+### 1. 开了 `virtualHost` 的组件，页面级选择器**一个节点都查不到**
 
-实测（2026-08-23，开发者工具 2.02.x + `miniprogram-automator` 0.12.1）：`slip-overlay` 开了 `virtualHost: true`，页面侧压根没有它的宿主节点，下面五种写法**全部返回 0**：
+实测（2026-08-23，开发者工具 2.02.x + `miniprogram-automator` 0.12.1）：当时 `slip-overlay` 开着 `virtualHost: true`，页面侧压根没有它的宿主节点，下面五种写法**全部返回 0**：
 
 | 写法 | 结果 |
 |---|---|
@@ -80,13 +172,24 @@ cp /d/work/inventory-miniapp/project.private.config.json ./
 | 页面内 `createSelectorQuery().selectAll('.js-slip')` | 0 |
 | `selectComponent` / `selectAllComponents`（tag、class、id 三种写法） | 全 null / 0 |
 
-所以：**组件内部的内容一律核对页面数据，不查 DOM。**
+**结论不是「组件内部一律核对页面数据」，而是「别开 `virtualHost`」。**
 
-送货单就是 `page.data().slip`（`shopName` / `operatorText` / `customerName` / `paidText` / `lines[]`，由 `utils/util.js` 的 `withSlipView()` 拼出），关闭走 `page.callMethod('closeSlip')`，判断是否弹出看 `showSlip && slip`。用例里封装成了 `waitSlipOpen()` / `assertSlip()` / `closeSlip()`。
+2026-08-31 把 `slip-overlay` 的 `virtualHost` 摘掉、给两个引用点（`pages/sale`、`pages/record-edit`）加上 `id="slip-overlay"` 之后，那条用例就从「核对 `page.data().slip`」升回了**核对渲染**：`page.$('#slip-overlay')` 拿到 `CustomElement`，再在这个实例上查 `.js-slip-*` 子元素，逐格和 `data.slip` 对账（店名 / 经手人 / 收货人 / `¥实收` / 每一行商品名）。关闭也改成**点真的那颗「完成」按钮**，把 `onClose → triggerEvent('close') → 页面 closeSlip` 这条链一起验掉。`components/record-sheet` 一开始就是这么做的。
 
-`page-loading` 同样是 `virtualHost`：等页面就绪一律用 `waitPageReady()`（读 `pageLoading` 字段），不要去查加载态的节点。
+摘之前先核排版：弹层本体是 `position: fixed`，关着时 `wx:if` 连子节点都不渲染，所以宿主是个零高的块级空节点；两个宿主都挂在 `.page` 里，而 `.page`（`app.wxss:76`）是普通块级容器，没有 flex / grid，多一个零高子节点不改变兄弟节点排布。**换个组件摘 `virtualHost` 时，这一步要自己重新核一遍。**
 
-**代价要认：** 数据对、但组件里字段绑错导致屏幕上不显示，这版用例查不出来。要验渲染只能靠 `miniProgram.screenshot()` 人眼看。
+不许再加回来这件事有静态钉子看着：`tests/slip-image.test.js` 末尾同时钉 `virtualHost` 和两个宿主的 `id`，`tests/record-sheet.test.js` 末尾钉 `record-sheet` 那一对。
+
+`page-loading` 仍然是 `virtualHost`（它没有需要查的内容）：等页面就绪一律用 `waitPageReady()`（读 `pageLoading` 字段），不要去查加载态的节点。哪些页面有这个字段由 `tests/automator-contract.test.js` 的两张名单钉着，**对没有这个字段的页面调 `waitPageReady()` 会报一句和真实原因无关的假错**。
+
+### 1b. 没开 `virtualHost` 时，`>>>` 会**静默降级**
+
+和第 1 条是同一类坑的另一面，别混：
+
+- 开着 `virtualHost` —— 页面侧根本没有宿主节点，三种写法都是**真的 0**，红得干脆；
+- 没开 —— 宿主在，`'宿主 >>> .a .b'` **能锚上**，然后因为 `>>>` 右边只吃单个简单选择器、吃不下两级后代链而**静默降级成宿主本身**：返回 1 个节点、`text()` 是整块拼成的一串，**绿着骗人**。
+
+所以组件里的元素一律走**组件实例自己的 `$` / `$$`**：先用页面查宿主 id 拿到 `CustomElement`，再在它上面查子元素。依据是 automator 的 `out/Element.js`：`CustomElement extends Element`，两个查询都以该元素为作用域下发，后代链正常。
 
 ### 2. 所有等待必须走 `waitFor(page, target, label)`
 
@@ -100,8 +203,8 @@ await waitFor(sale, async function () { ... }, '商品进购物车')  // 条件
 ```
 
 - 单步默认 30 秒，`WECHAT_AUTOMATOR_STEP_TIMEOUT` 覆盖
-- 整轮默认 15 分钟，`WECHAT_AUTOMATOR_RUN_TIMEOUT` 覆盖
-- 整个脚本默认 25 分钟，`WECHAT_AUTOMATOR_SCRIPT_TIMEOUT` 覆盖（整轮那道只罩用例本身，起端口、连接卡住时它还没起跑）
+- 整轮默认 30 分钟，`WECHAT_AUTOMATOR_RUN_TIMEOUT` 覆盖（2026-08-31 从 15 分钟抬上来：用例从 9 段加到 17 段，路由次数和页面加载都翻了倍。看门狗一开火只报「整轮 UI 用例超时」、指不出是哪一步，排查成本比多等十分钟高得多）
+- 整个脚本默认 45 分钟，`WECHAT_AUTOMATOR_SCRIPT_TIMEOUT` 覆盖（整轮那道只罩用例本身，起端口、连接卡住时它还没起跑）
 - 收尾关工具默认 20 秒，`WECHAT_AUTOMATOR_CLOSE_TIMEOUT` 覆盖
 - 超时消息带 `label`，直接说清在等什么：`等「出现 .js-seed」超时（30 秒）`
 
@@ -156,6 +259,7 @@ await waitFor(sale, async function () { ... }, '商品进购物车')  // 条件
 
 ## 改 wxml 时的检查清单
 
+- [ ] 跑过 `node tests/wxss-wxml.test.js`（两秒，不用开工具）——它查块注释配对、大括号平衡、标签配对、`wx:for` 缺 `wx:key`。**wxss 的块注释里不要出现 `*/`**：`.btn-*` 后面紧跟 `/` 就会把注释提前闭合，整页编译失败而工具不显式报错
 - [ ] 新增或改名 `js-` 钩子后，`grep` 过 `tests/ui.test.js`
 - [ ] 把页面里的块抽成自定义组件后，确认该块上的 `js-` 钩子在测试里**全部失效**了——要么把断言改走页面数据，要么把钩子留在页面模板一侧（`record-edit` 的「导出送货单」按钮 `.js-export-slip` 就还在页面里，所以还能直接点）
 - [ ] 跑过一次 `npm run test:ui`
@@ -173,9 +277,21 @@ await waitFor(sale, async function () { ... }, '商品进购物车')  // 条件
 跑失败时脚本会打印一份编号清单，按它查。踩过的坑：
 
 - 端口被上一次没退干净的工具占着——脚本会先 `cli quit`，退不掉就手动关工具
-- `cli.bat` 切 UTF-8 代码页后被 cmd 误解析、把注释里的 `CLI` 当命令递归调自己，刷屏「Maximum setlocal recursion level reached」——脚本已把工具安装目录从子进程 `PATH` 上摘掉
-- 同一句刷屏还可能以**另一副面孔**出现（2026-08-24 复现）：`cli.bat` 本体就是 UTF-8 编码 + 中文注释 + 中途 `chcp 65001`，某些机器状态（疑似工具更新后 cmd 与代码页失同步）下 cmd 丢了解析位置，`setlocal` 无限递归——拿 `cli.bat --help` 在安装目录里就能复现，与仓库内容无关，摘 `PATH` 也救不了。**绕法**：自己写一份 GBK 编码、**不含 `chcp`**、CRLF 行尾的等价 bat（照抄原文件的 exe 探测、`ELECTRON_RUN_AS_NODE`、`BOOTSTRAP_JS` 那几段，只去掉切代码页），放临时目录，跑测试时 `WECHAT_CLI=<这份bat的绝对路径> npm run test:ui`。关键点：GBK 编码让中文安装路径在默认 CP936 的 cmd 下稳定解析，整份文件从头到尾一个代码页，就没有中途失同步的窗口
-- `automator.launch()` 不能用：Node 18.20.2 / 20.12.2 起禁止不带 shell 地 spawn `.bat`，而且报错会被转述成误导性的「cliPath 不对」。脚本改成自己经 `cmd.exe` 起端口再 `connect`
+- **`cli.bat` 的 `setlocal` 递归风暴，以及它现在为什么不该再发生**（2026-08-31 重写这一条，旧说法有两处是错的）
+
+  症状是刷屏「Maximum setlocal recursion level reached.」、`cli auto` 永远不返回。成因：`cli.bat` 第 3 行 `chcp 65001 >nul` 把控制台切到 UTF-8，某些机器状态下 cmd 在切页处丢了解析位置，把一行中文注释的后半截当命令执行——那半截正好以 `CLI` 开头（bat 里就有 `set "CLI=%~dp0resources\...\index.js"` 这个变量名）。
+
+  **两处更正：**
+
+  1. 旧文档写「`cli.bat` 是 GBK 编码的」。**不对**：2026-08-31 实测这台机器上的 `cli.bat` 是 **UTF-8** 编码（前 64 字节里 `按` = `e6 8c 89`）、CRLF 行尾。工具升级换过版本，所以「自己写一份 GBK 的等价 bat」那条绕法是针对旧版的，别再照抄。
+  2. 旧文档写「脚本已把工具安装目录从子进程 `PATH` 上摘掉」。**这条修复对现在这版无效**：误解析发生在第 7 行 `cd /d "%~dp0"` **之后**，此刻 cwd 就是安装目录，而 cmd 解析裸命令时**先查当前目录、再查 `PATH`**——摘 `PATH` 摘不掉 cwd 那一跳。它只在「误解析发生在 `cd` 之前」或「cwd 不是安装目录」时才管用。
+
+  **现在的做法：根本不经 `cmd.exe` / `cli.bat`。** `tests/ui.test.js` 从 `cli.bat` 里**解析**出三样东西——Electron exe 的探测规则（`>50MB` + 六个排除名）、`BOOTSTRAP_JS`、`index.js` 的相对路径——然后自己 `spawn(electron, ['-e', BOOTSTRAP_JS, indexJs, ...args])`，带 `ELECTRON_RUN_AS_NODE=1`，并按 bat 的语义把调用方的 CD 传成环境变量 `cwd`。参数是解析出来的不是抄下来的，工具升级时跟着走；解析不出来才回落到内置默认值，再不行才回落到老路。
+
+  日志开头那行「CLI 走直接调用 / CLI 回落到 cmd.exe + cli.bat 老路」说的就是走了哪条。要强制走老路对拍，设 `WECHAT_CLI_DIRECT=0`；老路上再撞见递归风暴会**当场报错**，不会再刷满 3 分钟才报一句指不出原因的「等 cli auto 结束超时」。
+
+  **复现状态如实记**：2026-08-31 在这台机器上**没能复现**递归风暴——直接跑 `cli.bat --help`，五种组合（cwd = 安装目录 / 仓库根 × 安装目录在不在 `PATH` 上 × 先 `chcp 936` / 先 `chcp 65001`）全部干净退出、输出各 1841 字节、`setlocal recursion` 命中 0 次。所以改成直接调用**不是「修一个复现过的 bug」**，而是把 cmd.exe + .bat + 代码页 + `%~dp0` + `PATH` 这一整层已知脆弱面拿掉。直接调用那条路已用 `--help` 对拍过，输出与 `cli.bat` 完全一致。
+- `automator.launch()` 不能用：Node 18.20.2 / 20.12.2 起禁止不带 shell 地 spawn `.bat`，而且报错会被转述成误导性的「cliPath 不对」。直接调用那条路连 `.bat` 都不碰，这条限制自然不存在；兜底那条经 `cmd.exe` 走，也绕开了
 - `wx.showModal` 是系统弹窗，自动化点不到内部按钮，用 `mockWxMethod` 自动确认
 - 在任务 worktree 里跑，却没从主检出复制 `project.private.config.json`——挂的样子是随机的初始化/超时，不是断言失败，见上面「在任务 worktree 里跑：先补两个没进版本库的文件」
 

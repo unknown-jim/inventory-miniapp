@@ -181,6 +181,7 @@
   </view>
 
   <slip-overlay
+    id="slip-overlay"
     show-slip="{{showSlip}}"
     slip="{{slip}}"
     exporting="{{exporting}}"
