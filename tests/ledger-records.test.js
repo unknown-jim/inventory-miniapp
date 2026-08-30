@@ -232,6 +232,28 @@ function totalStock(skus, productId) {
   // getSlip 的后缀边界：createdAt <= at 的一律小于 pad13(at+1) + '_'
   assert.ok(apply.makeSortKey(5, 'zzzzzzzzzz') < apply.makeSortKey(6, ''))
 
+  // sortKey 的**定宽前提**（2b-4）。时间段 [from, to) 整个建立在
+  // 「pad13 输出定宽 13 位、所以字典序 == 数值序」上：边界值
+  // makeSortKey(t, '') = pad13(t) + '_' 要能和真实记录按字典序比大小，
+  // 前缀就必须一样长。这条以前只写在 pad13 的注释里，没有断言钉着。
+  const widthCases = [0, 1, 999, 1000000000, 1756500000000, 9999999999999]
+  widthCases.forEach(function (t) {
+    assert.strictEqual(apply.makeSortKey(t, '').length, 14,
+      'pad13 定宽：createdAt=' + t + ' 的边界键必须是 13 位 + 下划线')
+    assert.strictEqual(apply.makeSortKey(t, 'abc').length, 14 + 3,
+      'sortKey 长度必须是 13 + 1 + len(id)，createdAt=' + t)
+  })
+  // 定宽在 createdAt >= 1e13（约 2286-11-20）之后失效，**字典序会当场反转**：
+  // pad13 原样返回 14 位，而 '1' < '9'，于是「更晚的时刻」排到了「更早的时刻」前面。
+  // 钉住它不是为了纵容，是为了让这个悬崖有个准确坐标：时间段的闭开区间、
+  // getSlip 的后缀边界、分页游标三处都吃这条定宽，真到那天要一起改。
+  // **如果谁把 pad13 加宽了，这条会红 —— 那时把这里和 pad13 的注释、
+  // docs/cloud-ledger.md 的时间段一节一起更新，不要只把断言删掉。**
+  assert.strictEqual(apply.makeSortKey(10000000000000, '').length, 15,
+    'pad13 超过 13 位就原样返回，长度变 15')
+  assert.ok(apply.makeSortKey(10000000000000, '') < apply.makeSortKey(9999999999999, ''),
+    'pad13 的定宽悬崖：跨长度之后字典序反转（这是已知上限，不是回归）')
+
   // -------------------------------------------------------------------------
   // 1) 漂移守门员：3000 步随机记账，每步比对增量维护的聚合和集合的全量折叠
   // -------------------------------------------------------------------------
@@ -2618,7 +2640,32 @@ function totalStock(skus, productId) {
   assert.strictEqual(a9TodayA.profit, a9TodayB.profit)
   assert.strictEqual(a9TodayA.inAmount, a9TodayB.purchaseAmount,
     'T-A9：todayTotals 的 inAmount 就是窗口汇总的 purchaseAmount')
-
+  // todayTotals 还有三项（receivedAmount / unreceivedAmount / inCount）窗口汇总
+  // 没有，**那不是漏了**：设计稿的摘要条只有三列，没有调用点。但「实收 / 未收」
+  // 是流量、从 terms 一行就能推出来，把这条推导钉住 —— 以后谁要「本月未收」就
+  // 照这两行推，不要再写一遍 todayTotals 那套逐类型累加（同一个量的第二份实现）。
+  // 这条同时护着反向：改了 settledAmount / recordTerms 而让两套口径分岔会当场红。
+  const a9Terms = inv.foldTotalTerms(apply.filterWindow(pgFull, { from: a9Day }))
+  assert.strictEqual(
+    a9TodayA.receivedAmount,
+    inv.round2((a9Terms.salesSum - a9Terms.creditSalesSum
+      - a9Terms.returnsSum + a9Terms.creditReturnsSum) / 100),
+    'T-A9：本期销售单实收必须能由 terms 推出，两套口径不许分岔')
+  assert.strictEqual(
+    a9TodayA.unreceivedAmount,
+    inv.round2((a9Terms.creditSalesSum - a9Terms.creditReturnsSum) / 100),
+    'T-A9：本期销售单未收必须能由 terms 推出，两套口径不许分岔')
+  // 而「本期未收」和「欠款总额」是两个量。不用 notStrictEqual 去证明它们不相等
+  //（那依赖语料碰巧：pgFull 里期初和收款恰好各 40 笔、金额相同，两者真的相等），
+  // 而是直接钉住差额**是什么**—— 这条恒成立，而且把「多吃了期初和收款」
+  // 这个区别说得比「不相等」精确得多：
+  //     欠款（存量） - 本期未收（流量） == 期初 - 已收款
+  assert.strictEqual(
+    inv.round2(inv.totalsOf(a9Terms).receivable
+      - inv.round2((a9Terms.creditSalesSum - a9Terms.creditReturnsSum) / 100)),
+    inv.round2((a9Terms.openingsSum - a9Terms.paidSum) / 100),
+    'T-A9：欠款（存量）和本期未收（流量）的差额恒等于期初减已收款——'
+    + '两者不是同一个量，别因为都叫「未收 / 欠款」就混起来')
   // ⑥ 上界：翻过 SUMMARY_MAX_RECORDS 条就回 { totals: null, complete: false }，
   // **不抛错** —— 调用方要显示「—」，不是弹一个店主看不懂的错。
   // 用替身 store 直接撞上界：造 5000+ 条真语料只是为了测一个计数器，不值当。

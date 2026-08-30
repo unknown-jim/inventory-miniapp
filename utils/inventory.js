@@ -1475,6 +1475,25 @@ function totalsOf(terms) {
 // terms 里只有 saleCount，进货压根没有计数字段。要分型笔数得给 terms 加字段，
 // 而 terms 是增量累加器 applyTermsDelta 维护的，加字段要连存量账本一起回填 ——
 // 那是另一件事，不在这里顺手做。
+//
+// **和 todayTotals 的六项不是一套，别拿字段数对照。** todayTotals 是「今日」这
+// 一个固定窗口上的**单据口径**实现（销售额 / 实收 / 未收 / 毛利 / 进货额 / 进货
+// 笔数），这里是任意窗口上的 terms 折叠。三项重合的必须逐分相等（T-A9 ⑤ 钉着：
+// salesAmount / profit，以及 inAmount ↔ purchaseAmount）。
+//
+// **今日五数里的「实收 / 未收」没有搬过来，但不是搬不了 —— 它们是流量，有窗口
+// 形式，而且从 terms 一行就能推出来**（写在这里省得下一个人再推一遍）：
+//     本期销售单实收 = salesSum - creditSalesSum - returnsSum + creditReturnsSum
+//     本期销售单未收 = creditSalesSum - creditReturnsSum
+// 没加是因为设计稿的摘要条只有进货 / 销售 / 毛利三列，没有调用点；每多一个金额
+// 字段就多一处口径要对齐。真要加就照上面两行推，**不要再写一遍 todayTotals 那套
+// 逐类型累加**，那会变成同一个量的第二份实现。
+//
+// **注意「本期销售单未收」和「欠款总额」是两个量，不要因为都叫「未收 / 欠款」就
+// 混起来**：前者只吃本窗口的销售单和退货单，是流量；后者
+// （totalsOf.receivable = creditSalesSum + openingsSum - creditReturnsSum - paidSum）
+// 还吃期初和收款、并且是从开店累计到现在的**存量**，没有窗口形式。这正是上面
+// 「窗口汇总不回 receivable」那条的精确版本。
 function windowTotalsOf(terms) {
   const all = totalsOf(terms)
   return {
