@@ -646,8 +646,32 @@ async function memoryCall(action, shopId, payload) {
       type: type,
       customerId: customerId,
       cursor: (payload && payload.cursor) || '',
-      limit: payload && payload.limit
+      limit: payload && payload.limit,
+      from: payload && payload.from,
+      to: payload && payload.to
     })
+  }
+  // 时间段汇总（2b-4）。内存模式一次折完，没有上界可撞，所以 complete 恒真。
+  // 「必须给时间段」这条和云上同一份判据（apply.normalizeWindow 的 required），
+  // 别让它变成「开发者工具里好好的，一上线就报错」。
+  if (action === 'getRecordSummary') {
+    apply.normalizeWindow(payload || {}, true)
+    // 和云上同一条边界：摘要条不跟类型 chip 走，悄悄忽略掉这两个参数会让调用方
+    // 拿一个全类型的数当「本月进货」用
+    const sumType = String((payload && payload.type) || '')
+    if (sumType && sumType !== 'all') {
+      throw new Error('窗口汇总不支持按类型筛选')
+    }
+    if (String((payload && payload.customerId) || '')) {
+      throw new Error('窗口汇总不支持按客户筛选')
+    }
+    const inWindow = apply.filterWindow(
+      memoryRecordStore(memoryBookId()).all(), payload || {})
+    return {
+      totals: inventory.summarizeWindow(inWindow),
+      complete: true,
+      scanned: inWindow.length
+    }
   }
   if (action === 'getRecord') {
     const record = memoryRecordStore(memoryBookId()).byId(String((payload && payload.recordId) || ''))
@@ -900,12 +924,42 @@ async function listRecords(options) {
     type: options.type || '',
     customerId: options.customerId || '',
     cursor: options.cursor || '',
-    limit: options.limit
+    limit: options.limit,
+    from: options.from,
+    to: options.to
   })
   return {
     records: (res && res.records) || [],
     cursor: (res && res.cursor) || '',
     hasMore: !!(res && res.hasMore)
+  }
+}
+
+// 一个时间段 [from, to) 的汇总（2b-4）：流水页顶上的「本月」摘要条。
+// 回 { totals: {salesAmount, purchaseAmount, profit, count} | null, complete }。
+//
+// **complete 为假时 totals 是 null，页面必须显示「—」，不许显示 0**——和「今日
+// 三项算不出来」同一条规矩，0 是会被当真的错数。
+//
+// **「全部」那一档不调这个**：全店累计就是 getTotals()（服务端 accounts /
+// aggregate 的投影，零查询）。调这个只会扫一遍集合去重算同一个数。
+// **欠款也不在这里**：回包里没有 receivable，欠款是存量，读 getTotals()。
+async function getRecordSummary(options) {
+  await ensureReady()
+  options = options || {}
+  // type / customerId **原样转发**，不在这里挑掉：服务端会拒绝它们（摘要条不跟
+  // 类型 chip 走），挑掉就变成静默忽略 —— 调用方拿一个全类型的数当「本月进货」
+  // 用，而且一路没有任何提示。和 listRecords 的「type + customerId 同禁」一样，
+  // 规则只有服务端那一份，客户端只负责把话带到。
+  const res = await request('getRecordSummary', {
+    from: options.from,
+    to: options.to,
+    type: options.type,
+    customerId: options.customerId
+  })
+  return {
+    totals: (res && res.totals) || null,
+    complete: !!(res && res.complete)
   }
 }
 
@@ -1275,6 +1329,7 @@ module.exports = {
   getCustomer: getCustomer,
   getCategory: getCategory,
   listRecords: listRecords,
+  getRecordSummary: getRecordSummary,
   fetchRecord: fetchRecord,
   getSlip: getSlip,
   saveProduct: saveProduct,

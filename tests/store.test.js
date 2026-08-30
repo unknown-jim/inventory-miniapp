@@ -1067,6 +1067,68 @@ require.cache[require.resolve('../utils/cloud-config')].exports = {
       return store.listRecords({ type: 'out', customerId: 'x' })
     }, /不支持同时按类型和客户筛选/)
 
+    // b2) 时间段 [from, to)（2b-4）：内存模式和云上同一份定义（apply.filterWindow /
+    //     apply.pageRecords），非法入参也报同一条错。
+    const memTimes = paged.map(function (item) { return item.createdAt })
+    const memMin = Math.min.apply(null, memTimes)
+    const memMax = Math.max.apply(null, memTimes)
+    assert.ok(memMin < memMax, '种子账本的流水要跨多个时刻，否则窗口用例是空对空')
+    const memMid = Math.floor((memMin + memMax) / 2) + 1
+    const memWindows = [
+      { from: memMin }, { to: memMax + 1 }, { from: memMin, to: memMid },
+      { from: memMid, to: memMax + 1 }, { from: memMax + 1000, to: memMax + 2000 }
+    ]
+    for (let wi = 0; wi < memWindows.length; wi++) {
+      const win = memWindows[wi]
+      const wanted = apply.filterWindow(paged, win)
+        .map(function (item) { return item.id }).sort()
+      const gotIds = []
+      let winCursor = ''
+      for (let i = 0; i < 100; i++) {
+        const res = await store.listRecords(Object.assign({}, win, { cursor: winCursor, limit: 3 }))
+        res.records.forEach(function (item) { gotIds.push(item.id) })
+        if (!res.hasMore) break
+        winCursor = res.cursor || winCursor
+      }
+      assert.deepStrictEqual(gotIds.sort(), wanted,
+        '内存模式的时间段筛选口径不符 window=' + JSON.stringify(win))
+
+      // g) getRecordSummary：内存模式一次折完，complete 恒真，口径同 summarizeWindow
+      const sum = await store.getRecordSummary(win)
+      assert.strictEqual(sum.complete, true, '内存模式没有上界可撞')
+      assert.deepStrictEqual(sum.totals,
+        inventory.summarizeWindow(apply.filterWindow(paged, win)),
+        '内存模式的窗口汇总口径不符 window=' + JSON.stringify(win))
+      // 欠款是存量，窗口汇总里没有它
+      assert.deepStrictEqual(Object.keys(sum.totals).sort(),
+        ['count', 'profit', 'purchaseAmount', 'salesAmount'])
+    }
+    // 无界汇总要报错：全店累计读 getTotals()，不许扫一遍流水去重算
+    await rejects(function () {
+      return store.getRecordSummary({})
+    }, /汇总必须给时间段/)
+    // 非法时间段响亮失败，两条路径同一条错
+    await rejects(function () {
+      return store.listRecords({ from: 2000, to: 1000 })
+    }, /时间段不合法/)
+    await rejects(function () {
+      return store.getRecordSummary({ from: -1 })
+    }, /时间段不合法/)
+    // 摘要条不跟类型 chip 走：内存模式也拒绝，别让它变成「开发者工具里好好的」
+    await rejects(function () {
+      return store.getRecordSummary({ from: 1, to: 9999999999999, type: 'in' })
+    }, /窗口汇总不支持按类型筛选/)
+    await rejects(function () {
+      return store.getRecordSummary({ from: 1, to: 9999999999999, customerId: 'x' })
+    }, /窗口汇总不支持按客户筛选/)
+    // 盖住全部的窗口：流量三项必须等于服务端 totals 投影（内存模式的 totals 同样
+    // 是增量累加器维护的），这一条把「现折」和「累加器」两条路钉在一起
+    const memAll = await store.getRecordSummary({ from: 1, to: 9999999999999 })
+    assert.strictEqual(memAll.totals.salesAmount, store.getTotals().salesAmount)
+    assert.strictEqual(memAll.totals.purchaseAmount, store.getTotals().purchaseAmount)
+    assert.strictEqual(memAll.totals.profit, store.getTotals().profit)
+    assert.strictEqual(memAll.totals.count, store.getTotals().count)
+
     // c) getRecord：取得到、取不到就报错
     const target = paged[paged.length - 1]
     assert.deepStrictEqual(await store.fetchRecord(target.id), target)

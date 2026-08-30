@@ -1460,6 +1460,50 @@ function totalsOf(terms) {
   }
 }
 
+// terms -> **一个时间段**的对外形状（元）。就是 totalsOf 去掉 receivable 一项，
+// 由它派生而不是另写一遍，两者不可能算出不同的销售额 / 进货额 / 毛利。
+//
+// **为什么砍掉 receivable**：欠款是**存量**，不是流量。把 totalsOf 的公式套在
+// 一段流水上，算出来的是「这段时间里欠款净增了多少」——一个和「欠款」长得一模
+// 一样、含义完全不同的数。同屏还挂着一个真的欠款总额（accounts / aggregate 的
+// 投影，见 docs/cloud-ledger.md「聚合值」），两个数并排放，认错是迟早的事。
+// 设计稿也是这么定的：流水页的本月摘要条只有进货 / 销售 / 毛利三列，欠款是存量、
+// 不在这一屏重复。真要「本期净增欠款」，那就得叫 receivableDelta，另开一个字段
+// 名，不许复用 receivable 这个名字。
+//
+// **笔数只有 count（这一段里的流水条数）**，没有「销售 N 笔 / 进货 N 笔」：
+// terms 里只有 saleCount，进货压根没有计数字段。要分型笔数得给 terms 加字段，
+// 而 terms 是增量累加器 applyTermsDelta 维护的，加字段要连存量账本一起回填 ——
+// 那是另一件事，不在这里顺手做。
+//
+// **和 todayTotals 的六项不是一套，别拿字段数对照。** todayTotals 是「今日」这
+// 一个固定窗口上的**单据口径**实现（销售额 / 实收 / 未收 / 毛利 / 进货额 / 进货
+// 笔数），这里是任意窗口上的 terms 折叠。三项重合的必须逐分相等（T-A9 ⑤ 钉着：
+// salesAmount / profit，以及 inAmount ↔ purchaseAmount）。
+//
+// **今日五数里的「实收 / 未收」没有搬过来，但不是搬不了 —— 它们是流量，有窗口
+// 形式，而且从 terms 一行就能推出来**（写在这里省得下一个人再推一遍）：
+//     本期销售单实收 = salesSum - creditSalesSum - returnsSum + creditReturnsSum
+//     本期销售单未收 = creditSalesSum - creditReturnsSum
+// 没加是因为设计稿的摘要条只有进货 / 销售 / 毛利三列，没有调用点；每多一个金额
+// 字段就多一处口径要对齐。真要加就照上面两行推，**不要再写一遍 todayTotals 那套
+// 逐类型累加**，那会变成同一个量的第二份实现。
+//
+// **注意「本期销售单未收」和「欠款总额」是两个量，不要因为都叫「未收 / 欠款」就
+// 混起来**：前者只吃本窗口的销售单和退货单，是流量；后者
+// （totalsOf.receivable = creditSalesSum + openingsSum - creditReturnsSum - paidSum）
+// 还吃期初和收款、并且是从开店累计到现在的**存量**，没有窗口形式。这正是上面
+// 「窗口汇总不回 receivable」那条的精确版本。
+function windowTotalsOf(terms) {
+  const all = totalsOf(terms)
+  return {
+    salesAmount: all.salesAmount,
+    purchaseAmount: all.purchaseAmount,
+    profit: all.profit,
+    count: all.count
+  }
+}
+
 // -> { [customerId]: terms }，跳过 customerId 为空或非客户账记录的流水
 function foldAccountTerms(records) {
   const stats = Object.create(null)
@@ -3056,6 +3100,14 @@ function summarizeRecords(records) {
   return totalsOf(foldTotalTerms(records))
 }
 
+// 一段流水折成时间段汇总。折叠用的是**同一个** foldTotalTerms，所以窗口汇总
+// 和全店汇总的口径由构造相同，不存在「两处各写一套」。调用方（云函数的
+// getRecordSummary）逐页折叠再相加，和把整段一次折叠逐分相等 —— addTerms 是
+// 整数分的逐字段加法，可结合。
+function summarizeWindow(records) {
+  return windowTotalsOf(foldTotalTerms(records))
+}
+
 function computeTotals(records) {
   return summarizeRecords(records)
 }
@@ -3281,6 +3333,7 @@ module.exports = {
   addTerms: addTerms,
   accountOf: accountOf,
   totalsOf: totalsOf,
+  windowTotalsOf: windowTotalsOf,
   foldAccountTerms: foldAccountTerms,
   foldTotalTerms: foldTotalTerms,
   applyTermsDelta: applyTermsDelta,
@@ -3314,6 +3367,7 @@ module.exports = {
   filterProducts: filterProducts,
   filterRecords: filterRecords,
   summarizeRecords: summarizeRecords,
+  summarizeWindow: summarizeWindow,
   computeTotals: computeTotals,
   buildSeed: buildSeed
 }
