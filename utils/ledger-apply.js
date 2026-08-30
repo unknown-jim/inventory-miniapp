@@ -73,7 +73,7 @@ function cloneAccounts(accounts) {
 }
 
 function emptyCustomerAccount() {
-  return { count: 0, amount: 0, creditAmount: 0, paidAmount: 0, receivable: 0 }
+  return { count: 0, amount: 0, creditAmount: 0, paidAmount: 0, receivable: 0, prepay: 0 }
 }
 
 // ---------------------------------------------------------------------------
@@ -149,6 +149,85 @@ function fromRecordDoc(doc) {
 const RECORD_PAGE_DEFAULT = 20
 const RECORD_PAGE_LIMIT = 100
 
+// ---------------------------------------------------------------------------
+// 时间段 `[from, to)`（2b-4）。**闭开区间，毫秒时间戳，由客户端给**。
+//
+// 为什么是区间而不是「自然月」枚举：sortKey = pad13(createdAt) + '_' + id，
+// 所以「一段时间」在集合里就是 sortKey 的一段字符串区间 —— 它落在**每一条现有
+// 索引的最后一维**上（#1 bookId+sortKey、#2 +customerId、#3 +type），加时间段
+// 一条新索引都不用建。存一个 `month: '2026-08'` 字段再按它查是另一回事：新字段、
+// 新索引、还要给存量流水回填，而且只回答得了「自然月」这一种问题。
+// 「本月」由客户端把自然月边界算成两个毫秒数传进来（和 `dayStart` 同一条理由：
+// 服务端不知道店在哪个时区，日 / 月的边界只有客户端定得了）。
+//
+// **cursor 也是 sortKey 的上界**，所以时间段不是一种新查询形态，只是给已有的
+// `sortKey < cursor` 补一个下界。集合那一侧 `sortKey < cursor ∧ sortKey < to`
+// 合并成 `sortKey < min(cursor, to)`（见 upperBoundKey），一次查询最多两个界。
+//
+// 边界取 `makeSortKey(t, '')` = `pad13(t) + '_'`：任何真实记录的 id 非空，
+// 所以同毫秒的记录 sortKey 严格大于它 —— `>= fromKey` 恰好含 `createdAt >= from`、
+// `< toKey` 恰好含 `createdAt < to`，两边严格互补，没有重叠也没有遗漏。
+// （`suffixOfCustomer` 用的是同一个构造。）
+//
+// **非法入参一律抛错，不静默忽略**——这条和 `clampPageLimit`「非法给缺省」
+// 故意相反：limit 错了只影响取多少，时间段错了会把一次窗口查询变成全量查询，
+// 而调用方会把全量的数字挂在「本月」标签下面。错数比报错坏得多。
+// ---------------------------------------------------------------------------
+
+function windowBoundKey(value, label) {
+  if (value == null || value === '') return ''
+  if (typeof value !== 'number' && typeof value !== 'string') {
+    throw new Error('时间段不合法：' + label + ' 必须是毫秒时间戳')
+  }
+  const n = Number(value)
+  if (!isFinite(n) || n < 0) {
+    throw new Error('时间段不合法：' + label + ' 必须是非负毫秒时间戳')
+  }
+  return makeSortKey(n, '')
+}
+
+// options = { from?, to? }。缺省 / null / '' = 那一侧不设界。
+// required 为真时要求至少给一个界 —— 给 getRecordSummary 用：无界汇总等于
+// 全店累计，而那个数在 `getLedger` 的 totals 里是零查询就能拿到的权威值，
+// 扫一遍集合去算它是纯浪费（而且必然撞上界回「算不出来」）。
+function normalizeWindow(options, required) {
+  options = options || {}
+  const fromKey = windowBoundKey(options.from, 'from')
+  const toKey = windowBoundKey(options.to, 'to')
+  if (fromKey && toKey && fromKey >= toKey) {
+    throw new Error('时间段不合法：from 必须早于 to')
+  }
+  if (required && !fromKey && !toKey) {
+    throw new Error('汇总必须给时间段，全店累计读 getLedger 的 totals')
+  }
+  return { fromKey: fromKey, toKey: toKey }
+}
+
+// cursor 和 to 都是 sortKey 的上界、都用 `<`，所以两者合并就是取小的那个。
+// 集合查询靠它把「时间段 + 游标」压成一个 `_.lt`，纯函数一侧不需要（那边
+// 窗口和游标各筛一遍，结果相同）。
+function upperBoundKey(cursor, toKey) {
+  const c = String(cursor || '')
+  const t = String(toKey || '')
+  if (!c) return t
+  if (!t) return c
+  return c < t ? c : t
+}
+
+// 时间段谓词的**唯一定义**。pageRecords 和「未迁移账本 / 内存模式的窗口汇总」
+// 共用它；集合那一侧由 ledger-records.js 的 pageDocs 用 where 给出等价形式，
+// 等价性由 tests/ledger-records.test.js 的 T-A2 逐字段钉住。
+function filterWindow(records, options) {
+  const win = normalizeWindow(options)
+  if (!win.fromKey && !win.toKey) return (records || []).slice()
+  return (records || []).filter(function (record) {
+    const key = makeSortKey(record && record.createdAt, record && record.id)
+    if (win.fromKey && key < win.fromKey) return false
+    if (win.toKey && !(key < win.toKey)) return false
+    return true
+  })
+}
+
 // 不传 / 非法（NaN、<=0）一律给缺省值 20；超过上限钳到 100。
 function clampPageLimit(limit) {
   const n = Math.floor(inventory.toNumber(limit))
@@ -162,6 +241,11 @@ function clampPageLimit(limit) {
 // 本页为空时 cursor 为 ''。cursor 传一个不存在的 sortKey 也按 < 比较，和集合
 // 查询的 _.lt 语义一致。customerId 传 ''（散客）不过滤 —— 散客单没有独立的
 // 查询口径，不能靠这个参数单独查出来，和 recordStore.page 一致。
+//
+// options 另接 `{ from?, to? }` 时间段（`[from, to)`，见上面 normalizeWindow）。
+// 时间段**不改 hasMore 的口径**：越界的记录在这里就被筛掉了，一页仍然是
+// 「取满 limit 就可能还有」，和不带时间段时逐字相同。集合那一侧靠 where 的
+// 上下界做到同一件事，所以三处实现仍然只有这一份定义。
 function pageRecords(records, options) {
   options = options || {}
   const limit = clampPageLimit(options.limit)
@@ -185,11 +269,15 @@ function pageRecords(records, options) {
     if (ka === kb) return 0
     return ka > kb ? -1 : 1
   })
+  // 时间段和游标各筛一遍。集合那一侧把两个上界合并成 min(cursor, to) 发一次
+  // 查询，这里不合并——两种写法结果相同（`< cursor ∧ < to` ⟺ `< min`），
+  // 分开写才看得出「窗口」和「翻页」是两件事。
+  const windowed = filterWindow(sorted, options)
   const afterCursor = cursorKey
-    ? sorted.filter(function (record) {
+    ? windowed.filter(function (record) {
       return makeSortKey(record && record.createdAt, record && record.id) < cursorKey
     })
-    : sorted
+    : windowed
   const page = afterCursor.slice(0, limit)
   return {
     records: page,
@@ -839,6 +927,7 @@ function applyMutation(ledger, action, payload, now, nextId, loaded) {
       [],
       Object.assign({}, extra, {
         paidAmount: payload.paidAmount,
+        prepayUsed: payload.prepayUsed,
         payType: payload.payType,
         remark: payload.remark,
         operatorOpenid: payload.operatorOpenid,
@@ -855,7 +944,8 @@ function applyMutation(ledger, action, payload, now, nextId, loaded) {
       now,
       nextId(),
       nextId,
-      next.skus
+      next.skus,
+      { accounts: next.accounts }
     )
     next.products = applied.products
     next.skus = applied.skus
@@ -1064,6 +1154,9 @@ module.exports = {
   RECORD_PAGE_LIMIT: RECORD_PAGE_LIMIT,
   clampPageLimit: clampPageLimit,
   pageRecords: pageRecords,
+  normalizeWindow: normalizeWindow,
+  upperBoundKey: upperBoundKey,
+  filterWindow: filterWindow,
   emptyLedger: emptyLedger,
   listsOf: listsOf,
   withAggregates: withAggregates,
