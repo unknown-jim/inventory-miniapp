@@ -18,6 +18,7 @@ Page({
     profit: '0.00',
     receivable: '0.00',
     count: 0,
+    showRecordSheet: false,
     // 聚合漂移哨兵：汇总四项都来自服务端 totals 投影，漂了这四项都可疑。
     aggregatesStale: false
   },
@@ -113,6 +114,14 @@ Page({
   setType(e) {
     this.setData({ type: e.currentTarget.dataset.type })
     return this.reload()
+  },
+
+  openRecordSheet() {
+    this.setData({ showRecordSheet: true })
+  },
+
+  closeRecordSheet() {
+    this.setData({ showRecordSheet: false })
   },
 
   onRecordTap(e) {

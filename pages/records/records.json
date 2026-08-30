@@ -1,4 +1,6 @@
 {
   "navigationBarTitleText": "进销流水",
-  "usingComponents": {}
+  "usingComponents": {
+    "record-sheet": "/components/record-sheet/index"
+  }
 }

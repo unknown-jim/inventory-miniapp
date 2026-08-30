@@ -1,0 +1,264 @@
+/* 「记一笔」动作面板。尺寸按设计稿 375 宽屏换算（1px = 2rpx），
+   字号 / 热区 / 颜色一律走 app.wxss 的变量，见 docs/ui-scale.md。
+   行图标是内联 SVG data URI：仓库没有图标体系，assets/ 只有 tabBar 的 PNG。
+   **SVG 里的颜色只能写字面量** —— data URI 引用不到 CSS 变量，这是本组件
+   唯一的硬编码颜色，取值分别等于 --color-fill-action 和 --color-text-faint。 */
+
+.rs-mask {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: flex-end;
+  background: var(--color-bg-overlay);
+}
+
+.rs-sheet {
+  position: relative;
+  z-index: 1001;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  box-sizing: border-box;
+  width: 100%;
+  max-height: 80vh;
+  padding: var(--space-md) var(--space-xl) 56rpx;
+  background: var(--color-bg-card);
+  border-radius: 24rpx 24rpx 0 0;
+  box-shadow: 0 8rpx 24rpx rgba(15, 20, 26, 0.06);
+}
+
+/* grabber 是下滑关闭的手势目标，不是点击目标（44 热区地板管的是可点元素，
+   本面板的点击关闭通道是底部「取消」和遮罩，两个都吃满 44）。稿上这根条
+   只有 4px 高，纯按稿做划不中，所以外框上下各留 16rpx 透明 padding 撑成
+   40rpx，并把 sheet 的上内边距从 32rpx 收到 16rpx 抵掉，条的落点与稿差 2px 内。 */
+.rs-grabber-wrap {
+  display: flex;
+  justify-content: center;
+  padding: var(--space-md) 0;
+}
+
+.rs-grabber {
+  width: 72rpx;
+  height: 8rpx;
+  background: var(--color-neutral-200);
+  border-radius: 999rpx;
+}
+
+.rs-title {
+  font-size: var(--fs-title);
+  font-weight: 600;
+  color: var(--color-text-primary);
+  text-align: center;
+}
+
+/* ---- 一级动作行 ---- */
+
+.rs-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-lg);
+  margin-top: var(--space-xs);
+  min-height: var(--tap-min);
+  padding: var(--space-lg);
+  box-sizing: border-box;
+  border-radius: var(--space-md);
+}
+
+.rs-row-press,
+.rs-option-press {
+  background: var(--color-neutral-100);
+}
+
+.rs-icon {
+  flex-shrink: 0;
+  width: 40rpx;
+  height: 40rpx;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: contain;
+}
+
+.rs-col {
+  flex: 1;
+  min-width: 0;
+}
+
+.rs-label {
+  font-size: var(--fs-body);
+  font-weight: 500;
+  line-height: 1.4;
+  color: var(--color-text-primary);
+}
+
+.rs-desc {
+  margin-top: 4rpx;
+  font-size: var(--fs-caption);
+  line-height: 1.4;
+  color: var(--color-text-muted);
+}
+
+.rs-chevron {
+  flex-shrink: 0;
+  width: 32rpx;
+  height: 32rpx;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: contain;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%238B8B8B' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 3.5 10.5 8 6 12.5'/%3E%3C/svg%3E");
+}
+
+/* ---- 二级：库存修正的描边卡 ---- */
+
+.rs-option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-lg);
+  min-height: var(--tap-min);
+  padding: var(--space-lg);
+  box-sizing: border-box;
+  border: 2rpx solid var(--color-border-default);
+  border-radius: var(--space-md);
+}
+
+.rs-note {
+  font-size: var(--fs-caption);
+  line-height: 1.5;
+  color: var(--color-text-muted);
+}
+
+/* ---- picker 共用 ---- */
+
+.rs-search {
+  display: flex;
+  align-items: center;
+  height: var(--tap-min);
+  padding: 0 var(--space-lg);
+  box-sizing: border-box;
+  background-color: var(--color-neutral-100);
+  border-radius: var(--space-md);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23A3A3A3' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='7.3' cy='7.3' r='4.7'/%3E%3Cpath d='M11.1 11.1 14 14'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: var(--space-lg) center;
+  background-size: 32rpx 32rpx;
+}
+
+.rs-search-input {
+  flex: 1;
+  min-width: 0;
+  height: var(--tap-min);
+  margin-left: 48rpx;
+  font-size: var(--fs-body);
+  color: var(--color-text-primary);
+}
+
+.rs-sum {
+  font-size: var(--fs-label);
+  color: var(--color-text-primary);
+}
+
+.rs-hint {
+  font-size: var(--fs-caption);
+  color: var(--color-text-muted);
+}
+
+.rs-empty {
+  padding: var(--space-xl) 0;
+  font-size: var(--fs-label);
+  color: var(--color-text-muted);
+  text-align: center;
+}
+
+.rs-list {
+  max-height: 640rpx;
+}
+
+.rs-pick {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  min-height: var(--tap-min);
+  padding: var(--space-lg);
+  box-sizing: border-box;
+  border-radius: var(--space-md);
+}
+
+.rs-pick-label {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-body);
+  color: var(--color-text-primary);
+}
+
+.rs-debt {
+  flex-shrink: 0;
+  font-size: var(--fs-body);
+  font-weight: 500;
+  color: var(--color-text-debt);
+}
+
+.rs-stock {
+  flex-shrink: 0;
+  font-size: var(--fs-caption);
+  color: var(--color-text-muted);
+}
+
+/* ---- 选原销售单的行 ---- */
+
+.rs-order {
+  display: flex;
+  align-items: flex-start;
+  gap: 20rpx;
+  padding: var(--space-lg);
+  box-sizing: border-box;
+  border-bottom: 2rpx solid var(--color-border-default);
+}
+
+.rs-order:last-child {
+  border-bottom: none;
+}
+
+.rs-order-tag {
+  flex-shrink: 0;
+}
+
+.rs-order-amount {
+  flex-shrink: 0;
+  font-size: var(--fs-amount);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+/* ---- 取消：三条关闭通道里唯一的点击目标，热区吃满 44 ---- */
+
+.rs-cancel {
+  height: var(--tap-min);
+  line-height: var(--tap-min);
+  font-size: var(--fs-body);
+  color: var(--color-neutral-600);
+  text-align: center;
+}
+
+.rs-icon-sale {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='%23171717' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='7.5' cy='16.7' r='1.25'/%3E%3Ccircle cx='14.2' cy='16.7' r='1.25'/%3E%3Cpath d='M2.5 2.5h2.5l2 10.4h9.2'/%3E%3Cpath d='M6.4 10.4h10.2l0.9-5.4H5.4'/%3E%3C/svg%3E");
+}
+
+.rs-icon-purchase {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='%23171717' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10 2.5 3.3 6v8L10 17.5 16.7 14V6z'/%3E%3Cpath d='M3.3 6 10 9.6 16.7 6'/%3E%3Cpath d='M10 9.6v7.9'/%3E%3C/svg%3E");
+}
+
+.rs-icon-pay {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='%23171717' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='2.5' y='5.8' width='15' height='10' rx='1.5'/%3E%3Ccircle cx='12.9' cy='10.8' r='1.7'/%3E%3C/svg%3E");
+}
+
+.rs-icon-return {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='%23171717' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M16.7 12.5v-1.7a3.3 3.3 0 0 0-3.3-3.3H4.2'/%3E%3Cpath d='M7.5 5 4.2 7.5 7.5 10'/%3E%3C/svg%3E");
+}
+
+.rs-icon-adjust {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='%23171717' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2.5 5.4h15M2.5 10h15M2.5 14.6h15'/%3E%3Ccircle cx='7' cy='5.4' r='1.6'/%3E%3Ccircle cx='13' cy='10' r='1.6'/%3E%3Ccircle cx='9' cy='14.6' r='1.6'/%3E%3C/svg%3E");
+}
+

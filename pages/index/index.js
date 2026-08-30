@@ -22,6 +22,7 @@ Page({
     // 真了就说明页面上的金额可能不准，提示条要说清是什么、该找谁。
     aggregatesStale: false,
     pageLoading: true,
+    showRecordSheet: false,
     blocked: false,
     blockedMessage: '',
     shopName: ''
@@ -103,6 +104,14 @@ Page({
       aggregatesStale: store.getAggregatesStale(),
       isEmpty: dash.productCount === 0
     })
+  },
+
+  openRecordSheet() {
+    this.setData({ showRecordSheet: true })
+  },
+
+  closeRecordSheet() {
+    this.setData({ showRecordSheet: false })
   },
 
   goRecords() {

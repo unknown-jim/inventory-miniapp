@@ -50,3 +50,32 @@
 .load-more {
   margin-top: var(--space-md);
 }
+
+/* FAB 压在列表右下角，所以页面底部要多留出 FAB 高度 + 间距，
+   否则最后一行流水和「加载更多」会被它盖住。 */
+.page {
+  padding-bottom: 176rpx;
+}
+
+/* 稿 fab/记一笔 4:985：56×56 = 112rpx，正好是 --tap-lg */
+.record-fab {
+  position: fixed;
+  right: var(--space-xl);
+  bottom: calc(env(safe-area-inset-bottom) + var(--space-xl));
+  z-index: 900;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--tap-lg);
+  height: var(--tap-lg);
+  background: var(--color-fill-action);
+  border-radius: 999rpx;
+  box-shadow: 0 12rpx 32rpx rgba(15, 20, 26, 0.16);
+  font-size: var(--fs-display);
+  line-height: 1;
+  color: var(--color-text-on-action);
+}
+
+.record-fab-press {
+  background: var(--color-fill-action-pressed);
+}
