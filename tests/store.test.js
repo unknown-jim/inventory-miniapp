@@ -1103,9 +1103,15 @@ require.cache[require.resolve('../utils/cloud-config')].exports = {
     const dash = store.dashboard()
     assert.strictEqual(dash.todayAvailable, true, '内存模式今天算得出来')
     assert.deepStrictEqual(
-      { salesAmount: dash.todaySalesAmount, profit: dash.todayProfit, inAmount: dash.todayInAmount },
+      {
+        salesAmount: dash.todaySalesAmount,
+        receivedAmount: dash.todayReceivedAmount,
+        unreceivedAmount: dash.todayUnreceivedAmount,
+        profit: dash.todayProfit,
+        inAmount: dash.todayInAmount
+      },
       inventory.todayTotals(paged, inventory.startOfDay(Date.now())),
-      '内存模式的今日三项必须等于 todayTotals 对全量的折叠'
+      '内存模式的今日五数必须等于 todayTotals 对全量的折叠'
     )
     assert.strictEqual(dash.totalReceivable, store.getTotals().receivable)
 

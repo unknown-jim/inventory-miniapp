@@ -2375,3 +2375,177 @@ assert.ok(fuzzAllowed >= FUZZ_MIN_ALLOWED, '拆分 fuzzer 放行次数塌到 ' +
   + '（下限 ' + FUZZ_MIN_ALLOWED + '）：守卫可能被收紧成一刀切，不变量恒成立但功能没了')
 console.log('拆分不变量 fuzzer：500 局 × 14 步，放行 ' + fuzzAllowed
   + ' 次，全部与 main #47 口径逐分一致')
+
+// ---------------------------------------------------------------------------
+// G3 · 看板今日五数的「实收 / 未收」
+//
+// 口径写在 docs/accounting-vs-policy.md「看板今日五数」，一句话：
+//     今日实收 = Σ今日销售单实收 − Σ今日退货单退现金
+//     今日未收 = Σ今日销售单欠款 − Σ今日退货单冲欠
+//     恒等式    实收 + 未收 ≡ 应收（= salesAmount），逐分成立
+// 收款（pay）与期初欠款（opening）不进这三个数。
+// ---------------------------------------------------------------------------
+
+const T3_DAY = 1756051200000 // 演示账 2026-08-25 的零点，只当刻度用
+function t3Sale(id, amount, paid, profit, at) {
+  return {
+    id: id, type: 'out', amount: amount, paidAmount: paid, profit: profit,
+    customerId: 'c-' + id, createdAt: at,
+    lines: [{ lineId: id + '-l1', productId: 'p', qty: 1, unitPrice: amount, amount: amount }]
+  }
+}
+function t3In(id, amount, at) {
+  return { id: id, type: 'in', amount: amount, profit: 0, createdAt: at, lines: [] }
+}
+// 退货单头：amount = 退货货值，paidAmount = 退现金（冲欠 = amount − paidAmount）
+function t3Return(id, amount, cash, profit, at) {
+  return {
+    id: id, type: 'return', amount: amount, paidAmount: cash, profit: profit,
+    customerId: 'c-r', createdAt: at, lines: [{ lineId: id + '-l1', saleOrderId: 'x' }]
+  }
+}
+
+// (a) 演示账对照表复算 —— 本条是 G3 的验收点。
+// 表里逐笔声明的只有王姐 014（应收 352 / 实收 268 / 欠 84）与李老板枕芯（128 现结），
+// 其余是背景账；背景账那一块自己也必须闭合：
+//   应收 4120 − 352 − 128 = 3640，实收 3860 − 268 − 128 = 3464，未收 260 − 84 = 176，
+//   而 3640 = 3464 + 176 ✓ —— 三个数是同一套账，不是三处各编一个。
+const t3Demo = [
+  t3Sale('S014', 352, 268, 100, T3_DAY + 52320000),   // 王姐 14:32
+  t3Sale('S013', 128, 128, 33, T3_DAY + 39900000),    // 李老板枕芯 11:05 现结
+  t3Sale('S011', 2000, 1900, 600, T3_DAY + 32400000), // 背景账
+  t3Sale('S012', 1640, 1564, 447, T3_DAY + 36000000), // 背景账
+  t3In('P001', 2375, T3_DAY + 34200000),              // 09:30 样张进货单
+  t3In('P002', 300, T3_DAY + 28800000),
+  t3In('P003', 200, T3_DAY + 30600000),
+  // 昨天 16:40 王姐收款：跨日，被 dayStart 挡在外面
+  {
+    id: 'PAY-y', type: 'pay', amount: 300, profit: 0, customerId: 'c-S014',
+    createdAt: T3_DAY - 27000000, lines: []
+  }
+]
+const t3 = inv.todayTotals(t3Demo, T3_DAY)
+assert.strictEqual(t3.salesAmount, 4120, '演示账今日应收')
+assert.strictEqual(t3.receivedAmount, 3860, '演示账 hero 今日实收')
+assert.strictEqual(t3.unreceivedAmount, 260, '演示账 hero 今日未收')
+assert.strictEqual(t3.profit, 1180, '演示账今日毛利')
+assert.strictEqual(t3.inAmount, 2875, '演示账今日进货')
+assert.strictEqual(inv.round2(t3.receivedAmount + t3.unreceivedAmount), t3.salesAmount,
+  '恒等式：实收 + 未收 = 应收')
+
+// (b) 退货照口径是要进这三个数的。演示账把 15:10 退货①（96 = 冲欠 84 + 退现金 12）
+// 挡在五数之外，那是「今日五数是背景账、不参与逐笔勾稽」这条裁定放行的**演示账特例**，
+// 不是公式的反例。公式算出来是下面这组，恒等式照样成立。
+const t3WithReturn = t3Demo.concat([
+  t3Return('R001', 96, 12, -34, T3_DAY + 54600000)
+])
+const t3r = inv.todayTotals(t3WithReturn, T3_DAY)
+assert.strictEqual(t3r.salesAmount, 4024, '退货冲减应收：4120 − 96')
+assert.strictEqual(t3r.receivedAmount, 3848, '退现金 12 从实收里出去：3860 − 12')
+assert.strictEqual(t3r.unreceivedAmount, 176, '冲欠 84 把未收压下去：260 − 84')
+assert.strictEqual(inv.round2(t3r.receivedAmount + t3r.unreceivedAmount), t3r.salesAmount)
+
+// (c) 收款与期初欠款不进这三个数：今天收了昨天的欠款，hero 三个数一动不动。
+// 那笔钱走看板的欠款横幅（totals.receivable），不是丢了。
+const t3WithPay = t3Demo.concat([
+  {
+    id: 'PAY-t', type: 'pay', amount: 3000, profit: 0, customerId: 'c-old',
+    createdAt: T3_DAY + 57600000, lines: []
+  },
+  {
+    id: 'OPEN-t', type: 'opening', amount: 500, profit: 0, customerId: 'c-old2',
+    createdAt: T3_DAY + 61200000, lines: [{ lineId: 'o1', opening: true }]
+  }
+])
+const t3p = inv.todayTotals(t3WithPay, T3_DAY)
+assert.strictEqual(t3p.receivedAmount, 3860, '今日收款 3000 不抬今日实收')
+assert.strictEqual(t3p.unreceivedAmount, 260, '今日期初欠款 500 不抬今日未收')
+assert.strictEqual(t3p.salesAmount, 4120)
+
+// (d) 走真实写路径：口径不是靠手搭的记录形状撑起来的。
+// 卖 200 收 100 再退 50 —— 退的先冲这张单没收到的 100，冲得掉，不退现金。
+const t3Prod = inv.createProduct({
+  name: 'G3 货', costPrice: 1, salePrice: 100, stock: 100, alertQty: 1
+}, T3_DAY, 'p-g3')
+let t3Seq = 0
+const t3SaleA = inv.applySaleOrder([t3Prod], [], {
+  items: [{ productId: 'p-g3', qty: 2, unitPrice: 100 }],
+  customerId: 'c-g3', customerName: 'G3 客户', paidAmount: 100
+}, T3_DAY + 3600000, 'r-g3-a', function () { t3Seq += 1; return 'r-g3-a-l' + t3Seq }, [])
+const t3RetA = inv.applyReturnOrder(t3SaleA.products, t3SaleA.records, {
+  items: [{ saleOrderId: 'r-g3-a', saleLineId: 'r-g3-a-l1', qty: 0.5 }]
+}, T3_DAY + 7200000, function () { return 'r-g3-a-ret' }, t3SaleA.skus, null)
+const t3a = inv.todayTotals(t3RetA.records, T3_DAY)
+assert.strictEqual(t3a.salesAmount, 150, '应收 200 − 退货 50')
+assert.strictEqual(t3a.receivedAmount, 100, '退货冲得掉欠款，没退现金，实收不动')
+assert.strictEqual(t3a.unreceivedAmount, 50, '欠款 100 被冲掉 50')
+assert.strictEqual(inv.round2(t3a.receivedAmount + t3a.unreceivedAmount), t3a.salesAmount)
+// 当天开单当天退货，今日未收就等于这个客户的欠款净增 —— 两条路必须同解
+assert.strictEqual(inv.summarizeCustomerAccount(t3RetA.records, 'c-g3').receivable, 50,
+  '今日未收与 max(0, 应收 − 实收 − 已退) 在同日场景下同解')
+
+// 卖 100 收 40 再退 80：欠款只有 60，冲不掉的 20 才算退现金（AGENTS.md 那条规矩）。
+let t3Seq2 = 0
+const t3SaleB = inv.applySaleOrder([t3Prod], [], {
+  items: [{ productId: 'p-g3', qty: 1, unitPrice: 100 }],
+  customerId: 'c-g3b', customerName: 'G3 客户乙', paidAmount: 40
+}, T3_DAY + 3600000, 'r-g3-b', function () { t3Seq2 += 1; return 'r-g3-b-l' + t3Seq2 }, [])
+const t3RetB = inv.applyReturnOrder(t3SaleB.products, t3SaleB.records, {
+  items: [{ saleOrderId: 'r-g3-b', saleLineId: 'r-g3-b-l1', qty: 0.8 }]
+}, T3_DAY + 7200000, function () { return 'r-g3-b-ret' }, t3SaleB.skus, null)
+const t3b = inv.todayTotals(t3RetB.records, T3_DAY)
+assert.strictEqual(t3b.salesAmount, 20, '应收 100 − 退货 80')
+assert.strictEqual(t3b.receivedAmount, 20, '实收 40 − 退现金 20')
+assert.strictEqual(t3b.unreceivedAmount, 0, '欠款 60 被冲光')
+assert.strictEqual(inv.round2(t3b.receivedAmount + t3b.unreceivedAmount), t3b.salesAmount)
+assert.strictEqual(inv.summarizeCustomerAccount(t3RetB.records, 'c-g3b').receivable, 0)
+
+// (e) 昨天赊的货今天退掉：今日一笔销售都没有，三个数一起变负。
+// 这不是新的怪相 —— 今日销售额（salesAmount）本来就会在这种日子变负，
+// 恒等式仍然成立，看板照实显示即可。
+const t3CrossDay = [
+  t3Sale('S-yst', 100, 0, 30, T3_DAY - 3600000),
+  t3Return('R-tdy', 100, 0, -30, T3_DAY + 3600000)
+]
+const t3c = inv.todayTotals(t3CrossDay, T3_DAY)
+assert.strictEqual(t3c.salesAmount, -100)
+assert.strictEqual(t3c.receivedAmount, 0, '当初一分没收，今天也退不出现金')
+assert.strictEqual(t3c.unreceivedAmount, -100, '冲掉的是昨天的欠款')
+assert.strictEqual(inv.round2(t3c.receivedAmount + t3c.unreceivedAmount), t3c.salesAmount)
+
+// (f) getDashboard 把两个数原样投影出去；算不出来时给 null 而不是 0。
+const t3Dash = inv.getDashboard([], [], T3_DAY, undefined, null, t3)
+assert.strictEqual(t3Dash.todayReceivedAmount, 3860)
+assert.strictEqual(t3Dash.todayUnreceivedAmount, 260)
+assert.strictEqual(t3Dash.todaySalesAmount, 4120, 'hero 的「今日应收」就是这个字段')
+const t3DashNull = inv.getDashboard([], [], T3_DAY)
+assert.strictEqual(t3DashNull.todayReceivedAmount, null,
+  '今日算不出来时实收给 null，页面显示「—」而不是 0')
+assert.strictEqual(t3DashNull.todayUnreceivedAmount, null)
+
+// (g) 恒等式的随机复算：整数分累加 +「未收 = 应收 − 实收」由构造成立，
+// 任何一天的任何一组销售 / 退货都不该拆散它。
+let t3FuzzSeed = 20260825
+function t3Rand(n) {
+  t3FuzzSeed = (t3FuzzSeed * 1103515245 + 12345) % 2147483648
+  return t3FuzzSeed % n
+}
+for (let t3Trial = 0; t3Trial < 300; t3Trial += 1) {
+  const bag = []
+  const n = 1 + t3Rand(8)
+  for (let k = 0; k < n; k += 1) {
+    const amount = inv.round2((1 + t3Rand(50000)) / 100)
+    const settled = inv.round2(t3Rand(Math.round(amount * 100) + 1) / 100)
+    const at = T3_DAY + t3Rand(86400000)
+    if (t3Rand(3) === 0) {
+      bag.push(t3Return('rf' + t3Trial + '-' + k, amount, settled, -1, at))
+    } else {
+      bag.push(t3Sale('sf' + t3Trial + '-' + k, amount, settled, 1, at))
+    }
+  }
+  const got = inv.todayTotals(bag, T3_DAY)
+  assert.strictEqual(inv.round2(got.receivedAmount + got.unreceivedAmount), got.salesAmount,
+    'G3 恒等式被破坏（trial ' + t3Trial + '）：实收 ' + got.receivedAmount
+    + ' + 未收 ' + got.unreceivedAmount + ' ≠ 应收 ' + got.salesAmount)
+}
+console.log('G3 今日实收 / 未收：演示账 4120 = 3860 + 260 复算通过，恒等式 300 局随机复算通过')
