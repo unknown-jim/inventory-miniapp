@@ -256,16 +256,23 @@ assert.throws(function () {
   }, 8100, 'r-credit-no-customer')
 }, /客户/)
 
-assert.throws(function () {
-  sale(purchased.products, purchased.records, {
-    productId: 'p1',
-    qty: 1,
-    unitPrice: 4.5,
-    customerId: 'c1',
-    customerName: '张三超市',
-    paidAmount: 5
-  }, 8100, 'r-over-paid')
-}, /实收不能超过应收/)
+// 超收不再报错：单头夹在应收以内，溢出的 0.5 记成预收（G1）
+const overPaid = sale(purchased.products, purchased.records, {
+  productId: 'p1',
+  qty: 1,
+  unitPrice: 4.5,
+  customerId: 'c1',
+  customerName: '张三超市',
+  paidAmount: 5
+}, 8100, 'r-over-paid')
+assert.strictEqual(overPaid.record.amount, 4.5)
+assert.strictEqual(overPaid.record.paidAmount, 4.5, '实收仍夹在应收以内')
+assert.strictEqual(overPaid.record.prepayAdded, 0.5, '溢出记预收')
+assert.strictEqual(
+  inv.summarizeCustomerAccount(overPaid.records, 'c1').prepay, 0.5)
+assert.strictEqual(
+  inv.summarizeCustomerAccount(overPaid.records, 'c1').receivable, 0,
+  '超收不制造负欠款')
 
 const creditSale = sale(purchased.products, purchased.records, {
   productId: 'p1',
@@ -294,13 +301,17 @@ const paid = inv.applyPayment(creditSale.records, {
 assert.strictEqual(paid.record.type, 'pay')
 assert.strictEqual(inv.summarizeCustomerAccount(paid.records, 'c1').receivable, 5)
 
-assert.throws(function () {
-  inv.applyPayment(paid.records, {
-    customerId: 'c1',
-    customerName: '张三超市',
-    amount: 6
-  }, 8400, 'r-pay-over')
-}, /超过/)
+// 收款超欠款不再报错：欠 5 收 6，冲欠 5、余 1 记预收（G1）
+const payOver = inv.applyPayment(paid.records, {
+  customerId: 'c1',
+  customerName: '张三超市',
+  amount: 6
+}, 8400, 'r-pay-over')
+assert.strictEqual(payOver.record.amount, 6, '单头记的是收到的总额')
+assert.strictEqual(payOver.record.prepayAdded, 1, '超出欠款的部分记预收')
+const afterPayOver = inv.summarizeCustomerAccount(payOver.records, 'c1')
+assert.strictEqual(afterPayOver.receivable, 0, '欠款冲平，不折成负数')
+assert.strictEqual(afterPayOver.prepay, 1, '预收余额 1')
 
 assert.throws(function () {
   inv.applyOpening([], { amount: 80 }, 8410, 'r-open-no-customer')
@@ -348,12 +359,16 @@ const openPaid = inv.applyPayment(opened.records, {
   amount: 30
 }, 8430, 'r-open-pay')
 assert.strictEqual(inv.summarizeCustomerAccount(openPaid.records, 'c-open').receivable, 50)
-assert.throws(function () {
-  inv.applyPayment(openPaid.records, {
-    customerId: 'c-open',
-    amount: 51
-  }, 8440, 'r-open-pay-over')
-}, /超过/)
+// 期初欠款那一侧同理：欠 50 收 51，冲欠 50、余 1 记预收
+const openPayOver = inv.applyPayment(openPaid.records, {
+  customerId: 'c-open',
+  amount: 51
+}, 8440, 'r-open-pay-over')
+assert.strictEqual(openPayOver.record.prepayAdded, 1)
+assert.strictEqual(
+  inv.summarizeCustomerAccount(openPayOver.records, 'c-open').receivable, 0)
+assert.strictEqual(
+  inv.summarizeCustomerAccount(openPayOver.records, 'c-open').prepay, 1)
 
 const openEdited = inv.updateRecord(purchased.products, openPaid.records, {
   id: 'r-open',
@@ -736,12 +751,17 @@ const editedPay = inv.updateRecord(paid.products || purchased.products, paid.rec
 assert.strictEqual(editedPay.record.amount, 3)
 assert.strictEqual(inv.summarizeCustomerAccount(editedPay.records, 'c1').receivable, 6)
 
-assert.throws(function () {
-  inv.updateRecord(paid.products || purchased.products, paid.records, {
-    id: 'r-pay',
-    amount: 20
-  }, 2700, [])
-}, /超过/)
+// 改收款单同理：这张单原本冲欠 4，除本条外还欠 9；改成 20 → 冲 9、余 11 记预收
+const editedPayOver = inv.updateRecord(paid.products || purchased.products, paid.records, {
+  id: 'r-pay',
+  amount: 20
+}, 2700, [])
+assert.strictEqual(editedPayOver.record.amount, 20)
+assert.strictEqual(editedPayOver.record.prepayAdded, 11)
+assert.strictEqual(
+  inv.summarizeCustomerAccount(editedPayOver.records, 'c1').receivable, 0)
+assert.strictEqual(
+  inv.summarizeCustomerAccount(editedPayOver.records, 'c1').prepay, 11)
 
 assert.throws(function () {
   inv.deleteRecord(creditSale.products, paid.records, 'r-credit', 2800, [])
@@ -2200,19 +2220,24 @@ assert.strictEqual(shrunk.record.amount, 50)
 assert.strictEqual(shrunk.record.paidAmount, 50)
 assert.strictEqual(inv.summarizeCustomerAccount(shrunk.records, 'c-full').receivable, 0)
 
-// 实收不能超过应收，改流水也一样。
-assert.throws(function () {
-  inv.updateRecord(partialOrder.products, partialOrder.records, {
-    id: 'order-partial',
-    items: [
-      { id: partialOrder.record.lines[0].lineId, qty: 2, unitPrice: 25 },
-      { id: partialOrder.record.lines[1].lineId, qty: 5, unitPrice: 10 }
-    ],
-    paidAmount: 120,
-    customerId: 'c-partial-order',
-    customerName: '半款客户二'
-  }, 40700, [])
-}, /实收不能超过应收/)
+// 改流水时超收同样转预收：应收 100，实收填 120 → 单头 100 + 预收 20
+const editedOver = inv.updateRecord(partialOrder.products, partialOrder.records, {
+  id: 'order-partial',
+  items: [
+    { id: partialOrder.record.lines[0].lineId, qty: 2, unitPrice: 25 },
+    { id: partialOrder.record.lines[1].lineId, qty: 5, unitPrice: 10 }
+  ],
+  paidAmount: 120,
+  customerId: 'c-partial-order',
+  customerName: '半款客户二'
+}, 40700, [])
+assert.strictEqual(editedOver.record.amount, 100)
+assert.strictEqual(editedOver.record.paidAmount, 100, '单头实收仍夹在应收以内')
+assert.strictEqual(editedOver.record.prepayAdded, 20)
+assert.strictEqual(
+  inv.summarizeCustomerAccount(editedOver.records, 'c-partial-order').receivable, 0)
+assert.strictEqual(
+  inv.summarizeCustomerAccount(editedOver.records, 'c-partial-order').prepay, 20)
 
 console.log('inventory tests passed')
 
@@ -2570,3 +2595,219 @@ for (let t3Trial = 0; t3Trial < 300; t3Trial += 1) {
     + ' + 未收 ' + got.unreceivedAmount + ' ≠ 应收 ' + got.salesAmount)
 }
 console.log('G3 今日实收 / 未收：演示账 4120 = 3860 + 260 复算通过，恒等式 300 局随机复算通过')
+
+// ---------------------------------------------------------------------------
+// G1 · 预收（客户余额 / 超收转预收 / 开单抵扣 / 退货回流）
+//
+// 契约见 docs/accounting-vs-policy.md。四组，分工不同，谁也不冒充谁：
+//   G1-A 演示账主链  —— 设计稿上那几个数必须算得出来
+//   G1-B 退货三格    —— 欠款 → 现金 → 预收，含拆分不变量
+//   G1-C no-op       —— 老记录（一格预收字段都不带）逐分退化成旧公式
+//   G1-D 取小是支点  —— 手搭反证 + 边界扫描，**这一组管的是 creditedAmount 那行取小**
+//
+// G1-D 的存在理由：G1-B 的随机语料天然满足 paidAmount + prepayUsed <= amount
+// （生成器就是这么写的），所以它跑绿跟那行取小在不在**没有关系**。实测把取小
+// 注释掉，G1-A/B/C 全绿、只有 G1-D 变红。别把 G1-D 当成冗余的边界用例删掉。
+// ---------------------------------------------------------------------------
+
+// —— G1-A：演示账主链（设计稿 9:18 对照表）——
+// 昨天王姐欠 300 → 收款 500（冲欠 300 + 预收 200）→ 今日单 014 应收 352
+const g1Prod = inv.createProduct({
+  name: '四件套', costPrice: 60, salePrice: 128, stock: 100, alertQty: 1
+}, 50000, 'g1-p')
+function g1Sale(records, payload, at, id) {
+  return inv.applySaleOrder([g1Prod], records, Object.assign({
+    customerId: 'g1-c', customerName: '王姐'
+  }, payload), at, id, function () { return id + '-l' }, [])
+}
+
+const g1Debt = g1Sale([], {
+  items: [{ productId: 'g1-p', qty: 1, unitPrice: 300 }], paidAmount: 0
+}, 50100, 'g1-old')
+assert.strictEqual(inv.summarizeCustomerAccount(g1Debt.records, 'g1-c').receivable, 300)
+
+const g1Pay = inv.applyPayment(g1Debt.records, {
+  customerId: 'g1-c', customerName: '王姐', amount: 500
+}, 50200, 'g1-pay')
+assert.strictEqual(g1Pay.record.amount, 500, '流水上是一条「收款 ¥500」，不拆成两行')
+assert.strictEqual(g1Pay.record.prepayAdded, 200)
+const g1AfterPay = inv.summarizeCustomerAccount(g1Pay.records, 'g1-c')
+assert.strictEqual(g1AfterPay.receivable, 0, '欠款清零')
+assert.strictEqual(g1AfterPay.prepay, 200, '预收 200 = 500 − 300')
+
+// 分支 A：预收未用，实收 268 → 欠 84。欠款和预收**并存不对消**
+const g1BranchA = g1Sale(g1Pay.records, {
+  items: [{ productId: 'g1-p', qty: 1, unitPrice: 352 }], paidAmount: 268
+}, 50300, 'g1-014a')
+const g1A = inv.summarizeCustomerAccount(g1BranchA.records, 'g1-c')
+assert.strictEqual(g1A.receivable, 84, '分支 A：欠 84')
+assert.strictEqual(g1A.prepay, 200, '预收 200 原封不动 —— 并存态，净成 −116 就丢信息了')
+
+// 分支 B：抵预收 200、现金 152 → 收满，欠 0、预收归 0
+const g1BranchB = g1Sale(g1Pay.records, {
+  items: [{ productId: 'g1-p', qty: 1, unitPrice: 352 }], paidAmount: 152, prepayUsed: 200
+}, 50300, 'g1-014b')
+assert.strictEqual(g1BranchB.record.amount, 352, 'amount 仍是整单应收')
+assert.strictEqual(g1BranchB.record.paidAmount, 152, '「收满 ¥152.00」= 应收 − 抵扣')
+assert.strictEqual(g1BranchB.record.prepayUsed, 200)
+const g1B = inv.summarizeCustomerAccount(g1BranchB.records, 'g1-c')
+assert.strictEqual(g1B.receivable, 0, '分支 B：收满不欠')
+assert.strictEqual(g1B.prepay, 0, '预收被抵光')
+
+// G3 联锁：今日实收只认现金，预收是别的日子收的钱
+assert.strictEqual(inv.todayTotals([g1BranchB.record], 50000).receivedAmount, 152,
+  '抵扣不抬今日实收（否则那 200 会被算成今天进的抽屉）')
+assert.strictEqual(inv.todayTotals([g1BranchB.record], 50000).salesAmount, 352)
+
+// 超收样张：应收 352、实收框填 400 → 单头 352 + 预收 48
+const g1Over = g1Sale([], {
+  items: [{ productId: 'g1-p', qty: 1, unitPrice: 352 }], paidAmount: 400
+}, 50400, 'g1-over')
+assert.strictEqual(g1Over.record.paidAmount, 352)
+assert.strictEqual(g1Over.record.prepayAdded, 48, '超收 48 = 400 − 352')
+assert.strictEqual(inv.todayTotals([g1Over.record], 50000).receivedAmount, 352,
+  '超收也不抬今日实收')
+
+// 一张单不许既抵预收又超收
+assert.throws(function () {
+  g1Sale(g1Pay.records, {
+    items: [{ productId: 'g1-p', qty: 1, unitPrice: 352 }], paidAmount: 200, prepayUsed: 200
+  }, 50500, 'g1-both')
+}, /已抵扣预收/)
+
+// 抵扣超过客户预收余额要拦住（全账户扫描，不是按单校验）
+assert.throws(function () {
+  g1Sale(g1Pay.records, {
+    items: [{ productId: 'g1-p', qty: 1, unitPrice: 352 }], paidAmount: 0, prepayUsed: 300
+  }, 50600, 'g1-toomuch')
+}, /预收/)
+
+// —— G1-B：退货三格（欠款 → 现金 → 预收）——
+// 分支 B 那张单 352 = 现金 152 + 抵预收 200、欠 0。全额退货必须退现金 152 +
+// 回流预收 200，**不是**退现金 352 —— 客户当初只掏了 152 现钞。
+function g1Ret(products, records, qty, at, id, skus) {
+  return inv.applyReturn(products, records, {
+    saleOrderId: 'g1-014b', saleLineId: 'g1-014b-l', qty: qty
+  }, at, id, skus)
+}
+const g1FullRet = g1Ret(g1BranchB.products, g1BranchB.records, 1, 50700, 'g1-r1', g1BranchB.skus)
+const g1FullRetRec = g1FullRet.records.find(function (r) { return r.id === 'g1-r1' })
+assert.strictEqual(g1FullRetRec.paidAmount, 152, '退现金 = 当初收的现金')
+assert.strictEqual(g1FullRetRec.prepayRefund, 200, '抵掉的预收回流')
+const g1AfterRet = inv.summarizeCustomerAccount(g1FullRet.records, 'g1-c')
+assert.strictEqual(g1AfterRet.receivable, 0)
+assert.strictEqual(g1AfterRet.prepay, 200, '全退之后预收余额回到 200')
+
+// 部分退货：欠款 0，先退现金，预收不动
+const g1Half = g1Sale(g1Pay.records, {
+  items: [{ productId: 'g1-p', qty: 2, unitPrice: 176 }], paidAmount: 152, prepayUsed: 200
+}, 50800, 'g1-014c')
+const g1PartRet = inv.applyReturn(g1Half.products, g1Half.records, {
+  saleOrderId: 'g1-014c', saleLineId: 'g1-014c-l', qty: 0.5
+}, 50810, 'g1-r2', g1Half.skus)
+const g1PartRec = g1PartRet.records.find(function (r) { return r.id === 'g1-r2' })
+assert.strictEqual(g1PartRec.paidAmount, 88, '退 88 全走现金（现金额度还有 152）')
+assert.strictEqual(g1PartRec.prepayRefund, undefined, '没动到预收就不写这个字段')
+
+// 三张退货按记账顺序分份额：现金先吃光，再吃预收
+let g1Multi = g1Sale(g1Pay.records, {
+  items: [{ productId: 'g1-p', qty: 4, unitPrice: 88 }], paidAmount: 152, prepayUsed: 200
+}, 50900, 'g1-014d')
+const g1MultiShares = []
+;[1, 1, 2].forEach(function (qty, i) {
+  g1Multi = inv.applyReturn(g1Multi.products, g1Multi.records, {
+    saleOrderId: 'g1-014d', saleLineId: 'g1-014d-l', qty: qty
+  }, 50910 + i, 'g1-m' + i, g1Multi.skus)
+  const rec = g1Multi.records.find(function (r) { return r.id === 'g1-m' + i })
+  g1MultiShares.push([rec.paidAmount, inv.round2(inv.toNumber(rec.prepayRefund))])
+})
+assert.deepStrictEqual(g1MultiShares, [[88, 0], [64, 24], [0, 176]],
+  '现金 152 先被吃光（88 + 64），之后才动预收 200（24 + 176）')
+const g1AfterMulti = inv.summarizeCustomerAccount(g1Multi.records, 'g1-c')
+assert.strictEqual(g1AfterMulti.receivable, 0)
+assert.strictEqual(g1AfterMulti.prepay, 200, '全退完预收整整回来 200')
+
+// 拆分不变量：Σ冲欠款 == min(D, Σ退货额)，Σ现金 <= 当初收的现金，D >= 0
+const g1MultiSale = g1Multi.records.find(function (r) { return r.id === 'g1-014d' })
+const g1D = inv.round2(inv.toNumber(g1MultiSale.amount) - inv.creditedAmount(g1MultiSale))
+assert.ok(g1D >= 0, 'D >= 0')
+const g1Rets = g1Multi.records.filter(function (r) {
+  return r.type === 'return' && (r.lines[0] || {}).saleOrderId === 'g1-014d'
+})
+const g1SumR = inv.round2(g1Rets.reduce(function (s, r) { return s + inv.toNumber(r.amount) }, 0))
+const g1SumOffset = inv.round2(g1Rets.reduce(function (s, r) {
+  return s + inv.toNumber(r.amount) - inv.toNumber(r.paidAmount) - inv.toNumber(r.prepayRefund)
+}, 0))
+assert.strictEqual(g1SumOffset, inv.round2(Math.min(g1D, g1SumR)), 'Σ冲欠款 == min(D, Σr)')
+const g1SumCash = inv.round2(g1Rets.reduce(function (s, r) { return s + inv.toNumber(r.paidAmount) }, 0))
+assert.ok(g1SumCash <= inv.settledAmount(g1MultiSale) + 0.005, 'Σ现金 <= 销售单 paidAmount')
+
+// —— G1-C：no-op —— 老记录一格预收字段都不带，新公式必须逐分退化成旧公式 ——
+//
+// 这一条是「改账法在存量上是恒等变换」的证明。旧公式写死在这里当参照实现，
+// **不许从新实现抄一个值过来**——抄过来就成了自证。
+// （另一份更强的守门在 tests/ledger-terms.test.js 的 assertMatchesLegacy：
+// 2000 条两位小数 fuzz + 三代形状语料，逐字段比对并断言 prepay 恒为 0。）
+function g1LegacyCredited(rec) {
+  const amount = inv.round2(inv.toNumber(rec.amount))
+  const paid = inv.round2(inv.toNumber(rec.paidAmount))
+  if (paid <= 0) return 0
+  return paid > amount ? amount : paid
+}
+let g1NoopSeed = 20260830
+function g1Rand() {
+  g1NoopSeed = (g1NoopSeed * 1103515245 + 12345) & 0x7fffffff
+  return g1NoopSeed / 0x7fffffff
+}
+for (let i = 0; i < 5000; i += 1) {
+  const amount = inv.round2(g1Rand() * 1000 + 0.01)
+  const legacy = {
+    type: 'out', amount: amount,
+    paidAmount: inv.round2(g1Rand() * amount)
+  }
+  assert.strictEqual(inv.creditedAmount(legacy), g1LegacyCredited(legacy),
+    'no-op：老记录上 creditedAmount 必须等于旧的 settledAmount')
+  const terms = inv.recordTerms(legacy)
+  assert.strictEqual(terms.prepaySum, 0, 'no-op：老记录不得折出预收')
+  assert.strictEqual(terms.prepayUsedSum, 0, 'no-op：老记录不得折出预收抵扣')
+  assert.strictEqual(inv.accountOf(terms).prepay, 0)
+}
+
+// —— G1-D：creditedAmount 那行取小是 D >= 0 的支点（守门员，别删）——
+//
+// 上面 G1-B 的语料天然满足 paidAmount + prepayUsed <= amount，所以它对这行取小
+// **完全无效**。实测：把取小注释掉，G1-A/B/C 全绿，只有下面这两组变红。
+
+// D-1 手搭反证：一条 paidAmount + prepayUsed > amount 的畸形记录。
+// 写路径挡着，但改单、老数据兜底、云函数与小程序版本错位都造得出来。
+const g1Bad = { type: 'out', amount: 352, paidAmount: 300, prepayUsed: 200 }
+assert.strictEqual(inv.creditedAmount(g1Bad), 352,
+  '取小生效：夹到 352，不是 500')
+assert.strictEqual(inv.round2(inv.toNumber(g1Bad.amount) - inv.creditedAmount(g1Bad)), 0,
+  '于是 D = 0，没有折负')
+// 去掉取小会怎样：D = 352 − 500 = −148，returnCashRefund 走 left <= 0 分支、
+// Σ冲欠款得 0，而 min(D, Σr) = −148。两个数不等，但没有任何断言会响——
+// assertAccountsValid 只在**账户**折负时才拦，单据层的 D < 0 它看不见。
+const g1NoClamp = inv.round2(inv.settledAmount(g1Bad) + inv.toNumber(g1Bad.prepayUsed))
+assert.strictEqual(inv.round2(inv.toNumber(g1Bad.amount) - g1NoClamp), -148,
+  '反证：不取小就是 −148')
+
+// D-2 边界扫描：P 与 U 独立采样、故意让 P + U 常常越过 A，把边界扫成一条线
+let g1SweepOver = 0
+for (let i = 0; i < 5000; i += 1) {
+  const amount = inv.round2(g1Rand() * 1000 + 0.01)
+  const paid = inv.round2(g1Rand() * amount * 1.4)
+  const used = inv.round2(g1Rand() * amount * 1.4)
+  const rec = { type: 'out', amount: amount, paidAmount: paid, prepayUsed: used }
+  if (inv.round2(paid + used) > amount) g1SweepOver += 1
+  assert.strictEqual(inv.creditedAmount(rec),
+    inv.round2(Math.min(inv.round2(paid + used), amount)),
+    'creditedAmount 必须恒等于 min(paidAmount + prepayUsed, amount)')
+  assert.ok(inv.round2(amount - inv.creditedAmount(rec)) >= 0,
+    'D >= 0 在任何 P/U 组合下都要成立')
+}
+assert.ok(g1SweepOver > 1500,
+  '边界要真的被扫到：越界组合太少这一组就退化成摆设，实际 ' + g1SweepOver)
+
+console.log('G1 预收：演示账主链（欠 84 / 预收 200 并存、分支 B 收满 152、超收 48）'
+  + '、退货三格、no-op 5000 组、取小边界扫描 ' + g1SweepOver + '/5000 越界，全部通过')
