@@ -1460,6 +1460,31 @@ function totalsOf(terms) {
   }
 }
 
+// terms -> **一个时间段**的对外形状（元）。就是 totalsOf 去掉 receivable 一项，
+// 由它派生而不是另写一遍，两者不可能算出不同的销售额 / 进货额 / 毛利。
+//
+// **为什么砍掉 receivable**：欠款是**存量**，不是流量。把 totalsOf 的公式套在
+// 一段流水上，算出来的是「这段时间里欠款净增了多少」——一个和「欠款」长得一模
+// 一样、含义完全不同的数。同屏还挂着一个真的欠款总额（accounts / aggregate 的
+// 投影，见 docs/cloud-ledger.md「聚合值」），两个数并排放，认错是迟早的事。
+// 设计稿也是这么定的：流水页的本月摘要条只有进货 / 销售 / 毛利三列，欠款是存量、
+// 不在这一屏重复。真要「本期净增欠款」，那就得叫 receivableDelta，另开一个字段
+// 名，不许复用 receivable 这个名字。
+//
+// **笔数只有 count（这一段里的流水条数）**，没有「销售 N 笔 / 进货 N 笔」：
+// terms 里只有 saleCount，进货压根没有计数字段。要分型笔数得给 terms 加字段，
+// 而 terms 是增量累加器 applyTermsDelta 维护的，加字段要连存量账本一起回填 ——
+// 那是另一件事，不在这里顺手做。
+function windowTotalsOf(terms) {
+  const all = totalsOf(terms)
+  return {
+    salesAmount: all.salesAmount,
+    purchaseAmount: all.purchaseAmount,
+    profit: all.profit,
+    count: all.count
+  }
+}
+
 // -> { [customerId]: terms }，跳过 customerId 为空或非客户账记录的流水
 function foldAccountTerms(records) {
   const stats = Object.create(null)
@@ -3056,6 +3081,14 @@ function summarizeRecords(records) {
   return totalsOf(foldTotalTerms(records))
 }
 
+// 一段流水折成时间段汇总。折叠用的是**同一个** foldTotalTerms，所以窗口汇总
+// 和全店汇总的口径由构造相同，不存在「两处各写一套」。调用方（云函数的
+// getRecordSummary）逐页折叠再相加，和把整段一次折叠逐分相等 —— addTerms 是
+// 整数分的逐字段加法，可结合。
+function summarizeWindow(records) {
+  return windowTotalsOf(foldTotalTerms(records))
+}
+
 function computeTotals(records) {
   return summarizeRecords(records)
 }
@@ -3281,6 +3314,7 @@ module.exports = {
   addTerms: addTerms,
   accountOf: accountOf,
   totalsOf: totalsOf,
+  windowTotalsOf: windowTotalsOf,
   foldAccountTerms: foldAccountTerms,
   foldTotalTerms: foldTotalTerms,
   applyTermsDelta: applyTermsDelta,
@@ -3314,6 +3348,7 @@ module.exports = {
   filterProducts: filterProducts,
   filterRecords: filterRecords,
   summarizeRecords: summarizeRecords,
+  summarizeWindow: summarizeWindow,
   computeTotals: computeTotals,
   buildSeed: buildSeed
 }

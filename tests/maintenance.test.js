@@ -175,6 +175,10 @@ function noMaintenanceKey(res, label) {
     const page = await call(db, ids, 'owner-a', 'listRecords', shopId, { limit: 5 })
     assert.ok(Array.isArray(page.records), '维护期 listRecords 照常放行')
     assert.strictEqual(page.maintenance.on, true)
+    // 摘要条和它下面那张列表是同一件事：放行一个、挡住另一个没有道理
+    const sum = await call(db, ids, 'owner-a', 'getRecordSummary', shopId, { from: 1, to: 9999999999999 })
+    assert.ok(sum.totals, '维护期 getRecordSummary 照常放行')
+    assert.strictEqual(sum.maintenance.on, true)
   }
 
   // ---------------------------------------------------------------- 7

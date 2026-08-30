@@ -75,7 +75,8 @@ function stripComments(src) {
 const MONEY_NAMES = [
   'summarizeCustomerAccount', 'summarizeAllCustomerAccounts', 'receivableAt', 'receivableDelta',
   'getTotalReceivable', 'summarizeRecords', 'computeTotals', 'foldAccountTerms', 'foldTotalTerms',
-  'totalsOf', 'recordTerms', 'addTerms', 'emptyTerms', 'repairReturnSplits', 'recomputeSaleReturns'
+  'totalsOf', 'recordTerms', 'addTerms', 'emptyTerms', 'repairReturnSplits', 'recomputeSaleReturns',
+  'summarizeWindow', 'windowTotalsOf'
 ]
 // 裸名字匹配，**不要求名字后面跟 '('**：方括号取值 inventory['foldAccountTerms'](x)、
 // 解构别名 const f = inventory.foldAccountTerms; f(x) 都只是让名字出现一次，
@@ -158,6 +159,12 @@ assert.ok(MONEY_FROM_RECORDS.test('inventory.repairReturnSplits(page.records)'))
 assert.ok(MONEY_FROM_RECORDS.test('recomputeSaleReturns(list, sale)'))
 // 绕过写法 ①：components 里的直接调用（老扫描面只有 pages/，看不见它）
 assert.ok(MONEY_FROM_RECORDS.test('const t = inventory.foldTotalTerms(this.data.records)'))
+// 2b-4 的时间段汇总一样在名单里：页面把翻出来的那几页流水折成「本月」，
+// 折出来的必然只是已加载的那一段，而它会被贴上「本月」的标签显示出来。
+// 窗口汇总只有服务端 getRecordSummary 一条路（store.getRecordSummary 只是转发
+// 一次云调用、自己不折钱，所以它不在名单里，可以导出）。
+assert.ok(MONEY_FROM_RECORDS.test('inventory.summarizeWindow(this.data.list)'))
+assert.ok(MONEY_FROM_RECORDS.test('const t = windowTotalsOf(terms)'))
 // 绕过写法 ③：方括号取值 —— 名字后面不是 '('，老正则（要求 \s*\(）漏掉
 assert.ok(MONEY_FROM_RECORDS.test("inventory['foldAccountTerms'](records)"))
 // 绕过写法 ④：解构别名再调用 —— 同上

@@ -24,9 +24,27 @@ function clone(value) {
 // 照着真云最严的那一侧写，不要照着「能跑通」写。
 // ---------------------------------------------------------------------------
 
+// 比较指令带 `.and()`：真云的写法是 `_.gte(a).and(_.lt(b))`（指令链式调用），
+// 2b-4 的时间段查询（sortKey 同时有上下界）用它。替身照真云最严的一侧写：
+//   · `.and()` 只吃**查询指令**，塞一个裸值进去当场抛（真云那边是发出去才报，
+//     替身在本地就报，方向是更严那一侧）；
+//   · 匹配语义是全部子指令都得过，没有任何短路放行。
+function makeCommand(op, value) {
+  return {
+    __cmd: op,
+    value: value,
+    and: function (other) {
+      if (!other || typeof other !== 'object' || !other.__cmd) {
+        throw new Error('MemoryDb: .and() 只接受查询指令，收到 ' + JSON.stringify(other))
+      }
+      return makeCommand('and', [this, other])
+    }
+  }
+}
+
 function memCommand(op) {
   return function (value) {
-    return { __cmd: op, value: value }
+    return makeCommand(op, value)
   }
 }
 
@@ -38,17 +56,26 @@ const MEMORY_COMMAND = {
   in: memCommand('in')
 }
 
+function memMatchesCommand(got, want) {
+  if (want.__cmd === 'lt') return got < want.value
+  if (want.__cmd === 'lte') return got <= want.value
+  if (want.__cmd === 'gt') return got > want.value
+  if (want.__cmd === 'gte') return got >= want.value
+  if (want.__cmd === 'in') return (want.value || []).indexOf(got) >= 0
+  if (want.__cmd === 'and') {
+    return (want.value || []).every(function (sub) {
+      return memMatchesCommand(got, sub)
+    })
+  }
+  throw new Error('MemoryDb: unsupported command ' + want.__cmd)
+}
+
 function memMatches(doc, where) {
   return Object.keys(where || {}).every(function (key) {
     const want = where[key]
     const got = doc[key]
     if (want && typeof want === 'object' && want.__cmd) {
-      if (want.__cmd === 'lt') return got < want.value
-      if (want.__cmd === 'lte') return got <= want.value
-      if (want.__cmd === 'gt') return got > want.value
-      if (want.__cmd === 'gte') return got >= want.value
-      if (want.__cmd === 'in') return (want.value || []).indexOf(got) >= 0
-      throw new Error('MemoryDb: unsupported command ' + want.__cmd)
+      return memMatchesCommand(got, want)
     }
     return got === want
   })

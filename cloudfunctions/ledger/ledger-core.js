@@ -393,7 +393,8 @@ function validShopImageFileId(fileId, shopId) {
 // 2b-1 起小程序必须带 apiVersion。老客户端（已发布那一版）拿到不带 records
 // 的回传会把本地流水缓存清成空数组，下一张送货单就会印一个 0.00 的前欠。
 const API_VERSION = 2
-const VERSIONED_READS = ['getLedger', 'getSlip', 'migrateLocal', 'listRecords', 'getRecord']
+const VERSIONED_READS = ['getLedger', 'getSlip', 'migrateLocal', 'listRecords', 'getRecord',
+  'getRecordSummary']
 // 版本门的第二条理由，和上面那条（会不会回传账本）**不是一回事**：deleteShop 是
 // 不可逆动作（shops / members / ledgers / ledger_clears 全删，ledger_records 里
 // 该店的流水也在提交之后按 shopId 清掉，见下面 deleteShop 分支），冻结窗口里店主
@@ -441,7 +442,8 @@ function needsApiVersion(action) {
 // 不产生错账（账本的写被拦死了），和仓里已经接受的那类孤儿文件同一档，不必修，
 // 但别以为这道门覆盖了「所有写」——它覆盖的是**所有会改账的写**。
 const MAINTENANCE_READS = [
-  'whoami', 'listShops', 'listMembers', 'getLedger', 'getSlip', 'getRecord', 'listRecords'
+  'whoami', 'listShops', 'listMembers', 'getLedger', 'getSlip', 'getRecord', 'listRecords',
+  'getRecordSummary'
 ]
 
 // 维护期间照常放行的运维 action：它们**就是**维护窗口里要做的事，
@@ -974,6 +976,12 @@ async function dispatchAction(input) {
   // 分页取流水的唯一入口。type 和 customerId 不能同时非默认：不是没有调用点
   // 需要，而是这会变成一条无索引查询 —— 10 条数据上飞快，10000 条上超时，
   // 宁可在边界报一条明确的错，也不要发一条会随数据量退化的查询（方案 §3.1）。
+  //
+  // **时间段 [from, to)（2b-4）不放松这条约束，也不被它拦住。** 时间段走的是
+  // sortKey，而 sortKey 是 #1 / #2 / #3 三条索引各自的最后一维，所以
+  // 「时间段」「时间段 + type」「时间段 + customerId」三种组合各自命中一条现成
+  // 索引；唯一还是无索引的仍然是 type + customerId 同时非默认，加不加时间段
+  // 都一样 —— 窗口窄不代表查询有索引，别拿「反正只查一个月」当放开的理由。
   if (action === 'listRecords') {
     const members = await db.listMembersByShop(shopId)
     requireMember(members, shopId, openid)
@@ -982,13 +990,18 @@ async function dispatchAction(input) {
     if (type && type !== 'all' && customerId) {
       throw new Error('不支持同时按类型和客户筛选')
     }
+    // 时间段非法要在读账本文档**之前**就报出来：两条分支（未迁移的内存切片、
+    // 已迁移的集合查询）各自也会校验，这里提前一次只为省一次 IO、并且让错误
+    // 顺序稳定（不会因为账本读不到而先报「店铺账本不存在」）。
+    apply.normalizeWindow(payload)
     const raw = await db.getLedger(shopId)
     if (!raw) {
       throw new Error('店铺账本不存在')
     }
     const ledger = withBookId(raw, shopId)
     const pageOptions = {
-      type: type, customerId: customerId, cursor: payload.cursor, limit: payload.limit
+      type: type, customerId: customerId, cursor: payload.cursor, limit: payload.limit,
+      from: payload.from, to: payload.to
     }
     if (apply.recordsPending(ledger)) {
       // 未迁移的店也只回一页，从账本文档里那份老数组切，走同一个 apply.pageRecords —
@@ -1000,6 +1013,54 @@ async function dispatchAction(input) {
     }
     const store = records.recordStore(db.recordsCtx(), ledger.bookId, shopId)
     return store.page(pageOptions)
+  }
+
+  // 一个时间段的汇总（2b-4）：流水页顶上的「本月」摘要条。回
+  // { totals: {salesAmount, purchaseAmount, profit, count} | null, complete, scanned }。
+  //
+  // **必须给时间段**（normalizeWindow 的 required）。无界汇总 = 全店累计，而那个
+  // 数是 getLedger 的 totals（accounts / aggregate 的投影），零查询就能拿到的权威
+  // 值；在这里扫一遍集合去重算它，既浪费又必然撞上界回「算不出来」。摘要条的
+  // 「全部」那一档因此不走这个 action，直接读 totals。
+  //
+  // **回包里没有 receivable**（见 inventory.windowTotalsOf 那段）：欠款是存量，
+  // 一段时间的折叠算出来的是「本期净增欠款」，和同屏那个真的欠款总额是两个量。
+  //
+  // 只读 action：进 VERSIONED_READS，也进 MAINTENANCE_READS（维护期店里照样能
+  // 查账翻流水，摘要条和它下面的列表是同一件事，放行一个挡另一个没有道理）。
+  if (action === 'getRecordSummary') {
+    const members = await db.listMembersByShop(shopId)
+    requireMember(members, shopId, openid)
+    apply.normalizeWindow(payload, true)
+    // **不接受 type / customerId**。摘要条按设计是「这段时间的进货 / 销售 / 毛利」，
+    // 不跟着下面那排类型 chip 变；悄悄忽略掉这两个参数，调用方会拿一个全类型的
+    // 数当成「本月进货」用。要报错，不要给一个长得对、含义不对的数。
+    // （真要分型汇总，它走索引 #3 / #2、和这里同一个上界，但目前没有调用点，
+    // 每多一个入参就多一处口径要对齐。）
+    if (String(payload.type || '') && String(payload.type) !== 'all') {
+      throw new Error('窗口汇总不支持按类型筛选')
+    }
+    if (String(payload.customerId || '')) {
+      throw new Error('窗口汇总不支持按客户筛选')
+    }
+    const raw = await db.getLedger(shopId)
+    if (!raw) {
+      throw new Error('店铺账本不存在')
+    }
+    const ledger = withBookId(raw, shopId)
+    if (apply.recordsPending(ledger)) {
+      // 未迁移的店：老数组已经在内存里，现筛现折，零额外 IO，也没有上界可撞。
+      // 和 publicListsOf 的 recordsPending 分支同一条理由。
+      const legacy = apply.filterWindow(apply.legacyRecordsOf(ledger), payload)
+      return {
+        totals: inventory.summarizeWindow(legacy),
+        complete: true,
+        scanned: legacy.length,
+        recordsPendingMigration: true
+      }
+    }
+    const store = records.recordStore(db.recordsCtx(), ledger.bookId, shopId)
+    return records.windowSummary(store, payload)
   }
 
   if (action === 'migrateLocal') {

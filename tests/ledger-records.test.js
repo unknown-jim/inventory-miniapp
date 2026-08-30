@@ -2437,6 +2437,270 @@ function totalStock(skus, productId) {
   const a7Ok = await slipShop.call('listRecords', { type: 'all', customerId: slipA.id, limit: 100 })
   assert.ok(Array.isArray(a7Ok.records))
 
+  // -------------------------------------------------------------------------
+  // T-A8：时间段 [from, to)（2b-4）
+  //
+  // 时间段落在 sortKey 上，而 sortKey 已经是 #1 / #2 / #3 三条索引的最后一维，
+  // 所以它不是一种新查询形态，只是给「cursor 那个上界」补一个下界。这一节要
+  // 钉住四件事：① 三处实现仍然逐条一致；② 闭开区间的两个端点各自落在哪一侧；
+  // ③ 非法时间段响亮失败（不是静默退化成全量查询）；④ 时间段不放开
+  // 「type + customerId 同时非默认」那条无索引保护。
+  // -------------------------------------------------------------------------
+
+  // ① 等价性：把 T-A2 的笛卡尔积在时间段维度上再跑一遍。
+  // 语料 pgFull 的 createdAt = 1000 + floor(i/3) * 10，i = 0..319，
+  // 所以时间戳是 1000..2060 步长 10，每个时间戳恰好 3 条（同毫秒全序也一起测到）。
+  const a8Windows = [
+    {},
+    { from: 1500 },
+    { to: 1500 },
+    { from: 1200, to: 1800 },
+    { from: 1000, to: 2070 },
+    { from: 1030, to: 1040 },
+    { from: 9000, to: 9999 }
+  ]
+  const a8Types = ['all', 'out', 'in', 'adjust']
+  const a8Customers = ['', pgCustomers[0]]
+  const a8Limits = [1, 100]
+  let a8Combos = 0
+  for (let wi = 0; wi < a8Windows.length; wi++) {
+    for (let ti = 0; ti < a8Types.length; ti++) {
+      for (let ci = 0; ci < a8Customers.length; ci++) {
+        for (let li = 0; li < a8Limits.length; li++) {
+          await comparePagedEquivalence(pgFull, pgQStore, Object.assign({}, a8Windows[wi], {
+            type: a8Types[ti], customerId: a8Customers[ci], limit: a8Limits[li]
+          }))
+          a8Combos += 1
+        }
+      }
+    }
+  }
+  assert.strictEqual(a8Combos, a8Windows.length * a8Types.length * a8Customers.length * a8Limits.length)
+  console.log('T-A8：时间段下 pageRecords 与 recordStore.page 等价，' + a8Combos + ' 组合全部逐页核对')
+
+  // 语料真的落在窗口两侧，否则上面那一堆是空对空
+  assert.ok(apply.pageRecords(pgFull, { from: 1200, to: 1800, limit: 100 }).records.length > 0)
+  assert.strictEqual(apply.pageRecords(pgFull, { from: 9000, to: 9999, limit: 100 }).records.length, 0,
+    'T-A8：落在语料之外的窗口必须是空页')
+
+  // ② 闭开区间：createdAt === from 在窗口里，createdAt === to 在窗口外。
+  // 这是 makeSortKey(t, '') = pad13(t) + '_' 的直接后果 —— 真实记录 id 非空，
+  // 所以同毫秒记录的 sortKey 严格大于边界值。
+  function idsAt(createdAt) {
+    return pgFull.filter(function (item) {
+      return item.createdAt === createdAt
+    }).map(function (item) { return item.id }).sort()
+  }
+  function idsOf(page) {
+    return page.records.map(function (item) { return item.id }).sort()
+  }
+  assert.strictEqual(idsAt(1030).length, 3, 'T-A8 语料：每个时间戳应有 3 条同毫秒记录')
+  assert.deepStrictEqual(
+    idsOf(apply.pageRecords(pgFull, { from: 1030, to: 1040, limit: 100 })), idsAt(1030),
+    'T-A8：左闭 —— createdAt === from 的记录必须在窗口里')
+  assert.deepStrictEqual(
+    idsOf(apply.pageRecords(pgFull, { from: 1020, to: 1030, limit: 100 })), idsAt(1020),
+    'T-A8：右开 —— createdAt === to 的记录必须在窗口外')
+  assert.deepStrictEqual(
+    idsOf(await pgQStore.page({ from: 1030, to: 1040, limit: 100 })), idsAt(1030),
+    'T-A8：集合查询的左闭必须和纯函数一致')
+  assert.deepStrictEqual(
+    idsOf(await pgQStore.page({ from: 1020, to: 1030, limit: 100 })), idsAt(1020),
+    'T-A8：集合查询的右开必须和纯函数一致')
+
+  // ③ 非法时间段一律抛，不静默忽略。**这条和 clampPageLimit「非法给缺省」
+  // 故意相反**：limit 错了只影响取多少，时间段被吞掉会把窗口查询变成全量查询，
+  // 而调用方会把全量的数字挂在「本月」标签下面。
+  const a8Bad = [
+    { from: 'x' }, { to: 'x' }, { from: NaN }, { to: NaN },
+    { from: -1 }, { to: -1 }, { from: Infinity }, { from: true }, { from: {} },
+    { from: 1000, to: 1000 }, { from: 2000, to: 1000 }
+  ]
+  a8Bad.forEach(function (bad) {
+    assert.throws(function () {
+      apply.normalizeWindow(bad)
+    }, /时间段不合法/, 'T-A8：非法时间段必须抛错：' + JSON.stringify(bad))
+  })
+  // 缺省 / null / '' = 那一侧不设界，不是错
+  const a8Blank = [{}, { from: null }, { to: null }, { from: '', to: '' }, { from: undefined }]
+  a8Blank.forEach(function (ok) {
+    assert.deepStrictEqual(apply.normalizeWindow(ok), { fromKey: '', toKey: '' })
+  })
+  // 数字字符串按数字认（payload 一路 JSON，客户端把毫秒当字符串传是常见事故）
+  assert.deepStrictEqual(apply.normalizeWindow({ from: '1500' }), apply.normalizeWindow({ from: 1500 }))
+  // 走完整云函数栈也要报同一条错
+  await rejects(function () {
+    return slipShop.call('listRecords', { from: -1 })
+  }, /时间段不合法/)
+  await rejects(function () {
+    return slipShop.call('listRecords', { from: 2000, to: 1000 })
+  }, /时间段不合法/)
+
+  // ④ 时间段不放开 type + customerId 同禁：窗口窄不代表查询有索引
+  await rejects(function () {
+    return slipShop.call('listRecords', { type: 'out', customerId: slipA.id, from: 1, to: 2 })
+  }, /不支持同时按类型和客户筛选/)
+
+  // -------------------------------------------------------------------------
+  // T-A9：getRecordSummary —— 一个时间段的汇总
+  // -------------------------------------------------------------------------
+
+  // ① 口径：走完整云函数栈的窗口汇总 == 对同一窗口的流水跑 summarizeWindow。
+  // 语料用 pg 那 320 条（PAGE_LIMIT=100，所以必然翻 4 页）—— 逐页折叠再相加
+  // 和一次折完必须逐分相等。
+  const a9Windows = [
+    { from: 1500 }, { to: 1500 }, { from: 1200, to: 1800 },
+    { from: 1, to: 9999 }, { from: 1030, to: 1040 }, { from: 9000, to: 9999 }
+  ]
+  for (let wi = 0; wi < a9Windows.length; wi++) {
+    const win = a9Windows[wi]
+    const expected = inv.summarizeWindow(apply.filterWindow(pgFull, win))
+    const got = await pgShop.call('getRecordSummary', win)
+    assert.strictEqual(got.complete, true, 'T-A9：320 条撞不到上界，必须 complete')
+    assert.deepStrictEqual(got.totals, expected,
+      'T-A9：窗口汇总口径不符 window=' + JSON.stringify(win))
+  }
+  // 语料真的跨了多页，否则「逐页折叠」这条没测到
+  assert.ok(pgFull.length > recordsModule.PAGE_LIMIT,
+    'T-A9 语料必须多于一页，否则测不到逐页折叠')
+
+  // ② 回包里没有 receivable：欠款是存量，窗口折出来的是「本期净增欠款」，
+  // 和同屏那个真的欠款总额是两个量，绝不能同名。
+  const a9Shape = await pgShop.call('getRecordSummary', { from: 1, to: 9999 })
+  assert.deepStrictEqual(Object.keys(a9Shape.totals).sort(),
+    ['count', 'profit', 'purchaseAmount', 'salesAmount'],
+    'T-A9：窗口汇总只回流量三项 + 条数，不许回 receivable')
+
+  // ③ 必须给时间段：无界汇总 = 全店累计，那个数在 getLedger 的 totals 里，
+  // 零查询就能拿到，不许在这里扫一遍集合去重算它。
+  await rejects(function () {
+    return pgShop.call('getRecordSummary', {})
+  }, /汇总必须给时间段/)
+  await rejects(function () {
+    return pgShop.call('getRecordSummary', { from: null, to: null })
+  }, /汇总必须给时间段/)
+  await rejects(function () {
+    return pgShop.call('getRecordSummary', { from: 2000, to: 1000 })
+  }, /时间段不合法/)
+  // 不接受 type / customerId：悄悄忽略会让调用方拿一个全类型的数当「本月进货」用
+  await rejects(function () {
+    return pgShop.call('getRecordSummary', { from: 1, to: 9999, type: 'in' })
+  }, /窗口汇总不支持按类型筛选/)
+  await rejects(function () {
+    return pgShop.call('getRecordSummary', { from: 1, to: 9999, customerId: pgCustomers[0] })
+  }, /窗口汇总不支持按客户筛选/)
+  // type='all' 不算「非默认」，和 listRecords 一致
+  assert.ok((await pgShop.call('getRecordSummary', { from: 1, to: 9999, type: 'all' })).totals)
+
+  // ④ 窗口盖住全部时，窗口汇总 == 账本文档里增量维护的 aggregate 投影。
+  // 这一条把「现折」和「增量累加器」两条路钉在一起 —— 用 slipShop（正经走
+  // 记账动作攒出来的账，聚合是 applyTermsDelta 维护的），不用 pgShop
+  //（那是直接塞进文档袋的语料，聚合本来就对不上）。
+  // 上界取 13 位十进制的最大值（pad13 的宽度，约 2286 年），盖得住任何语料 ——
+  // 不从某个先前抓下来的快照里取 max，那种写法会随着后面新增用例悄悄漏掉记录。
+  const a9SlipAll = await slipShop.call('getRecordSummary', { from: 1, to: 9999999999999 })
+  const a9SlipTotals = (await slipShop.call('getLedger', {})).ledger.totals
+  assert.strictEqual(a9SlipAll.complete, true)
+  assert.ok(a9SlipTotals.count > 0, 'T-A9：slipShop 必须有流水，否则这一组是空对空')
+  assert.strictEqual(a9SlipAll.totals.salesAmount, a9SlipTotals.salesAmount,
+    'T-A9：盖住全部的窗口，销售额必须等于 aggregate 投影')
+  assert.strictEqual(a9SlipAll.totals.purchaseAmount, a9SlipTotals.purchaseAmount)
+  assert.strictEqual(a9SlipAll.totals.profit, a9SlipTotals.profit)
+  assert.strictEqual(a9SlipAll.totals.count, a9SlipTotals.count)
+
+  // ⑤ 「今日」的两条路不许漂：getLedger 的 today（todayTotals）和
+  // getRecordSummary({ from: dayStart }) 必须给出同一组数。两处实现，一个口径。
+  const a9Day = 1500
+  const a9TodayA = inv.todayTotals(pgFull, a9Day)
+  const a9TodayB = inv.summarizeWindow(apply.filterWindow(pgFull, { from: a9Day }))
+  assert.strictEqual(a9TodayA.salesAmount, a9TodayB.salesAmount,
+    'T-A9：todayTotals 和 summarizeWindow 的销售额必须逐分相等')
+  assert.strictEqual(a9TodayA.profit, a9TodayB.profit)
+  assert.strictEqual(a9TodayA.inAmount, a9TodayB.purchaseAmount,
+    'T-A9：todayTotals 的 inAmount 就是窗口汇总的 purchaseAmount')
+
+  // ⑥ 上界：翻过 SUMMARY_MAX_RECORDS 条就回 { totals: null, complete: false }，
+  // **不抛错** —— 调用方要显示「—」，不是弹一个店主看不懂的错。
+  // 用替身 store 直接撞上界：造 5000+ 条真语料只是为了测一个计数器，不值当。
+  // 替身的 hasMore 照抄真 store 的口径（本页条数 >= limit）。
+  function summaryStubStore(total, seen) {
+    let served = 0
+    return {
+      page: async function (options) {
+        seen.push({ from: options.from, to: options.to, limit: options.limit })
+        const n = Math.max(0, Math.min(options.limit, total - served))
+        const records = []
+        for (let k = 0; k < n; k++) {
+          records.push({
+            id: 'stub-' + (served + k), type: 'in', amount: 1, profit: 0,
+            createdAt: 1000, lines: []
+          })
+        }
+        served += n
+        return { records: records, cursor: 'stub-cursor', hasMore: n >= options.limit }
+      }
+    }
+  }
+  const a9Seen = []
+  const a9Under = await recordsModule.windowSummary(
+    summaryStubStore(recordsModule.SUMMARY_MAX_RECORDS, a9Seen), { from: 1, to: 9999 })
+  assert.strictEqual(a9Under.complete, true, 'T-A9：正好到上界（不超过）仍然算得出来')
+  assert.strictEqual(a9Under.scanned, recordsModule.SUMMARY_MAX_RECORDS)
+  assert.strictEqual(a9Under.totals.purchaseAmount, recordsModule.SUMMARY_MAX_RECORDS)
+  // 时间段必须一路透传到每一次 page()，否则上界之内的数也是错的
+  assert.ok(a9Seen.length > 1, 'T-A9：上界用例必须翻了多页')
+  a9Seen.forEach(function (seenCall) {
+    assert.strictEqual(seenCall.from, 1, 'T-A9：from 必须透传给每一次 page()')
+    assert.strictEqual(seenCall.to, 9999, 'T-A9：to 必须透传给每一次 page()')
+    assert.strictEqual(seenCall.limit, recordsModule.PAGE_LIMIT)
+  })
+  const a9Over = await recordsModule.windowSummary(
+    summaryStubStore(recordsModule.SUMMARY_MAX_RECORDS + 1, []), { from: 1, to: 9999 })
+  assert.strictEqual(a9Over.complete, false, 'T-A9：超过上界必须回 complete:false')
+  assert.strictEqual(a9Over.totals, null,
+    'T-A9：算不出来必须回 null —— 回一个偏小的数比不回更糟')
+
+  // ⑦ 未迁移的老账本：时间段和窗口汇总在那条路上也必须成立（现筛现折，
+  // 零额外 IO），不许「新参数只有集合分支支持」。
+  const a9LegDb = new MemoryDb()
+  const a9LegIds = idFactory('a9lg')
+  const a9LegShopId = (await core.dispatch({
+    db: a9LegDb, makeId: a9LegIds, openid: 'u1', action: 'createShop',
+    shopId: '', apiVersion: core.API_VERSION, payload: { name: '窗口老账本店' }, now: 1000
+  })).shop.id
+  const a9LegRecords = [
+    { id: 'a9-1', type: 'in', amount: 10, profit: 0, createdAt: 1000, lines: [] },
+    { id: 'a9-2', type: 'out', amount: 30, profit: 12, payType: 'cash', customerId: '', createdAt: 2000, lines: [] },
+    { id: 'a9-3', type: 'in', amount: 7, profit: 0, createdAt: 3000, lines: [] }
+  ]
+  a9LegDb.ledgers[a9LegShopId] = legacyDoc(a9LegDb.ledgers[a9LegShopId], {
+    records: a9LegRecords
+  })
+  function a9LegCall(action, payload) {
+    return core.dispatch({
+      db: a9LegDb, makeId: a9LegIds, openid: 'u1', action: action,
+      shopId: a9LegShopId, apiVersion: core.API_VERSION, payload: payload || {}, now: 5000
+    })
+  }
+  const a9LegPage = await a9LegCall('listRecords', { from: 2000, to: 3000, limit: 100 })
+  assert.strictEqual(a9LegPage.recordsPendingMigration, true, 'T-A9 语料必须真的没迁移')
+  assert.deepStrictEqual(a9LegPage.records.map(function (item) { return item.id }), ['a9-2'],
+    'T-A9：未迁移分支的时间段也是 [from, to)')
+  const a9LegSum = await a9LegCall('getRecordSummary', { from: 1000, to: 3000 })
+  assert.strictEqual(a9LegSum.recordsPendingMigration, true)
+  assert.strictEqual(a9LegSum.complete, true, 'T-A9：未迁移分支现折现算，没有上界可撞')
+  assert.deepStrictEqual(a9LegSum.totals, inv.summarizeWindow(
+    a9LegRecords.filter(function (item) {
+      return item.createdAt >= 1000 && item.createdAt < 3000
+    })), 'T-A9：未迁移分支的窗口汇总口径必须和纯函数一致')
+  await rejects(function () {
+    return a9LegCall('getRecordSummary', {})
+  }, /汇总必须给时间段/)
+  await rejects(function () {
+    return a9LegCall('listRecords', { from: 3000, to: 3000 })
+  }, /时间段不合法/)
+  console.log('T-A8 / T-A9：时间段 [from, to) 与窗口汇总通过')
+
   // T-A5：today / recent 与全量折叠相等；跨日语料；单页装不下当天（130 条同日
   // 逼出翻页，PAGE_LIMIT=100）仍 todayComplete；dayStart 非法只发一次查询。
   function taRec(id, type, createdAt, amount, profit) {

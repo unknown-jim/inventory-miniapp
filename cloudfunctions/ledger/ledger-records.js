@@ -20,6 +20,11 @@ const inventory = require('./inventory')
 //   4  bookId ASC, saleOrderId ASC, sortKey ASC                 -> 查一张销售单的退货（整体重算用）
 //   5  bookId ASC, type ASC, productId ASC, skuId ASC, sortKey DESC -> latestPurchases
 //   6  shopId ASC                                               -> purgeByShop（删店之后清孤儿流水，2b-3）
+//
+// **时间段筛选（2b-4）一条索引都不用加。** `[from, to)` 落在 sortKey 上，而
+// sortKey 已经是 #1 / #2 / #3 的**最后一维**，所以「加时间段」= 给这三条索引
+// 已有的最后一维加一个区间条件，不是新查询形态 —— 今天的 cursor 本来就是
+// `sortKey < X` 这样一个半边区间。scripts/wxcloud-ensure-indexes.js 因此不动。
 
 const COLLECTION = 'ledger_records'
 const PAGE_LIMIT = 100
@@ -43,6 +48,16 @@ const LATEST_PURCHASE_KEEP = 2
 // 一直翻下去 —— 和 SUFFIX_MAX_RECORDS 一样是「有界循环」的兜底，但两者是不同
 // 的量（一个管今日聚合翻多远，一个管欠款倒推翻多远），互不影响。
 const TODAY_MAX_RECORDS = 2000
+// windowSummary（一个时间段的汇总）单次调用能翻多少条。取 5000 是照
+// SUFFIX_MAX_RECORDS 的先例：那条路（getSlip 倒推欠款）同样是 PAGE_LIMIT=100
+// 一页一页翻到 5000 条 = 50 次往返，已经在生产的读路径上跑着，所以这个量级是
+// **有先例的**，不是拍的。判条数不判页数，和仓里另外三处有界循环同源。
+//
+// **到顶不抛错，回 `complete: false`**（和 recentAndToday 一侧，不和
+// suffixOfCustomer 一侧）：调用方是流水页顶上的摘要条，算不出来要显示「—」，
+// 不是弹一个店主看不懂也做不了什么的错。理由和「今日三项算不出来显示 —— 而
+// 不是 0」逐字一致 —— 0 和一个偏小的数都会被当真，「—」不会。
+const SUMMARY_MAX_RECORDS = 5000
 // 一张销售单名下退货单的查询上限：200 张已远超现实（一次退货是一张单，退 200 次
 // 同一张销售单），到顶说明数据不对劲，报错不做无界翻页 —— 有界循环的同一份样板。
 // **查询要 limit(MAX + 1)、判据要 `> MAX`**，理由见 returnsOfSale 里那段。
@@ -202,8 +217,22 @@ function recordStore(ctx, bookId, shopId) {
     if (options.customerId) {
       where.customerId = String(options.customerId)
     }
-    if (options.cursor) {
-      where.sortKey = _.lt(String(options.cursor))
+    // 时间段 [from, to) 和 cursor 都是 sortKey 上的界，合并之后最多两个：
+    // 下界 `>= from`，上界 `< min(cursor, to)`（两个上界都用 `<`，取小的那个
+    // 就是它们的合取）。**不传时间段时这里和 2b-4 之前逐字相同**：只剩
+    // `_.lt(cursor)` 那一个界，发出去的还是同一条查询。
+    //
+    // 两个界都在时用 `_.gte(a).and(_.lt(b))` —— 这是**本文件唯一一处指令链式
+    // 调用**，此前所有查询都只挂一个指令。真云上没实测过（见
+    // docs/cloud-ledger.md「时间段筛选」那节的未实测项），演示店必须先验一次。
+    const win = apply.normalizeWindow(options)
+    const upper = apply.upperBoundKey(options.cursor, win.toKey)
+    if (win.fromKey && upper) {
+      where.sortKey = _.gte(win.fromKey).and(_.lt(upper))
+    } else if (win.fromKey) {
+      where.sortKey = _.gte(win.fromKey)
+    } else if (upper) {
+      where.sortKey = _.lt(upper)
     }
     const res = await col.where(where).orderBy('sortKey', 'desc').limit(limit).get()
     return { docs: docsOf(res), limit: limit }
@@ -354,6 +383,45 @@ async function recentAndToday(store, dayStart, recentLimit) {
   }
 }
 
+// 一个时间段 [from, to) 的汇总（2b-4）。**只准从只读 action 调**，理由和
+// attachRecent 那段逐字相同：事务提交之后再发一次可能失败的 IO，就是「账记上了
+// 却报失败」。
+//
+// 为什么不是「把整月流水回传给客户端自己折」：① 客户端结构上就没有折钱的路
+//（tests/no-client-cloud-db.test.js 的禁令），② 一个月上千条流水为了三个数全
+// 拉一遍，翻页边界上还必然算错。为什么不是「塞进 getLedger」：那是首页每次
+// onShow 都走的热路径，为流水页的一条摘要给它加一段有界循环不划算，而且月份
+// 边界和 dayStart 一样是客户端的东西，getLedger 已经背了一个 dayStart 了。
+//
+// 逐页折叠再相加 == 把整段一次折叠：addTerms 是整数分的逐字段加法，可结合。
+// 这样内存是 O(一页)，不用把 5000 条流水（每条还带 lines[]）攒在数组里 ——
+// recentAndToday 攒 2000 条是因为它要回传 recent，这里一条都不回传。
+async function windowSummary(store, options) {
+  // required=true：一个界都不给会被拦在这里（无界汇总 = 全店累计，那个数在
+  // getLedger 的 totals 里，零查询）
+  apply.normalizeWindow(options, true)
+  let cursor = ''
+  let scanned = 0
+  let terms = inventory.emptyTerms()
+  for (;;) {
+    const got = await store.page({
+      from: options && options.from,
+      to: options && options.to,
+      cursor: cursor,
+      limit: PAGE_LIMIT
+    })
+    terms = inventory.addTerms(terms, inventory.foldTotalTerms(got.records), 1)
+    scanned += got.records.length
+    // 判条数不判页数（同 SUFFIX_MAX_RECORDS 顶上那段的 off-by-one）
+    if (scanned > SUMMARY_MAX_RECORDS) {
+      return { totals: null, complete: false, scanned: scanned }
+    }
+    if (!got.hasMore) break
+    cursor = got.cursor
+  }
+  return { totals: inventory.windowTotalsOf(terms), complete: true, scanned: scanned }
+}
+
 async function applyWrites(store, writes) {
   const list = writes || []
   for (let i = 0; i < list.length; i++) {
@@ -474,11 +542,13 @@ module.exports = {
   SUFFIX_MAX_RECORDS: SUFFIX_MAX_RECORDS,
   LATEST_PURCHASE_KEEP: LATEST_PURCHASE_KEEP,
   TODAY_MAX_RECORDS: TODAY_MAX_RECORDS,
+  SUMMARY_MAX_RECORDS: SUMMARY_MAX_RECORDS,
   SALE_RETURNS_MAX: SALE_RETURNS_MAX,
   PURGE_MAX_RECORDS: PURGE_MAX_RECORDS,
   PURGE_BUDGET_MS: PURGE_BUDGET_MS,
   recordStore: recordStore,
   recentAndToday: recentAndToday,
+  windowSummary: windowSummary,
   applyWrites: applyWrites,
   purgeByShop: purgeByShop
 }
