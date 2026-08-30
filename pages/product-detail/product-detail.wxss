@@ -1,4 +1,4 @@
-/* 只读详情页。共用类（.card/.btn-*/.action-strip）来自 app.wxss，这里只写本页布局。 */
+/* 只读详情页。共用类（.card、.btn-primary、.btn-ghost、.action-strip）来自 app.wxss，这里只写本页布局。 */
 
 .main-card {
   display: flex;
