@@ -58,7 +58,9 @@
 ### 测试
 
 - 改 wxml 的 `js-` 钩子、或把页面里的块抽成自定义组件，必须同步检查 `tests/ui.test.js` 并跑一次 `npm run test:ui`。抽组件会让该块上的钩子在测试里全部失效。
-- 自定义组件内部的内容，页面级选择器一律查不到（`slip-overlay` / `page-loading` 都开了 `virtualHost`，`page.$$` / `>>>` / `selectComponent` 实测全是 0）。断言改成核对页面数据，别再往回写 `.js-slip` 这类选择器。
+- **不要给需要被测的自定义组件开 `virtualHost`**：开了页面侧连宿主节点都没有，`page.$$` / `>>>` / `selectComponent` 实测全是 0，断言只能退回核对页面数据（字段绑错、屏幕上不显示就查不出来）。`record-sheet` 和 `slip-overlay` 都已摘掉并给宿主加了 `id`，用例走「`page.$('#id')` 拿 CustomElement，再在实例上查子元素」。两条静态钉子分别在 `tests/record-sheet.test.js` 和 `tests/slip-image.test.js` 末尾。
+- 没开 `virtualHost` 时**不要用页面级的 `>>>`**：右边只吃单个简单选择器，吃不下两级后代链时不报错，静默降级成宿主本身、返回 1 个错节点，绿着骗人。
+- 新建 wxss 时注意**块注释里不要出现 `*/`**（`.btn-*` 后面紧跟 `/` 就会提前闭合注释，整页编译失败而且工具不报错）。`tests/wxss-wxml.test.js` 会拦，但拦下来之前先别写。
 - `tests/ui.test.js` 里新增等待一律走 `waitFor(page, target, label)`。automator 原生的 `page.waitFor` 没有超时，选择器一过期就静默挂死，不报错。
 - 以上详见 [docs/ui-test.md](docs/ui-test.md)。
 

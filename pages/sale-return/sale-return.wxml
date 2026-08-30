@@ -2,7 +2,7 @@
   <view class="card">
     <view class="field">
       <view class="field-label">客户</view>
-      <view class="field-input readonly">{{customerName}}</view>
+      <view class="field-input readonly js-return-customer">{{customerName}}</view>
     </view>
     <view class="field last">
       <view class="field-label">原单时间</view>
@@ -12,10 +12,10 @@
 
   <view class="card list-card">
     <view class="muted tip">退货按当时卖掉的规格原样入库。要换格，入库后再用「改规格」。</view>
-    <view class="line" wx:for="{{lines}}" wx:key="id">
-      <view class="item-name">{{item.productName}}</view>
+    <view class="line js-return-line" wx:for="{{lines}}" wx:key="id">
+      <view class="item-name js-return-name">{{item.productName}}</view>
       <view class="muted" wx:if="{{item.specText}}">{{item.specText}}</view>
-      <view class="muted">已卖 {{item.soldText}} · 已退 {{item.returnedText}} · 可退 {{item.remainText}}</view>
+      <view class="muted js-return-remain">已卖 {{item.soldText}} · 已退 {{item.returnedText}} · 可退 {{item.remainText}}</view>
       <view class="field last">
         <view class="field-label">本次退货数量</view>
         <input
@@ -34,5 +34,5 @@
     </view>
   </view>
 
-  <button class="btn-primary save-btn" bindtap="submit">确认退货</button>
+  <button class="btn-primary save-btn js-return-submit" bindtap="submit">确认退货</button>
 </view>

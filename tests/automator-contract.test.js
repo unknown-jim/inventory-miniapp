@@ -156,14 +156,27 @@ const HAS_PAGE_LOADING = [
   'pages/index/index.js',
   'pages/customers/customers.js',
   'pages/shop/shop.js',
-  'pages/sale/sale.js'
+  'pages/sale/sale.js',
+  // 2026-08-31 这一批新进 tests/ui.test.js 的落点，都调了 waitPageReady
+  'pages/purchase/purchase.js',
+  'pages/products/products.js',
+  'pages/product-detail/product-detail.js',
+  'pages/members/members.js'
 ]
 
 // tests/ui.test.js 现在不对这几个页面调 waitPageReady —— 调了就会撞上那句假报错。
 const NO_PAGE_LOADING = [
   'pages/record-edit/record-edit.js',
   'pages/customer-edit/customer-edit.js',
-  'pages/records/records.js'
+  'pages/records/records.js',
+  // 同一批新进的落点，但**没有**这个字段：用例里一律等各自的业务字段
+  //（如 adjust 等 productId、sale-return 等 lines.length）
+  'pages/adjust/adjust.js',
+  'pages/convert/convert.js',
+  'pages/sale-return/sale-return.js',
+  'pages/product-edit/product-edit.js',
+  'pages/categories/categories.js',
+  'pages/category-edit/category-edit.js'
 ]
 
 HAS_PAGE_LOADING.forEach(function (rel) {

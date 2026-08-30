@@ -512,4 +512,40 @@ assert.ok(loDpr[1] < 1)
 const small = slipImage.exportScales(1000, 1000, 3)
 assert.deepStrictEqual(small, [3, 1])
 
+// ---------------------------------------------------------------------------
+// 送货单弹层组件的**可测性**钉子（和 tests/record-sheet.test.js 末尾那条同形）。
+//
+// 【背景】slip-overlay 从 2026-08-23 到 2026-08-31 一直开着 virtualHost。开了它，
+// 页面侧压根没有宿主节点，automator 三种写法（page.$$('.js-slip')、
+// 'slip-overlay >>> .js-slip'、selectComponent）实测**全是 0**，于是 tests/ui.test.js
+// 的送货单用例只能退化成核对页面 data —— 屏幕上显示成什么样，那版用例查不出来。
+// 2026-08-31 摘掉 virtualHost 并给两个引用点加 id，用例才升回核对渲染。
+//
+// 这条钉子看着两件事：virtualHost 没被加回来、两个宿主的 id 还在。任一被改掉，
+// UI 测试会在开开发者工具十分钟之后才失败，而这里两秒钟就红。
+// ---------------------------------------------------------------------------
+const fs = require('fs')
+const path = require('path')
+function readRepo(rel) {
+  return fs.readFileSync(path.join(__dirname, '..', rel), 'utf8')
+}
+const slipJs = readRepo('components/slip-overlay/index.js')
+assert.ok(
+  !/virtualHost\s*:\s*true/.test(slipJs),
+  'slip-overlay 不许开 virtualHost：开了页面侧就没有宿主节点，UI 测试够不到弹层里的任何元素，'
+    + '那条用例只能退回核对页面 data（字段绑错、屏幕上不显示，就查不出来了）'
+)
+;['pages/sale/sale.wxml', 'pages/record-edit/record-edit.wxml'].forEach(function (rel) {
+  const src = readRepo(rel)
+  assert.ok(
+    src.indexOf('<slip-overlay') >= 0,
+    rel + ' 里找不到 <slip-overlay> 了 —— 引用点改了的话这条钉子要跟着改'
+  )
+  assert.ok(
+    /<slip-overlay\s*\n\s*id="slip-overlay"/.test(src),
+    rel + ' 的 <slip-overlay> 要带 id="slip-overlay"：UI 测试靠 page.$(\'#slip-overlay\') '
+      + '取组件实例，再在实例上查 .js-slip-* 子元素'
+  )
+})
+
 console.log('slip-image tests passed')

@@ -4,7 +4,7 @@
   <view class="section-title">
     <text>{{shopName || '本店'}}成员</text>
   </view>
-  <view class="card member-card" wx:for="{{members}}" wx:key="id">
+  <view class="card member-card js-member-card" wx:for="{{members}}" wx:key="id">
     <block wx:if="{{item.editing}}">
       <view class="field">
         <view class="field-label">称呼</view>
@@ -23,8 +23,8 @@
       </view>
     </block>
     <block wx:else>
-      <view class="item-name">{{item.displayTitle}}</view>
-      <view class="muted">{{item.roleText}}<block wx:if="{{item.isMe}}"> · 我</block></view>
+      <view class="item-name js-member-name">{{item.displayTitle}}</view>
+      <view class="muted js-member-role">{{item.roleText}}<block wx:if="{{item.isMe}}"> · 我</block></view>
       <view class="action-strip" wx:if="{{item.canEditName || (isOwner && !item.isMe)}}">
         <button
           wx:if="{{item.canEditName}}"
@@ -51,7 +51,7 @@
       <view class="field-label">称呼</view>
       <input class="field-input" maxlength="32" value="{{newDisplayName}}" bindinput="onNewDisplayName" placeholder="店里怎么叫，可选" />
     </view>
-    <button class="btn-primary" bindtap="addMember">添加店员</button>
+    <button class="btn-primary js-member-add" bindtap="addMember">添加店员</button>
   </view>
   <view wx:else class="card quiet">
     <view class="muted">只有店主能加减成员。店员把身份发给老板，在店铺页复制。</view>

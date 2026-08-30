@@ -2,7 +2,7 @@
   <view class="card">
     <view class="field">
       <view class="field-label">商品</view>
-      <view class="field-input picker" bindtap="openPicker">{{productName}}</view>
+      <view class="field-input picker js-convert-picker" bindtap="openPicker">{{productName}}</view>
     </view>
     <view class="muted tip" wx:if="{{blankProcess}}">只能改分规格现货，不能改待加工库存。要加工请直接销售。</view>
     <view class="muted tip" wx:elif="{{hasSpecs}}">从仓里的现货改到另一格，一件还是一件。</view>
@@ -12,7 +12,7 @@
         <view class="field-label">从</view>
         <view class="chips">
           <view
-            class="chip {{item.on ? 'on' : ''}}"
+            class="chip js-convert-from {{item.on ? 'on' : ''}}"
             wx:for="{{fromOptions}}"
             wx:key="id"
             data-id="{{item.id}}"
@@ -25,7 +25,7 @@
         <view class="field-label">改成{{specAxis1}}</view>
         <view class="chips">
           <view
-            class="chip {{item.on ? 'on' : ''}}"
+            class="chip js-convert-color {{item.on ? 'on' : ''}}"
             wx:for="{{colorOptions}}"
             wx:key="value"
             data-value="{{item.value}}"
@@ -37,7 +37,7 @@
         <view class="field-label">改成{{specAxis2}}</view>
         <view class="chips">
           <view
-            class="chip {{item.on ? 'on' : ''}}"
+            class="chip js-convert-size {{item.on ? 'on' : ''}}"
             wx:for="{{sizeOptions}}"
             wx:key="value"
             data-value="{{item.value}}"
@@ -50,7 +50,7 @@
     <view class="field-row">
       <view class="field half">
         <view class="field-label">数量</view>
-        <input class="field-input" type="digit" data-field="qty" value="{{qty}}" bindinput="onField" placeholder="0" hidden="{{showPicker}}" />
+        <input class="field-input js-convert-qty" type="digit" data-field="qty" value="{{qty}}" bindinput="onField" placeholder="0" hidden="{{showPicker}}" />
       </view>
       <view class="field half last">
         <view class="field-label">备注</view>
@@ -59,15 +59,15 @@
     </view>
   </view>
 
-  <button class="btn-primary save-btn" bindtap="submit" hidden="{{showPicker}}">确认改规格</button>
+  <button class="btn-primary save-btn js-convert-submit" bindtap="submit" hidden="{{showPicker}}">确认改规格</button>
 
   <view wx:if="{{showPicker}}" class="mask" bindtap="closePicker">
     <view class="sheet" catchtap="closePickerKeep">
       <view class="sheet-title">选择商品</view>
-      <input class="search" placeholder="搜索商品" value="{{keyword}}" bindinput="onSearch" />
+      <input class="search js-convert-search" placeholder="搜索商品" value="{{keyword}}" bindinput="onSearch" />
       <scroll-view scroll-y class="sheet-list">
         <view
-          class="sheet-item"
+          class="sheet-item js-convert-item"
           wx:for="{{filtered}}"
           wx:key="id"
           data-id="{{item.id}}"

@@ -2,7 +2,7 @@
   <page-loading wx:if="{{pageLoading}}" />
   <block wx:else>
   <input
-    class="search"
+    class="search js-product-search"
     placeholder="搜索名称 / 货号 / 条码"
     value="{{keyword}}"
     bindinput="onSearch"
@@ -33,7 +33,7 @@
   </view>
 
   <view wx:else class="goods-grid">
-    <view class="card goods-card" wx:for="{{list}}" wx:key="id" data-id="{{item.id}}" bindtap="goDetail">
+    <view class="card goods-card js-product-card" wx:for="{{list}}" wx:key="id" data-id="{{item.id}}" bindtap="goDetail">
       <view class="goods-thumb" wx:if="{{item.image && !item.imageFailed}}">
         <image class="thumb-img" src="{{item.image}}" mode="aspectFill" lazy-load binderror="onThumbError" data-index="{{index}}" />
       </view>
@@ -48,6 +48,6 @@
     </view>
   </view>
 
-  <view class="fab" bindtap="goAdd">+ 新增</view>
+  <view class="fab js-product-add" bindtap="goAdd">+ 新增</view>
   </block>
 </view>

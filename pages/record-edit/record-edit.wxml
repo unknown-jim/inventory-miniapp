@@ -185,7 +185,7 @@
   <view class="muted tip" wx:elif="{{isAdjust}}">{{adjustHint}}</view>
   <view class="muted tip" wx:elif="{{editing}}">改数量会同步改库存。记错商品请删除后重新开单。<text wx:if="{{isOut}}">删除销售会去掉本单全部商品。同一张送货单的客户、实收和备注会一起改。</text></view>
 
-  <button wx:if="{{canReturn && !editing}}" class="btn-ghost export-btn" bindtap="goReturn" hidden="{{showCustomerPicker || showSlip}}">退货入库</button>
+  <button wx:if="{{canReturn && !editing}}" class="btn-ghost export-btn js-go-return" bindtap="goReturn" hidden="{{showCustomerPicker || showSlip}}">退货入库</button>
   <button wx:if="{{isOut && !editing}}" class="btn-ghost export-btn js-export-slip" bindtap="openSlip" hidden="{{showCustomerPicker || showSlip}}">导出送货单</button>
   <button wx:if="{{!editing}}" class="btn-primary save-btn js-edit" bindtap="startEdit" hidden="{{showCustomerPicker || showSlip}}">修改</button>
   <button wx:if="{{editing}}" class="btn-primary save-btn js-save" bindtap="save" hidden="{{showCustomerPicker || showSlip}}">保存</button>
@@ -224,6 +224,7 @@
   </view>
 
   <slip-overlay
+    id="slip-overlay"
     show-slip="{{showSlip}}"
     slip="{{slip}}"
     exporting="{{exporting}}"

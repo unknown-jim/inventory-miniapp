@@ -2,12 +2,12 @@
   <view class="card">
     <view class="field">
       <view class="field-label">种类名称</view>
-      <input class="field-input" data-field="name" value="{{name}}" bindinput="onField" placeholder="例如 纺织、日用" />
+      <input class="field-input js-ce-name" data-field="name" value="{{name}}" bindinput="onField" placeholder="例如 纺织、日用" />
     </view>
     <view class="field last">
       <view class="field-label">默认商品类型</view>
       <view class="seg">
-        <view class="seg-item {{productKind === 'plain' ? 'on' : ''}}" data-kind="plain" bindtap="setProductKind">普通</view>
+        <view class="seg-item js-ce-kind-plain {{productKind === 'plain' ? 'on' : ''}}" data-kind="plain" bindtap="setProductKind">普通</view>
         <view class="seg-item {{productKind === 'blank' ? 'on' : ''}}" data-kind="blank" bindtap="setProductKind">待加工</view>
         <view class="seg-item {{productKind === 'finished' ? 'on' : ''}}" data-kind="finished" bindtap="setProductKind">分规格现货</view>
       </view>
@@ -19,11 +19,11 @@
     <view class="spec-title">商品名待选项</view>
     <view class="muted spec-desc">可改、可删、可再加。点选后填进商品名称，不是唯一合法名。</view>
     <view class="chips" wx:if="{{names.length}}">
-      <view class="chip on" wx:for="{{names}}" wx:key="*this" data-value="{{item}}" bindtap="removeName">{{item}} ×</view>
+      <view class="chip on js-ce-name-chip" wx:for="{{names}}" wx:key="*this" data-value="{{item}}" bindtap="removeName">{{item}} ×</view>
     </view>
     <view class="add-spec">
-      <input class="field-input" data-field="nameInput" value="{{nameInput}}" bindinput="onField" bindconfirm="addName" placeholder="添加商品名" />
-      <button class="btn-ghost spec-add" bindtap="addName">添加</button>
+      <input class="field-input js-ce-name-input" data-field="nameInput" value="{{nameInput}}" bindinput="onField" bindconfirm="addName" placeholder="添加商品名" />
+      <button class="btn-ghost spec-add js-ce-name-add" bindtap="addName">添加</button>
     </view>
   </view>
 
@@ -63,6 +63,6 @@
     <view class="muted spec-desc last-desc">建档时只填一次进价售价。进货仍可改某一格的进价。</view>
   </view>
 
-  <button class="btn-primary save-btn" bindtap="save">保存</button>
-  <button wx:if="{{isEdit}}" class="btn-danger" bindtap="remove">删除种类</button>
+  <button class="btn-primary save-btn js-ce-save" bindtap="save">保存</button>
+  <button wx:if="{{isEdit}}" class="btn-danger js-ce-remove" bindtap="remove">删除种类</button>
 </view>

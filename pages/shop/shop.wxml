@@ -23,9 +23,9 @@
     <view class="card">
       <view class="field">
         <view class="field-label">创建一家店</view>
-        <input class="field-input" value="{{newShopName}}" bindinput="onShopName" placeholder="店铺名称" />
+        <input class="field-input js-shop-name" value="{{newShopName}}" bindinput="onShopName" placeholder="店铺名称" />
       </view>
-      <button class="btn-primary" bindtap="createShop">创建并进入</button>
+      <button class="btn-primary js-shop-create" bindtap="createShop">创建并进入</button>
     </view>
 
     <view class="card">
@@ -42,7 +42,7 @@
       <button class="btn-ghost copy-btn" bindtap="retryShops">重试</button>
     </view>
     <view wx:if="{{hasCurrentShop}}" class="card current-shop">
-      <view class="item-name">{{shopName || '未命名店铺'}}</view>
+      <view class="item-name js-shop-current">{{shopName || '未命名店铺'}}</view>
       <view class="muted">
         <block wx:if="{{currentRoleText}}">{{currentRoleText}} · </block>当前
       </view>
@@ -55,7 +55,7 @@
       <text>本店</text>
     </view>
     <view wx:if="{{hasCurrentShop}}" class="card list-card">
-      <view class="list-item" bindtap="goMembers">
+      <view class="list-item js-shop-members" bindtap="goMembers">
         <view class="item-name">成员名单</view>
         <view class="cell-go">›</view>
       </view>
@@ -66,7 +66,7 @@
     </view>
     <view wx:if="{{shops.length}}" class="card list-card">
       <view
-        class="list-item"
+        class="list-item js-shop-item"
         wx:for="{{shops}}"
         wx:key="id"
         data-id="{{item.id}}"
@@ -81,16 +81,16 @@
     </view>
 
     <view class="card">
-      <view class="fold-head" bindtap="toggleCreate">
+      <view class="fold-head js-shop-create-toggle" bindtap="toggleCreate">
         <view class="item-name">再建一家</view>
         <view class="cell-go">{{showCreate ? '收起' : '展开'}}</view>
       </view>
       <view wx:if="{{showCreate}}" class="fold-body">
         <view class="field">
           <view class="field-label">店铺名称</view>
-          <input class="field-input" value="{{newShopName}}" bindinput="onShopName" placeholder="店铺名称" />
+          <input class="field-input js-shop-name" value="{{newShopName}}" bindinput="onShopName" placeholder="店铺名称" />
         </view>
-        <button class="btn-primary" bindtap="createShop">创建并进入</button>
+        <button class="btn-primary js-shop-create" bindtap="createShop">创建并进入</button>
       </view>
     </view>
 
