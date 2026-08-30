@@ -57,7 +57,8 @@
   padding-bottom: 176rpx;
 }
 
-/* 稿 fab/记一笔 4:985：56×56 = 112rpx，正好是 --tap-lg */
+/* 稿 fab/记一笔 4:985：56×56 = 112rpx。0b 批把 --tap-lg 翻到文档值 104rpx 之后，
+   新档位表里已经没有 56px 这一档，所以这里写字面量，不再借变量的数值。 */
 .record-fab {
   position: fixed;
   right: var(--space-xl);
@@ -66,8 +67,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: var(--tap-lg);
-  height: var(--tap-lg);
+  width: 112rpx;
+  height: 112rpx;
   background: var(--color-fill-action);
   border-radius: 999rpx;
   box-shadow: 0 12rpx 32rpx rgba(15, 20, 26, 0.16);
