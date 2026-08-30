@@ -1,0 +1,182 @@
+<!-- 「记一笔」动作面板。看板首屏主按钮和流水页 FAB 共用这一个组件。
+     结构对设计稿 sheet/记一笔(3:323)、sheet/库存修正(4:31)、sheet/选原销售单(11:29)、
+     sheet/select·收款(11:58)；遮罩层级见 demo/记一笔遮罩层级(7:112)。 -->
+<view wx:if="{{show}}" class="rs-mask js-rs-mask" bindtap="onClose" catchtouchmove="noop">
+  <view class="rs-sheet" catchtap="noop">
+    <view
+      class="rs-grabber-wrap"
+      bindtouchstart="onGrabStart"
+      catchtouchmove="onGrabMove"
+      bindtouchend="onGrabEnd"
+    >
+      <view class="rs-grabber"></view>
+    </view>
+
+    <!-- 一级：记一笔 -->
+    <block wx:if="{{step === 'main'}}">
+      <view class="rs-title">记一笔</view>
+
+      <view class="rs-row js-rs-sale" data-action="sale" bindtap="onAction" hover-class="rs-row-press">
+        <view class="rs-icon rs-icon-sale"></view>
+        <view class="rs-col">
+          <view class="rs-label">销售</view>
+          <view class="rs-desc">卖货开单，可出送货单</view>
+        </view>
+        <view class="rs-chevron"></view>
+      </view>
+
+      <view class="rs-row js-rs-purchase" data-action="purchase" bindtap="onAction" hover-class="rs-row-press">
+        <view class="rs-icon rs-icon-purchase"></view>
+        <view class="rs-col">
+          <view class="rs-label">进货</view>
+          <view class="rs-desc">补货入库</view>
+        </view>
+        <view class="rs-chevron"></view>
+      </view>
+
+      <view class="rs-row js-rs-pay" data-action="pay" bindtap="onAction" hover-class="rs-row-press">
+        <view class="rs-icon rs-icon-pay"></view>
+        <view class="rs-col">
+          <view class="rs-label">收款</view>
+          <view class="rs-desc">收客户的欠款</view>
+        </view>
+        <view class="rs-chevron"></view>
+      </view>
+
+      <view class="rs-row js-rs-return" data-action="return" bindtap="onAction" hover-class="rs-row-press">
+        <view class="rs-icon rs-icon-return"></view>
+        <view class="rs-col">
+          <view class="rs-label">退货</view>
+          <view class="rs-desc">客户退货原样入库</view>
+        </view>
+        <view class="rs-chevron"></view>
+      </view>
+
+      <view class="rs-row js-rs-adjust" data-action="adjust" bindtap="onAction" hover-class="rs-row-press">
+        <view class="rs-icon rs-icon-adjust"></view>
+        <view class="rs-col">
+          <view class="rs-label">库存修正</view>
+          <view class="rs-desc">换规格加工或盘盈盘亏</view>
+        </view>
+        <view class="rs-chevron"></view>
+      </view>
+    </block>
+
+    <!-- 二级：库存修正。稿上三条，本批交付两条；「盘一遍这个商品」阻塞于
+         Screen/02b 盘点页未实现，按画布规范不挂禁用件，整行不画。 -->
+    <block wx:elif="{{step === 'adjust'}}">
+      <view class="rs-title">库存修正</view>
+
+      <view class="rs-option js-rs-convert" data-action="convert" bindtap="onAdjustAction" hover-class="rs-option-press">
+        <view class="rs-col">
+          <view class="rs-label">换规格 / 加工（总数不变）</view>
+          <view class="rs-desc">成品换规格、半成品做成成品</view>
+        </view>
+        <view class="rs-chevron"></view>
+      </view>
+
+      <view class="rs-option js-rs-qty" data-action="qty" bindtap="onAdjustAction" hover-class="rs-option-press">
+        <view class="rs-col">
+          <view class="rs-label">数量对不上（盘盈 / 盘亏 / 报损）</view>
+          <view class="rs-desc">直接改某个规格的件数，不计进销毛利</view>
+        </view>
+        <view class="rs-chevron"></view>
+      </view>
+
+      <view class="rs-note">库存修正只改件数：不计入进货、销售、毛利，也不产生欠款</view>
+    </block>
+
+    <!-- 收款 › 选客户：只列有欠款的，按欠款倒序，点行即走 -->
+    <block wx:elif="{{step === 'customer'}}">
+      <view class="rs-title">选择客户</view>
+      <view class="rs-search">
+        <input
+          class="rs-search-input js-rs-customer-search"
+          value="{{customerKeyword}}"
+          placeholder="搜索客户"
+          bindinput="onCustomerSearch"
+        />
+      </view>
+      <view wx:if="{{loading}}" class="rs-empty">正在读取…</view>
+      <block wx:elif="{{customers.length}}">
+        <view class="rs-sum">{{debtCount}} 位 · 欠款共 ¥{{debtTotalText}}</view>
+        <view class="rs-hint">只列有欠款的客户</view>
+        <scroll-view class="rs-list" scroll-y>
+          <view
+            class="rs-pick js-rs-customer"
+            wx:for="{{customers}}"
+            wx:key="id"
+            data-id="{{item.id}}"
+            bindtap="onPickCustomer"
+            hover-class="rs-option-press"
+          >
+            <view class="rs-pick-label">{{item.name}}</view>
+            <view class="rs-debt">欠 ¥{{item.receivableText}}</view>
+          </view>
+        </scroll-view>
+      </block>
+      <view wx:else class="rs-empty">没有欠款客户，都收清了</view>
+    </block>
+
+    <!-- 退货 › 选原销售单：只列可退 > 0，时间倒序，不开空白退货单 -->
+    <block wx:elif="{{step === 'order'}}">
+      <view class="rs-title">选择原销售单</view>
+      <view wx:if="{{loading}}" class="rs-empty">正在读取…</view>
+      <block wx:elif="{{orders.length}}">
+        <view class="rs-hint">只列出还没退完的销售单</view>
+        <scroll-view class="rs-list" scroll-y>
+          <view
+            class="rs-order js-rs-order"
+            wx:for="{{orders}}"
+            wx:key="id"
+            data-id="{{item.id}}"
+            bindtap="onPickOrder"
+            hover-class="rs-option-press"
+          >
+            <text class="tag tag-out rs-order-tag">销售</text>
+            <view class="rs-col">
+              <view class="rs-label">{{item.customerText}}</view>
+              <view class="rs-desc">{{item.subText}}</view>
+              <view class="rs-desc">{{item.returnText}}</view>
+            </view>
+            <view class="rs-order-amount">¥{{item.amountText}}</view>
+          </view>
+        </scroll-view>
+      </block>
+      <view wx:else class="rs-empty">没有可退的销售单</view>
+    </block>
+
+    <!-- 库存修正 › 数量对不上 › 选商品：adjust 收 ?id=<productId>，不选商品进不去 -->
+    <block wx:elif="{{step === 'product'}}">
+      <view class="rs-title">选择商品</view>
+      <view class="rs-search">
+        <input
+          class="rs-search-input js-rs-product-search"
+          value="{{productKeyword}}"
+          placeholder="搜索商品"
+          bindinput="onProductSearch"
+        />
+      </view>
+      <view wx:if="{{loading}}" class="rs-empty">正在读取…</view>
+      <block wx:elif="{{products.length}}">
+        <view class="rs-hint">选一个商品，再改它的件数</view>
+        <scroll-view class="rs-list" scroll-y>
+          <view
+            class="rs-pick js-rs-product"
+            wx:for="{{products}}"
+            wx:key="id"
+            data-id="{{item.id}}"
+            bindtap="onPickProduct"
+            hover-class="rs-option-press"
+          >
+            <view class="rs-pick-label">{{item.name}}</view>
+            <view class="rs-stock">库存 {{item.stockText}}</view>
+          </view>
+        </scroll-view>
+      </block>
+      <view wx:else class="rs-empty">没有找到商品</view>
+    </block>
+
+    <view class="rs-cancel js-rs-cancel" bindtap="onClose">取消</view>
+  </view>
+</view>

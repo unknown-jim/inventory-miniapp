@@ -57,4 +57,11 @@
   <view wx:if="{{loading}}" class="card quiet">正在加载…</view>
   <button wx:elif="{{loaded && list.length && hasMore}}" class="btn-ghost load-more js-load-more" bindtap="onLoadMore">加载更多</button>
   <view wx:elif="{{loaded && list.length && !hasMore}}" class="card quiet">没有更多了</view>
+
+  <!-- 流水页 FAB（稿 fab/记一笔 4:985：56×56 实心黑圆钮，右下角，距右缘和 tabBar 各 16px）。
+       tabBar 页的 webview 本来就不含原生 tabBar，所以 bottom 是相对可视区底缘算的：
+       下一批流水升级成 tab 之后这里不用改。 -->
+  <view class="record-fab js-record-fab" hover-class="record-fab-press" bindtap="openRecordSheet">＋</view>
+
+  <record-sheet id="record-sheet" show="{{showRecordSheet}}" bindclose="closeRecordSheet" />
 </view>

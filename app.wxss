@@ -9,6 +9,47 @@ page {
   --tap-md: 104rpx;
   --tap-lg: 112rpx;
   --chip-min: 80rpx;
+
+  /* docs/ui-scale.md（2026-08-26 改版）的完整档位表。补全而不是只补本批要用的几个：
+     文档描述的这套 token 在代码里一个都不存在，每一批 UI 都会撞到同一个洞。
+     **旧的 --fs-xs/sm/md/lg/xl 和 --tap-sm/md/lg 一个都没改**：把它们重指到新值
+     会一次性改掉每一页的字号和行高，那是独立的一批迁移，不该搭在面板这批里。
+
+     三个名字在旧表里已被占用、值又对不上，本批一律不重定义（重定义会当场改掉
+     不在本批范围内的页面）：
+       · --fs-hero  文档 80rpx / 这里 48rpx，4 处消费（index.wxss:43,53、
+         customer-edit.wxss:15、products.wxss:62）→ 原样留着，登记为遗留。
+       · --tap-md   文档 96rpx / 这里 104rpx。文档的 --tap-lg(104rpx) 恰好等于
+         这里的 --tap-md，主按钮就用它，用处已标注。
+       · --tap-lg   文档 104rpx / 这里 112rpx。 */
+  --fs-caption: 24rpx;
+  --fs-label: 26rpx;
+  --fs-body: 28rpx;
+  --fs-title: 32rpx;
+  --fs-amount: 32rpx;
+  --fs-amount-lg-sm: 32rpx;
+  --fs-amount-lg: 40rpx;
+  --fs-display: 48rpx;
+  --fs-hero-sm: 56rpx;
+  --fs-hero-md: 68rpx;
+  --tap-min: 88rpx;
+
+  /* 颜色取自设计稿 Semantic 层（ui-scale.md 只管字号热区密度，没有颜色表）。
+     现有页面仍是青绿一套，这些变量本批只有 components/record-sheet 消费。
+     主行动一律黑是 docs/design-file.md 记的历轮刻意决策，不要回退成 brand 青绿。 */
+  --color-fill-action: #171717;
+  --color-fill-action-pressed: #404040;
+  --color-text-primary: #171717;
+  --color-text-muted: rgba(23, 23, 23, 0.62);
+  --color-text-faint: rgba(23, 23, 23, 0.5);
+  --color-text-on-action: #FFFFFF;
+  --color-bg-card: #FFFFFF;
+  --color-bg-overlay: rgba(15, 20, 26, 0.45);
+  --color-border-default: rgba(23, 23, 23, 0.1);
+  --color-neutral-100: #F5F5F5;
+  --color-neutral-200: #E5E5E5;
+  --color-neutral-600: #525252;
+  --color-text-debt: #DB2626;
   --space-xs: 8rpx;
   --space-sm: 12rpx;
   --space-md: 16rpx;

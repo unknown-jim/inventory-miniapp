@@ -47,6 +47,9 @@
     </view>
   </view>
 
+  <!-- 记一笔主入口。稿上 btn/记一笔（主入口）4:983：343×52 实心黑，紧贴 hero 下方。 -->
+  <view class="record-entry js-record-entry" hover-class="record-entry-press" bindtap="openRecordSheet">＋ 记一笔</view>
+
   <view wx:if="{{!todayAvailable}}" class="card quiet js-today-unavailable">今天的汇总暂时算不出来，上面几项先显示「—」。稍后重新进这个页面再看。</view>
 
   <view wx:if="{{aggregatesStale}}" class="card quiet js-aggregates-stale">这里的汇总金额正在核对，可能不准；单张单据上的金额是准的。请把这个情况告诉店主。</view>
@@ -112,4 +115,6 @@
     <view wx:else class="card quiet">还没有进货或销售记录</view>
   </block>
   </block>
+
+  <record-sheet id="record-sheet" show="{{showRecordSheet}}" bindclose="closeRecordSheet" />
 </view>

@@ -139,3 +139,23 @@
   color: #0F766E;
   font-size: var(--fs-sm);
 }
+
+/* 记一笔主入口（稿 btn/记一笔 4:983：343×52 实心黑，圆角 8px、标题字号 16 SemiBold）。
+   高度用 --tap-md：它是 104rpx = 稿上的 52px。docs/ui-scale.md 把这一档叫 --tap-lg，
+   而 app.wxss 里 --tap-lg 是 112rpx —— 名字撞车的来龙去脉见 app.wxss 的注释。 */
+.record-entry {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: var(--tap-md);
+  margin: 8rpx 0;
+  background: var(--color-fill-action);
+  border-radius: var(--space-md);
+  font-size: var(--fs-title);
+  font-weight: 600;
+  color: var(--color-text-on-action);
+}
+
+.record-entry-press {
+  background: var(--color-fill-action-pressed);
+}
