@@ -562,7 +562,7 @@ function totalStock(skus, productId) {
     const expectedAccounts = inv.summarizeAllCustomerAccounts(bookRecords)
     ledger.customers.forEach(function (customer) {
       const want = expectedAccounts[customer.id] || {
-        count: 0, amount: 0, creditAmount: 0, paidAmount: 0, receivable: 0
+        count: 0, amount: 0, creditAmount: 0, paidAmount: 0, receivable: 0, prepay: 0
       }
       assert.deepStrictEqual(customer.account, want,
         'step ' + step + '：客户 ' + customer.name + ' 的落库账目和现算对不上')
@@ -972,24 +972,44 @@ function totalStock(skus, productId) {
   capLists = await capShop.ledger()
   assert.strictEqual(capLists.customers[0].account.receivable, 40)
 
-  await rejects(function () {
-    return capShop.call('addPayment', { customerId: capCustomer.id, amount: 40.01 })
-  }, /收款不能超过当前欠款 40/)
+  // G1：收款超欠款不再拒收，超出的部分转预收，走完整条云函数链路
+  const capOver = (await capShop.call('addPayment',
+    { customerId: capCustomer.id, amount: 40.01 })).result.record
+  assert.strictEqual(capOver.prepayAdded, 0.01, '超出欠款的一分钱记预收')
+  capLists = await capShop.ledger()
+  assert.strictEqual(capLists.customers[0].account.receivable, 0)
+  assert.strictEqual(capLists.customers[0].account.prepay, 0.01)
+  assert.deepStrictEqual(capLists.accounts, inv.foldAccountTerms(capLists.records),
+    '落库累加器与全量重折叠逐字段一致（含预收两项）')
+  await capShop.call('deleteRecord', { id: capOver.id })
+
   const capPay = (await capShop.call('addPayment', { customerId: capCustomer.id, amount: 40 })).result.record
   capLists = await capShop.ledger()
   assert.strictEqual(capLists.customers[0].account.receivable, 0, '收满之后欠款精确归零')
+  assert.strictEqual(capLists.customers[0].account.prepay, 0, '删掉超收单，预收也退回 0')
   assert.deepStrictEqual(capLists.accounts, inv.foldAccountTerms(capLists.records))
 
-  // 收满之后再收一分钱都不行
-  await rejects(function () {
-    return capShop.call('addPayment', { customerId: capCustomer.id, amount: 0.01 })
-  }, /收款不能超过当前欠款 0/)
+  // 收满之后再收，整笔都是预收
+  const capAllPrepay = (await capShop.call('addPayment',
+    { customerId: capCustomer.id, amount: 0.01 })).result.record
+  assert.strictEqual(capAllPrepay.prepayAdded, 0.01, '无欠款时整笔收款转预收')
+  capLists = await capShop.ledger()
+  assert.strictEqual(capLists.customers[0].account.receivable, 0, '不折成负欠款')
+  assert.strictEqual(capLists.customers[0].account.prepay, 0.01)
+  await capShop.call('deleteRecord', { id: capAllPrepay.id })
 
-  // 改这条收款单：上限是「除本条之外的欠款」= 当前欠款 + 本条金额
-  await rejects(function () {
-    return capShop.call('updateRecord', { id: capPay.id, amount: 40.01 })
-  }, /收款不能超过当前欠款 40/)
+  // 改这条收款单：基准是「除本条之外的欠款」= 当前欠款 + 本条冲欠款的部分。
+  // 超出的部分同样转预收，不再拒收。
+  const capEditOver = (await capShop.call('updateRecord',
+    { id: capPay.id, amount: 40.01 })).result.record
+  assert.strictEqual(capEditOver.prepayAdded, 0.01)
+  capLists = await capShop.ledger()
+  assert.strictEqual(capLists.customers[0].account.receivable, 0)
+  assert.strictEqual(capLists.customers[0].account.prepay, 0.01)
   await capShop.call('updateRecord', { id: capPay.id, amount: 25 })
+  capLists = await capShop.ledger()
+  assert.strictEqual(capLists.customers[0].account.prepay, 0,
+    '改回 25 之后预收退回 0——prepayAdded 是每次改单重分的，不是累加的')
   capLists = await capShop.ledger()
   assert.strictEqual(capLists.customers[0].account.receivable, 15)
   assert.deepStrictEqual(capLists.accounts, inv.foldAccountTerms(capLists.records))

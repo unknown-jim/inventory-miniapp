@@ -73,7 +73,7 @@ function cloneAccounts(accounts) {
 }
 
 function emptyCustomerAccount() {
-  return { count: 0, amount: 0, creditAmount: 0, paidAmount: 0, receivable: 0 }
+  return { count: 0, amount: 0, creditAmount: 0, paidAmount: 0, receivable: 0, prepay: 0 }
 }
 
 // ---------------------------------------------------------------------------
@@ -927,6 +927,7 @@ function applyMutation(ledger, action, payload, now, nextId, loaded) {
       [],
       Object.assign({}, extra, {
         paidAmount: payload.paidAmount,
+        prepayUsed: payload.prepayUsed,
         payType: payload.payType,
         remark: payload.remark,
         operatorOpenid: payload.operatorOpenid,
@@ -943,7 +944,8 @@ function applyMutation(ledger, action, payload, now, nextId, loaded) {
       now,
       nextId(),
       nextId,
-      next.skus
+      next.skus,
+      { accounts: next.accounts }
     )
     next.products = applied.products
     next.skus = applied.skus

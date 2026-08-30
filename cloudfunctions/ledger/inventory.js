@@ -989,6 +989,35 @@ function settledAmount(record) {
   return paid > amount ? amount : paid
 }
 
+// 本单**已结清**额 = 现金结算额 + 预收那一格。
+//
+// 为什么不把预收并进 settledAmount 而要另开一个函数：那个数被两个语义共用了。
+//   - 「本单收了多少**现金**」—— 看板今日实收读它（todayTotals），预收是别的日子
+//     收的钱，掺进来今日实收就变成假的（见 docs/accounting-vs-policy.md
+//     「看板今日五数」的 G1 对齐条款）。
+//   - 「本单**结清**了多少」—— 欠款和退货冲抵读它，抵掉的部分当然不该再算欠款。
+// 一个数背两个口径，迟早有一边错，所以拆成两个函数。
+//
+// **那个取小不是抄顺手，是 D >= 0 的支点。** settledAmount 的取小保证了
+// D = amount − settledAmount >= 0，returnCashRefund / recomputeSaleReturns 的
+// 份额定义全靠 D >= 0。换成 creditedAmount 之后若不带取小，一条
+// paidAmount + prepayUsed > amount 的记录（写路径挡着，但改单、老数据兜底、
+// 云函数与小程序版本错位都造得出来）会让 D < 0 —— 代码走 `left <= 0` 分支、
+// Σ冲欠款额得 0，而 min(D, Σr) 是负数，**拆分不变量静默失守**：
+// assertAccountsValid 只在账户折成负数时才拦得住，单据层的 D < 0 它看不见。
+// 守门的是 tests/inventory.test.js 的「取小是 D>=0 的支点」两组（手搭反证 +
+// 边界扫描），验收方式：把下面这行取小注释掉，那两组必须**各自独立**变红。
+function creditedAmount(record) {
+  if (!record) return 0
+  const amount = round2(toNumber(record.amount))
+  const settled = settledAmount(record)
+  // 销售单用 prepayUsed（本单抵掉的预收），退货单用 prepayRefund（回流预收的部分）。
+  // 一条记录只可能有其中一格，相加即可，不必按 type 分叉。
+  const fromPrepay = round2(toNumber(record.prepayUsed) + toNumber(record.prepayRefund))
+  const credited = round2(settled + fromPrepay)
+  return credited > amount ? amount : credited
+}
+
 // 一张销售单上已经退掉的货值。returnedAmount 是退货时按退货单实际金额累加的
 // 持久字段（老流水缺失时回退 returnedQty × 当前单价，老数据读时兜底、不写迁移），
 // 不扫退货记录：流水已经在集合里，扫全表要多键索引。
@@ -1009,13 +1038,46 @@ function returnedAmountOfSale(saleRecord) {
 // 要求单条记录的贡献只依赖自己；getSlip 的「当前欠款 − 后缀」要求贡献能按时间
 // 拆开。把 max(0,…) 放进折叠里，这两条路都会算错。
 // 规则本身仍是 AGENTS.md 那条：退的钱先冲这张单没收到的，冲不掉的才算退现金。
+// 冲不掉欠款的那部分怎么分成「退现金」和「回流预收」。单条 append（returnCashRefund）
+// 和整组重算（recomputeSaleReturns）必须共用这一份定义，否则两条路会算出两套数。
+//
+// 顺序是现金优先，但**预收只吸收现金吃不下的那部分，余下仍然回现金**。
+// 不能写成「先把 cash 夹到 cashLeft、剩下的全塞给预收」：小数数量下逐张退货
+// 取整会让 Σ退货额比单据金额多 1 分（round2(0.5×7.77)×2 = 7.78 > 7.77），
+// 那 1 分超出 D + 现金 + 预收 三格之和，会被塞成**凭空的预收**——客户从没预付过，
+// 账上却多出 1 分余额。让现金兜底，行为与改动前逐字一致（老账 no-op 的一部分）。
+function splitBeyondDebt(beyondDebt, cashLeft, prepayLeft) {
+  if (beyondDebt <= 0) return { cash: 0, prepayRefund: 0 }
+  const overCash = Math.max(0, round2(beyondDebt - Math.max(0, cashLeft)))
+  const prepayRefund = overCash > prepayLeft ? Math.max(0, round2(prepayLeft)) : overCash
+  return { cash: round2(beyondDebt - prepayRefund), prepayRefund: prepayRefund }
+}
+
+// 返回 { cash, prepayRefund }：冲不掉欠款的那部分再分成「退现金」和「回流预收」。
+//
+// 顺序是 **欠款 → 现金 → 预收**，不是「欠款 → 预收 → 现金」，理由与上面那条
+// 「退货先冲这张单没收到的钱」同源 —— 出错方向必须可补救：
+//   - 记成退现金、现场其实没退：补记一笔收款就对上（客户此时无欠款，这笔收款
+//     全额转预收，余额刚好补回来）。
+//   - 记成回流预收、现场其实退了现金：账上预收多了、抽屉少了，补救需要「把预收
+//     换成现金」，系统里没有这个操作，补不回来。
 function returnCashRefund(saleRecord, returnAmount, othersReturned) {
   const amount = round2(returnAmount)
-  if (!saleRecord) return amount
-  const debt = round2(toNumber(saleRecord.amount) - settledAmount(saleRecord))
+  if (!saleRecord) return { cash: amount, prepayRefund: 0 }
+  const debt = round2(toNumber(saleRecord.amount) - creditedAmount(saleRecord))
   const left = round2(debt - round2(othersReturned))
-  if (left <= 0) return amount
-  return left >= amount ? 0 : round2(amount - left)
+  const beyondDebt = left <= 0 ? amount : (left >= amount ? 0 : round2(amount - left))
+  if (beyondDebt <= 0) return { cash: 0, prepayRefund: 0 }
+  // 本次能退的现金额度 = 当初收进来的现金 − 之前那些退货**已经退掉的现金**。
+  // 之前退货冲不掉欠款的总额是 max(0, othersReturned − D)，它们同样先吃现金，
+  // 所以已退现金 = min(max(0, O − D), P)。这一步不能省成「额度 = P」：
+  // 新退货单永远是这一组的最后一张，它的份额必须等于 recomputeSaleReturns
+  // 把整组重算一遍时分给最后一张的那一份，否则单条路径和整组重算会算出两套数。
+  const paidCash = settledAmount(saleRecord)
+  const othersBeyond = Math.max(0, round2(round2(othersReturned) - debt))
+  const cashLeft = Math.max(0, round2(paidCash - Math.min(othersBeyond, paidCash)))
+  const prepayLeft = Math.max(0, round2(toNumber(saleRecord.prepayUsed) - Math.max(0, round2(othersBeyond - paidCash))))
+  return splitBeyondDebt(beyondDebt, cashLeft, prepayLeft)
 }
 
 // ---------------------------------------------------------------------------
@@ -1052,7 +1114,7 @@ function recomputeSaleReturns(records, saleRecord) {
   if (!saleRecord || !saleId) {
     return { records: records, changes: [] }
   }
-  const debt = round2(toNumber(saleRecord.amount) - settledAmount(saleRecord))
+  const debt = round2(toNumber(saleRecord.amount) - creditedAmount(saleRecord))
   const siblings = (records || []).filter(function (item) {
     return item && item.type === 'return'
       && String((recordLines(item)[0] || {}).saleOrderId || '') === saleId
@@ -1067,10 +1129,19 @@ function recomputeSaleReturns(records, saleRecord) {
   })
   const changes = []
   let left = debt
+  // 三格 running 计数器，按 欠款 → 现金 → 预收 的顺序吃掉每张退货单的金额。
+  // 分配规则见 splitBeyondDebt —— 现金兜底，零头不会变成凭空的预收。
+  let cashLeft = settledAmount(saleRecord)
+  let prepayLeft = round2(toNumber(saleRecord.prepayUsed))
   const rewritten = siblings.map(function (ret) {
     const amount = round2(toNumber(ret.amount))
-    const cash = left <= 0 ? amount : (left >= amount ? 0 : round2(amount - left))
+    const beyondDebt = left <= 0 ? amount : (left >= amount ? 0 : round2(amount - left))
     left = round2(Math.max(0, round2(left - amount)))
+    const share = splitBeyondDebt(beyondDebt, cashLeft, prepayLeft)
+    const cash = share.cash
+    const prepayRefund = share.prepayRefund
+    cashLeft = round2(Math.max(0, round2(cashLeft - cash)))
+    prepayLeft = round2(Math.max(0, round2(prepayLeft - prepayRefund)))
     const want = {
       customerId: saleRecord.customerId || '',
       customerName: saleRecord.customerName || '',
@@ -1082,8 +1153,11 @@ function recomputeSaleReturns(records, saleRecord) {
     // payType）——否则下游 settledAmount 会按老 payType 把它回推成整笔退现金 /
     // 整笔冲欠款，账就飞了。两处判据必须一致，否则空串会被当成已 materialize
     // 跳过重写，读的时候却仍按 payType 回推。
+    // prepayRefund 缺省即 0，所以老退货单（一格都没有）比对时 0 === 0 自然相等，
+    // 不会被这一条平白拖成「有变化」。
     const materialized = !(ret.paidAmount == null || ret.paidAmount === '')
     if (materialized && round2(ret.paidAmount) === cash
+      && round2(toNumber(ret.prepayRefund)) === prepayRefund
       && ret.customerId === want.customerId
       && ret.customerName === want.customerName
       && ret.customerPhone === want.customerPhone
@@ -1091,6 +1165,13 @@ function recomputeSaleReturns(records, saleRecord) {
       return ret
     }
     const nextRet = Object.assign({}, ret, want, { paidAmount: cash })
+    // 没有预收回流就不要往单头塞一个 0：老退货单的形状保持原样，
+    // record-shape 的往返断言和 diffRecords 都不会因为多一个恒零字段而变脏。
+    if (prepayRefund > 0) {
+      nextRet.prepayRefund = prepayRefund
+    } else {
+      delete nextRet.prepayRefund
+    }
     delete nextRet.payType
     changes.push({ before: ret, after: nextRet })
     return nextRet
@@ -1386,6 +1467,8 @@ function emptyTerms() {
     creditReturnsSum: 0,
     openingsSum: 0,
     paidSum: 0,
+    prepaySum: 0,
+    prepayUsedSum: 0,
     purchaseSum: 0,
     profitSum: 0,
     count: 0
@@ -1402,10 +1485,18 @@ function recordTerms(record) {
     saleCount: type === 'out' ? 1 : 0,
     salesSum: type === 'out' ? amount : 0,
     returnsSum: type === 'return' ? amount : 0,
-    creditSalesSum: type === 'out' ? amount - cents(settledAmount(record)) : 0,
-    creditReturnsSum: type === 'return' ? amount - cents(settledAmount(record)) : 0,
+    creditSalesSum: type === 'out' ? amount - cents(creditedAmount(record)) : 0,
+    creditReturnsSum: type === 'return' ? amount - cents(creditedAmount(record)) : 0,
     openingsSum: isOpening(record) ? amount : 0,
-    paidSum: type === 'pay' ? amount : 0,
+    // 收款单的 amount 是收到的总额；超出当时欠款的那部分记在 prepayAdded 上，
+    // 不冲欠款，所以要先减掉再进 paidSum。
+    paidSum: type === 'pay' ? amount - cents(record && record.prepayAdded) : 0,
+    // 预收余额也是两个线性折叠项，和 receivable 同构：发生 − 使用。
+    // 退货的 prepayRefund 是「把抵掉的预收还回去」，所以进的是使用那一侧的负数。
+    prepaySum: (type === 'out' || type === 'pay') ? cents(record && record.prepayAdded) : 0,
+    prepayUsedSum: type === 'out'
+      ? cents(record && record.prepayUsed)
+      : (type === 'return' ? -cents(record && record.prepayRefund) : 0),
     purchaseSum: type === 'in' ? amount : 0,
     profitSum: (type === 'out' || type === 'return') ? profit : 0,
     count: 1
@@ -1428,6 +1519,8 @@ function addTerms(target, terms, sign) {
     creditReturnsSum: t.creditReturnsSum + s * terms.creditReturnsSum,
     openingsSum: t.openingsSum + s * terms.openingsSum,
     paidSum: t.paidSum + s * terms.paidSum,
+    prepaySum: t.prepaySum + s * terms.prepaySum,
+    prepayUsedSum: t.prepayUsedSum + s * terms.prepayUsedSum,
     purchaseSum: t.purchaseSum + s * terms.purchaseSum,
     profitSum: t.profitSum + s * terms.profitSum,
     count: t.count + s * terms.count
@@ -1444,7 +1537,10 @@ function accountOf(terms) {
     amount: yuan(t.salesSum - t.returnsSum),
     creditAmount: yuan(creditAmount),
     paidAmount: yuan(t.paidSum),
-    receivable: yuan(creditAmount - t.paidSum)
+    receivable: yuan(creditAmount - t.paidSum),
+    // 预收余额。与 receivable 平行、各自 >= 0、**互不相消** —— 客户可以同时
+    // 欠 84 又存着 200 预收，设计稿的并存态要的就是这个（净成一个数就丢信息了）。
+    prepay: yuan(t.prepaySum - t.prepayUsedSum)
   }
 }
 
@@ -1587,6 +1683,7 @@ function summarizeCustomerAccount(records, customerId) {
     creditAmount: account.creditAmount,
     paidAmount: account.paidAmount,
     receivable: account.receivable,
+    prepay: account.prepay,
     records: sales,
     ledger: related
   }
@@ -1619,8 +1716,15 @@ function receivableOf(ctx, records, customerId) {
 // 有 ctx 就按「老聚合 ± 本条记录的贡献」查，没有就按老口径全量重折叠。
 function assertAccountsValid(accounts) {
   Object.keys(accounts || {}).forEach(function (customerId) {
-    if (accountOf(accounts[customerId]).receivable < 0) {
+    const account = accountOf(accounts[customerId])
+    if (account.receivable < 0) {
       throw new Error('改完后收款会超过赊账，请先改收款记录')
+    }
+    // 预收余额和欠款一样不能是负的：抵扣不能超过客户存过的钱。
+    // 和 receivable 那条一样是**全账户扫描**，不是按单校验 —— 抵扣额度依赖
+    // 「此刻这个客户的余额」，那是所有流水折出来的，单条记录自己看不见。
+    if (account.prepay < 0) {
+      throw new Error('改完后预收抵扣会超过客户预收余额，请先改抵扣或收款记录')
     }
   })
 }
@@ -1653,10 +1757,11 @@ function applyPayment(records, payload, now, id, ctx) {
   if (amount <= 0) {
     throw new Error('收款金额必须大于 0')
   }
+  // 「收款不能超过当前欠款」这条闸门放开了：多收的部分记预收，不再是错误。
+  // 拆分在**写路径**定死（prepayAdded 写进单头），不在读的时候按金额反推 ——
+  // 反推要靠「当时的欠款」，那是所有更早流水折出来的，读的时候已经不在场了。
   const receivable = receivableOf(ctx, records, customerId)
-  if (amount > receivable) {
-    throw new Error('收款不能超过当前欠款 ' + receivable)
-  }
+  const prepayAdded = amount > receivable ? round2(amount - Math.max(0, receivable)) : 0
 
   const record = {
     id: id,
@@ -1671,6 +1776,7 @@ function applyPayment(records, payload, now, id, ctx) {
     createdAt: now,
     lines: []
   }
+  if (prepayAdded > 0) record.prepayAdded = prepayAdded
 
   return {
     records: [record].concat(records),
@@ -1711,33 +1817,85 @@ function applyOpening(records, payload, now, id) {
 // 本单实收。新写法直接给 paidAmount；没给就按老的 payType 回推，让还没更新的
 // 小程序也能继续开单（云函数和小程序不是同一次部署）。两个都没有时按收满算，
 // 和以前默认现结一致。fallback 用于改流水：不动实收时保留原值，并跟着新应收收口。
-function resolvePaidAmount(payload, amount, fallback) {
+// 返回 { paidAmount, prepayUsed, prepayAdded } 三格。
+//
+// 「实收不能超过应收」这条闸门放开了 —— 多收的钱不再是错误，是**预收**。但夹断
+// 本身没有放开：单头的 paidAmount 仍然夹在 (应收 − 抵扣) 以内，溢出的部分改记
+// 到 prepayAdded 上，进客户的预收余额。所以 creditedAmount <= amount 恒成立，
+// 老账的欠款一分不变（见 tests/inventory.test.js 的 no-op 一节）。
+function resolvePaidAmount(payload, amount, fallback, fallbackPrepayUsed) {
   const due = round2(amount)
+  // 抵扣和实收同一条 fallback 规矩：改流水时没传就保留原值。不给 fallback
+  // 的话，任何一次「只改备注」的保存都会把抵扣悄悄抹成 0，客户的预收余额凭空长回来。
+  const prepayUsed = (payload && payload.prepayUsed != null && payload.prepayUsed !== '')
+    ? round2(payload.prepayUsed)
+    : round2(toNumber(fallbackPrepayUsed))
+  if (prepayUsed < 0) {
+    throw new Error('预收抵扣不能为负数')
+  }
+  if (prepayUsed > due) {
+    // 只有显式传进来的抵扣才报错；从原记录继承来的抵扣遇上「金额改小了」要
+    // 自动收口，否则店主改个单价就被自己上一单的抵扣卡死，还无从下手。
+    if (payload && payload.prepayUsed != null && payload.prepayUsed !== '') {
+      throw new Error('预收抵扣不能超过应收 ' + due)
+    }
+  }
+  const usedCapped = prepayUsed > due ? due : prepayUsed
+  // 抵扣之后还要收的现金上限。抵满了就是 0，收满 chip 上那个数就是它。
+  const cashDue = round2(due - usedCapped)
   if (payload && payload.paidAmount != null && payload.paidAmount !== '') {
     const paid = round2(payload.paidAmount)
     if (paid < 0) {
       throw new Error('实收不能为负数')
     }
-    if (paid > due) {
-      throw new Error('实收不能超过应收 ' + due)
+    // 一张单不要既抵预收又转预收：那是把钱从左口袋掏到右口袋再掏回来，
+    // 现场不会这么开单，允许它只会让对账时多一种看不懂的形状。
+    if (usedCapped > 0 && paid > cashDue) {
+      throw new Error('已抵扣预收，实收不能超过 ' + cashDue)
     }
-    return paid
+    return {
+      paidAmount: paid > cashDue ? cashDue : paid,
+      prepayUsed: usedCapped,
+      prepayAdded: paid > cashDue ? round2(paid - cashDue) : 0
+    }
   }
-  if (payload && payload.payType === 'credit') return 0
-  if (payload && payload.payType === 'cash') return due
-  if (fallback == null) return due
-  const kept = round2(fallback)
-  if (kept <= 0) return 0
-  return kept > due ? due : kept
+  let kept
+  if (payload && payload.payType === 'credit') kept = 0
+  else if (payload && payload.payType === 'cash') kept = cashDue
+  else if (fallback == null) kept = cashDue
+  else {
+    kept = round2(fallback)
+    if (kept < 0) kept = 0
+  }
+  return {
+    paidAmount: kept > cashDue ? cashDue : kept,
+    prepayUsed: usedCapped,
+    prepayAdded: 0
+  }
 }
 
-function assertCustomerForDebt(paidAmount, amount, customerId) {
-  if (round2(paidAmount) < round2(amount) && !customerId) {
+// 把三格写进单头。为 0 的格子**不写**：老单的形状原样不动，
+// record-shape 的往返断言和 diffRecords 不会因为多几个恒零字段而变脏。
+function applyPrepayFields(record, settlement) {
+  record.paidAmount = settlement.paidAmount
+  if (settlement.prepayUsed > 0) record.prepayUsed = settlement.prepayUsed
+  else delete record.prepayUsed
+  if (settlement.prepayAdded > 0) record.prepayAdded = settlement.prepayAdded
+  else delete record.prepayAdded
+  return record
+}
+
+// 判据是「已结清额」不是「现金实收」：抵了预收就等于结清了，散客那条线不该
+// 因为客户掏的是余额而不是现钞就把单拦下来。（不过散客本来也不可能有预收余额，
+// 预收挂在客户身上；这里按 credited 判是为了口径统一，不是为了放行某种单。）
+function assertCustomerForDebt(settlement, amount, customerId) {
+  const credited = round2(round2(settlement.paidAmount) + round2(settlement.prepayUsed))
+  if (credited < round2(amount) && !customerId) {
     throw new Error('实收少于应收，欠款必须记在客户名下，请先选择客户')
   }
 }
 
-function applySaleOrder(products, records, payload, now, orderId, nextId, skus) {
+function applySaleOrder(products, records, payload, now, orderId, nextId, skus, ctx) {
   const items = payload.items || []
   if (!items.length) {
     throw new Error('请先加入商品')
@@ -1759,9 +1917,12 @@ function applySaleOrder(products, records, payload, now, orderId, nextId, skus) 
   const amount = round2(lineAmounts.reduce(function (sum, value) {
     return sum + value
   }, 0))
-  const paidAmount = resolvePaidAmount(payload, amount)
+  const settlement = resolvePaidAmount(payload, amount)
   const customerId = String(payload.customerId || '')
-  assertCustomerForDebt(paidAmount, amount, customerId)
+  assertCustomerForDebt(settlement, amount, customerId)
+  if ((settlement.prepayUsed > 0 || settlement.prepayAdded > 0) && !customerId) {
+    throw new Error('预收必须记在客户名下，请先选择客户')
+  }
 
   // 整单预扫：同一张单里的待加工要整单一起算，不能两行各把待加工算满。
   // 记录形状改了也要留着——它保证的是「整单能不能出货」的原子校验。
@@ -1810,14 +1971,18 @@ function applySaleOrder(products, records, payload, now, orderId, nextId, skus) 
     customerName: String(payload.customerName || '').trim(),
     customerPhone: String(payload.customerPhone || '').trim(),
     customerAddress: String(payload.customerAddress || '').trim(),
-    paidAmount: paidAmount,
     operatorOpenid: String(payload.operatorOpenid || ''),
     operatorName: String(payload.operatorName || '').trim().slice(0, 32),
     createdAt: now,
     lines: lines
   }
 
+  applyPrepayFields(record, settlement)
+
   const nextRecords = [record].concat(records)
+  // 抵扣额度依赖「此刻这个客户的预收余额」，那是折出来的，单条记录看不见 ——
+  // 所以和收款超欠款那条线一样，走 delta 之后的全账户扫描来拦。
+  assertAccountsAfter(ctx, nextRecords, null, record)
 
   return {
     products: workingProducts,
@@ -2154,11 +2319,13 @@ function applyReturnOrder(products, records, payload, now, nextId, skus, ctx) {
   const patchedSale = nextRecords.find(function (item) {
     return item.id === saleOrderId
   })
-  record.paidAmount = returnCashRefund(
+  const refund = returnCashRefund(
     patchedSale,
     record.amount,
     round2(returnedAmountOfSale(patchedSale) - record.amount)
   )
+  record.paidAmount = refund.cash
+  if (refund.prepayRefund > 0) record.prepayRefund = refund.prepayRefund
   nextRecords = [record].concat(nextRecords)
   assertAccountsAfter(ctx, nextRecords, null, record)
   return {
@@ -2553,15 +2720,20 @@ function updateRecord(products, records, payload, now, skus, ctx) {
       throw new Error('收款金额必须大于 0')
     }
     // 「除本条之外的欠款」= 当前欠款 + 本条收款额（本条 pay 已经算进 accounts 了）
+    // 「除本条之外的欠款」要把本条**冲欠款的那部分**加回来，不是整个 amount ——
+    // 本条里记成预收的钱从来没冲过欠款，加回去会把上限抬高一截，改单时又能凭空
+    // 多冲一笔。paidSum 那一侧减的就是 amount − prepayAdded，这里必须对称。
+    const selfPaid = round2(toNumber(existing.amount) - toNumber(existing.prepayAdded))
     const cap = ctx && ctx.accounts
-      ? round2(accountOf(ctx.accounts[existing.customerId]).receivable + toNumber(existing.amount))
+      ? round2(accountOf(ctx.accounts[existing.customerId]).receivable + selfPaid)
       : summarizeCustomerAccount(records.filter(function (item) {
         return item.id !== existing.id
       }), existing.customerId).receivable
-    if (amount > cap) {
-      throw new Error('收款不能超过当前欠款 ' + cap)
-    }
     next.amount = amount
+    // 改完之后重新分一次：超出「除本条外的欠款」的部分记预收。
+    const nextPrepayAdded = amount > cap ? round2(amount - Math.max(0, cap)) : 0
+    if (nextPrepayAdded > 0) next.prepayAdded = nextPrepayAdded
+    else delete next.prepayAdded
     next.remark = String(payload.remark || '').trim()
   } else if (existing.type === 'opening') {
     const amount = round2(payload.amount)
@@ -2655,9 +2827,13 @@ function updateRecord(products, records, payload, now, skus, ctx) {
     next.amount = sumBy(repriced.lines, 'amount')
     next.profit = sumBy(repriced.lines, 'profit')
     next.remark = String(payload.remark || '').trim()
-    const paidAmount = resolvePaidAmount(payload, next.amount, settledAmount(existing))
-    assertCustomerForDebt(paidAmount, next.amount, customerId)
-    next.paidAmount = paidAmount
+    const settlement = resolvePaidAmount(
+      payload, next.amount, settledAmount(existing), existing.prepayUsed)
+    assertCustomerForDebt(settlement, next.amount, customerId)
+    if ((settlement.prepayUsed > 0 || settlement.prepayAdded > 0) && !customerId) {
+      throw new Error('预收必须记在客户名下，请先选择客户')
+    }
+    applyPrepayFields(next, settlement)
     delete next.payType
     next.customerId = customerId
     next.customerName = String(payload.customerName || '').trim()
@@ -3307,6 +3483,7 @@ module.exports = {
   firstLine: firstLine,
   returnableQty: returnableQty,
   settledAmount: settledAmount,
+  creditedAmount: creditedAmount,
   returnedAmountOfSale: returnedAmountOfSale,
   recomputeSaleReturns: recomputeSaleReturns,
   repairReturnSplits: repairReturnSplits,

@@ -132,7 +132,8 @@ const allAccounts = inv.summarizeAllCustomerAccounts(mixedRecords);
     amount: single.amount,
     creditAmount: single.creditAmount,
     paidAmount: single.paidAmount,
-    receivable: single.receivable
+    receivable: single.receivable,
+    prepay: single.prepay
   }, '客户 ' + customerId + ' 的聚合结果应与逐个计算完全一致')
 })
 
@@ -207,7 +208,8 @@ book.ledger.customers.forEach(function (customer) {
     amount: expected.amount,
     creditAmount: expected.creditAmount,
     paidAmount: expected.paidAmount,
-    receivable: expected.receivable
+    receivable: expected.receivable,
+    prepay: expected.prepay
   })
 })
 assert.strictEqual(book.ledger.totals.receivable, inv.getTotalReceivable(bookRecords))
@@ -234,7 +236,8 @@ assert.deepStrictEqual(blankCustomer.account, {
   amount: 0,
   creditAmount: 0,
   paidAmount: 0,
-  receivable: 0
+  receivable: 0,
+  prepay: 0
 })
 
 // custB 目前欠 40（赊账 2 件 x 20），补齐全款后应精确归零

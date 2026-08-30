@@ -99,7 +99,11 @@ function legacySummarizeAllCustomerAccounts(records) {
       amount: legacyRound2(entry.salesSum - entry.returnsSum),
       creditAmount: creditAmount,
       paidAmount: paidAmount,
-      receivable: legacyRound2(creditAmount - paidAmount)
+      receivable: legacyRound2(creditAmount - paidAmount),
+      // G1 no-op：老算法根本没有预收这个概念。这份语料里的记录一格预收字段都不带，
+      // 所以新算法必须原样退化成老算法**并且**把预收折成 0。写死 0 而不是从
+      // 新算法抄一个值过来——抄过来这条断言就自证了，什么也证明不了。
+      prepay: 0
     }
   })
   return result
