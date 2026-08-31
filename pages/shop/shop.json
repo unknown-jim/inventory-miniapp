@@ -1,6 +1,7 @@
 {
   "navigationBarTitleText": "店铺",
   "usingComponents": {
-    "page-loading": "/components/page-loading/index"
+    "page-loading": "/components/page-loading/index",
+    "state-blocking": "/components/state-blocking/index"
   }
 }

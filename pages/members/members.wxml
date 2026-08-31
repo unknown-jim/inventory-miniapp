@@ -1,60 +1,106 @@
+<!-- 成员。稿 Screen/14d 添加店员 15:214：navbar「成员」+ content 15:217
+     （section 15:218「{店名} · 成员」+ card/成员 15:219 + card/添加店员 15:238）
+     + bottom-cta 15:243（hairline + 62 高实心黑「添加店员」+ safe-area·34）。
+     入口是店铺页 card/成员 那一行 —— 稿 15:250 逐字：「入口 = Screen/14 card/成员
+     「＋添加店员」；表单只有店主可见，店员的成员页只有列表加一句提示」。
+
+     成员行的两枚文字链是危险三级里最轻的一档（稿 4:927 / 15:236）。
+     稿 $12:9 逐字：「改称呼 / 移出 / 换图等文本链接视觉 13px，落地透明 padding
+     扩热区至 44；同一行相邻文本链至少留 16px 间距，保证 44 热区不重叠」。 -->
 <view class="page">
   <page-loading wx:if="{{pageLoading}}" />
   <block wx:else>
-  <view class="section-title">
-    <text>{{shopName || '本店'}}成员</text>
-  </view>
-  <view class="card member-card js-member-card" wx:for="{{members}}" wx:key="id">
-    <block wx:if="{{item.editing}}">
+    <!-- 稿 section/成员 15:218「金秋布艺 · 成员」16px SemiBold -->
+    <view class="section-title">
+      <text>{{shopName || '本店'}} · 成员</text>
+    </view>
+
+    <view class="card list-card">
+      <view class="member-row js-member-card" wx:for="{{members}}" wx:key="id">
+        <!-- 改称呼的编辑态稿上没画（14d 与 Screen/14 都只画了静态链接）。
+             这是 main 就有的能力，删掉是功能回退，所以逐字保留、只换容器。 -->
+        <view wx:if="{{item.editing}}" class="member-edit">
+          <view class="field last">
+            <view class="field-label">称呼</view>
+            <input
+              class="field-input"
+              maxlength="32"
+              value="{{item.editName}}"
+              data-openid="{{item.openid}}"
+              bindinput="onEditName"
+              placeholder="店里怎么叫，可选"
+            />
+          </view>
+          <view class="action-strip">
+            <button class="btn-primary" data-openid="{{item.openid}}" bindtap="saveDisplayName">保存</button>
+            <button class="btn-ghost" bindtap="cancelEditName">取消</button>
+          </view>
+        </view>
+        <view wx:else class="member-line">
+          <view class="member-name js-member-name">{{item.displayTitle}}</view>
+          <view
+            class="tag js-member-role {{item.isOwnerRole ? 'tag-owner' : 'tag-staff'}}"
+          >{{item.roleTagText}}</view>
+          <view class="member-gap"></view>
+          <!-- 稿注 4:582 写「仅店主可见可点」，但服务端 updateMember 允许
+               「owner 或本人」（ledger-core.js:756-758），稿 15:253 又写「之后随时
+               改称呼」不限角色。两条注释打架时取与服务端一致的那条，见规格 5.7。 -->
+          <view
+            wx:if="{{item.canEditName}}"
+            class="row-link js-member-rename"
+            data-openid="{{item.openid}}"
+            bindtap="startEditName"
+          >改称呼</view>
+          <!-- 危险三级里最轻的一档：红字链。移出可逆（把身份码再发一次就能加回），
+               所以不给实底、也不给描边。服务端 requireOwner + 「不能移除最后一位店主」
+               两道闸都在（ledger-core.js:772 / :781-782），客户端不重复实现后一条 ——
+               那需要在客户端数 owner 数量，是一份会漂的镜像逻辑。 -->
+          <view
+            wx:if="{{isOwner && !item.isMe}}"
+            class="row-link danger js-member-remove"
+            data-openid="{{item.openid}}"
+            bindtap="removeMember"
+          >移出</view>
+        </view>
+      </view>
+    </view>
+
+    <!-- 稿 card/添加店员 15:238：两格「label + input」，label 13px text/muted -->
+    <view wx:if="{{isOwner}}" class="card">
       <view class="field">
-        <view class="field-label">称呼</view>
+        <view class="field-label">店员身份</view>
+        <input
+          class="field-input"
+          value="{{newOpenid}}"
+          bindinput="onNewOpenid"
+          placeholder="粘贴店员发来的身份"
+        />
+      </view>
+      <view class="field last">
+        <view class="field-label">称呼（可选）</view>
         <input
           class="field-input"
           maxlength="32"
-          value="{{item.editName}}"
-          data-openid="{{item.openid}}"
-          bindinput="onEditName"
+          value="{{newDisplayName}}"
+          bindinput="onNewDisplayName"
           placeholder="店里怎么叫，可选"
         />
       </view>
-      <view class="action-strip">
-        <button class="btn-primary" data-openid="{{item.openid}}" bindtap="saveDisplayName">保存</button>
-        <button class="btn-ghost" bindtap="cancelEditName">取消</button>
-      </view>
-    </block>
-    <block wx:else>
-      <view class="item-name js-member-name">{{item.displayTitle}}</view>
-      <view class="muted js-member-role">{{item.roleText}}<block wx:if="{{item.isMe}}"> · 我</block></view>
-      <view class="action-strip" wx:if="{{item.canEditName || (isOwner && !item.isMe)}}">
-        <button
-          wx:if="{{item.canEditName}}"
-          class="btn-ghost"
-          data-openid="{{item.openid}}"
-          bindtap="startEditName"
-        >改称呼</button>
-        <button
-          wx:if="{{isOwner && !item.isMe}}"
-          class="btn-danger"
-          data-openid="{{item.openid}}"
-          bindtap="removeMember"
-        >移出</button>
-      </view>
-    </block>
-  </view>
+    </view>
+    <view wx:else class="card">
+      <view class="muted">只有店主能加减成员。店员把身份发给老板，在店铺页复制。</view>
+    </view>
 
-  <view wx:if="{{isOwner}}" class="card">
-    <view class="field">
-      <view class="field-label">店员身份</view>
-      <input class="field-input" value="{{newOpenid}}" bindinput="onNewOpenid" placeholder="粘贴店员发来的身份" />
-    </view>
-    <view class="field">
-      <view class="field-label">称呼</view>
-      <input class="field-input" maxlength="32" value="{{newDisplayName}}" bindinput="onNewDisplayName" placeholder="店里怎么叫，可选" />
-    </view>
-    <button class="btn-primary js-member-add" bindtap="addMember">添加店员</button>
-  </view>
-  <view wx:else class="card quiet">
-    <view class="muted">只有店主能加减成员。店员把身份发给老板，在店铺页复制。</view>
-  </view>
+    <!-- 稿 bottom-cta 15:243 只画在 14d 上，而 15:250 逐字写着表单只有店主可见。
+         所以钉底 CTA 只对店主渲染；店员那一侧改成稿画布规范 9:24 要求的 34 安全区。 -->
+    <block wx:if="{{isOwner}}">
+      <view class="cta-hold"></view>
+      <view class="cta-bar">
+        <view class="cta-inner">
+          <button class="btn-primary js-member-add" bindtap="addMember">添加店员</button>
+        </view>
+      </view>
+    </block>
+    <view wx:else class="safe-area"></view>
   </block>
 </view>

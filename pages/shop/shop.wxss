@@ -1,76 +1,155 @@
-.openid {
-  margin: 16rpx 0;
-  padding: 20rpx 24rpx;
-  background: #F8FAF9;
-  border-radius: 14rpx;
-  word-break: break-all;
-  font-size: var(--fs-sm);
-}
+/* 店铺设置。共用类来自 app.wxss，这里只写本页布局：
+   .page 与 .card 与 .muted 与 .empty 与 .empty-title 与 .section-title 与 .tag 与
+   .tag-owner 与 .tag-staff 与 .field 与 .field-label 与 .field-input 与
+   .btn-primary 与 .btn-ghost 与 .action。
+   稿 Screen/14 店铺设置 4:522。 */
 
-.copy-btn {
-  margin-top: 12rpx;
-}
-
+/* tests/ui-scale.test.js 钉着这两行：连续卡片之间要有竖向间距 */
 .card + .card {
   margin-top: var(--space-md);
 }
 
-.list-card {
-  padding: 8rpx 28rpx;
+/* 稿 4:557 与 4:573 卡标题：13px text/muted 62% */
+.card-label {
+  color: var(--color-text-muted);
+  font-size: var(--fs-label);
 }
 
-.list-item,
-.fold-head {
+/* 稿 4:537 店名：16px SemiBold neutral/900 */
+.card-title,
+.shop-name {
+  font-size: var(--fs-title);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+/* 稿 4:929 row/店名：横排 gap10，店名占满、角色 tag 贴右 */
+.shop-head {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  min-height: var(--tap-sm);
-  padding: 24rpx 0;
+  gap: var(--space-md);
+}
+
+.shop-name {
+  flex: 1;
+  min-width: 0;
+  word-break: break-all;
+}
+
+/* 稿 card/成员 4:539 与 card/其他店 4:562：整卡不留上下内边距，
+   分隔线由行与行之间的 border-top 承担（稿 4:546 与 4:567 的 div h1 = 2rpx） */
+.list-card {
+  padding: 0 var(--card-pad);
 }
 
 .list-item {
-  border-bottom: 1rpx solid #F1F5F4;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: var(--tap-md);
+  padding: var(--space-lg) 0;
 }
 
-.list-item:last-child {
-  border-bottom: none;
+.list-item + .list-item,
+.fold-body + .list-item {
+  border-top: 2rpx solid var(--color-border-default);
 }
 
-.item-main {
+.list-main {
   flex: 1;
   min-width: 0;
 }
 
-.item-name {
-  font-size: var(--fs-lg);
-  font-weight: 600;
-  margin-bottom: 8rpx;
+/* 稿 4:564 与 4:569 行文案：14px neutral/900 */
+.list-title {
+  font-size: var(--fs-body);
+  color: var(--color-text-primary);
 }
 
-.fold-head > .item-name {
-  margin-bottom: 0;
+.list-main .list-title {
+  margin-bottom: var(--space-xs);
 }
 
+/* 稿 4:565 与 4:570 chevron：12×12，描边黑 50% = text/faint */
 .cell-go {
   flex-shrink: 0;
   margin-left: var(--gap);
-  color: #64748B;
-  font-size: var(--fs-sm);
+  color: var(--color-text-faint);
+  font-size: var(--fs-label);
+}
+
+.press {
+  background: var(--color-fill-ghost);
 }
 
 .fold-body {
-  padding-top: var(--space-md);
-  border-top: 1rpx solid #F1F5F4;
+  padding: var(--space-md) 0 var(--space-lg);
+  border-top: 2rpx solid var(--color-border-default);
 }
 
-.seed-btn {
-  margin-top: var(--space-lg);
+/* 共用 .field 自带下外边距，块里最后一格不要那一截 */
+.last {
+  margin-bottom: 0;
 }
 
-.js-restore {
+.gap-top {
   margin-top: var(--space-md);
 }
 
-.restore-copy {
-  margin-top: var(--space-lg);
+.gap-top-sm {
+  margin-top: var(--space-sm);
+}
+
+/* 稿 4:559 身份码。真 openid 是 28 字符，与 44 高的复制钮同行必然挤成两行，
+   而且店员要能长按选中，所以码独占一行、钮在下面。 */
+.code {
+  margin-top: var(--space-xs);
+  padding: var(--space-md) var(--space-lg);
+  background: var(--color-fill-ghost);
+  border-radius: 14rpx;
+  word-break: break-all;
+  font-size: var(--fs-body);
+}
+
+/* ---- 危险三级分层（规格 5.3；稿注 4:584 与十二轮收口裁定 3）----
+   删除店铺 7:212       实心 red/600 底 + 白字        = 最强
+   清空本店数据 4:574   白底 + red/600 描边与字        = 中
+   移出成员 4:927       13px red/600 纯文字链 44 热区  = 最轻（落在成员页）
+   恢复清空前数据 4:576 白底 + neutral/900 描边        = 中性档，走共用类 .action */
+.danger-outline,
+.danger-solid {
+  height: auto;
+  min-height: var(--tap-md);
+  margin-top: var(--space-md);
+  padding: var(--space-sm) var(--space-md);
+  box-sizing: border-box;
+  line-height: 1.3;
+  border-radius: 16rpx;
+  font-size: var(--fs-body);
+  font-weight: 600;
+  white-space: normal;
+}
+
+.danger-outline {
+  background: var(--color-bg-card);
+  border: 2rpx solid var(--color-red-600);
+  color: var(--color-red-600);
+}
+
+.danger-solid {
+  background: var(--color-red-600);
+  color: var(--color-text-on-action);
+}
+
+/* 稿 13:368 spacer 24 加 13:369 hairline：把删店铺和上面两个动作隔开，
+   免得手指从「恢复」一路滑到「删店」 */
+.danger-split {
+  height: 2rpx;
+  margin-top: var(--space-xl);
+  background: var(--color-border-default);
+}
+
+/* 稿 15:11 safe-area·34 = 68rpx。本屏没有钉底 CTA，安全区挂在滚动流末尾。 */
+.safe-area {
+  height: calc(env(safe-area-inset-bottom) + 68rpx);
 }

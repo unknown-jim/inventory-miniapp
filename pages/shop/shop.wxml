@@ -1,19 +1,32 @@
+<!-- 店铺设置。稿 Screen/14 店铺设置 4:522，content 4:525 自上而下：
+     card/当前店 4:536 → card/成员 4:539 → card/身份码 4:556 → card/其他店 4:562
+     → card/数据危险区 4:572 → safe-area·34 15:11。
+
+     阻断态换成 B1 交付的共用卡 components/state-blocking（B1 commit 0c6e0e1 的移交清单
+     第三条点名交给本批）。这里刻意不给 action：BLOCKING 表兜底档的按钮文案是
+     「去店铺页」，而本屏就是那个目的地，按钮点了原地不动；本页是从看板 hero 行
+     navigateTo 进来的二级页，原生返回箭头就是出口。
+
+     危险区三级分层（稿注 4:584 与十二轮收口裁定 3，五轮独立审计逐轮复核过）：
+     删除店铺 7:212 实心红 强于 清空 4:574 白底红描边 强于 移出成员（在成员页）红字链。
+     恢复清空前数据 4:576 是白底中性描边，它是撤销路径不是破坏动作，不进红档。 -->
 <view class="page">
   <block wx:if="{{pageLoading}}">
     <page-loading />
   </block>
 
   <block wx:elif="{{!configured}}">
-    <view class="card empty">
-      <view class="empty-title">还不能记账</view>
-      <view class="muted">{{blockedMessage}}</view>
-    </view>
+    <state-blocking
+      kind="{{blockedKind}}"
+      title="{{blockedTitle}}"
+      body="{{blockedMessage}}"
+    />
   </block>
 
   <block wx:elif="{{!shops.length && !hasCurrentShop}}">
     <view wx:if="{{shopsLoadError}}" class="card empty">
       <view class="muted">店铺列表没加载成功。可以重试，或先创建、把身份发给老板。</view>
-      <button class="btn-ghost copy-btn" bindtap="retryShops">重试</button>
+      <button class="btn-ghost gap-top" bindtap="retryShops">重试</button>
     </view>
     <view wx:else class="card empty">
       <view class="empty-title">还没有店铺</view>
@@ -21,46 +34,66 @@
     </view>
 
     <view class="card">
-      <view class="field">
+      <view class="field last">
         <view class="field-label">创建一家店</view>
-        <input class="field-input js-shop-name" value="{{newShopName}}" bindinput="onShopName" placeholder="店铺名称" />
+        <input
+          class="field-input js-shop-name"
+          value="{{newShopName}}"
+          bindinput="onShopName"
+          placeholder="店铺名称"
+        />
       </view>
-      <button class="btn-primary js-shop-create" bindtap="createShop">创建并进入</button>
+      <button class="btn-primary gap-top js-shop-create" bindtap="createShop">创建并进入</button>
     </view>
 
     <view class="card">
-      <view class="field-label">加入别人的店</view>
-      <view class="muted">把这一串发给老板。没有邀请码。</view>
-      <view class="openid" selectable="true">{{openid || '加载中…'}}</view>
-      <button class="btn-ghost copy-btn" bindtap="copyOpenid">复制我的身份</button>
+      <view class="card-label">我的身份码（发给店主，用于被添加为店员）</view>
+      <view class="code" selectable="true">{{openid || '加载中…'}}</view>
+      <button class="action gap-top" bindtap="copyOpenid">复制</button>
+      <view class="muted gap-top">没有邀请码。把这串身份码发给店主，店主添加后你就在店里了。</view>
     </view>
+
+    <view class="safe-area"></view>
   </block>
 
   <block wx:else>
     <view wx:if="{{shopsLoadError}}" class="card empty">
       <view class="muted">{{shops.length ? '店铺列表没刷新成功，下面仍是上次看到的店。' : '店铺列表没加载成功。'}}</view>
-      <button class="btn-ghost copy-btn" bindtap="retryShops">重试</button>
+      <button class="btn-ghost gap-top" bindtap="retryShops">重试</button>
     </view>
-    <view wx:if="{{hasCurrentShop}}" class="card current-shop">
-      <view class="item-name js-shop-current">{{shopName || '未命名店铺'}}</view>
-      <view class="muted">
-        <block wx:if="{{currentRoleText}}">{{currentRoleText}} · </block>当前
+
+    <!-- 稿 card/当前店 4:536：店名 16 SemiBold 与角色 tag 是兄弟节点。
+         js-shop-current 里只许有店名这一段文字 —— tests/ui.test.js:2985 拿它的
+         渲染文本和账本里的店名做严格相等比较，塞进去任何别的字都会红。 -->
+    <view wx:if="{{hasCurrentShop}}" class="card">
+      <view class="shop-head">
+        <view class="shop-name js-shop-current">{{shopName || '未命名店铺'}}</view>
+        <view
+          wx:if="{{currentRoleText}}"
+          class="tag {{isOwner ? 'tag-owner' : 'tag-staff'}}"
+        >{{currentRoleText}}</view>
       </view>
     </view>
     <view wx:else class="card empty">
       <view class="muted">点下面一家店进入，才能记账。</view>
     </view>
 
-    <view wx:if="{{hasCurrentShop}}" class="section-title">
-      <text>本店</text>
-    </view>
+    <!-- 稿 card/成员 4:539。稿把名单铺在本屏、由「＋ 添加店员」4:552 跳 Screen/14d；
+         实现保留独立的成员页，这一行就是稿上那一跳的等价物（规格 5.2）。 -->
     <view wx:if="{{hasCurrentShop}}" class="card list-card">
-      <view class="list-item js-shop-members" bindtap="goMembers">
-        <view class="item-name">成员名单</view>
+      <view class="list-item js-shop-members" hover-class="press" bindtap="goMembers">
+        <view class="list-main">
+          <view class="list-title">成员名单</view>
+          <view class="muted">改称呼、加店员、移出店员</view>
+        </view>
         <view class="cell-go">›</view>
       </view>
     </view>
 
+    <!-- 稿 4:847 row/切换店铺（我加入的店）是一行带 chevron 的文字链，
+         但全稿没有「我加入的店」这个目标屏；而 tests/ui.test.js:2991 在页面加载完
+         之后直接点 js-shop-item，中间不展开任何东西。所以列表常驻，
+         稿上那一行退化成这个小标题。 -->
     <view wx:if="{{shops.length}}" class="section-title">
       <text>我加入的店</text>
     </view>
@@ -71,70 +104,92 @@
         wx:key="id"
         data-id="{{item.id}}"
         data-name="{{item.name}}"
+        hover-class="press"
         bindtap="selectShop"
       >
-        <view class="item-main">
-          <view class="item-name">{{item.name}}</view>
+        <view class="list-main">
+          <view class="list-title">{{item.name}}</view>
           <view class="muted">{{item.role === 'owner' ? '店主' : '店员'}}<block wx:if="{{item.current}}"> · 当前</block></view>
         </view>
+        <view class="cell-go">›</view>
       </view>
     </view>
 
+    <!-- 稿 card/身份码 4:556。main 上这块藏在「加入别人的店」折叠里，
+         而且屏上会出现两枚「复制我的身份」；稿把它做成常驻卡，本批照办、收成一枚。
+         码不截断：真 openid 是 28 字符，店员要能长按选中。 -->
     <view class="card">
-      <view class="fold-head js-shop-create-toggle" bindtap="toggleCreate">
-        <view class="item-name">再建一家</view>
+      <view class="card-label">我的身份码（发给店主，用于被添加为店员）</view>
+      <view class="code" selectable="true">{{openid || '加载中…'}}</view>
+      <button class="action gap-top" bindtap="copyOpenid">复制</button>
+    </view>
+
+    <!-- 稿 card/其他店 4:562。两行入口在稿上各有一张独立屏（Screen/14b 15:123 与
+         Screen/14c 15:177），那两屏属于 B13「建店 4 屏」。
+         shop-onboarding-design-2026-08-31.md 第 6 节第 2 条逐字授权
+         「实现可做 navigateTo 也可维持折叠」，本批维持折叠；两块互相独立，
+         B13 要拆成真页面时各自替换掉即可。 -->
+    <view class="card list-card">
+      <view class="list-item js-shop-create-toggle" hover-class="press" bindtap="toggleCreate">
+        <view class="list-title">再建一家店</view>
         <view class="cell-go">{{showCreate ? '收起' : '展开'}}</view>
       </view>
       <view wx:if="{{showCreate}}" class="fold-body">
-        <view class="field">
+        <view class="muted">创建后立即进入新店。新店从空账本开始，与现在这家店的账互不相通。</view>
+        <view class="field gap-top last">
           <view class="field-label">店铺名称</view>
-          <input class="field-input js-shop-name" value="{{newShopName}}" bindinput="onShopName" placeholder="店铺名称" />
+          <input
+            class="field-input js-shop-name"
+            value="{{newShopName}}"
+            bindinput="onShopName"
+            placeholder="店铺名称"
+          />
         </view>
-        <button class="btn-primary js-shop-create" bindtap="createShop">创建并进入</button>
+        <button class="btn-primary gap-top js-shop-create" bindtap="createShop">创建并进入</button>
+      </view>
+      <view class="list-item" hover-class="press" bindtap="toggleJoin">
+        <view class="list-title">加入别人的店（把身份码发给店主）</view>
+        <view class="cell-go">{{showJoin ? '收起' : '展开'}}</view>
+      </view>
+      <view wx:if="{{showJoin}}" class="fold-body">
+        <view class="muted">没有邀请码。把上面的身份码发给店主，店主添加后你就在店里了。</view>
+        <view class="muted gap-top">加入不切店：新店会出现在「我加入的店」里，点它才进去记账。</view>
       </view>
     </view>
 
-    <view class="card">
-      <view class="fold-head" bindtap="toggleIdentity">
-        <view class="item-main">
-          <view class="item-name">加入别人的店</view>
-          <view class="muted">把身份发给老板</view>
-        </view>
-        <view class="cell-go">{{showIdentity ? '收起' : '展开'}}</view>
-      </view>
-      <view wx:if="{{showIdentity}}" class="fold-body">
-        <view class="muted">发给老板，加进店里就能记账。没有邀请码。</view>
-        <view class="openid" selectable="true">{{openid || '加载中…'}}</view>
-        <button class="btn-ghost copy-btn" bindtap="copyOpenid">复制我的身份</button>
-      </view>
-    </view>
-
+    <!-- 稿上没有这张卡的样张（shop-onboarding 交接第 6 节第 1 条已登记），
+         所以只换 token、不换形状。 -->
     <view wx:if="{{canMigrate}}" class="card">
-      <view class="empty-title">本机还有一份旧账本</view>
-      <view class="muted">只会上传到当前店一次。若云上已经有账，就不要传，以免两份账对打。</view>
-      <button class="btn-primary seed-btn" bindtap="migrateLocal">把本机账本上传到当前店</button>
+      <view class="card-title">本机还有一份旧账本</view>
+      <view class="muted gap-top-sm">只会上传到当前店一次。若云上已经有账，就不要传，以免两份账对打。</view>
+      <button class="btn-primary gap-top" bindtap="migrateLocal">把本机账本上传到当前店</button>
     </view>
 
-    <view wx:if="{{showLedgerReset}}" class="section-title">
-      <text>账本</text>
-    </view>
-    <view wx:if="{{showLedgerReset}}" class="card">
-      <block wx:if="{{!isEmpty}}">
-        <view class="muted">只清商品、客户、种类模板和流水。店铺和成员还在。</view>
-        <button class="btn-danger seed-btn js-clear" bindtap="clearData">清空数据</button>
+    <!-- 稿 card/数据危险区 4:572。清空与恢复按稿注 4:583 和 13:601 两处 owner-gated
+         （服务端只有 requireMember，这道闸是客户端的，见规格 5.4 与 OPEN-Q-1）。
+         删除店铺前面隔着稿上的 spacer 24（13:368）加 hairline（13:369），
+         就是为了不让手指从「恢复」直接滑到「删店」。 -->
+    <view wx:if="{{(isOwner && showLedgerReset) || canDeleteShop}}" class="card">
+      <view class="card-label">数据危险区</view>
+      <block wx:if="{{isOwner && showLedgerReset}}">
+        <block wx:if="{{!isEmpty}}">
+          <view class="muted gap-top">只清商品、客户、种类模板和流水。店铺和成员还在。</view>
+          <button class="danger-outline js-clear" bindtap="clearData">清空本店数据</button>
+        </block>
+        <block wx:if="{{canRestore}}">
+          <view class="muted gap-top">可恢复到最近一次清空前。清空之后新记的账会丢掉。</view>
+          <button class="action gap-top-sm js-restore" bindtap="restoreCleared">恢复清空前数据</button>
+        </block>
       </block>
-      <block wx:if="{{canRestore}}">
-        <view class="muted restore-copy">可恢复到最近一次清空前。清空之后新记的账会丢掉。</view>
-        <button class="btn-ghost js-restore" bindtap="restoreCleared">恢复清空前数据</button>
+      <block wx:if="{{canDeleteShop}}">
+        <view class="danger-split"></view>
+        <view class="muted gap-top">店铺、成员、账本和清空记录都会删掉，不能从本程序找回。</view>
+        <button class="danger-solid js-delete-shop" bindtap="deleteShop">删除店铺</button>
       </block>
     </view>
 
-    <view wx:if="{{canDeleteShop}}" class="section-title">
-      <text>危险操作</text>
-    </view>
-    <view wx:if="{{canDeleteShop}}" class="card">
-      <view class="muted">店铺、成员、账本和清空记录都会删掉，不能从本程序找回。</view>
-      <button class="btn-danger seed-btn js-delete-shop" bindtap="deleteShop">删除店铺</button>
-    </view>
+    <!-- 稿 15:11 safe-area·34。本屏没有钉底 CTA，稿的画布规范 9:24 点名了它：
+         「长滚动屏（内容超视口，如 Screen/14 店铺设置）安全区同样挂在滚动流末尾」。 -->
+    <view class="safe-area"></view>
   </block>
 </view>
