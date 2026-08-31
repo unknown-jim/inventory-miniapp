@@ -2595,6 +2595,19 @@ async function runProductDetail(miniProgram) {
   await waitForData(products, function (d) {
     return d.list && d.list.length === 1 && d.list[0].id === target.id
   }, '搜索把商品列表收敛到唯一那一条')
+
+  // 货号行（2026-09-01，稿 sku 槽 19:32）：有货号的商品，卡上「货号 X」单独一行。
+  // 不复刻文案拼法之外的东西 —— 期望值由页面 data 里的 sku 现算，改了前缀这里就红。
+  const cardWithSku = await products.data()
+  assert.ok(cardWithSku.list[0].sku,
+    '前提：种子里的「短袖 T恤」应当带货号，实为 ' + JSON.stringify(cardWithSku.list[0].sku))
+  assert.strictEqual(cardWithSku.list[0].skuText, '货号 ' + cardWithSku.list[0].sku,
+    'cardViewOf 给出的 skuText 不是「货号 」+ product.sku')
+  assert.deepStrictEqual(
+    await textsOf(products, '.js-product-sku'),
+    ['货号 ' + cardWithSku.list[0].sku],
+    '屏幕上的货号行和 data.list[0].skuText 对不上 —— 数据对、卡上没画出来（或画了两行）')
+
   await tap(products, '.js-product-card')
 
   const detail = await waitForPage(miniProgram, 'pages/product-detail/product-detail', '商品详情页')
@@ -2807,7 +2820,7 @@ async function runProductEdit(miniProgram) {
   const saved = await waitForLists(miniProgram, function (lists) {
     return lists.products.some(function (item) { return item.name === name })
   }, '新建的商品落进账本')
-  await waitForPage(miniProgram, 'pages/products/products', '保存后退回商品页')
+  const listAfterSave = await waitForPage(miniProgram, 'pages/products/products', '保存后退回商品页')
 
   const created = saved.products.find(function (item) { return item.name === name })
   assert.ok(created, '保存之后账本里没有这件商品')
@@ -2839,6 +2852,25 @@ async function runProductEdit(miniProgram) {
         + '，账本里是 ' + hit[0].alertQty
         + '（矩阵里某一行的数据被丢掉时就是这个样子 —— 只对组合名是查不出来的）')
   })
+
+  // 货号行的空分支（2026-09-01，稿 n12「product.sku 为空则整行不渲染」）。
+  // 种子里五件商品全带货号，只有本用例自己建的这件没填 —— 空分支只有在这里测得到。
+  // 顺序上必须放在删除之前：删掉之后这件商品就不在列表里了。
+  await waitPageReady(listAfterSave)
+  await typeInto(listAfterSave, '.js-product-search', name, '商品搜索（货号空态）', 'keyword')
+  await waitForData(listAfterSave, function (d) {
+    return d.list && d.list.length === 1 && d.list[0].id === created.id
+  }, '商品列表收敛到刚建的这件（没填货号的那件）')
+  const cardNoSku = await listAfterSave.data()
+  assert.ok(!cardNoSku.list[0].sku,
+    '前提：本用例建的这件商品不该有货号，实为 ' + JSON.stringify(cardNoSku.list[0].sku))
+  assert.strictEqual(cardNoSku.list[0].skuText, '',
+    '没填货号时 cardViewOf 该给空串（给出「货号 undefined」「货号 」都是这里红）')
+  assert.deepStrictEqual(await textsOf(listAfterSave, '.js-product-sku'), [],
+    '没填货号就整行不渲染：屏幕上不该有 .js-product-sku 节点'
+      + '（wx:if 被摘掉、或换成 hidden，这里都会红）')
+  // 把搜索框清回去，不给后面的用例留一个只剩一条的列表。
+  await typeInto(listAfterSave, '.js-product-search', '', '清空商品搜索', 'keyword')
 
   // 删掉自己造的这件商品：既覆盖删除路径（wx.showModal 由 mockWxMethod 自动确认），
   // 也不给后面的用例留垃圾。

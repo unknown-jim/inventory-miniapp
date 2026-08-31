@@ -131,7 +131,21 @@ assert.ok(productsWxml.indexOf('库存调整') < 0)
 assert.ok(productsWxml.indexOf('goods-thumb') >= 0)
 assert.ok(productsWxml.indexOf('lazy-load') >= 0)
 assert.ok(productsWxml.indexOf('thumb-empty') >= 0)
-const productsCard = productsWxml.slice(productsWxml.indexOf('class="card goods-card"'))
+// 锚点必须真能命中：旧值 'class="card goods-card"' 在 wxml 里找不到（实际 class 是
+// 'card goods-card js-product-card'，goods-card 后面没引号），indexOf 恒 -1，
+// slice(-1) 只剩最后一个字符，下面的「条码」断言在 1 个字符里恒真 —— 整条空转。
+// （ui.test.js 钉子⑨的注释记过同一类坑：slice(x, -1) 不报错、钉子静默降级却照样绿。）
+// 锚点要匹配到**类名边界**，两头的坑都得躲开：
+//   · 带闭合引号（'…goods-card"'）→ 卡上后加 hook class 就失配，正是这条空转的成因
+//   · 纯前缀（'…goods-card'）→ 把 class 改名成 goods-cardX 也照样命中，改名漏网
+// 所以要求 goods-card 后面紧跟引号或空格，即它确实是一个完整的类名。
+const productsCardMatch = /class="card goods-card[" ]/.exec(productsWxml)
+const productsCardAt = productsCardMatch ? productsCardMatch.index : -1
+assert.ok(
+  productsCardAt >= 0,
+  '自检：商品卡锚点没命中，本条「条码」断言会跟着空转 —— 改 wxml 的卡 class 时要连锚点一起改'
+)
+const productsCard = productsWxml.slice(productsCardAt)
 assert.ok(productsCard.indexOf('条码') < 0)
 
 const productsJs = fs.readFileSync(
