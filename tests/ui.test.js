@@ -1506,7 +1506,8 @@ async function runRecordSheetFabEntry(miniProgram) {
   await waitForData(records, function (d) {
     return d && d.showRecordSheet === false
   }, '流水页关掉面板')
-  await goBackTo(miniProgram, '看板')
+  // 上一步是 switchTab 进流水，栈深恒为 1，没有「上一页」可退——回看板同样要 switchTab。
+  await goto(miniProgram, 'switchTab', '/pages/index/index', '看板')
 }
 
 async function runSalePickerAndSlip(miniProgram) {
@@ -1752,9 +1753,10 @@ async function runRecordsLoadMore(miniProgram) {
     ids[item.id] = true
   })
   await waitForGone(records, '.js-load-more', '翻完之后「加载更多」按钮要消失')
-  await trace(miniProgram, 'runRecordsLoadMore 结尾 navigateBack 之前')
-  await goBackTo(miniProgram, '客户页')
-  await trace(miniProgram, 'runRecordsLoadMore 结尾 navigateBack 之后')
+  // 上一步是 switchTab 进流水，栈深恒为 1，没有「上一页」可退——回客户页同样要 switchTab。
+  await trace(miniProgram, 'runRecordsLoadMore 结尾 switchTab 之前')
+  await goto(miniProgram, 'switchTab', '/pages/customers/customers', '客户页')
+  await trace(miniProgram, 'runRecordsLoadMore 结尾 switchTab 之后')
 }
 
 async function runCustomerLedgerLoadMore(miniProgram) {
