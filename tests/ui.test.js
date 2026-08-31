@@ -1516,6 +1516,37 @@ async function runRecordSheetProductPicker(miniProgram, home) {
   )
   step('picker 空结果高度不变：' + Math.round(heightWithRows) + 'px → '
     + Math.round(heightWhenEmpty) + 'px')
+
+  // 空态在外壳里垂直居中 —— 读**计算样式**，不读 wxss 文本。
+  // tests/record-sheet.test.js 里那三条静态断言守不住这一格：它们只看原始文本，
+  // 看不见层叠（同规则后补 align-items: flex-start）、看不见注释（把整条规则注释掉，
+  // 「align-items: center」这七个字仍在文本里，正则照样命中）、也看不见 DOM 嵌套
+  // （给 .rs-empty 外面套一层 view，wxss 一个字节都不用改）。四种绕法静态全绿，
+  // 其中「注释掉」实测连全套 UI 都绿，而居中已经彻底坏了。所以真正的守卫在这里。
+  // 选择器只能用**单一简单选择器**：'.rs-picker-body > .rs-empty' 这种后代/子组合
+  // 在组件查询这条通道上取不到（实测超时），与 docs/ui-test.md 记的 `>>>` 那个坑同源。
+  // 用 .rs-empty 是安全的：本组件里它只出现在外壳内，且同一时刻只有一个 step 在渲染，
+  // 下面先断言恰好一个，避免哪天多出一个时静默量错对象。
+  const emptyNodes = await host.$$('.rs-empty')
+  assert.strictEqual(emptyNodes.length, 1,
+    '空结果时应当恰好有一个 .rs-empty，实为 ' + emptyNodes.length + ' 个 —— 多于一个就量不准了')
+  const emptyEl = emptyNodes[0]
+  const emptyStyle = await emptyEl.style('align-items')
+  const emptyDisplay = await emptyEl.style('display')
+  assert.strictEqual(String(emptyDisplay), 'flex',
+    '空态不是 flex 容器（实为 ' + emptyDisplay + '）：align-items 在非 flex 容器上静默失效')
+  assert.strictEqual(String(emptyStyle), 'center',
+    '空态没有垂直居中（align-items 实为 ' + emptyStyle + '）：会贴在固定高外壳顶部')
+  // 这一条同时覆盖「flex: 1 还在」和「内容没把外壳撑破」：空态要占满外壳整高。
+  const emptyBox = await emptyEl.size()
+  assert.ok(
+    Math.abs(emptyBox.height - heightWhenEmpty) <= 1,
+    '空态没有占满外壳：空态 ' + Math.round(emptyBox.height)
+      + 'px vs 外壳 ' + Math.round(heightWhenEmpty) + 'px。'
+      + '少了 flex: 1 的话空态只有自身一行高，居中的是它自己，照样贴顶'
+  )
+  step('picker 空态居中：display=' + emptyDisplay + ' align-items=' + emptyStyle
+    + '，占满外壳 ' + Math.round(emptyBox.height) + 'px')
   // 关键词还回去，后面的用例按顺序点第一个商品，不能停在空列表上
   await typeInSheet(host, '.js-rs-product-search', '', '商品 picker 清空搜索', 'productKeyword')
   await waitSheetData(host, function (d) {
