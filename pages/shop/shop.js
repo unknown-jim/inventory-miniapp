@@ -27,6 +27,14 @@ Page({
     // 只有 listShops 明确回 role === 'owner' 才翻真（fail-safe 方向）。
     isOwner: false,
     newShopName: '',
+    // 改名的三件套。renaming 决定卡内展开体渲不渲染；canSaveRename 是
+    // 「trim 之后非空」的**交互可供性**（wxml 里调不了 .trim()，所以在 JS 里算），
+    // **不是**第二份校验 —— 服务端那条「请填写店铺名称」原样保留。
+    // 入口本身还挂着 isOwner（wxml），服务端另有 requireMember + role 判断，
+    // 三道各管各的，谁都不替代谁。
+    renaming: false,
+    renameName: '',
+    canSaveRename: false,
     canMigrate: false,
     // 阻断态三件套。kind / title 来自 utils/messages.js 的 BLOCKING 表，
     // body 仍然是话术层那一句（blockingFor 的 body 逐字等于 forStaff().text）。
@@ -109,7 +117,12 @@ Page({
       currentShopId: status.shopId,
       shopName: status.shopName,
       canMigrate: !!store.getPendingMigrate(),
-      shopsLoadError: false
+      shopsLoadError: false,
+      // 每次进页面都把改名态收掉。onShow 也在从成员页返回时跑，
+      // 不复位的话会留着一个填了一半、店名可能已经不是那个店的输入框。
+      renaming: false,
+      renameName: '',
+      canSaveRename: false
     })
     if (status.canBookkeep) {
       try {
@@ -199,6 +212,52 @@ Page({
 
   toggleJoin() {
     this.setData({ showJoin: !this.data.showJoin })
+  },
+
+  // 改名四件套。形与 pages/members/members.js 的
+  // startEditName / onEditName / cancelEditName / saveDisplayName 一一对应 ——
+  // 那是仓库里最近的同类功能，两处必须读起来一样。
+  //
+  // **不用 wx.showModal。** 现有 confirmDeleteShop 确实用了 editable: true，
+  // 但那一处自己写着「content 在 editable 模式下的语义本仓没有实测过」，
+  // 所以传的是空串。改名要「带出当前店名让人改」，恰好依赖那条没验过的语义；
+  // 而且 modal 给不了 maxlength、给不了禁用态、给不了说明行。
+  startRename() {
+    const current = this.data.shopName || ''
+    this.setData({
+      renaming: true,
+      renameName: current,
+      canSaveRename: !!current.trim()
+    })
+  },
+
+  onRenameName(e) {
+    const value = e.detail.value
+    this.setData({
+      renameName: value,
+      canSaveRename: !!String(value || '').trim()
+    })
+  },
+
+  cancelRename() {
+    this.setData({ renaming: false, renameName: '', canSaveRename: false })
+  },
+
+  // 校验一条都不在这里预判：空名报「请填写店铺名称」、超长报「店铺名称最多 16 个字」、
+  // 店员点了报「只有店主能改店名」，三句都由服务端给（inventory.normalizeShopName
+  // 与 ledger-core 的 renameShop 分支）。客户端另写一份就是第二份实现，两份迟早分叉 ——
+  // 这条判据逐字取自 members.js 的 addMember 上方那段注释。
+  // 三句都是店主话，utils/messages.js 未命中时原样 toast 显示即可，**不用加话术规则**。
+  async saveShopName() {
+    try {
+      await store.renameShop(this.data.renameName)
+      this.setData({ renaming: false, renameName: '', canSaveRename: false })
+      wx.showToast({ title: '已改名', icon: 'success' })
+      this.onShow()
+    } catch (error) {
+      // 失败**不收起展开体**：名字还在框里，店主改一下就能再提交。
+      util.showError(error)
+    }
   },
 
   retryShops() {

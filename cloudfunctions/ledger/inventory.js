@@ -794,6 +794,33 @@ function applyPurchase(products, records, payload, now, id, skus) {
   }
 }
 
+// 店铺名称的唯一一份校验：建店（ledger-core 的 createShop）、改名（renameShop）、
+// 以及内存模式（utils/store.js 的 memoryCall）三处共用它。
+// 放在本文件是因为它是客户端与云函数唯一的共享通道：npm run sync:ledger-inventory
+// 逐字复制到 cloudfunctions/ledger/inventory.js，tests/ledger.test.js 开头那条
+// 逐字相等断言盯着这份复制。分成三份常量的话，改名拦得下来的名字建店照样进得去。
+//
+// 上限 16 的来历（**不是拍脑袋，改它要重新算这一串**）：店名印在送货单抬头上
+// （utils/slip-image.js 的 layoutSlip：pushText(shopName, pageWidth / 2, y, FONT.title, …)），
+// 标题 88px、居中、**不折行也不缩字**；画布最窄 WIDTH = 1700、左右各 PAD = 36，
+// 内容宽 1628，一个汉字按 88px 算只放得下 18 个。扣掉真机字体与估算的出入
+// （同文件 MEASURE_SLACK = 1.04）之后取 16，是有余量的整数。
+//
+// 用 String.length 而不是按码点数：与 normalizeDisplayName（'称呼最多 32 个字'）同口径，
+// 对 emoji 这类代理对偏严——而偏严的那一侧正是送货单需要的。
+const SHOP_NAME_MAX = 16
+
+function normalizeShopName(value) {
+  const name = String(value == null ? '' : value).trim()
+  if (!name) {
+    throw new Error('请填写店铺名称')
+  }
+  if (name.length > SHOP_NAME_MAX) {
+    throw new Error('店铺名称最多 ' + SHOP_NAME_MAX + ' 个字')
+  }
+  return name
+}
+
 function createCustomer(input, now, id) {
   const name = String(input.name || '').trim()
   if (!name) {
@@ -3492,6 +3519,8 @@ module.exports = {
   createSku: createSku,
   updateSku: updateSku,
   applyProductSkus: applyProductSkus,
+  SHOP_NAME_MAX: SHOP_NAME_MAX,
+  normalizeShopName: normalizeShopName,
   createCustomer: createCustomer,
   updateCustomer: updateCustomer,
   filterCustomers: filterCustomers,

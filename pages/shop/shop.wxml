@@ -77,7 +77,16 @@
 
     <!-- 稿 card/当前店 4:536：店名 16 SemiBold 与角色 tag 是兄弟节点。
          js-shop-current 里只许有店名这一段文字 —— tests/ui.test.js:2985 拿它的
-         渲染文本和账本里的店名做严格相等比较，塞进去任何别的字都会红。 -->
+         渲染文本和账本里的店名做严格相等比较，塞进去任何别的字都会红。
+         **「改名」链接必须是它的兄弟，不许放进去。**
+
+         改名（稿 link/改名 + card/当前店·改名中，见
+         spec-rename-shop-design-2026-08-31.md §3）：入口是店名行右端的 13px 文字链，
+         仅店主可见；点开在本卡内就地展开，不弹窗、不跳页。
+         形与成员页的「改称呼」（pages/members/members.wxml 的 member-edit）
+         逐条对齐 —— 两者是同一档动作，隔着一次 navigateTo 用两套交互是纯损失。
+         展开体套的是本页已有的 .fold-body（hairline + 上下留白），等价于稿上
+         店名行下面那条 div 4:930，所以不用新写一条 wxss。 -->
     <view wx:if="{{hasCurrentShop}}" class="card">
       <view class="shop-head">
         <view class="shop-name js-shop-current">{{shopName || '未命名店铺'}}</view>
@@ -85,6 +94,42 @@
           wx:if="{{currentRoleText}}"
           class="tag {{isOwner ? 'tag-owner' : 'tag-staff'}}"
         >{{currentRoleText}}</view>
+        <view
+          wx:if="{{isOwner && !renaming}}"
+          class="row-link js-shop-rename"
+          hover-class="press"
+          bindtap="startRename"
+        >改名</view>
+      </view>
+      <view wx:if="{{renaming}}" class="fold-body">
+        <view class="field last">
+          <view class="field-label">店铺名称</view>
+          <!-- maxlength 16 镜像服务端 inventory.SHOP_NAME_MAX，
+               与成员页 maxlength="32" 镜像 normalizeDisplayName 是同一个做法：
+               原生属性，不是第二份校验。空值那条仍然由服务端说了算。 -->
+          <input
+            class="field-input js-shop-rename-input"
+            maxlength="16"
+            value="{{renameName}}"
+            bindinput="onRenameName"
+            placeholder="店铺名称"
+          />
+        </view>
+        <view class="muted gap-top-sm">改名只换名字，账本、库存、成员都不动。送货单上的抬头会跟着换成新名字。最多 16 个字。</view>
+        <!-- 保存在左、取消在右：与成员页改称呼那一处一致。
+             稿上两个 dialog 的 btn-row 是取消在左，那是「确认危险动作」那一档的
+             惯例，改名不在那一档。
+             禁用走共用的 .btn-primary[disabled]（--color-fill-ghost 底 +
+             --color-neutral-500 字 + opacity: 1 = 4.35:1），
+             正是 docs/ui-scale.md 禁用五档里的实底档，不要另配色。 -->
+        <view class="action-strip">
+          <button
+            class="btn-primary js-shop-rename-save"
+            disabled="{{!canSaveRename}}"
+            bindtap="saveShopName"
+          >保存</button>
+          <button class="btn-ghost js-shop-rename-cancel" bindtap="cancelRename">取消</button>
+        </view>
       </view>
     </view>
     <view wx:else class="card empty">

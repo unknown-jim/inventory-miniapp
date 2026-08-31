@@ -471,6 +471,98 @@ async function rejects(promise, re) {
   const staffStillWrites = await call(db, ids, 'staff-c', 'saveCustomer', shopA, { name: '店员记的客户' })
   assert.ok(staffStillWrites.result.customer.id, 'staff should still be able to record day-to-day')
 
+  // -------------------------------------------------------------------------
+  // renameShop：店主改店名。11 条断言见规格 §5.1；改完这一组 shopA 的名字必须
+  // 还是「甲店」，下面 tempShop 那段（shopsAfterTemp.shops[0].name === '甲店'）
+  // 才不会被它带红。
+  // -------------------------------------------------------------------------
+  {
+    const shopDocBefore = db.shops[shopA]
+    const ledgerBefore = await call(db, ids, 'user-a', 'getLedger', shopA)
+    const recordsBefore = await allRecords(db, ids, 'user-a', shopA)
+
+    // L1：owner 改名成功，listShops 跟着换
+    const renamed = await call(db, ids, 'user-a', 'renameShop', shopA, { name: '甲店改名' })
+    assert.strictEqual(renamed.shop.name, '甲店改名')
+    assert.strictEqual((await call(db, ids, 'user-a', 'listShops')).shops[0].name, '甲店改名')
+
+    // L2：**本规格最重要的一条**。tx.setShop 是全文档 set，写 { _id, name } 会把
+    // ownerOpenid / createdAt 一起抹掉 —— 店从此判不出谁是店主。
+    assert.strictEqual(db.shops[shopA].ownerOpenid, 'user-a',
+      '改名之后 ownerOpenid 没了：tx.setShop 是全文档 set，必须整份文档读回来再改一个字段')
+    assert.strictEqual(db.shops[shopA].createdAt, shopDocBefore.createdAt,
+      '改名之后 createdAt 变了：全文档 set 少带了字段')
+
+    // L7：同名再改一次（不同的 now）不写库 —— renamedAt 不动
+    const renamedAtFirst = db.shops[shopA].renamedAt
+    await call(db, ids, 'user-a', 'renameShop', shopA, { name: '甲店改名' }, 2000)
+    assert.strictEqual(db.shops[shopA].renamedAt, renamedAtFirst,
+      '同名改名不该再写一次库（renamedAt 变了说明短路分支被拆了）')
+
+    // L6：两侧边界 —— 16 个字通过，17 个字被拒
+    await call(db, ids, 'user-a', 'renameShop', shopA, { name: '字'.repeat(16) })
+    await rejects(
+      call(db, ids, 'user-a', 'renameShop', shopA, { name: '字'.repeat(17) }),
+      /店铺名称最多 16 个字/
+    )
+
+    // 收尾：把店名改回去，本组开头的 L8 断言要在「账本没动」的店上比
+    await call(db, ids, 'user-a', 'renameShop', shopA, { name: '甲店' })
+
+    // L8：改名不动账本 —— products / customers 逐字相等，流水条数不变
+    const ledgerAfter = await call(db, ids, 'user-a', 'getLedger', shopA)
+    assert.deepStrictEqual(ledgerAfter.ledger.products, ledgerBefore.ledger.products)
+    assert.deepStrictEqual(ledgerAfter.ledger.customers, ledgerBefore.ledger.customers)
+    assert.strictEqual((await allRecords(db, ids, 'user-a', shopA)).length, recordsBefore.length)
+
+    // L3：店员改名被拒
+    await rejects(
+      call(db, ids, 'staff-c', 'renameShop', shopA, { name: '店员改的名' }),
+      /只有店主能改店名/
+    )
+    // L4：非成员改名被拒
+    await rejects(
+      call(db, ids, 'user-b', 'renameShop', shopA, { name: '外人改的名' }),
+      /不是该店成员/
+    )
+    // L5：空名与全空格都被拒
+    await rejects(call(db, ids, 'user-a', 'renameShop', shopA, { name: '' }), /请填写店铺名称/)
+    await rejects(call(db, ids, 'user-a', 'renameShop', shopA, { name: '   ' }), /请填写店铺名称/)
+
+    // L9：建店同样受 16 字限制（同一份校验）
+    await rejects(
+      call(db, ids, 'user-a', 'createShop', '', { name: '字'.repeat(17) }),
+      /店铺名称最多 16 个字/
+    )
+
+    // L11：店铺文档不存在 → 店铺不存在。单独一个 db：真把 shopA 从文档袋里删掉
+    // 会弄坏下面 listShops 那几条断言。
+    {
+      const dbGone = new MemoryDb()
+      const idsGone = idFactory()
+      const shopGone = (await call(dbGone, idsGone, 'user-a', 'createShop', '', { name: '短命店' })).shop.id
+      delete dbGone.shops[shopGone]
+      await rejects(
+        call(dbGone, idsGone, 'user-a', 'renameShop', shopGone, { name: '改不成的名' }),
+        /店铺不存在/
+      )
+    }
+
+    // L10：不进版本门。renameShop 用 apiVersion 1（老客户端）也能过，而
+    // deleteShop 用同样的 apiVersion 1 照样被版本门挡住。
+    await core.dispatch({
+      db: db, makeId: ids, openid: 'user-a', action: 'renameShop', shopId: shopA,
+      apiVersion: 1, payload: { name: '甲店' }, now: 1000
+    })
+    await rejects(
+      core.dispatch({
+        db: db, makeId: ids, openid: 'user-a', action: 'deleteShop', shopId: shopA,
+        apiVersion: 1, payload: {}, now: 1000
+      }),
+      /请更新小程序到最新版本/
+    )
+  }
+
   const tempShop = await call(db, ids, 'user-a', 'createShop', '', { name: '临时店' })
   await call(db, ids, 'user-a', 'deleteShop', tempShop.shop.id)
   const shopsAfterTemp = await call(db, ids, 'user-a', 'listShops')

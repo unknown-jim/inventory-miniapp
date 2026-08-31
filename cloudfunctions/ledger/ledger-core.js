@@ -647,10 +647,11 @@ async function dispatchAction(input) {
   }
 
   if (action === 'createShop') {
-    const name = String(payload.name || '').trim()
-    if (!name) {
-      throw new Error('请填写店铺名称')
-    }
+    // 建店与改名共用同一条校验（utils/inventory.js 的 normalizeShopName）。
+    // 分叉的后果很具体：改名拦得下来的名字建店照样进得去，
+    // 最后送货单抬头（88px 居中不折行）还是会溢出画布。
+    // 「请填写店铺名称」这句原文没变，只是搬进了那个函数。
+    const name = inventory.normalizeShopName(payload.name)
     const shopId = nextId()
     const memberId = memberDocId(shopId, openid)
     return db.runTransaction(async function (tx) {
@@ -790,6 +791,50 @@ async function dispatchAction(input) {
       }
       await tx.removeMember(existing._id || existing.id || memberDocId(shopId, target))
       return { removed: true, openid: target }
+    })
+  }
+
+  // 改店名。形状照下面 deleteShop 那一支：requireMember 之后自己判 role，
+  // **不用 requireOwner** —— 那个函数的报错文案写死成「只有店主能改成员」（:257），
+  // 用在这里会把店员指到成员页去。deleteShop 没用它也是同一个理由（:805-807）。
+  //
+  // **不进 VERSIONED_DESTRUCTIVE。** 那份名单管的是「不可逆动作不许由老客户端在冻结
+  // 窗口里发起」，而改名完全可逆（再改回去就是了），也不回传账本，版本门的两条理由
+  // 一条都不占。它跟 createShop / updateMember 同档：不设门。设了门的代价是冻结窗口里
+  // 店主连店名都改不了 —— 纯损失，零收益。同理它不进 apply.MUTATIONS：它不是一笔账。
+  //
+  // 维护期**自动被挡**：allowedDuringMaintenance 是白名单，renameShop 不在
+  // MAINTENANCE_READS 里。**不要**把它加进那张白名单。
+  if (action === 'renameShop') {
+    const name = inventory.normalizeShopName(payload.name)
+    return db.runTransaction(async function (tx) {
+      const members = await membersOfShop(db, tx, shopId)
+      const member = requireMember(members, shopId, openid)
+      if (member.role !== 'owner') {
+        throw new Error('只有店主能改店名')
+      }
+      const shop = tx.getShop ? await tx.getShop(shopId) : null
+      if (!shop) {
+        throw new Error('店铺不存在')
+      }
+      // 同名直接回，不写库。改名是幂等的，一次无谓的 set 只白占一次事务写。
+      if (String(shop.name || '') === name) {
+        return { shop: publicShop(shop, member.role) }
+      }
+      // **必须把整份文档读回来再改一个字段。**
+      // tx.setShop 是**全文档 set**，不是 update
+      // （cloudfunctions/ledger/index.js:151-155 → doc(_id).set({data: cloneData(shop)})），
+      // 传 { _id, name } 会把 ownerOpenid 和 createdAt 一起抹掉 ——
+      // ownerOpenid 没了之后这家店就再也判不出谁是店主，等于把店锁死。
+      // cloneData 会剥掉 _id（真云对 set 带 _id 报 -501007），所以这里显式补 _id
+      // 是给内存替身 tests/memory-db.js 的 setShop 用的（它按 shop._id 落袋）。
+      const next = Object.assign({}, shop, {
+        _id: shopId,
+        name: name,
+        renamedAt: now
+      })
+      await tx.setShop(next)
+      return { shop: publicShop(next, member.role) }
     })
   }
 

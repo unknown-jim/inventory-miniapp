@@ -183,6 +183,44 @@ assert.ok(
   'shop page consecutive cards should keep vertical spacing'
 )
 
+// 店铺改名（renameShop）的静态形状。全部是 indexOf 扫描：匹配完整语法形状
+// （含 {{ }} 的属性写法），注释里出现同名字符串不算数。
+assert.ok(shopWxml.indexOf('js-shop-rename') >= 0, 'shop page should have a rename entry link')
+assert.ok(
+  shopWxml.indexOf('js-shop-rename-input') >= 0 && shopWxml.indexOf('maxlength="16"') >= 0,
+  'rename input should cap at 16 (native mirror of inventory.SHOP_NAME_MAX)'
+)
+assert.ok(
+  shopWxml.indexOf('isOwner && !renaming') >= 0,
+  'rename entry should be owner-gated in wxml (staff must not see 改名 at all)'
+)
+assert.ok(
+  shopWxml.indexOf('js-shop-rename-save') >= 0
+    && shopWxml.indexOf('disabled="{{!canSaveRename}}"') >= 0,
+  'rename save should be disabled while the trimmed name is empty'
+)
+assert.ok(
+  shopJs.indexOf('\n    renaming: false,') >= 0,
+  'rename panel should start collapsed (renaming: false in page data)'
+)
+assert.ok(
+  appWxss.indexOf('.row-link {') >= 0
+    && read('pages/members/members.wxss').indexOf('.row-link {') < 0
+    && shopWxss.indexOf('.row-link') < 0,
+  '.row-link should be defined once in app.wxss — not copied into members or shop'
+)
+const shopCurrentLine = shopWxml.split('\n').filter(function (line) {
+  return line.indexOf('js-shop-current"') >= 0
+}).join('\n')
+assert.ok(
+  shopCurrentLine.indexOf("{{shopName || '未命名店铺'}}") >= 0,
+  'js-shop-current 那一行只许绑店名本身（tests/ui.test.js 拿它的渲染文本和账本店名做严格相等）'
+)
+assert.ok(
+  shopCurrentLine.indexOf('改名') < 0,
+  '「改名」链接必须是 js-shop-current 的兄弟节点，不许塞进同一行'
+)
+
 const membersWxml = read('pages/members/members.wxml')
 const membersJs = read('pages/members/members.js')
 assert.ok(membersWxml.indexOf('<page-loading') >= 0, 'members page should use shared loading view')
