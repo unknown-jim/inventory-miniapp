@@ -1,45 +1,166 @@
-.spec-card {
-  margin-top: 16rpx;
+/* 种类模板编辑。稿 Screen/16 种类模板编辑 4:532。
+   共用类（page / field / field-label / field-input / chips / chip / chip add /
+   btn-primary）来自 app.wxss，这里只写本页布局。 */
+
+/* 保存钮钉在底栏（稿 bottom-cta 4:1000），内容要让出这一条的高度，
+   否则「删除种类」那一行会被压在按钮底下 —— 而稿 n6 7:71 逐字要求
+   「开关与删除必须完整可见」。
+   24（上内边距）+ 124（xxl 62）+ 24（下内边距）+ 48（离底栏再空一口气）= 220rpx。
+   数值与 pages/product-edit 的同一条逐字相同（两屏用的是同一枚稿组件）。 */
+.page {
+  padding-bottom: calc(env(safe-area-inset-bottom) + 220rpx);
 }
 
-.spec-title {
-  margin-bottom: 8rpx;
-  font-weight: 600;
+/* 稿 label 4:614 / 4:620 / 4:627：12px text/muted（字号与颜色由共用类 field-label 给）。
+   chips 组前面的标签自己带上间距：它上面不一定有输入框，而共用类里那条相邻选择器
+   只管「输入框后面紧跟的 chips」。 */
+.chips-label {
+  margin-top: var(--space-lg);
 }
 
-.spec-desc {
-  margin-bottom: 20rpx;
+/* 取值 chip（稿 chip/取值·可删 10:158）：灰底 = 「未选中·可点」那一档（chip 铁律）。
+   改版前这里用的是 chip on（白底黑描边），那是「已选中」的形，取值不是选择态。
+   右边挂 44x44 的删除热区，所以竖向内边距归零、由热区自己撑高。
+   逐条与 pages/product-edit 的同名四条相同。 */
+.chip-val {
+  padding: 0 0 0 28rpx;
 }
 
-.last-desc {
-  margin-bottom: 0;
+.chip-text {
+  font-size: var(--fs-body);
 }
 
-.axis-title {
-  margin-bottom: 12rpx;
-  min-height: var(--tap-sm);
-  line-height: var(--tap-sm);
-  font-weight: 600;
-  font-size: var(--fs-md);
-}
-
-.add-spec {
+.chip-del {
+  width: var(--tap-min);
+  height: var(--tap-min);
+  margin-left: var(--space-xs);
   display: flex;
-  gap: 12rpx;
   align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--color-text-muted);
+  font-size: var(--fs-body);
 }
 
-.add-spec .field-input {
+/* 「＋ 添加」原位变输入框（稿 n1 4:646）：与 chip 同高同圆角，
+   聚焦中所以用黑描边，和它替换掉的那枚 chip add 占同一块地方。 */
+.chip-input {
+  width: 240rpx;
+  height: var(--tap-min);
+  padding: 0 28rpx;
+  box-sizing: border-box;
+  background: var(--color-bg-card);
+  border: 2rpx solid var(--color-border-brand);
+  border-radius: 999rpx;
+  font-size: var(--fs-body);
+}
+
+/* 稿 row/开关组 4:633：横排 gap 10、两格等分。
+   窄屏允许折行、不缩小字号（docs/ui-scale.md 的密度规则）。 */
+.switch-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-lg);
+  margin-top: var(--space-lg);
+}
+
+/* 稿 col/半成品池开关 9:84 与 col/同价开关 9:85：横排 gap 6，文字占满、开关不压缩。 */
+.switch-cell {
+  flex: 1 1 45%;
+  min-width: 300rpx;
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.switch-text {
   flex: 1;
+  min-width: 0;
 }
 
-.spec-add {
-  width: 140rpx;
-  margin: 0;
-  height: var(--tap-md);
-  line-height: var(--tap-md);
+/* 稿 4:635 / 4:640：14px text/primary。 */
+.switch-t {
+  font-size: var(--fs-body);
+}
+
+/* 稿 4:636 / 4:641：12px text/muted。 */
+.switch-s {
+  margin-top: 4rpx;
+  font-size: var(--fs-caption);
+  color: var(--color-text-muted);
+}
+
+/* 稿 switch/on 3:272：44x26 的胶囊 + 20 的钮。视觉小、热区不小：
+   外面套一枚 44x44 的透明热区（docs/ui-scale.md 的「视觉尺寸可以小于热区」）。
+   逐条与 pages/product-edit 的同名五条相同。 */
+.switch-hit {
+  width: var(--tap-min);
+  height: var(--tap-min);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.switch {
+  width: 88rpx;
+  height: 52rpx;
+  padding: 6rpx;
+  box-sizing: border-box;
+  background: var(--color-neutral-200);
+  border-radius: 999rpx;
+  transition: background var(--duration-fast) var(--easing-standard);
+}
+
+.switch.on {
+  background: var(--color-fill-action);
+}
+
+.switch-knob {
+  width: 40rpx;
+  height: 40rpx;
+  background: var(--color-bg-card);
+  border-radius: 999rpx;
+  transition: transform var(--duration-fast) var(--easing-standard);
+}
+
+.switch.on .switch-knob {
+  transform: translateX(36rpx);
+}
+
+/* 危险入口放在滚动区末尾、不进底栏（稿 画布规范 9:24 与 UX注释/模板编辑 7:71），
+   形是「危险红字链 44」那一档（稿 删除模板 4:643 是 13px red/600 的 52x44 纯文字），
+   不是实底按钮。改版前那枚浅红底 danger 按钮比这一档重 —— 而删模板什么都不毁。
+   逐条与 pages/product-edit 的 danger-link 相同（那一屏的注释引的正是本节点）。 */
+.danger-link {
+  display: flex;
+  align-items: center;
+  min-height: var(--tap-min);
+  margin-top: var(--space-lg);
+  padding: 0 var(--space-xs);
+  color: var(--color-red-600);
+  font-size: var(--fs-label);
+}
+
+/* 稿 bottom-cta 4:1000：1px hairline + 62 高实心黑 + 34 安全区。
+   62px = 124rpx，档位表里没有这一档（--tap-lg 是 52px = 104rpx），按稿写字面量，
+   同 pages/records 的 FAB 写 112rpx 那处的处理方式。
+   层级 10 = 稿「动效与层级」里 sticky 那一档；层级 token 还没进 app.wxss（B1 刻意没加），
+   这里先写字面量。逐条与 pages/product-edit 的 save-bar 与 save-btn 相同。 */
+.save-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10;
+  box-sizing: border-box;
+  padding: var(--space-lg) var(--page-pad) calc(env(safe-area-inset-bottom) + var(--space-lg));
+  background: var(--color-bg-card);
+  border-top: 2rpx solid var(--color-border-default);
 }
 
 .save-btn {
-  margin: 32rpx 0 16rpx;
+  height: 124rpx;
+  line-height: 124rpx;
+  margin: 0;
 }

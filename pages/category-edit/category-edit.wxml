@@ -1,68 +1,148 @@
+<!-- 种类模板编辑。稿 Screen/16 种类模板编辑 4:532、UX注释/模板编辑 4:644。
+     共用类（page / field / field-label / field-input / chips / chip / chip add /
+     btn-primary）来自 app.wxss，这里只写本页布局。
+
+     稿 content 4:535 是一列平铺表单，不是白卡堆 —— 它的 12 个直接子节点里
+     没有一个带白底，所以本页不套 card。
+
+     稿顶部的 chips 模板切换 4:842 本批不实现，理由见规格 12a 的 §5.3
+     （稿自己在 15:158 写着「两条管理路径是否收敛，待产品拍板」）。
+
+     删除在内容区末尾、底栏只留保存：稿 n6 7:71 逐字
+     「删除模板在内容区末尾，不进底栏；底栏只留保存。内容可滚，开关与删除必须完整可见。」 -->
 <view class="page">
-  <view class="card">
-    <view class="field">
-      <view class="field-label">种类名称</view>
-      <input class="field-input js-ce-name" data-field="name" value="{{name}}" bindinput="onField" placeholder="例如 纺织、日用" />
+  <!-- 稿 field/模板名 4:611：label 12px muted + 44 高输入框。 -->
+  <view class="field">
+    <view class="field-label">种类名称</view>
+    <input
+      class="field-input js-ce-name"
+      data-field="name"
+      value="{{name}}"
+      bindinput="onField"
+      placeholder="例如 四件套、窗帘布"
+    />
+  </view>
+
+  <!-- 稿 label 4:614 + chips/商品名 4:615。
+       取值 chip 走共用类 chip（灰底 = 「未选中·可点」那一档，chip 铁律），
+       右边挂 44x44 的 × 热区（稿 chip/取值·可删 10:158 里的 hit 13:678）；
+       「＋ 添加」走共用类 chip add（白底 + neutral/300 描边 = 铁律第五档，稿 13:703）。
+       点「＋ 添加」原位变输入框，回车或失焦提交（稿 n1 4:646「点 chip 上的 × 删取值；无左滑」）。 -->
+  <view class="field-label chips-label">商品名待选项</view>
+  <view class="chips">
+    <view class="chip chip-val js-ce-name-chip" wx:for="{{names}}" wx:key="*this">
+      <text class="chip-text">{{item}}</text>
+      <view class="chip-del js-ce-name-del" data-value="{{item}}" catchtap="removeName">×</view>
     </view>
-    <view class="field last">
-      <view class="field-label">默认商品类型</view>
-      <view class="seg">
-        <view class="seg-item js-ce-kind-plain {{productKind === 'plain' ? 'on' : ''}}" data-kind="plain" bindtap="setProductKind">普通</view>
-        <view class="seg-item {{productKind === 'blank' ? 'on' : ''}}" data-kind="blank" bindtap="setProductKind">待加工</view>
-        <view class="seg-item {{productKind === 'finished' ? 'on' : ''}}" data-kind="finished" bindtap="setProductKind">分规格现货</view>
+    <input
+      wx:if="{{adding === 'name'}}"
+      class="chip-input js-ce-name-input"
+      value="{{nameInput}}"
+      focus="{{true}}"
+      data-field="nameInput"
+      bindinput="onField"
+      bindconfirm="commitName"
+      bindblur="commitName"
+      placeholder="输入商品名"
+    />
+    <view wx:else class="chip add js-ce-name-add" data-add="name" bindtap="startAdd">＋ 添加</view>
+  </view>
+
+  <!-- 稿 label/规格一 4:620 + input 4:621 + chips/规格一取值 4:622。
+       轴名是可编辑输入框（稿 n2 4:647「规格名是可编辑输入框（可供性规则）」）。
+       两根轴都常驻显示：有没有规格是靠「有没有取值」表达的，藏起来就没法加第一个取值。 -->
+  <view class="field-label chips-label">规格一</view>
+  <input
+    class="field-input js-ce-axis1"
+    data-field="specAxis1"
+    value="{{specAxis1}}"
+    bindinput="onField"
+    placeholder="如 颜色、口味"
+  />
+  <view class="chips">
+    <view class="chip chip-val js-ce-color-chip" wx:for="{{colors}}" wx:key="*this">
+      <text class="chip-text">{{item}}</text>
+      <view class="chip-del js-ce-color-del" data-value="{{item}}" catchtap="removeColor">×</view>
+    </view>
+    <input
+      wx:if="{{adding === 'color'}}"
+      class="chip-input js-ce-spec-input"
+      value="{{colorInput}}"
+      focus="{{true}}"
+      data-field="colorInput"
+      bindinput="onField"
+      bindconfirm="commitColor"
+      bindblur="commitColor"
+      placeholder="输入取值"
+    />
+    <view wx:else class="chip add js-ce-color-add" data-add="color" bindtap="startAdd">＋ 添加</view>
+  </view>
+
+  <!-- 稿 label/规格二 4:627 + input 4:628 + chips/规格二取值 4:629。 -->
+  <view class="field-label chips-label">规格二</view>
+  <input
+    class="field-input js-ce-axis2"
+    data-field="specAxis2"
+    value="{{specAxis2}}"
+    bindinput="onField"
+    placeholder="如 尺码、容量（可空）"
+  />
+  <view class="chips">
+    <view class="chip chip-val js-ce-size-chip" wx:for="{{sizes}}" wx:key="*this">
+      <text class="chip-text">{{item}}</text>
+      <view class="chip-del js-ce-size-del" data-value="{{item}}" catchtap="removeSize">×</view>
+    </view>
+    <input
+      wx:if="{{adding === 'size'}}"
+      class="chip-input js-ce-spec-input"
+      value="{{sizeInput}}"
+      focus="{{true}}"
+      data-field="sizeInput"
+      bindinput="onField"
+      bindconfirm="commitSize"
+      bindblur="commitSize"
+      placeholder="输入取值"
+    />
+    <view wx:else class="chip add js-ce-size-add" data-add="size" bindtap="startAdd">＋ 添加</view>
+  </view>
+
+  <!-- 稿 row/开关组 4:633：两枚开关并排一行（十二轮收口逐字「模板编辑两开关并排一行
+       （同价开关回归可见）」）。两枚都只在有规格取值时才有意义：没有取值时模板是「普通」，
+       半成品池与各规格同价都不落盘（utils/inventory.js 的 createCategory 对 plain
+       强制 colors 与 sizes 为空、sharedPrice 为 false）。 -->
+  <view wx:if="{{hasSpecs}}" class="switch-row">
+    <view class="switch-cell">
+      <view class="switch-text">
+        <view class="switch-t">默认带半成品池</view>
+        <view class="switch-s">新建档默认开</view>
       </view>
-      <view class="muted spec-desc">选这个种类时，会带出下面的待选项。建档后仍可改。</view>
+      <view class="switch-hit js-ce-blank-switch" bindtap="toggleBlank">
+        <view class="switch {{blankPool ? 'on' : ''}}">
+          <view class="switch-knob"></view>
+        </view>
+      </view>
+    </view>
+    <view class="switch-cell">
+      <view class="switch-text">
+        <view class="switch-t">各规格同价</view>
+        <view class="switch-s">建档只填一次价</view>
+      </view>
+      <view class="switch-hit js-ce-shared-switch" bindtap="toggleShared">
+        <view class="switch {{sharedPrice ? 'on' : ''}}">
+          <view class="switch-knob"></view>
+        </view>
+      </view>
     </view>
   </view>
 
-  <view class="card spec-card">
-    <view class="spec-title">商品名待选项</view>
-    <view class="muted spec-desc">可改、可删、可再加。点选后填进商品名称，不是唯一合法名。</view>
-    <view class="chips" wx:if="{{names.length}}">
-      <view class="chip on js-ce-name-chip" wx:for="{{names}}" wx:key="*this" data-value="{{item}}" bindtap="removeName">{{item}} ×</view>
-    </view>
-    <view class="add-spec">
-      <input class="field-input js-ce-name-input" data-field="nameInput" value="{{nameInput}}" bindinput="onField" bindconfirm="addName" placeholder="添加商品名" />
-      <button class="btn-ghost spec-add js-ce-name-add" bindtap="addName">添加</button>
-    </view>
+  <!-- 稿 删除模板 4:643：13px red/600 的纯文字，52x44，在内容区末尾。
+       危险三级里最轻的那一档（红字链）—— 删模板不动任何已建商品，见规格 12a 的 §5.1。
+       写法与 pages/product-edit 的 danger-link 同源（那一屏的注释引的正是本节点）。 -->
+  <view wx:if="{{isEdit}}" class="danger-link js-ce-remove" bindtap="remove">删除种类</view>
+
+  <!-- 稿 bottom-cta 4:1000：hairline + 62 高实心黑「保存」+ 34 安全区。本屏唯一实心块
+       （稿 n4 4:649「保存 = 底部实心黑块（本屏唯一）」）。 -->
+  <view class="save-bar">
+    <button class="btn-primary save-btn js-ce-save" bindtap="save">保存</button>
   </view>
-
-  <view class="card spec-card" wx:if="{{productKind !== 'plain'}}">
-    <view class="spec-title">规格待选项</view>
-    <view class="muted spec-desc">轴名和取值都可改。可只用一根轴。</view>
-
-    <view class="field">
-      <input class="axis-title" data-field="specAxis1" value="{{specAxis1}}" bindinput="onField" placeholder="规格一，如 颜色、口味" />
-      <view class="chips" wx:if="{{colors.length}}">
-        <view class="chip on" wx:for="{{colors}}" wx:key="*this" data-value="{{item}}" bindtap="removeColor">{{item}} ×</view>
-      </view>
-      <view class="add-spec">
-        <input class="field-input" data-field="colorInput" value="{{colorInput}}" bindinput="onField" bindconfirm="addColor" placeholder="添加取值" />
-        <button class="btn-ghost spec-add" bindtap="addColor">添加</button>
-      </view>
-    </view>
-
-    <view class="field last">
-      <input class="axis-title" data-field="specAxis2" value="{{specAxis2}}" bindinput="onField" placeholder="规格二，如 尺码、容量（可空）" />
-      <view class="chips" wx:if="{{sizes.length}}">
-        <view class="chip on" wx:for="{{sizes}}" wx:key="*this" data-value="{{item}}" bindtap="removeSize">{{item}} ×</view>
-      </view>
-      <view class="add-spec">
-        <input class="field-input" data-field="sizeInput" value="{{sizeInput}}" bindinput="onField" bindconfirm="addSize" placeholder="添加取值" />
-        <button class="btn-ghost spec-add" bindtap="addSize">添加</button>
-      </view>
-    </view>
-  </view>
-
-  <view class="card spec-card" wx:if="{{productKind !== 'plain'}}">
-    <view class="spec-title">默认各规格同价</view>
-    <view class="seg">
-      <view class="seg-item {{sharedPrice ? 'on' : ''}}" data-on="1" bindtap="setSharedPrice">同价</view>
-      <view class="seg-item {{!sharedPrice ? 'on' : ''}}" data-on="0" bindtap="setSharedPrice">各格不同价</view>
-    </view>
-    <view class="muted spec-desc last-desc">建档时只填一次进价售价。进货仍可改某一格的进价。</view>
-  </view>
-
-  <button class="btn-primary save-btn js-ce-save" bindtap="save">保存</button>
-  <button wx:if="{{isEdit}}" class="btn-danger js-ce-remove" bindtap="remove">删除种类</button>
 </view>

@@ -1,24 +1,62 @@
+<!-- 种类模板列表。稿 Screen/16b 种类模板列表 15:64、Screen/16c 真空态 15:160、
+     Screen/16d 搜索无结果 15:169；UX注释/模板列表 15:152。
+     共用类（page / card / search / muted / empty / empty-title / empty-icon /
+     empty-actions / tag / btn-primary / btn-ghost）来自 app.wxss，这里只写本页布局。
+
+     新增入口 = 搜索行右端的 ＋（稿 15:70），不留 FAB：稿 n1 15:154 逐字
+     「FAB 全站只服务「记一笔」（流水页），与商品/客户列表同构」。 -->
 <view class="page">
-  <input
-    class="search"
-    placeholder="搜索种类 / 商品名"
-    value="{{keyword}}"
-    bindinput="onSearch"
-  />
+  <!-- 稿 row/搜索与新增 15:68：searchbar 占满 + 44x44 描边圆钮，横排 gap 10。
+       与 pages/customers 和 pages/products 的 tool-row 是同一份写法（同一枚稿组件）。
+       它在空态卡外面，所以三个态都有搜索框和 ＋。 -->
+  <view class="tool-row">
+    <input
+      class="search js-category-search"
+      placeholder="搜索种类 / 商品名"
+      value="{{keyword}}"
+      bindinput="onSearch"
+    />
+    <view class="add-btn js-category-add" bindtap="goAdd">＋</view>
+  </view>
 
+  <!-- 两态分开（稿 n4 15:157）。total 是**未过滤**的模板总数：
+         total 为 0            = 真空态，走 state/empty/cta 15:168；
+         total 不为 0 而 list 空 = 搜索无结果，走 state/empty 15:205 + 清空搜索退路。
+       改版前两态共用一张「还没有种类模板」卡，搜不到时那是假话 —— 他明明有模板。 -->
   <view wx:if="{{!list.length}}" class="card empty">
-    <view class="empty-title">还没有种类模板</view>
-    <view class="muted">种类只用来带出名称和规格待选项，可改、可删、可再加。不是库存分类。</view>
-    <button class="btn-primary seed-btn" bindtap="goAdd">新增种类</button>
+    <view class="empty-icon empty-icon-products"></view>
+    <block wx:if="{{total > 0}}">
+      <view class="empty-title">没有匹配的种类</view>
+      <view class="muted">{{missText}}</view>
+      <!-- 空态卡内的 ghost 是稿 9:24 明确豁免的一档（「空态 / 错误状态卡内轻量动作」），
+           不是页面操作区里的灰底横条。 -->
+      <view class="empty-actions">
+        <button class="btn-ghost js-category-clear" bindtap="clearSearch">清空搜索</button>
+      </view>
+    </block>
+    <block wx:else>
+      <view class="empty-title">还没有种类模板</view>
+      <view class="muted">种类只用来带出名称和规格待选项，可改、可删、可再加。不是库存分类。</view>
+      <view class="empty-actions">
+        <button class="btn-primary js-category-seed" bindtap="goAdd">新增种类</button>
+      </view>
+    </block>
   </view>
 
-  <view class="card goods-card js-category-item" wx:for="{{list}}" wx:key="id" data-id="{{item.id}}" bindtap="goEdit">
-    <view class="goods-top">
-      <view class="item-name js-category-name">{{item.name}}</view>
-      <text class="tag {{item.productKind === 'blank' ? 'tag-blank' : (item.productKind === 'finished' ? 'tag-spec' : 'tag-ok')}}">{{item.kindTag}}</text>
+  <!-- 稿 card/四件套 15:72：白卡、头行（名 16 SemiBold 左 + 类型 tag 右）+ 一行摘要。
+       点整卡进编辑（稿 n2 15:155）；无左滑删除（稿 9:24 与 n1 4:646）。
+       类型 tag 是彩色浅底的**状态标识**，chip 铁律里不可点的那一档（稿 n3 15:156）。 -->
+  <view
+    class="card cat-card js-category-item"
+    wx:for="{{list}}"
+    wx:key="id"
+    data-id="{{item.id}}"
+    bindtap="goEdit"
+  >
+    <view class="cat-top">
+      <view class="cat-name js-category-name">{{item.name}}</view>
+      <text class="tag {{item.tagClass}}">{{item.kindTag}}</text>
     </view>
-    <view class="muted">{{item.summary}}</view>
+    <view class="muted cat-sum">{{item.summary}}</view>
   </view>
-
-  <view class="fab js-category-add" bindtap="goAdd">+ 新增</view>
 </view>
