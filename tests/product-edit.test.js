@@ -156,11 +156,21 @@ const purchaseWxml = fs.readFileSync(
 assert.ok(saleWxml.indexOf('sheet-thumb') >= 0)
 assert.ok(purchaseWxml.indexOf('sheet-thumb') >= 0)
 
+// B7 把类型 chip 从 wxml 字面量改成了 records.js 的 TYPE_OPTIONS 数组
+// wx:for 渲染，所以「调整」这一档现在钉在数组里，不是 wxml 文本。
 const recordsWxml = fs.readFileSync(
   path.join(__dirname, '../pages/records/records.wxml'),
   'utf8'
 )
-assert.ok(recordsWxml.indexOf('>调整</view>') >= 0 || recordsWxml.indexOf('调整') >= 0)
-assert.ok(recordsWxml.indexOf('data-type="adjust"') >= 0)
+const recordsJs = fs.readFileSync(
+  path.join(__dirname, '../pages/records/records.js'),
+  'utf8'
+)
+assert.ok(/\{\s*key:\s*'adjust',\s*label:\s*'调整'\s*\}/.test(recordsJs))
+assert.ok(recordsWxml.indexOf('wx:for="{{typeOptions}}"') >= 0)
+assert.ok(recordsWxml.indexOf('data-type="{{item.key}}"') >= 0)
+// 光有数组和 wxml 动态渲染语法还不够：数组必须真的接到 data.typeOptions
+// 上，否则 wx:for 绑定的是个 undefined，chip 一枚都渲染不出来也测不出来。
+assert.ok(recordsJs.indexOf('typeOptions: TYPE_OPTIONS') >= 0)
 
 console.log('product-edit tests passed')

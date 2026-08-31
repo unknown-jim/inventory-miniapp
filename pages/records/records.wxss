@@ -1,54 +1,12 @@
-.stat-num {
-  margin-top: var(--space-xs);
-  color: #0F766E;
-}
+/* 流水。稿 Screen/06 流水 4:124 的 content 4:127。
+   页面外框 padding 走共用 .page（--page-pad 24rpx = 12px），稿上是 16px；
+   差 4px 是全站页边距口径，不在本批单独改（与 B2 看板同一条处理，见其 OQ-1）。
+   卡片圆角 / 阴影 / 内边距一律吃共用 .card，不在这里重定义。 */
 
-.stat-num.warm {
-  color: #C2410C;
-}
-
-.chips {
-  margin: var(--space-lg) 0 var(--space-md);
-}
-
-.list-card {
-  padding: 8rpx 28rpx;
-}
-
-.list-item {
-  display: flex;
-  justify-content: space-between;
-  padding: 24rpx 0;
-  border-bottom: 1rpx solid #F1F5F4;
-}
-
-.list-item:last-child {
-  border-bottom: none;
-}
-
-.item-name {
-  font-weight: 600;
-  margin-bottom: 8rpx;
-}
-
-.item-right {
-  text-align: right;
-}
-
-.amount {
-  margin-top: 8rpx;
-  font-weight: 600;
-}
-
-/* 触底加载的两条脚注。和 index / customer-edit 的 .quiet 同一套灰。 */
-.quiet {
-  text-align: center;
-  color: #64748B;
-}
-
-/* 触底不触发时的手动兜底。高度用共用 .btn-ghost（--tap-sm），这里只管间距。 */
-.load-more {
-  margin-top: var(--space-md);
+/* 按下反馈。这是按下态不是禁用态 —— docs/ui-scale.md 那条
+   「禁用一律 opacity: 1」管的是禁用档，不管 hover-class。 */
+.press {
+  opacity: 0.72;
 }
 
 /* FAB 压在列表右下角，所以页面底部要多留出 FAB 高度 + 间距，
@@ -57,8 +15,226 @@
   padding-bottom: 176rpx;
 }
 
-/* 稿 fab/记一笔 4:985：56×56 = 112rpx。0b 批把 --tap-lg 翻到文档值 104rpx 之后，
-   新档位表里已经没有 56px 这一档，所以这里写字面量，不再借变量的数值。 */
+/* ---- 时间段 pill（稿 row/汇总切换 4:835 / pill/时间段 4:1007） ---- */
+
+.window-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: var(--space-sm);
+}
+
+/* 稿 4:1007：白底 $3:13 + 描边 $3:23 + r999 + h44 + padding-x 14。
+   h44 = 88rpx = --tap-min（本身就是可点元素的地板）。 */
+.window-pill {
+  display: flex;
+  align-items: center;
+  min-height: var(--tap-min);
+  padding: 0 28rpx;
+  box-sizing: border-box;
+  background: var(--color-bg-card);
+  border: 2rpx solid var(--color-border-brand);
+  border-radius: 999rpx;
+  color: var(--color-text-primary);
+  font-size: var(--fs-label);
+  line-height: 1.3;
+}
+
+.window-pill-press {
+  background: var(--color-fill-ghost);
+}
+
+/* ---- 期间摘要条（稿 row/本月摘要 13:118） ---- */
+
+/* 稿：白底 + 描边 $3:85 + r10 + h44 + padding-x 12，三列等分。
+   r10 = 20rpx，h44 = 88rpx。**块只读**（稿 n1 4:190），所以不给 hover。 */
+.summary-row {
+  display: flex;
+  align-items: center;
+  min-height: 88rpx;
+  padding: var(--space-sm) var(--space-lg);
+  box-sizing: border-box;
+  background: var(--color-bg-card);
+  border: 2rpx solid var(--color-border-default);
+  border-radius: 20rpx;
+}
+
+.summary-col {
+  flex: 1 1 0;
+  min-width: 0;
+  text-align: center;
+}
+
+/* 稿 13:122 / 13:124 / 13:126：12px muted。12px = --fs-caption，是字号地板。 */
+.summary-label {
+  font-size: var(--fs-caption);
+  color: var(--color-text-muted);
+  line-height: 1.2;
+}
+
+/* 稿 13:123 / 13:125 / 13:127：14px Inter。14px = --fs-body。 */
+.summary-num {
+  margin-top: 4rpx;
+  font-size: var(--fs-body);
+  font-weight: 600;
+  color: var(--color-text-primary);
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 毛利数字是稿上唯一一处品牌青绿点缀（13:127 绑 $3:83 = brand/700 #0F756E）。
+   docs/design-file.md：品牌青绿只做非语义场合的小剂量点缀，毛利 stat 数字正是
+   其中一处；A1 批（spec-0a）也点名「records.wxss 的青绿 .stat-num 留着不动」。
+   app.wxss 里没有 brand token，所以写字面量。原值 #0F766E 是笔误，稿是 #0F756E。 */
+.summary-num.profit {
+  color: #0F756E;
+}
+
+/* ---- 聚合漂移提示（稿 hint/汇总核对中·样张 13:131） ---- */
+
+.stale-hint {
+  margin-top: var(--space-sm);
+  font-size: var(--fs-caption);
+  color: var(--color-text-muted);
+  line-height: 1.4;
+}
+
+/* ---- 类型筛选：单行横滑（稿 filter-chips 4:144 + docs/ui-scale.md 本页专属裁定） ---- */
+
+/* scroll-view 默认是块级，横滑要靠内部 .type-row 的 inline-flex 撑出宽度。
+   给 scroll-view 本身留出上下 margin，别让 chip 的 44 高被裁掉。 */
+.type-scroll {
+  margin: var(--space-lg) 0 var(--space-md);
+  width: 100%;
+  white-space: nowrap;
+}
+
+.type-row {
+  display: inline-flex;
+  gap: var(--gap);
+  padding-right: var(--space-lg);
+}
+
+/* 共用 .chip 已给了 min-height:--tap-min / r999 / 灰底灰字 / .on 白底黑描边，
+   这里只关掉它的换行与外边距（.chips 那一套是折行用的，本页不走 .chips）。 */
+.type-chip {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  margin: 0;
+}
+
+/* ---- 空态插画（稿 icon/empty/records · 票据 48 = 10:28） ----
+   这一条由 B1 交接（spec-1a-assets/empty-icons.wxss），**原样粘贴，一个字节都不要改**。
+   描边色 #0F756E 是稿上的字面量（不是变量）；data URI 里引用不到 CSS 变量。 */
+.empty-icon-records {
+  background-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='48'%20height='48'%3E%3Cpath%20fill='%230F756E'%20transform='matrix(1%200%200%201%2011.2%206.4)'%20d='M26.1303%20-0.5303Q25.9144%20-0.759%2025.6%20-0.75L0%20-0.75Q-0.3144%20-0.759%20-0.5303%20-0.5303Q-0.759%20-0.3144%20-0.75%200L-0.75%2035.2Q-0.759%2035.5144%20-0.5303%2035.7303Q-0.3144%2035.959%200%2035.95Q0.1206%2035.9502%200.235%2035.9122Q0.3497%2035.8746%200.4464%2035.8027L4.3115%2032.9397L8.0227%2035.7945Q8.2205%2035.9518%208.4732%2035.95Q8.7258%2035.9564%208.9264%2035.8027L12.8%2032.9333L16.6736%2035.8027Q16.8742%2035.9564%2017.1268%2035.95Q17.3795%2035.9518%2017.5773%2035.7945L21.2885%2032.9397L25.1536%2035.8027Q25.4008%2035.9971%2025.7105%2035.9418Q26.0228%2035.9045%2026.2027%2035.6464Q26.2746%2035.5497%2026.3122%2035.4351Q26.3502%2035.3206%2026.35%2035.2L26.35%200Q26.3591%20-0.3144%2026.1303%20-0.5303ZM24.85%200.75L0.75%200.75L0.75%2033.7111L3.8736%2031.3973Q4.0742%2031.2436%204.3268%2031.25Q4.5795%2031.2482%204.7773%2031.4055L8.4885%2034.2603L12.3536%2031.3973Q12.5512%2031.2461%2012.8%2031.25Q13.0488%2031.2461%2013.2464%2031.3973L17.1115%2034.2603L20.8227%2031.4055Q21.0205%2031.2482%2021.2732%2031.25Q21.5258%2031.2436%2021.7264%2031.3973L24.85%2033.7111L24.85%200.75Z'%20fill-rule='evenodd'/%3E%3Cpath%20fill='%230F756E'%20transform='matrix(1%200%200%201%2017.6%2016.8)'%20d='M12.8%20-0.75L0%20-0.75Q-0.3144%20-0.759%20-0.5303%20-0.5303Q-0.759%20-0.3144%20-0.75%200Q-0.759%200.3144%20-0.5303%200.5303Q-0.3144%200.759%200%200.75L12.8%200.75Q13.1144%200.759%2013.3303%200.5303Q13.559%200.3144%2013.55%200Q13.559%20-0.3144%2013.3303%20-0.5303Q13.1144%20-0.759%2012.8%20-0.75ZM12.8%206.45L0%206.45Q-0.3144%206.441%20-0.5303%206.6697Q-0.759%206.8856%20-0.75%207.2Q-0.759%207.5144%20-0.5303%207.7303Q-0.3144%207.959%200%207.95L12.8%207.95Q13.1144%207.959%2013.3303%207.7303Q13.559%207.5144%2013.55%207.2Q13.559%206.8856%2013.3303%206.6697Q13.1144%206.441%2012.8%206.45Z'%20fill-rule='evenodd'/%3E%3C/svg%3E");
+}
+
+/* ---- 流水列表（稿 card/流水列表 4:152） ---- */
+
+/* 稿行 padding {left 12, right 64, top 12, bottom 12}。右边那 64 是给 FAB 让位
+   （UX注释 7:49：金额右缘不超过绝对 x=295 = FAB 左 303 − 8）。
+   卡本身吃共用 .card 的 28rpx 内边距会和行 padding 打架，所以卡的左右内边距
+   归零、由行自己给。 */
+.records-card {
+  padding: 0;
+  overflow: hidden;
+}
+
+.record-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 20rpx;
+  padding: var(--space-lg) 128rpx var(--space-lg) var(--space-lg);
+  border-bottom: 2rpx solid var(--color-border-default);
+}
+
+.record-row:last-child {
+  border-bottom: none;
+}
+
+/* tag 在行首、不跟着文字基线跑（稿上 tag 与 title 顶对齐）。 */
+.record-row .tag {
+  flex: 0 0 auto;
+  margin-top: 2rpx;
+}
+
+.record-col {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 标题与金额同一行：稿 row/title-amt 13:295 / 13:494。 */
+.record-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-md);
+}
+
+/* 稿 title 14px Medium。 */
+.record-title {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-body);
+  font-weight: 500;
+  color: var(--color-text-primary);
+  word-break: break-word;
+}
+
+/* 稿 amount 16px Inter SemiBold。16px = --fs-amount。
+   docs/ui-scale.md 的降档表：「列表行金额」任意长度都不降档，现有字号够用。 */
+.record-amount {
+  flex: 0 0 auto;
+  font-size: var(--fs-amount);
+  font-weight: 600;
+  color: var(--color-text-primary);
+  white-space: nowrap;
+}
+
+/* 稿 sub 12px muted。 */
+.record-sub {
+  margin-top: 4rpx;
+  font-size: var(--fs-caption);
+  color: var(--color-text-muted);
+  word-break: break-word;
+}
+
+/* 稿 sub-debt。两种色：
+     退货的「冲欠 ¥84.00 · 退现金 ¥12.00」= muted（13:505 绑 $3:79）
+     销售的「欠 ¥800.00 · 未收清」     = text/debt 红（9:124 绑 $7:346） */
+.record-note {
+  margin-top: 4rpx;
+  font-size: var(--fs-caption);
+  color: var(--color-text-muted);
+  word-break: break-word;
+}
+
+.record-note.debt {
+  color: var(--color-text-debt);
+}
+
+/* ---- 翻页脚注（稿 loadmore 4:187：12px muted，h44 居中） ---- */
+
+.foot-note {
+  min-height: var(--tap-min);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--fs-caption);
+  color: var(--color-text-muted);
+}
+
+/* 触底不触发时的手动兜底。高度用共用 .btn-ghost（--tap-md），这里只管间距。 */
+.load-more {
+  margin-top: var(--space-md);
+}
+
+/* ---- FAB（稿 fab/记一笔 4:985） ---- */
+
+/* 56×56 = 112rpx。0b 批把 --tap-lg 翻到文档值 104rpx 之后，新档位表里已经没有
+   56px 这一档，所以这里写字面量，不再借变量的数值。本批原样保留，不动几何。 */
 .record-fab {
   position: fixed;
   right: var(--space-xl);

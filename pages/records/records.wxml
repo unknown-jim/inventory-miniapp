@@ -1,66 +1,108 @@
 <view class="page">
-  <view class="card stat-grid">
-    <view class="stat">
-      <view class="muted">进货金额</view>
-      <view class="stat-num">¥{{purchaseAmount}}</view>
+  <!-- 时间段 pill。稿 row/汇总切换 4:835 的右半 pill/时间段（可选区间）4:1007：
+       白底 + 黑描边 + r999 + h44 + padding-x 14，label「本月 ⌄」13px。
+       稿上这一行左侧还有「导出 ›」（4:1006）→ 底部账本导出 sheet（4:872），
+       本批**不做**：后端给不出它要的数（多选类型 + 分型笔数 + 分型金额），
+       理由与缺口写在规格 §6 与 [OPEN-Q-1]。不做就整个不画，不留一个点了没反应的入口。 -->
+  <view class="window-row">
+    <view
+      class="window-pill js-window-pill"
+      hover-class="window-pill-press"
+      bindtap="openWindowPicker"
+    >{{windowLabel}} ⌄</view>
+  </view>
+
+  <!-- 期间摘要条。稿 row/本月摘要 13:118：白底 + hairline 描边 + r10 + h44，三等分。
+       三列 = 进货 / 销售（应收）/ 毛利，**没有欠款**（稿 4:190 原话：「欠款是存量，
+       不在本页重复」；服务端 windowTotalsOf 也压根不回 receivable）。 -->
+  <view class="summary-row">
+    <view class="summary-col">
+      <view class="summary-label">进货</view>
+      <view class="summary-num js-summary-purchase">{{purchaseText}}</view>
     </view>
-    <view class="stat">
-      <view class="muted">销售金额</view>
-      <view class="stat-num warm">¥{{salesAmount}}</view>
+    <view class="summary-col">
+      <view class="summary-label">销售（应收）</view>
+      <view class="summary-num js-summary-sales">{{salesText}}</view>
     </view>
-    <view class="stat">
-      <view class="muted">销售毛利</view>
-      <view class="stat-num">¥{{profit}}</view>
-    </view>
-    <view class="stat">
-      <view class="muted">客户欠款</view>
-      <view class="stat-num warm">¥{{receivable}}</view>
+    <view class="summary-col">
+      <view class="summary-label">毛利</view>
+      <view class="summary-num profit js-summary-profit">{{profitText}}</view>
     </view>
   </view>
 
-  <view wx:if="{{aggregatesStale}}" class="card quiet js-aggregates-stale">这里的汇总金额正在核对，可能不准；单张单据上的金额是准的。请把这个情况告诉店主。</view>
-
-  <view class="chips">
-    <view class="chip {{type === 'all' ? 'on' : ''}}" data-type="all" bindtap="setType">全部 {{count}}</view>
-    <view class="chip {{type === 'in' ? 'on' : ''}}" data-type="in" bindtap="setType">进货</view>
-    <view class="chip {{type === 'out' ? 'on' : ''}}" data-type="out" bindtap="setType">销售</view>
-    <view class="chip {{type === 'pay' ? 'on' : ''}}" data-type="pay" bindtap="setType">收款</view>
-    <view class="chip {{type === 'return' ? 'on' : ''}}" data-type="return" bindtap="setType">退货</view>
-    <view class="chip {{type === 'convert' ? 'on' : ''}}" data-type="convert" bindtap="setType">改规格</view>
-    <view class="chip {{type === 'adjust' ? 'on' : ''}}" data-type="adjust" bindtap="setType">调整</view>
+  <!-- 聚合漂移哨兵。稿 hint/汇总核对中·样张 13:131，caption 13:137 写明
+       「aggregatesStale 时出现，Screen/06 默认隐藏」。 -->
+  <view wx:if="{{aggregatesStale}}" class="stale-hint js-aggregates-stale">
+    云端汇总核对中，数字可能短暂不准
   </view>
 
-  <view wx:if="{{loaded && !list.length}}" class="card empty">还没有流水</view>
+  <!-- 类型筛选。稿 filter-chips 4:144：8 枚 44 高 chip，**单行横滑**。
+       docs/ui-scale.md 的本页专属裁定 + 稿 n2 4:191：「本页 8 个 44 高 chip
+       单行横滑（字号高度不减）；折行会吃掉列表。其它页筛选项仍折行。」
+       选中态用 .chip.on（白底黑描边）—— chip 铁律里彩色浅底已经被
+       「不可点的状态标识」占住了，类型色只出现在 tag 上（稿 n7 4:278）。 -->
+  <scroll-view scroll-x enhanced show-scrollbar="{{false}}" class="type-scroll">
+    <view class="type-row">
+      <view
+        class="chip type-chip {{type === item.key ? 'on' : ''}}"
+        wx:for="{{typeOptions}}"
+        wx:key="key"
+        data-type="{{item.key}}"
+        bindtap="setType"
+      >{{item.label}}</view>
+    </view>
+  </scroll-view>
 
-  <view class="card list-card" wx:if="{{list.length}}">
-    <view class="list-item js-record-item {{item.isOut ? 'js-record-out' : ''}}" wx:for="{{list}}" wx:key="id" data-id="{{item.id}}" bindtap="onRecordTap">
-      <view>
-        <view class="item-name">{{item.productName}}</view>
-        <view class="muted" wx:if="{{item.hasSpec}}">{{item.specText}}</view>
-        <view class="muted">
-          {{item.timeText}}
-          <block wx:if="{{item.isOut || item.isIn || item.isAdjust}}"> · {{item.qtyText}} 件<block wx:if="{{item.isMulti}}"> · {{item.lineCount}} 种</block><block wx:elif="{{!item.isAdjust}}"> · 单价 ¥{{item.priceText}}</block></block>
+  <!-- 首屏加载：列表区换成 state/loading（稿 n4 4:193 / B1 的 b3EmptyCap 13:169）。
+       **不要给 data 加 pageLoading 字段** —— tests/automator-contract.test.js 的
+       NO_PAGE_LOADING 名单里有本页，加了会红；那条判据只看 data 块里的字面量，
+       所以用组件本身没问题。 -->
+  <page-loading wx:if="{{loading && !loaded}}" />
+
+  <!-- 空态。稿 state/empty·流水 11:125（无 CTA），B1 已给 .empty / .empty-title /
+       .empty-icon 三个共用类，插画那一条由 B1 交接、粘在本页 wxss 里。 -->
+  <view wx:elif="{{loaded && !list.length}}" class="card empty js-records-empty">
+    <view class="empty-icon empty-icon-records"></view>
+    <view class="empty-title">还没有流水</view>
+    <view class="muted">记一笔就有了</view>
+  </view>
+
+  <!-- 流水列表。稿 card/流水列表 4:152：成组包卡 + 行间 hairline。 -->
+  <view wx:elif="{{list.length}}" class="card records-card">
+    <view
+      class="record-row js-record-item {{item.isOut ? 'js-record-out' : ''}}"
+      hover-class="press"
+      wx:for="{{list}}"
+      wx:key="id"
+      data-id="{{item.id}}"
+      bindtap="onRecordTap"
+    >
+      <text class="tag {{item.tagClass}}">{{item.typeText}}</text>
+      <view class="record-col">
+        <view class="record-head">
+          <view class="record-title">{{item.rowTitle}}</view>
+          <view wx:if="{{item.hasAmount}}" class="record-amount">{{item.amountSigned}}</view>
         </view>
-        <view wx:if="{{item.customerText}}" class="muted">客户 {{item.customerText}}</view>
-        <view wx:if="{{item.isOut && item.hasDebt}}" class="muted">已收 ¥{{item.paidText}} · 欠 ¥{{item.debtText}}</view>
-        <view wx:if="{{item.remark}}" class="muted">{{item.remark}}</view>
-      </view>
-      <view class="item-right">
-        <text class="tag {{item.tagClass}}">{{item.typeText}}</text>
-        <view wx:if="{{!item.isAdjust}}" class="amount">¥{{item.amountText}}</view>
-          <view wx:if="{{item.isOut}}" class="muted">毛利 ¥{{item.profitText}}</view>
-          <view wx:elif="{{item.isReturn}}" class="muted">冲减毛利 ¥{{item.profitText}}</view>
+        <view class="record-sub">{{item.rowSub}}</view>
+        <view
+          wx:if="{{item.noteText}}"
+          class="record-note {{item.noteDebt ? 'debt' : ''}}"
+        >{{item.noteText}}</view>
       </view>
     </view>
   </view>
 
-  <view wx:if="{{loading}}" class="card quiet">正在加载…</view>
-  <button wx:elif="{{loaded && list.length && hasMore}}" class="btn-ghost load-more js-load-more" bindtap="onLoadMore">加载更多</button>
-  <view wx:elif="{{loaded && list.length && !hasMore}}" class="card quiet">没有更多了</view>
+  <!-- 触底 / 手动翻页的三种脚注。稿 loadmore 4:187「没有更多了」。 -->
+  <view wx:if="{{loaded && list.length && loading}}" class="foot-note">正在加载…</view>
+  <button
+    wx:elif="{{loaded && list.length && hasMore}}"
+    class="btn-ghost load-more js-load-more"
+    bindtap="onLoadMore"
+  >加载更多</button>
+  <view wx:elif="{{loaded && list.length}}" class="foot-note">没有更多了</view>
 
   <!-- 流水页 FAB（稿 fab/记一笔 4:985：56×56 实心黑圆钮，右下角，距右缘和 tabBar 各 16px）。
-       tabBar 页的 webview 本来就不含原生 tabBar，所以 bottom 是相对可视区底缘算的：
-       下一批流水升级成 tab 之后这里不用改。 -->
+       0c 批已落地，本批**几何一个数都不动**，只是原样搬过来。 -->
   <view class="record-fab js-record-fab" hover-class="record-fab-press" bindtap="openRecordSheet">＋</view>
 
   <record-sheet id="record-sheet" show="{{showRecordSheet}}" bindclose="closeRecordSheet" />

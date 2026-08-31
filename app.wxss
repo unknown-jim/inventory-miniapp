@@ -214,19 +214,40 @@ button::after {
   color: #047857;
 }
 
+/* ---- 流水类型 tag 六色（稿 Section/标签与胶囊 3:210，2026-08-31 实读）----
+   值取自设计稿变量本体（export_variables hex6），不是截图取色：
+     tag/in 3:211      cyan-50   #EDFFFF / cyan-600   #0891B2
+     tag/out 3:213     neutral-100 #F5F5F5 / neutral-600 #525252
+     tag/payment 3:221 green-50  #EDFCF5 / green-700  #057857
+     tag/return 3:215  blue-50   #F0F5FF / blue-700   #1C4FD9
+     tag/convert 3:217 violet-50 #F5F2FF / violet-700 #6E29D9
+     tag/adjust 3:219  slate-100 #F2F5FA / slate-700  #334054
+     tag/期初 11:84    与 tag/out 同档（稿 9:83：期初与销售同中性档，不占色位）
+   稿 UX注释 9:83 的裁定：销售 = 中性灰底中性字，暖色留给欠款红与琥珀点，
+   避免整列表泛暖被误读成欠款单。所以 out / return 都从原来的橙色换掉了。
+   A1 批（spec-0a）把这 22 处颜色划出范围、标注「单独一批」，本批就是那一批。
+   .tag-credit / .tag-ok / .tag-alert / .tag-spec / .tag-blank 归别的屏消费，本批不动。 */
 .tag-in {
-  background: #ECFEFF;
-  color: #0E7490;
+  background: #EDFFFF;
+  color: #0891B2;
 }
 
 .tag-out {
-  background: #FFF7ED;
-  color: #C2410C;
+  background: #F5F5F5;
+  color: #525252;
+}
+
+/* 期初与销售同中性档（稿 tag/期初 11:84 与 tag/out 3:213 逐值相同）。
+   单开一个类而不是复用 .tag-out，是为了让 utils/util.js 的映射读得出语义；
+   两段值刻意一样，改一处要连带改另一处。 */
+.tag-opening {
+  background: #F5F5F5;
+  color: #525252;
 }
 
 .tag-pay {
-  background: #F5F3FF;
-  color: #6D28D9;
+  background: #EDFCF5;
+  color: #057857;
 }
 
 .tag-credit {
@@ -245,18 +266,18 @@ button::after {
 }
 
 .tag-return {
-  background: #FFF7ED;
-  color: #C2410C;
+  background: #F0F5FF;
+  color: #1C4FD9;
 }
 
 .tag-convert {
-  background: #F5F3FF;
-  color: #6D28D9;
+  background: #F5F2FF;
+  color: #6E29D9;
 }
 
 .tag-adjust {
-  background: #F1F5F9;
-  color: #334155;
+  background: #F2F5FA;
+  color: #334054;
 }
 
 .chips {

@@ -1706,6 +1706,15 @@ async function runRecordsLoadMore(miniProgram) {
   await backToTabRoot(miniProgram)
   const records = await goto(miniProgram, 'switchTab', '/pages/records/records', '流水页')
   await waitForData(records, function (data) { return data.loaded }, '流水页首屏加载完成')
+  // 7a 批给流水页加了时间段 pill，默认「本月」（稿 UX注释 n8 4:839）。而这条
+  // 用例的种子文档 createdAt = 1700000000000 起（2023-11-14，见 seedExtraPayDocs），
+  // 落在本月之外。本用例验的是**分页不重不漏**，跟时间段无关，所以先切到「全部」。
+  // 时间段选择走原生 wx.showActionSheet，automator 点不到里面的选项，
+  // 所以直调页面方法 —— applyWindow 就是为这件事单独抽出来的。
+  await records.callMethod('applyWindow', 'all')
+  await waitForData(records, function (data) {
+    return data.windowKey === 'all' && data.loaded && data.list.length > 0
+  }, '切到「全部」时间段之后重新加载完成')
   const first = await records.data()
   assert.strictEqual(first.list.length, 20, '首屏只给一页 20 条，不多给')
   assert.strictEqual(first.hasMore, true, '还有下一页')

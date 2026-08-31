@@ -167,7 +167,11 @@ function withRecordView(record) {
   else if (isReturn) typeText = '退货'
   else if (isConvert) typeText = '改规格'
   else if (isAdjust) typeText = inventory.adjustTypeText(record)
-  else if (isCredit) typeText = '赊账'
+  // 【7a】原来这里还有一档 `else if (isCredit) typeText = '赊账'`，去掉了。
+  // 稿上没有「赊账」这个 tag：欠款未清的销售单（样张 9:118）打的仍是中性的
+  // 「销售」tag，欠不欠钱写在副行红字「欠 ¥800.00 · 未收清」里（Screen/06 的
+  // UX注释 4:192 原话）。tag 说的是**这是哪种单**，不是**这单收没收到钱**——
+  // 把两件事挤进同一个槽，结果就是同一张单在收款前后换一个 tag。
   let specText = spec
   if (isConvert) specText = fromSpec + ' → ' + spec
   if ((isIn || isAdjust) && !spec && line.skuId) specText = inventory.blankStockLabel()
@@ -197,16 +201,32 @@ function withRecordView(record) {
     isMulti: isMulti,
     lineCount: lineCount,
     typeText: typeText,
+    // 【7a】两处改动，都照稿 Section/标签与胶囊 3:210：
+    //   ① 期初从 'tag-credit'（红）改成 'tag-opening'（中性）—— 稿 9:83：
+    //      「期初与销售同中性档，不上独立色（上线前一次性结转，不占色位）」。
+    //   ② isCredit 不再进这个映射 —— 赊账的销售单打中性「销售」tag，见上面
+    //      typeText 那一段。`.tag-credit` 本身**保持不动**：pages/customers 用它
+    //      当「欠款」角标（customers.wxml:21），那是欠款语义、不是流水类型。
     tagClass: isAdjust
       ? 'tag-adjust'
       : (isPay
       ? 'tag-pay'
-      : (isOpening || isCredit ? 'tag-credit' : (isIn ? 'tag-in' : (isReturn ? 'tag-return' : (isConvert ? 'tag-convert' : 'tag-out'))))),
+      : (isOpening ? 'tag-opening' : (isIn ? 'tag-in' : (isReturn ? 'tag-return' : (isConvert ? 'tag-convert' : 'tag-out'))))),
     timeText: formatTime(record.createdAt),
     amountText: money(record.amount),
     paidText: money(paidAmount),
     debtText: money(debtAmount),
     hasDebt: debtAmount > 0,
+    // 【7a】列表行要的两个派生量。都用 utils/inventory.js 的现成纯函数算，
+    // **不在页面里从流水折钱**（tests/no-client-cloud-db.test.js 的 T-S3 禁令）。
+    //
+    // creditedAmount = 现金实收 + 抵掉的预收（utils/inventory.js:1010-1019）。
+    // 「本单结清了没有」要按它判，不能按 settledAmount：一张「应收 352 =
+    // 现金 152 + 抵预收 200」的单，按现金判会显示欠 200，而客户账上是 0。
+    creditedAmount: isOut || isReturn ? inventory.creditedAmount(record) : 0,
+    // 这张销售单已经退掉的货值（老流水缺 returnedAmount 时函数自己按
+    // returnedQty × 单价兜底，读时兜底、不写迁移）。
+    returnedAmount: isOut ? inventory.returnedAmountOfSale(record) : 0,
     priceText: money(single ? line.unitPrice : 0),
     profitText: money(record.profit),
     qtyText: isPay || isOpening ? '' : String(qty),
