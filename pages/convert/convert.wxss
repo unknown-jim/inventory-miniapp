@@ -1,57 +1,232 @@
-.last {
+/* 稿 Screen/12 库存修正·换格 4:423。颜色全部绑 app.wxss 的 token。
+   字号一律写变量名：tests/ui-scale.test.js 拦所有小于 32rpx 的字面量 font-size。
+   注意注释里不要写以星号结尾再跟斜杠的选择器通配（会提前闭合块注释）。 */
+
+/* 钉底 CTA 要让位。同 pages/product-edit 与 pages/sale 的做法。 */
+.page {
+  padding-bottom: calc(env(safe-area-inset-bottom) + 220rpx);
+}
+
+/* 稿 picker/字段/selected 4:460。chevron 用 ::after 画（content 为空串）。 */
+.picker {
+  position: relative;
+  display: flex;
+  align-items: center;
+  padding-right: 56rpx;
+  border: 2rpx solid var(--color-border-default);
+  box-sizing: border-box;
+}
+
+.picker::after {
+  content: '';
+  position: absolute;
+  right: var(--space-lg);
+  top: 50%;
+  width: 16rpx;
+  height: 16rpx;
+  margin-top: -10rpx;
+  border-right: 3rpx solid var(--color-text-faint);
+  border-bottom: 3rpx solid var(--color-text-faint);
+  transform: rotate(-45deg);
+}
+
+.field.last {
   margin-bottom: 0;
 }
 
-.picker {
-  line-height: var(--tap-md);
+.tip {
+  margin: var(--space-sm) var(--space-xs) var(--gap);
 }
 
-.tip {
-  margin: 0 0 24rpx;
+/* 稿 picker/格选择器/简版 4:502 / 4:503：白卡 padding12、label + chips + note */
+.pick-card {
+  margin-bottom: var(--space-sm);
+}
+
+.pick-card .chips {
+  margin-bottom: 0;
+}
+
+.pick-card .note {
+  margin-top: var(--space-sm);
+}
+
+/* 稿 chip/disabled 4:503;4:498「与来源相同（不可点）」：
+   实底档禁用 = fill/ghost 底 + neutral/500 字，**整枚 opacity 1**
+   （docs/ui-scale.md「禁用态一律不用透明度」，4.35:1）。
+   这一档和「未选中可点」只差字色，所以它一定要和 .chip.on 的白底黑描边分得开。 */
+.chip.off {
+  background: var(--color-fill-ghost);
+  border-color: transparent;
+  color: var(--color-neutral-500);
+  font-weight: 400;
+  opacity: 1;
+}
+
+/* 稿 方向箭头 4:512：16×16、居中、黑 50% 描边 */
+.arrow {
+  width: 100%;
+  height: 40rpx;
+  margin: var(--space-xs) 0;
+  position: relative;
+}
+
+.arrow::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 8rpx;
+  width: 18rpx;
+  height: 18rpx;
+  margin-left: -9rpx;
+  border-right: 3rpx solid var(--color-text-faint);
+  border-bottom: 3rpx solid var(--color-text-faint);
+  transform: rotate(45deg);
+}
+
+/* 稿 field/数量 4:463 + hint 7:106（右对齐的「最多 N 件（= 来源现存）」） */
+.qty-card {
+  margin-bottom: var(--space-sm);
+}
+
+.qty-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--space-sm);
+}
+
+.qty-label {
+  margin-bottom: 0;
+}
+
+/* 稿 stepper/default 7:225。与 pages/sale-return 的同名块逐条同构。 */
+.stepper {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+}
+
+.step-btn {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--tap-min);
+  height: var(--tap-min);
+  background: var(--color-fill-ghost);
+  border-radius: 16rpx;
+  font-size: var(--fs-title);
+  color: var(--color-text-primary);
+}
+
+/* 到顶 / 到底走**图标档**禁用：不加实底、opacity 保持 1、只降字色到 neutral/500
+   （docs/ui-scale.md「给透明底控件加实底会做出比启用态更重的禁用件」）。 */
+.step-btn.off {
+  color: var(--color-neutral-500);
+  opacity: 1;
+}
+
+/* 稿 qty-input 7:225;7:220：56×44 r10。宽度按 docs/ui-scale.md「容器按四位数排宽」
+   取 144rpx，与 pages/sale-return、pages/sale、pages/stock-take 同值。 */
+.step-input {
+  flex: none;
+  box-sizing: border-box;
+  width: 144rpx;
+  height: var(--tap-min);
+  background: var(--color-fill-ghost);
+  border-radius: 20rpx;
+  font-size: var(--fs-title);
+  font-weight: 600;
+  color: var(--color-text-primary);
+  text-align: center;
+}
+
+/* 稿 card/换规格预览 4:786：白卡 r12、padding 12/6、两行之间一条 hairline */
+.preview {
+  padding: var(--space-sm) var(--space-lg);
+  margin-bottom: var(--space-sm);
+}
+
+.preview-line {
+  padding: var(--space-xs) 0;
+  font-size: var(--fs-label);
+  color: var(--color-text-muted);
+}
+
+.preview-div {
+  height: 2rpx;
+  background: var(--color-border-default);
+}
+
+/* 稿 bottom-cta 4:427。范式同 pages/product-edit 的 save-bar。 */
+.save-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10;
+  box-sizing: border-box;
+  padding: var(--space-lg) var(--page-pad) calc(env(safe-area-inset-bottom) + var(--space-lg));
+  background: var(--color-bg-card);
+  border-top: 2rpx solid var(--color-border-default);
 }
 
 .save-btn {
-  margin: 32rpx 0 16rpx;
+  margin: 0;
 }
 
+/* 弹层骨架。与 pages/sale/sale.wxss 的同名块逐条同构。 */
 .mask {
   position: fixed;
   top: 0;
   right: 0;
   bottom: 0;
   left: 0;
-  background: rgba(15, 23, 42, 0.45);
+  z-index: 1000;
   display: flex;
   align-items: flex-end;
-  z-index: 1000;
+  background: var(--color-bg-overlay);
 }
 
 .sheet {
+  position: relative;
+  z-index: 1001;
+  box-sizing: border-box;
   width: 100%;
-  background: #FFFFFF;
+  max-height: 84vh;
+  padding: 28rpx var(--space-xl) var(--space-lg);
+  background: var(--color-bg-card);
   border-radius: 24rpx 24rpx 0 0;
-  padding: 28rpx 24rpx 12rpx;
 }
 
 .sheet-title {
-  font-size: var(--fs-lg);
+  margin-bottom: var(--space-md);
+  font-size: var(--fs-title);
   font-weight: 600;
-  margin-bottom: 16rpx;
+  color: var(--color-text-primary);
 }
 
 .sheet-list {
-  height: 560rpx;
+  max-height: 560rpx;
 }
 
 .sheet-item {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  box-sizing: border-box;
+  min-height: var(--tap-md);
   padding: 22rpx 0;
-  border-bottom: 1rpx solid #F1F5F4;
+  border-bottom: 2rpx solid var(--color-border-default);
+}
+
+.sheet-body {
+  flex: 1;
+  min-width: 0;
 }
 
 .item-name {
-  font-weight: 600;
   margin-bottom: 6rpx;
+  font-weight: 600;
 }

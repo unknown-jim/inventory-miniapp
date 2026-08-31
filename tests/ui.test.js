@@ -2510,14 +2510,25 @@ async function runConvert(miniProgram) {
   await waitForData(convert, function (d) {
     return d.fromSkuId === from.id
   }, '源格选中')
-  await tapNth(convert, '.js-convert-color', picked.colors.indexOf(toColor), '目标颜色')
+
+  // B10 起目标格是**一列组合 chip**（稿 picker/格选择器/简版 4:503），不再分颜色 /
+  // 尺码两行 —— 稿注 $13:694 要求「与来源相同的 chip 禁用」，那条只有在组合 chip 上
+  // 才表达得出来（双轴下禁掉「白色」会连「白色/2.0m」一起误禁）。
+  // 下标一律**在选完来源之后重新读一次 toOptions 去找**：与来源相同的那一枚仍然占位
+  //（禁用档），拿 fromOptions 或 skus 的顺序去猜必然错位。
+  const afterFrom = await convert.data()
+  const toIndex = afterFrom.toOptions.findIndex(function (item) {
+    return item.id === toSku.id
+  })
+  assert.ok(toIndex >= 0,
+    '目标格没有出现在 toOptions 里：' + toSku.id
+      + '（toOptions = ' + JSON.stringify(afterFrom.toOptions.map(function (item) {
+        return item.id + ':' + item.label + (item.same ? '(同源禁用)' : '')
+      })) + '）')
+  await tapNth(convert, '.js-convert-to', toIndex, '目标格')
   await waitForData(convert, function (d) {
-    return d.toColor === toColor
-  }, '目标颜色选中')
-  await tapNth(convert, '.js-convert-size', picked.sizes.indexOf(fromSku.size), '目标尺码')
-  await waitForData(convert, function (d) {
-    return d.toSize === fromSku.size
-  }, '目标尺码选中')
+    return d.toSkuId === toSku.id
+  }, '目标格选中')
 
   const qty = 1
   await typeInto(convert, '.js-convert-qty', qty, '换规格数量', 'qty')
@@ -2525,7 +2536,8 @@ async function runConvert(miniProgram) {
   // 一个字段值都没有，只能从两百行之后的库存断言倒推。
   const ready = await convert.data()
   step('换规格提交前：fromSkuId=' + ready.fromSkuId + '（' + fromSku.color + '/' + fromSku.size
-    + '）→ toColor=' + ready.toColor + ' toSize=' + ready.toSize + ' qty=' + JSON.stringify(ready.qty))
+    + '）→ toSkuId=' + ready.toSkuId + '（' + toColor + '/' + fromSku.size
+    + '） qty=' + JSON.stringify(ready.qty))
   const beforeRecords = await readRecords(miniProgram)
   await tapWhen(convert, '.js-convert-submit')
   const record = await waitForNewRecord(miniProgram, 'convert', beforeRecords, '换规格提交')

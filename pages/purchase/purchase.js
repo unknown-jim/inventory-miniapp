@@ -2,28 +2,36 @@ const store = require('../../utils/store')
 const util = require('../../utils/util')
 const inventory = require('../../utils/inventory')
 
+// 「最近进货」chips（稿 chips/最近进货 4:694 + 注 4:713）。
+// 拉一页 in 流水、按「商品 + 规格」去重后取前 3 枚。
+//
+// **只读 lines[0] 上已经算好的字段**：进货是单行单（utils/ledger-apply.js:31 的
+// SINGLE_LINE_TYPES 含 'in'），productId / skuId / unitPrice 都在那一行上，
+// 页面一分钱都不折（tests/no-client-cloud-db.test.js 的 T-S3）。
+const RECENT_SCAN = 30
+const RECENT_KEEP = 3
+
 Page({
   data: {
     products: [],
     skus: [],
+    recent: [],
     productId: '',
     productName: '请选择商品',
     stockText: '-',
     hasSpecs: false,
-    colors: [],
-    sizes: [],
-    selectedColor: '',
-    selectedSize: '',
-    skuId: '',
-    specAxis1: '规格一',
-    specAxis2: '规格二',
-    colorOptions: [],
-    sizeOptions: [],
     blankProcess: false,
+    skuId: '',
+    skuOptions: [],
+    baseCostText: '',
+    specLabel: '',
     qty: '',
     unitPrice: '',
     remark: '',
     amountText: '0.00',
+    totalText: '共 0 件 · ¥0.00',
+    costHint: '',
+    submitting: false,
     showPicker: false,
     keyword: '',
     filtered: [],
@@ -48,6 +56,46 @@ Page({
     } else if (this.data.productId) {
       this.selectProduct(this.data.productId)
     }
+    // **故意不 await**：最近进货只是快捷入口，挂进 onShow 的等待链就等于给
+    // tests/ui.test.js 的 waitPageReady 多加一个随机失败点。
+    this.loadRecent()
+  },
+
+  // 稿 4:713：点选带出商品 + 规格 + 上次进价，只留数量给店员。
+  // 拿不到就留空数组、**不弹任何 toast**：主路径（选商品）一点都不依赖它。
+  async loadRecent() {
+    let records = []
+    try {
+      const res = await store.listRecords({ type: 'in', limit: RECENT_SCAN })
+      records = (res && res.records) || []
+    } catch (error) {
+      records = []
+    }
+    const seen = {}
+    const out = []
+    records.forEach(function (record) {
+      if (out.length >= RECENT_KEEP) return
+      const line = inventory.firstLine(record)
+      const productId = String(line.productId || '')
+      if (!productId) return
+      const skuId = String(line.skuId || '')
+      const key = productId + '|' + skuId
+      if (seen[key]) return
+      const product = store.getProduct(productId)
+      if (!product) return
+      const sku = skuId ? store.getSku(skuId) : null
+      if (skuId && !sku) return
+      const spec = sku && !sku.isBlank ? inventory.specText(sku.color, sku.size) : ''
+      seen[key] = true
+      out.push({
+        key: key,
+        productId: productId,
+        skuId: skuId,
+        unitPrice: String(inventory.toNumber(line.unitPrice)),
+        label: spec ? (product.name + ' · ' + spec) : product.name
+      })
+    })
+    this.setData({ recent: out })
   },
 
   applyFilter(keyword, products, skus) {
@@ -95,96 +143,99 @@ Page({
     this.setData(patch)
   },
 
-  currentSku(product) {
-    const current = product || store.getProduct(this.data.productId)
-    if (!current || !inventory.productHasSpecs(current)) return null
-    const colors = current.colors || []
-    const sizes = current.sizes || []
-    if ((colors.length && !this.data.selectedColor) || (sizes.length && !this.data.selectedSize)) {
-      return null
-    }
-    return inventory.findSkuBySpec(this.data.skus, current.id, this.data.selectedColor, this.data.selectedSize)
+  // 稿 picker/格选择器/简版 4:493：一枚 chip = 一个成品规格格，label 带余量。
+  // 待加工池那一格**不出**：applyPurchase 的 blank 分支无条件走 findBlankSku、
+  // 完全忽略 payload.skuId（utils/inventory.js:739-757），选了也没用（规格 §6-3）。
+  skuOptionsOf(product, skuId) {
+    return inventory.skusOfProduct(this.data.skus, product.id).filter(function (item) {
+      return !item.isBlank
+    }).map(function (item) {
+      return {
+        id: item.id,
+        label: inventory.specText(item.color, item.size),
+        stock: item.stock,
+        on: item.id === skuId
+      }
+    })
   },
 
-  specOptions(product, selectedColor, selectedSize) {
-    const colors = (product && product.colors) || []
-    const sizes = (product && product.sizes) || []
-    const skus = this.data.skus
-    return {
-      colorOptions: colors.map(function (color) {
-        return { value: color, on: color === selectedColor }
-      }),
-      sizeOptions: sizes.map(function (size) {
-        const sku = inventory.findSkuBySpec(skus, product.id, selectedColor || '', size)
-        return {
-          value: size,
-          stock: sku ? sku.stock : 0,
-          on: size === selectedSize
-        }
-      })
-    }
+  // 「档案进价」的基准分三档取，与 applyPurchase 三条分支一一对应：
+  //   待加工   -> 待加工那条 sku 的 costPrice（:746 与 :753 都被这次进价覆盖）
+  //   分规格   -> 选中 sku 的 costPrice（:770 覆盖；product.costPrice 不动）
+  //   普通商品 -> product.costPrice（:782 覆盖）
+  baseCostOf(product, sku, blank) {
+    if (blank) return inventory.toNumber(blank.costPrice)
+    if (sku) return inventory.toNumber(sku.costPrice)
+    return inventory.toNumber(product.costPrice)
   },
 
-  applyProductState(product, selectedColor, selectedSize) {
+  applyProductState(product, skuId) {
     const hasSpecs = inventory.productHasSpecs(product)
     const blankProcess = inventory.isBlankProcess(product)
-    const colors = product.colors || []
-    const sizes = product.sizes || []
-    let color = selectedColor
-    let size = selectedSize
+    const options = hasSpecs && !blankProcess ? this.skuOptionsOf(product, skuId) : []
+    let nextSkuId = ''
     if (hasSpecs && !blankProcess) {
-      if (colors.length === 1) color = colors[0]
-      if (sizes.length === 1) size = sizes[0]
-    } else {
-      color = ''
-      size = ''
+      const hit = options.find(function (item) {
+        return item.id === skuId
+      })
+      nextSkuId = hit ? hit.id : (options.length === 1 ? options[0].id : '')
     }
-    const sku = hasSpecs && !blankProcess ? inventory.findSkuBySpec(this.data.skus, product.id, color, size) : null
+    const sku = nextSkuId ? store.getSku(nextSkuId) : null
     const blank = blankProcess ? inventory.findBlankSku(this.data.skus, product.id) : null
-    const keepPrice = this.data.productId === product.id && this.data.unitPrice && this.data.skuId === (sku ? sku.id : (blank ? blank.id : ''))
-    const unitPrice = keepPrice ? this.data.unitPrice : String(sku ? sku.costPrice : product.costPrice)
-    const amount = inventory.round2(inventory.toNumber(this.data.qty) * inventory.toNumber(unitPrice))
-    let stockText = String(product.stock)
-    if (blankProcess) {
-      stockText = blank ? String(blank.stock) : '0'
-    } else if (hasSpecs) {
-      stockText = sku ? String(sku.stock) : '请选规格'
+    const baseCost = this.baseCostOf(product, sku, blank)
+    // 店主手改过的进价要保住：同一个商品、同一格、已经填过价，就不要拿档案价盖掉。
+    const keepPrice = this.data.productId === product.id
+      && this.data.unitPrice
+      && this.data.skuId === nextSkuId
+    const unitPrice = keepPrice ? this.data.unitPrice : String(baseCost)
+    let stockText = '当前库存 ' + product.stock + ' 件'
+    if (hasSpecs) {
+      // 稿 库存meta 4:441（$13:637）：「进货前：白色/1.8m 5 · … · 半成品 40（共 63）」。
+      // skuSummaryText 是仓库里唯一的规格余量拼接函数（utils/inventory.js:414-432）。
+      stockText = '进货前：' + inventory.skuSummaryText(product, this.data.skus)
+        + '（共 ' + product.stock + ' 件）'
     }
-    this.setData(Object.assign({
+    this.setData({
       productId: product.id,
       productName: product.name,
       hasSpecs: hasSpecs,
       blankProcess: blankProcess,
-      specAxis1: inventory.specAxis1Name(product),
-      specAxis2: inventory.specAxis2Name(product),
-      colors: colors,
-      sizes: sizes,
-      selectedColor: color,
-      selectedSize: size,
-      skuId: sku ? sku.id : (blank ? blank.id : ''),
+      skuId: nextSkuId,
+      skuOptions: options.map(function (item) {
+        return Object.assign({}, item, { on: item.id === nextSkuId })
+      }),
+      specLabel: blank ? '待加工' : (sku ? inventory.specText(sku.color, sku.size) : product.name),
+      baseCostText: util.money(baseCost),
       stockText: stockText,
-      unitPrice: unitPrice,
-      amountText: util.money(amount)
-    }, this.specOptions(product, color, size)))
+      unitPrice: unitPrice
+    })
+    this.refreshAmount()
   },
 
-  selectProduct(id) {
+  selectProduct(id, skuId) {
     const product = store.getProduct(id)
     if (!product) return
     const same = this.data.productId === id
-    this.applyProductState(product, same ? this.data.selectedColor : '', same ? this.data.selectedSize : '')
+    this.applyProductState(product, skuId || (same ? this.data.skuId : ''))
   },
 
-  pickColor(e) {
+  pickSku(e) {
     const product = store.getProduct(this.data.productId)
     if (!product) return
-    this.applyProductState(product, e.currentTarget.dataset.value, this.data.selectedSize)
+    this.applyProductState(product, e.currentTarget.dataset.id)
   },
 
-  pickSize(e) {
-    const product = store.getProduct(this.data.productId)
-    if (!product) return
-    this.applyProductState(product, this.data.selectedColor, e.currentTarget.dataset.value)
+  // 稿 4:713：带出商品 + 规格 + 上次进价，**数量留空**。
+  pickRecent(e) {
+    const key = e.currentTarget.dataset.key
+    const hit = this.data.recent.find(function (item) {
+      return item.key === key
+    })
+    if (!hit) return
+    this.setData({ qty: '', unitPrice: '' })
+    this.selectProduct(hit.productId, hit.skuId)
+    this.setData({ unitPrice: hit.unitPrice })
+    this.refreshAmount()
   },
 
   onField(e) {
@@ -194,24 +245,41 @@ Page({
     this.refreshAmount()
   },
 
+  // 「数量 × 进价」这一次乘法是**预览**，与服务端 applyPurchase:726 的
+  // `amount: round2(qty * unitPrice)` 逐字同构。落账的金额一律由服务端算，
+  // 提交后的 toast 只读回包（见 submit），不许用这里的数重拼。
   refreshAmount() {
-    const amount = inventory.round2(inventory.toNumber(this.data.qty) * inventory.toNumber(this.data.unitPrice))
-    this.setData({ amountText: util.money(amount) })
+    const qty = inventory.toNumber(this.data.qty)
+    const amount = inventory.round2(qty * inventory.toNumber(this.data.unitPrice))
+    // 稿 hint/进价回写 7:350（默认 visible:false）与变体 13:415（$13:383）：
+    // 只在这次填的价与档案价不同的时候才出，句式「{规格} 档案进价 ¥旧 → ¥新，后续毛利按新进价」。
+    const typed = String(this.data.unitPrice || '').trim()
+    const changed = this.data.productId
+      && typed !== ''
+      && util.money(inventory.round2(inventory.toNumber(typed))) !== this.data.baseCostText
+    this.setData({
+      amountText: util.money(amount),
+      totalText: '共 ' + qty + ' 件 · ¥' + util.money(amount),
+      costHint: changed
+        ? (this.data.specLabel + ' 档案进价 ¥' + this.data.baseCostText
+          + ' → ¥' + util.money(inventory.round2(inventory.toNumber(typed)))
+          + '，后续毛利按新进价')
+        : ''
+    })
   },
 
   async submit() {
+    if (this.data.submitting) return
+    this.setData({ submitting: true })
     try {
       const product = store.getProduct(this.data.productId)
       if (product && inventory.productHasSpecs(product) && !inventory.isBlankProcess(product)) {
-        const colors = product.colors || []
-        const sizes = product.sizes || []
-        if ((colors.length && !this.data.selectedColor) || (sizes.length && !this.data.selectedSize)) {
-          throw new Error(inventory.specSelectHint(product))
-        }
         if (!this.data.skuId) {
-          throw new Error('规格不存在')
+          throw new Error(inventory.specSelectHint(product) || '请选择规格')
         }
       }
+      // payload 只有这五个键。applyPurchase（utils/inventory.js:696-795）也只读这五个，
+      // 单头的 amount / profit 由它自己算与写死，**客户端一个金额字段都不许加**。
       const record = await store.addPurchase({
         productId: this.data.productId,
         skuId: inventory.isBlankProcess(product) ? '' : this.data.skuId,
@@ -222,18 +290,19 @@ Page({
       this.data.skus = store.getSkus()
       const recordLine = inventory.firstLine(record)
       const latest = store.getProduct(recordLine.productId)
-      const blank = latest && inventory.isBlankProcess(latest) ? inventory.findBlankSku(this.data.skus, latest.id) : null
-      const sku = recordLine.skuId && !blank ? store.getSku(recordLine.skuId) : null
-      this.setData({
-        skus: this.data.skus,
-        qty: '',
-        remark: '',
-        stockText: blank ? String(blank.stock) : (sku ? String(sku.stock) : String(latest.stock))
+      this.setData({ skus: this.data.skus, qty: '', remark: '' })
+      if (latest) this.applyProductState(latest, this.data.skuId)
+      this.loadRecent()
+      // 稿 toast/进货完成 7:313「已记进货 · 25 件 · ¥2,375.00」。
+      // 两个数**都读回包**（服务端真值），不是屏上那份预览。
+      wx.showToast({
+        title: '已记进货 · ' + inventory.toNumber(recordLine.qty) + ' 件 · ¥'
+          + util.money(record && record.amount),
+        icon: 'none'
       })
-      this.refreshAmount()
-      wx.showToast({ title: '进货成功', icon: 'success' })
     } catch (error) {
       util.showError(error)
     }
+    this.setData({ submitting: false })
   }
 })
