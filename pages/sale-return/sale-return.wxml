@@ -1,38 +1,135 @@
+<!-- 退货入库。稿 Screen/08 退货入库 4:135、Screen/08b 退货·全部可退 0 7:366、
+     UX注释/退货入库 4:271。
+     入口两个，本批都不改：销售流水详情的「退货入库」(pages/record-edit) 与
+     记一笔面板的「退货 -> 选原单」(components/record-sheet)，都带 ?id=<销售单 id>。
+     整屏自上而下：原单信息卡 / 退货行卡（每行一枚 stepper）/ 金额预览 / 备注 /
+     固定底栏「确认退货 · ¥X」。
+     全部可退 0 时走稿 08b：金额预览与备注都不出，退货行卡下面补一张空态卡，
+     底栏换成白底黑描边的「返回销售详情」（稿 caption 7:365「返回销售详情只在底栏」）。 -->
 <view class="page">
-  <view class="card">
-    <view class="field">
-      <view class="field-label">客户</view>
-      <view class="field-input readonly js-return-customer">{{customerName}}</view>
-    </view>
-    <view class="field last">
-      <view class="field-label">原单时间</view>
-      <view class="field-input readonly">{{timeText}}</view>
+  <page-loading wx:if="{{pageLoading}}" />
+
+  <!-- 稿 state/error 3:759：标题 + 一句话 + 一枚按钮。
+       可重试与不可重试是两种错误态，不可重试的那种不给重试按钮
+       （docs/ui-scale.md「新页面要」第 5 条）。 -->
+  <view wx:elif="{{loadErrorText}}" class="card empty js-return-error">
+    <view class="empty-title">打不开这张单</view>
+    <view class="muted">{{loadErrorText}}</view>
+    <view class="empty-actions">
+      <button
+        wx:if="{{loadErrorRetry}}"
+        class="btn-primary js-return-retry"
+        bindtap="reload"
+      >重试</button>
+      <button
+        wx:else
+        class="back-btn js-return-error-back"
+        bindtap="backToSale"
+      >返回</button>
     </view>
   </view>
 
-  <view class="card list-card">
-    <view class="muted tip">退货按当时卖掉的规格原样入库。要换格，入库后再用「改规格」。</view>
-    <view class="line js-return-line" wx:for="{{lines}}" wx:key="id">
-      <view class="item-name js-return-name">{{item.productName}}</view>
-      <view class="muted" wx:if="{{item.specText}}">{{item.specText}}</view>
-      <view class="muted js-return-remain">已卖 {{item.soldText}} · 已退 {{item.returnedText}} · 可退 {{item.remainText}}</view>
-      <view class="field last">
-        <view class="field-label">本次退货数量</view>
-        <input
-          class="field-input"
-          type="digit"
-          data-id="{{item.id}}"
-          value="{{item.qty}}"
-          bindinput="onQty"
-          placeholder="0"
-        />
+  <block wx:else>
+    <!-- 稿 card/原单信息 4:235：三行 k/v，k 13px muted 定宽 56，v 14px。只读。 -->
+    <view class="card info-card">
+      <view class="kv">
+        <text class="kv-k">原单号</text>
+        <text class="kv-v js-return-docno">{{docNoText}}</text>
+      </view>
+      <view class="kv">
+        <text class="kv-k">客户</text>
+        <text class="kv-v js-return-customer">{{customerName}}</text>
+      </view>
+      <view class="kv">
+        <text class="kv-k">时间</text>
+        <text class="kv-v">{{timeText}}</text>
       </view>
     </view>
-    <view class="field last">
-      <view class="field-label">备注</view>
-      <input class="field-input" data-field="remark" value="{{remark}}" bindinput="onRemark" placeholder="可选" />
-    </view>
-  </view>
 
-  <button class="btn-primary save-btn js-return-submit" bindtap="submit">确认退货</button>
+    <!-- 稿 card/退货行 4:245：整卡无内边距，行自己带 12/12，行间 1px 分隔线 4:256。 -->
+    <view class="card line-card">
+      <view class="line js-return-line" wx:for="{{lines}}" wx:key="id">
+        <view class="line-col">
+          <view class="line-name js-return-name">{{item.productName}}</view>
+          <view wx:if="{{item.specText}}" class="line-sub">{{item.specText}}</view>
+          <view class="line-sub js-return-remain">{{item.metaText}}</view>
+          <view class="line-sub">{{item.priceText}}</view>
+        </view>
+        <!-- 稿 stepper/default 7:226。可退 0 的行是禁用态 7:227：底色不变、
+             只把字色降到 neutral/500（docs/ui-scale.md 的图标档配方，
+             禁用一律 opacity: 1）。上限 = 可退数量（稿注释 4:274）。 -->
+        <view class="stepper">
+          <view
+            class="step-btn js-return-minus {{item.canDec ? '' : 'off'}}"
+            data-id="{{item.id}}"
+            bindtap="stepDown"
+          >−</view>
+          <input
+            class="step-input js-return-qty {{item.disabled ? 'off' : ''}}"
+            type="digit"
+            disabled="{{item.disabled}}"
+            data-id="{{item.id}}"
+            value="{{item.qty}}"
+            bindinput="onQty"
+          />
+          <view
+            class="step-btn js-return-plus {{item.canInc ? '' : 'off'}}"
+            data-id="{{item.id}}"
+            bindtap="stepUp"
+          >＋</view>
+        </view>
+      </view>
+    </view>
+
+    <!-- 稿 state/empty · 全退0 13:653：纸箱 48 + 「这张单已经退完」+ 「没有可退的件数」。
+         稿上这枚实例的 cta-row 3:756 是 visible:false —— 按钮只在底栏，
+         caption 7:365 原话「返回销售详情只在底栏」。 -->
+    <view wx:if="{{allZero}}" class="card empty ret-empty js-return-empty">
+      <view class="empty-icon empty-icon-products"></view>
+      <view class="empty-title">这张单已经退完</view>
+      <view class="muted">没有可退的件数</view>
+    </view>
+
+    <block wx:else>
+      <!-- 稿 退货金额预览 4:284 + 措辞样张 7:352。段的拼装规则写在 sale-return.js
+           的 previewOf 上方；冲欠款那一格用 text/debt 红（稿 7:362 绑 $7:346）。 -->
+      <view class="preview js-return-preview">
+        <view class="preview-line">
+          <block wx:for="{{previewParts}}" wx:key="t">
+            <text class="preview-t">{{item.t}}</text>
+            <text class="preview-a {{item.debt ? 'preview-debt' : ''}}">{{item.a}}</text>
+          </block>
+        </view>
+        <view wx:if="{{previewNote}}" class="preview-note js-return-preview-note">{{previewNote}}</view>
+      </view>
+
+      <!-- 稿 input/default 4:267 -->
+      <input
+        class="remark-input js-return-remark"
+        value="{{remark}}"
+        bindinput="onRemark"
+        placeholder="备注（可选，如「拉链坏了」）"
+      />
+    </block>
+
+    <!-- 底栏是 fixed，正常文档流要留出等高的空白，否则最后一块内容会被盖住 -->
+    <view class="cta-hold"></view>
+
+    <!-- 稿 bottom-cta 4:268 / 7:370：hairline + 一枚按钮 + 安全区 -->
+    <view class="cta-bar">
+      <view class="cta-inner">
+        <button
+          wx:if="{{allZero}}"
+          class="back-btn js-return-back"
+          bindtap="backToSale"
+        >返回销售详情</button>
+        <button
+          wx:else
+          class="btn-primary submit-btn js-return-submit"
+          bindtap="submit"
+          disabled="{{!canSubmit || submitting}}"
+        >{{submitText}}</button>
+      </view>
+    </view>
+  </block>
 </view>

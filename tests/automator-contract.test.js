@@ -161,7 +161,10 @@ const HAS_PAGE_LOADING = [
   'pages/purchase/purchase.js',
   'pages/products/products.js',
   'pages/product-detail/product-detail.js',
-  'pages/members/members.js'
+  'pages/members/members.js',
+  // B8：退货页重做之后有了 pageLoading（onLoad 里要先 fetchRecord 才画得出东西），
+  // tests/ui.test.js 的 returnWholeOrder 已经改成调 waitPageReady。
+  'pages/sale-return/sale-return.js'
 ]
 
 // tests/ui.test.js 现在不对这几个页面调 waitPageReady —— 调了就会撞上那句假报错。
@@ -170,10 +173,9 @@ const NO_PAGE_LOADING = [
   'pages/customer-edit/customer-edit.js',
   'pages/records/records.js',
   // 同一批新进的落点，但**没有**这个字段：用例里一律等各自的业务字段
-  //（如 adjust 等 productId、sale-return 等 lines.length）
+  //（如 adjust 等 productId、convert 等 productId）
   'pages/adjust/adjust.js',
   'pages/convert/convert.js',
-  'pages/sale-return/sale-return.js',
   'pages/product-edit/product-edit.js',
   'pages/categories/categories.js',
   'pages/category-edit/category-edit.js'

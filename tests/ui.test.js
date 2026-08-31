@@ -2176,6 +2176,9 @@ async function returnWholeOrder(miniProgram, orderId, how) {
   const debt = Math.round((sale.amount - settled) * 100) / 100
 
   const ret = await waitForPage(miniProgram, 'pages/sale-return/sale-return', '退货页（' + how + '）')
+  // B8 起退货页有 pageLoading（onLoad 里先 fetchRecord）。名单在
+  // tests/automator-contract.test.js 的 HAS_PAGE_LOADING 里。
+  await waitPageReady(ret)
   await waitForData(ret, function (d) {
     return d && d.lines && d.lines.length > 0 && d.orderId === orderId
   }, '退货页带出了原单行（' + how + '）')

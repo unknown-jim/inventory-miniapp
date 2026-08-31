@@ -1,35 +1,227 @@
-.readonly {
-  line-height: var(--tap-md);
-  color: #64748B;
+/* 退货入库。共用类（.page / .card / .muted / .empty / .empty-title / .empty-icon /
+   .empty-actions / .btn-primary）来自 app.wxss，这里只写本页布局。
+   稿 Screen/08 退货入库 4:135、Screen/08b 退货·全部可退 0 7:366。 */
+
+/* 稿 card/原单信息 4:235：上下内边距 14、行间 gap 10。左右沿用共用 .card 的 --card-pad。 */
+.info-card {
+  padding: 20rpx var(--card-pad);
 }
 
-.last {
-  margin-bottom: 0;
+.kv {
+  display: flex;
+  align-items: baseline;
 }
 
-.list-card {
-  margin-top: 16rpx;
+.kv + .kv {
+  margin-top: 20rpx;
 }
 
-.tip {
-  margin-bottom: 16rpx;
+/* 稿 k 4:237：13px、text/muted、定宽 56（= 112rpx） */
+.kv-k {
+  flex: none;
+  width: 112rpx;
+  font-size: var(--fs-label);
+  color: var(--color-text-muted);
 }
 
+/* 稿 v 4:238：14px、text/primary */
+.kv-v {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-body);
+  color: var(--color-text-primary);
+  word-break: break-all;
+}
+
+/* 稿 card/退货行 4:245：整卡内边距 0，行自己带；卡与卡之间 gap 12 */
+.line-card {
+  margin-top: var(--gap);
+  padding: 0;
+  overflow: hidden;
+}
+
+/* 稿 row/退货行 4:246：横排 gap 10、内边距 12，行间 1px 分隔线 4:256（border/default） */
 .line {
-  padding: 20rpx 0;
-  border-top: 1rpx solid #F1F5F4;
+  display: flex;
+  align-items: center;
+  gap: 20rpx;
+  box-sizing: border-box;
+  padding: var(--space-lg);
+  border-bottom: 2rpx solid var(--color-border-default);
 }
 
-.line:first-of-type {
-  border-top: none;
-  padding-top: 0;
+.line:last-child {
+  border-bottom: none;
 }
 
-.item-name {
+.line-col {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 稿 title 4:248：14px Medium */
+.line-name {
+  font-size: var(--fs-body);
+  font-weight: 500;
+  color: var(--color-text-primary);
+  word-break: break-all;
+}
+
+/* 稿 spec 13:552 / meta 4:249 / price 7:29：三行都是 12px text/muted，col gap 2 */
+.line-sub {
+  margin-top: 4rpx;
+  font-size: var(--fs-caption);
+  color: var(--color-text-muted);
+  word-break: break-all;
+}
+
+/* 稿 stepper/default 7:226：加减 44x44（本仓热区地板 88rpx）r8，中间可点开输入，gap 4 */
+.stepper {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+}
+
+.step-btn {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--tap-min);
+  height: var(--tap-min);
+  background: var(--color-fill-ghost);
+  border-radius: 16rpx;
+  font-size: var(--fs-title);
+  color: var(--color-text-primary);
+}
+
+/* 到顶 / 到底 / 整行不可退时走图标档禁用：不加实底、opacity 保持 1、只降字色到
+   neutral/500（docs/ui-scale.md「禁用态一律不用透明度」）。稿 7:227 就是这一档。 */
+.step-btn.off {
+  color: var(--color-neutral-500);
+  opacity: 1;
+}
+
+/* 稿 qty-input 7:226;7:220：56x44 r10。宽度按 docs/ui-scale.md「容器按四位数排宽」
+   取 144rpx，与 pages/sale 的 .step-input、pages/stock-take 的 .take-qty 同值。 */
+.step-input {
+  flex: none;
+  box-sizing: border-box;
+  width: 144rpx;
+  height: var(--tap-min);
+  background: var(--color-fill-ghost);
+  border-radius: 20rpx;
+  font-size: var(--fs-title);
   font-weight: 600;
-  margin-bottom: 8rpx;
+  color: var(--color-text-primary);
+  text-align: center;
 }
 
-.save-btn {
-  margin: 32rpx 0 16rpx;
+.step-input.off {
+  color: var(--color-neutral-500);
+  opacity: 1;
+}
+
+/* 稿 08b 的 state/empty 13:653 与卡之间同样是 gap 12 */
+.ret-empty {
+  margin-top: var(--gap);
+}
+
+/* 稿 退货金额预览 4:284：白卡 r8、内边距 12/10 */
+.preview {
+  margin-top: var(--gap);
+  padding: 20rpx var(--space-lg);
+  background: var(--color-bg-card);
+  border-radius: 16rpx;
+}
+
+.preview-line {
+  line-height: 1.6;
+}
+
+/* 稿 t1/t2/t3：12px text/muted */
+.preview-t {
+  font-size: var(--fs-caption);
+  color: var(--color-text-muted);
+}
+
+/* 稿 a1/a3：14px SemiBold text/primary */
+.preview-a {
+  font-size: var(--fs-body);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+/* 稿 a2 7:362：冲欠款那一格绑 $7:346 = text/debt。红的三种语义里这是「欠款金额」那一种。 */
+.preview-debt {
+  color: var(--color-text-debt);
+}
+
+.preview-note {
+  margin-top: var(--space-xs);
+  font-size: var(--fs-caption);
+  color: var(--color-text-muted);
+  line-height: 1.5;
+}
+
+/* 稿 input/default 4:267：h44 r10、底 neutral/100、描边 border/default */
+.remark-input {
+  box-sizing: border-box;
+  width: 100%;
+  height: var(--tap-md);
+  margin-top: var(--gap);
+  padding: 0 var(--space-lg);
+  background: var(--color-fill-ghost);
+  border: 2rpx solid var(--color-border-default);
+  border-radius: 20rpx;
+  font-size: var(--fs-body);
+  color: var(--color-text-primary);
+}
+
+/* 底栏占位：高度 = 按钮 104 + 上内边距 12 + 下内边距 24 + 安全区 */
+.cta-hold {
+  height: calc(env(safe-area-inset-bottom) + 160rpx);
+}
+
+/* 稿 bottom-cta 4:268：1px hairline（做成 border-top）+ 安全区 34 */
+.cta-bar {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 10;
+  background: var(--color-bg-card);
+  border-top: 2rpx solid var(--color-border-default);
+}
+
+.cta-inner {
+  padding: var(--space-sm) var(--page-pad) calc(env(safe-area-inset-bottom) + var(--space-lg));
+}
+
+.submit-btn {
+  margin: 0;
+}
+
+/* 稿 08b 的 btn/返回销售详情 13:326：fill x 48、r8、白底 + 黑描边、16px Medium。
+   与 pages/stock-take 的 .take-exit 同一份写法（那一枚就是稿上的白底黑描边件）。 */
+.back-btn {
+  box-sizing: border-box;
+  height: var(--tap-md);
+  line-height: var(--tap-md);
+  margin: 0;
+  background: var(--color-bg-card);
+  border: 2rpx solid var(--color-border-brand);
+  border-radius: 16rpx;
+  color: var(--color-text-primary);
+  font-size: var(--fs-title);
+  font-weight: 500;
+}
+
+/* 空态插画「纸箱 48」。原样取自 inventory-miniapp-handoffs/spec-1a-assets/empty-icons.wxss
+   的 .empty-icon-products 一条（稿组件 icon/empty/products 10:36 的 svg 导出，
+   几何一个数没动）。几何槽位在 app.wxss 的 .empty-icon 里，这里只补背景图。
+   描边色 #0F756E 是稿上的字面量：data URI 里引用不到 CSS 变量。 */
+.empty-icon-products {
+  background-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='48'%20height='48'%3E%3Cpath%20fill='%230F756E'%20transform='matrix(1%200%200%201%209.6%2020)'%20d='M29.3303%20-0.5303Q29.1144%20-0.759%2028.8%20-0.75L0%20-0.75Q-0.3144%20-0.759%20-0.5303%20-0.5303Q-0.759%20-0.3144%20-0.75%200L-0.75%2016Q-0.75%2017.3048%200.1726%2018.2274Q1.0952%2019.15%202.4%2019.15L26.4%2019.15Q27.7048%2019.15%2028.6274%2018.2274Q29.55%2017.3048%2029.55%2016L29.55%200Q29.559%20-0.3144%2029.3303%20-0.5303ZM28.05%200.75L0.75%200.75L0.75%2016Q0.75%2016.6835%201.2333%2017.1667Q1.7166%2017.65%202.4%2017.65L26.4%2017.65Q27.0834%2017.65%2027.5667%2017.1667Q28.05%2016.6834%2028.05%2016L28.05%200.75Z'%20fill-rule='evenodd'/%3E%3Cpath%20fill='%230F756E'%20transform='matrix(1%200%200%201%209.6%209.6)'%20d='M3.8068%200.9493L-0.6732%2010.0693L0.6732%2010.7307L5.148%201.6212Q5.358%201.2283%205.7381%200.9944Q6.1223%200.7579%206.5734%200.7499L22.24%200.75Q22.6777%200.7579%2023.0619%200.9944Q23.442%201.2283%2023.652%201.6212L28.1268%2010.7307L29.4732%2010.0693L24.9932%200.9493Q24.9908%200.9445%2024.9883%200.9397Q24.9859%200.9349%2024.9834%200.9301Q24.5816%200.1683%2023.8481%20-0.2831Q23.1146%20-0.7345%2022.24%20-0.75L6.5466%20-0.7499Q5.6855%20-0.7345%204.9519%20-0.2831Q4.2184%200.1683%203.8166%200.9301Q3.8141%200.9349%203.8116%200.9397Q3.8092%200.9445%203.8068%200.9493Z'%20fill-rule='evenodd'/%3E%3Cpath%20fill='%230F756E'%20transform='matrix(1%200%200%201%2019.2%2020)'%20d='M0.75%204.85L0.75%200L-0.75%200L-0.75%205.6Q-0.759%205.9144%20-0.5303%206.1303Q-0.3144%206.359%200%206.35L9.6%206.35Q9.9144%206.359%2010.1303%206.1303Q10.359%205.9144%2010.35%205.6L10.35%200L8.85%200L8.85%204.85L0.75%204.85Z'%20fill-rule='evenodd'/%3E%3C/svg%3E");
 }
