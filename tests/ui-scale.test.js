@@ -288,9 +288,11 @@ assert.strictEqual(
 )
 
 const productsWxss = read('pages/products/products.wxss')
+// 3a 批（B3）：--tap-sm 是 A2 标为待删的旧别名（与 --tap-md 同值 96rpx），
+// 两列图卡是新写的代码，直接绑文档档位名。
 assert.ok(
-  productsWxss.indexOf('min-height: var(--tap-sm)') >= 0,
-  'products.wxss card should use min-height: var(--tap-sm)'
+  productsWxss.indexOf('min-height: var(--tap-md)') >= 0,
+  'products.wxss card should use min-height: var(--tap-md)'
 )
 assert.ok(productsWxss.indexOf('goods-grid') >= 0, 'products.wxss should layout a two-column grid')
 assert.ok(productsWxss.indexOf('width: 112rpx') < 0, 'products.wxss should not keep the small left thumbnail')
@@ -408,6 +410,63 @@ assert.ok(
     return item.pagePath === 'pages/low-stock/low-stock'
   }),
   '01b 是 navigateTo 的二级页，不许进 tabBar'
+)
+
+// ---------------------------------------------------------------------------
+// 3a 批（B3）· 商品列表两列图卡（稿 Screen/02 = 3:577）
+// 这一组钉的都是「看不见就会悄悄退回去」的事：FAB 复活、筛选退回两枚 chip、
+// 空态退回单按钮、五色瓷砖丢失、青绿残留、旧字号别名回流、看板交接态复活。
+// ---------------------------------------------------------------------------
+const productsWxml = read('pages/products/products.wxml')
+const productsPageJs = read('pages/products/products.js')
+
+assert.ok(
+  productsWxml.indexOf('js-product-add') >= 0 && productsWxml.indexOf('class="fab') < 0,
+  '「＋ 新增商品」在搜索行里，不是 FAB（稿 UX 注释 13:165：FAB 全站只服务「记一笔」）'
+)
+assert.ok(
+  productsWxss.indexOf('.fab') < 0,
+  'products.wxss 不该再留 FAB 样式'
+)
+assert.ok(
+  productsWxml.indexOf('seg-item') >= 0
+    && productsWxml.indexOf('有半成品') >= 0
+    && productsWxml.indexOf('低库存') >= 0,
+  '筛选是稿上的三档 segment（全部 / 有半成品 / 低库存），不是两枚 chip'
+)
+assert.ok(
+  productsWxml.indexOf('empty-icon-products') >= 0
+    && productsWxml.indexOf('empty-actions') >= 0
+    && productsWxml.indexOf('从模板建档') >= 0
+    && productsWxml.indexOf('手动新增') >= 0,
+  '无商品空态用 B1 交付的 state/empty/cta 形（稿 7:322：插画 + 标题 + 副行 + 两枚 CTA）'
+)
+assert.ok(
+  productsWxss.indexOf('.tile-0') >= 0 && productsWxss.indexOf('.tile-4') >= 0,
+  '无图占位的五色瓷砖（稿「规范/无图占位底色」3:821）落在 products.wxss 的 .tile-0 到 .tile-4'
+)
+assert.ok(
+  productsWxss.indexOf('thumb-camera') >= 0,
+  '无图占位右下要有相机角标（稿 camera 13:198）'
+)
+assert.ok(
+  productsWxss.indexOf('#0F766E') < 0,
+  'products.wxss 的两处青绿（原 .link 与 .fab）本批清干净，A1 规格把它划给了逐屏批'
+)
+assert.ok(
+  productsWxss.indexOf('var(--fs-hero)') < 0 && productsWxss.indexOf('var(--tap-sm)') < 0,
+  '.thumb-text 脱离 --fs-hero、.goods-card 脱离 --tap-sm（B2 规格 OQ-2 交给本批的那一处）'
+)
+// 3a 批执行备注（规格内部矛盾的裁定）：这条断言的意图是拦「products.js 再消费
+// consumePendingInventoryFilter」（§8.3 变异 #4 加回 getApp().consumePendingInventoryFilter()
+// 必须红），但规格 §7.1 给的 products.js 注释里合法提到了这个方法名（「所以这里不再
+// consumePendingInventoryFilter」），宽 indexOf 会把注释误当调用拦下来 —— 同本文件
+// state-blocking virtualHost 那条的同一个坑。收窄到「方法名后跟 ASCII 左括号」的调用
+// 形态，意图不变：真加回调用照样红。
+assert.ok(
+  !/consumePendingInventoryFilter\s*\(/.test(productsPageJs),
+  '看板不再带筛选进商品 tab（稿 caption 7:269 把「全部 ›」指向独立页 Screen/01b），'
+    + '这个消费点在本批摘掉；app.js 那三个方法本批刻意留着，见规格 OQ-4'
 )
 
 console.log('ui-scale tests passed')
