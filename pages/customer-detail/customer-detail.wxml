@@ -1,0 +1,166 @@
+<!-- 客户详情。稿 Screen/10 客户详情 4:297（content 4:300）、UX注释/客户详情 4:406。
+     首卡三个变体：默认 card/当前欠款 4:368、预收变体 7:250、欠款预收并存 9:4。
+     弹层两枚：sheet/收款·默认态 13:450（空值禁用态 9:26）、
+              sheet/记期初欠款·默认态 13:451（空值禁用态 9:27）。
+     三个入口都带 ?id=<客户id>，其中两个还带 &pay=1（进来直接开收款层）：
+       pages/customers/customers.js      客户列表整行
+       components/record-sheet/index.js  记一笔面板「收款」选完客户
+       pages/record-edit/record-edit.js  流水详情「去收款」桥 -->
+<view class="page">
+  <page-loading wx:if="{{pageLoading}}" />
+
+  <view wx:elif="{{notFound}}" class="card empty js-detail-notfound">
+    <view class="empty-title">打不开这个客户</view>
+    <view class="muted">这个客户不在账本里，可能已经被删掉了。</view>
+    <view class="empty-actions">
+      <button class="btn-primary js-detail-back" bindtap="goBack">返回</button>
+    </view>
+  </view>
+
+  <block wx:else>
+    <!-- 稿首卡三档，label / 金额颜色 / hint 由 customer-detail.js 的 cardOf 决定：
+         A 有欠款无预收 4:368 ／ B 无欠款有预收 7:250 ／ C 两者并存 9:4 ／
+         D 两者都没有（稿未画，按 A 的形状收口、不出 hint、金额中性黑）。 -->
+    <view class="card hero-card js-detail-card">
+      <view class="hero-label">{{cardLabel}}</view>
+      <view class="hero-num {{cardAmountClass}} js-detail-amount">¥{{cardAmountText}}</view>
+      <view wx:if="{{cardHint}}" class="hero-hint js-detail-hint">{{cardHint}}</view>
+      <view class="hero-meta">累计销售 {{saleCount}} 笔 · ¥{{saleAmountText}}</view>
+
+      <!-- 稿 btn-row 4:371：黑块「收款」是本屏唯一实心终行动（注释 4:408），
+           右边「去销售」是白底黑描边。收款**不按 hasDebt 藏起来**：
+           G1 之后收款可以超欠款，多出的部分自动记预收（注释 7:254）。 -->
+      <view class="btn-row">
+        <button class="btn-primary hero-btn js-pay-open" bindtap="openPay">收款</button>
+        <button class="hero-ghost js-detail-sale" bindtap="goSale">去销售</button>
+      </view>
+
+      <!-- 稿 link/记期初欠款 7:38：13px Medium、行高 44 的文字链（注释 7:39：
+           记期初欠款降为文字链——低频，上线前才用） -->
+      <view class="card-link js-opening" bindtap="openOpening">记期初欠款（上线前旧账）›</view>
+    </view>
+
+    <view class="section-title"><text>往来记录</text></view>
+
+    <!-- 稿 card/往来记录 4:375：整卡内边距 0，行 = tag + 标题/副行 + 右侧金额。
+         金额列是「这条流水对这个客户欠款的影响」，不是流水金额：
+         现结销售那行是 ¥0.00、应收 2300 实收 1500 那行是 +¥800.00（稿 4:383/4:388）。
+         这个数由 utils/util.js 的 withRecordView 算好放在 debtDeltaText 上，
+         页面一分钱都不折。四行都是黑字，稿上没有红。 -->
+    <view wx:if="{{ledger.length}}" class="card list-card">
+      <view
+        class="lrow js-ledger-item"
+        wx:for="{{ledger}}"
+        wx:key="id"
+        data-id="{{item.id}}"
+        bindtap="goRecord"
+      >
+        <text class="tag {{item.tagClass}} lrow-tag">{{item.typeText}}</text>
+        <view class="lrow-col">
+          <view class="lrow-title">{{item.productName}}</view>
+          <view class="lrow-sub">{{item.subText}}</view>
+        </view>
+        <view class="lrow-amount">{{item.debtDeltaText}}</view>
+      </view>
+    </view>
+    <view wx:elif="{{ledgerUnavailable}}" class="card quiet">往来明细没取到。上面的欠款和预收来自服务端，是准的。<text class="link js-ledger-retry" bindtap="retryLedger">重试</text></view>
+    <view wx:elif="{{ledgerLoading}}" class="card quiet">正在加载…</view>
+    <view wx:else class="card quiet">还没有往来记录</view>
+    <button wx:if="{{ledger.length && ledgerHasMore && !ledgerLoading}}" class="btn-ghost ledger-more js-ledger-more" bindtap="onLoadMoreLedger">加载更多</button>
+    <view wx:if="{{ledger.length && ledgerLoading}}" class="card quiet">正在加载…</view>
+    <view wx:elif="{{ledger.length && !ledgerHasMore}}" class="card quiet">没有更多了</view>
+
+    <!-- 稿 card/联系 4:397：两行 k/v（k 定宽 56）+ 两枚白底黑描边按钮。
+         「编辑客户资料」是进 Screen/09b 的唯一入口。 -->
+    <view class="card contact-card">
+      <view class="kv">
+        <text class="kv-k">电话</text>
+        <text class="kv-v">{{phoneText}}</text>
+      </view>
+      <view class="kv">
+        <text class="kv-k">地址</text>
+        <text class="kv-v">{{addressText}}</text>
+      </view>
+      <button class="hero-ghost contact-btn js-detail-phone" bindtap="callPhone">拨打电话</button>
+      <button class="hero-ghost contact-btn js-detail-edit" bindtap="goEdit">编辑客户资料</button>
+    </view>
+  </block>
+
+  <!-- 稿 sheet/收款·默认态 13:450 与空值禁用态 9:26。
+       金额空 / 0 时：feedback 不出、确认钮走 .btn-primary[disabled]（灰底灰字、
+       opacity 1）、label 只写「确认收款」（稿 9:26;7:503 逐字）。
+       支付方式 chips 本批不实现，理由见规格 §6-4 与 OPEN-Q-3。 -->
+  <view wx:if="{{showPay}}" class="mask js-pay-sheet" bindtap="closePay">
+    <view class="sheet" catchtap="keepSheet">
+      <view class="grabber"></view>
+      <view class="sheet-title">收款 · {{name}}</view>
+      <view class="sheet-note">当前欠款 ¥{{receivableText}}</view>
+      <view class="sheet-label">收到多少</view>
+      <input
+        class="amount-input js-pay-amount"
+        type="digit"
+        value="{{payAmount}}"
+        bindinput="onPayAmount"
+        placeholder="输入金额"
+      />
+      <!-- 稿 快捷chips 13:450;4:1080：「收满 ¥X」「收一半 ¥Y」。
+           当前金额正好等于某一档时那枚走 chip 选中态（白底黑描边）。
+           零欠款时两档都没有意义，整行不出。 -->
+      <view wx:if="{{hasDebt}}" class="chips pay-chips">
+        <view class="chip {{payFullOn ? 'on' : ''}} js-pay-full" bindtap="fillPayFull">收满 ¥{{payFullText}}</view>
+        <view class="chip {{payHalfOn ? 'on' : ''}} js-pay-half" bindtap="fillPayHalf">收一半 ¥{{payHalfText}}</view>
+      </view>
+      <view class="sheet-label">备注</view>
+      <input
+        class="field-input js-pay-remark"
+        value="{{payRemark}}"
+        bindinput="onPayRemark"
+        placeholder="可选"
+      />
+      <!-- 稿 feedback 13:450;4:1085：绿字「收下后李老板还欠 ¥0.00（已清）」。
+           超收那一段是本批新拼的（稿收款侧没画超收样张），措辞跟销售侧的
+           toast/销售完成·超收预收 10:204 走同一个词「多收 ¥X 记预收」。 -->
+      <view wx:if="{{payFeedback}}" class="feedback {{payFeedbackOk ? 'ok' : ''}} js-pay-feedback">{{payFeedback}}</view>
+      <!-- 稿 warn 13:450;4:1086 逐字，默认态与禁用态都出 -->
+      <view class="sheet-warn">收款可以超过欠款：多出部分记为预收，下次开单自动抵扣</view>
+      <button
+        class="btn-primary sheet-cta js-pay-submit"
+        bindtap="submitPay"
+        disabled="{{!payCanSubmit || paySubmitting}}"
+      >{{payConfirmText}}</button>
+      <view class="sheet-cancel js-pay-cancel" bindtap="closePay">取消</view>
+    </view>
+  </view>
+
+  <!-- 稿 sheet/记期初欠款·默认态 13:451 与空值禁用态 9:27。
+       金额**不预填**（稿上那枚 hint「默认 = 当前欠款」是 visible:false）。 -->
+  <view wx:if="{{showOpening}}" class="mask js-opening-sheet" bindtap="closeOpening">
+    <view class="sheet" catchtap="keepSheet">
+      <view class="grabber"></view>
+      <view class="sheet-title">记期初欠款 · {{name}}</view>
+      <view class="sheet-body">用小程序之前就欠下的钱。只加应收，不改库存、不计入销售和毛利。</view>
+      <view class="sheet-label">上线前欠了多少</view>
+      <input
+        class="amount-input js-opening-amount"
+        type="digit"
+        value="{{openingAmount}}"
+        bindinput="onOpeningAmount"
+        placeholder="输入金额"
+      />
+      <view class="sheet-label">备注</view>
+      <input
+        class="field-input js-opening-remark"
+        value="{{openingRemark}}"
+        bindinput="onOpeningRemark"
+        placeholder="例如 上线前旧账"
+      />
+      <view class="sheet-warn">已有期初记录的客户也能补记：各记一笔，不覆盖原来那条。</view>
+      <button
+        class="btn-primary sheet-cta js-opening-submit"
+        bindtap="submitOpening"
+        disabled="{{!openingCanSubmit || openingSubmitting}}"
+      >确认记账</button>
+      <view class="sheet-cancel js-opening-cancel" bindtap="closeOpening">取消</view>
+    </view>
+  </view>
+</view>

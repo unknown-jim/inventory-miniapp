@@ -1,102 +1,85 @@
+<!-- 客户编辑 / 新增。稿 Screen/09b 客户编辑 4:1116（content 4:1119、bottom-cta 4:1136）、
+     变体/名称空底栏 13:395、edit-caption 9:56 逐字：
+     「保存走底部 CTA，不放页头右上（胶囊位）；有往来记录的客户不可删，
+       置为不可点并说明原因，不要点了才报错」。
+     三个入口：客户列表右上角 ＋（无参 = 新增）、销售 / 流水详情的「＋ 新增客户」
+     （?select=1，存完回选）、客户详情的「编辑客户资料」（?id=）。 -->
 <view class="page">
+  <!-- 稿 card/基础信息 4:1120：四组「label + 输入框」，label 13px neutral/500 -->
   <view class="card">
     <view class="field">
-      <view class="field-label">客户名称</view>
-      <input class="field-input" data-field="name" value="{{name}}" bindinput="onField" placeholder="例如 张三超市" hidden="{{showPay || showOpening}}" />
+      <view class="field-label">客户名称 · 必填</view>
+      <input
+        class="field-input js-edit-name"
+        data-field="name"
+        value="{{name}}"
+        bindinput="onField"
+        placeholder="例如 张三超市"
+      />
     </view>
     <view class="field">
       <view class="field-label">电话</view>
-      <input class="field-input" data-field="phone" value="{{phone}}" bindinput="onField" placeholder="可选" hidden="{{showPay || showOpening}}" />
+      <input
+        class="field-input"
+        data-field="phone"
+        value="{{phone}}"
+        bindinput="onField"
+        placeholder="选填"
+      />
     </view>
     <view class="field">
-      <view class="field-label">送货地址</view>
+      <view class="field-label">地址</view>
       <textarea
         class="field-input field-textarea"
         data-field="address"
         value="{{address}}"
         bindinput="onField"
-        placeholder="可选"
+        placeholder="选填"
         maxlength="200"
         auto-height
-        hidden="{{showPay || showOpening}}"
       />
     </view>
-    <view class="field {{isEdit ? 'last' : ''}}">
-      <view class="field-label">内部备注</view>
-      <input class="field-input" data-field="remark" value="{{remark}}" bindinput="onField" placeholder="仅自己可见" hidden="{{showPay || showOpening}}" />
-    </view>
-    <view class="field last" wx:if="{{!isEdit}}">
-      <view class="field-label">上线前欠款</view>
-      <input class="field-input" type="digit" data-field="openingAmount" value="{{openingAmount}}" bindinput="onField" placeholder="没有就留空" />
-    </view>
-    <view class="muted tip">内部备注不会出现在送货单上。<text wx:if="{{!isEdit}}">上线前欠款只记应收，不改库存、不计入销售。</text></view>
-  </view>
-
-  <block wx:if="{{isEdit}}">
-    <view class="card debt-card">
-      <view class="muted">当前欠款</view>
-      <view class="debt-num {{hasDebt ? 'on' : ''}}">¥{{receivableText}}</view>
-      <view class="muted">累计销售 {{saleCount}} 笔 · ¥{{saleAmountText}}</view>
-      <button wx:if="{{hasDebt}}" class="btn-primary collect-btn js-pay-open" bindtap="openPay" hidden="{{showPay || showOpening}}">收款</button>
-      <button class="btn-ghost opening-btn js-opening" bindtap="openOpening" hidden="{{showPay || showOpening}}">记期初欠款</button>
-    </view>
-
-    <view class="section-title">
-      <text>往来记录</text>
-    </view>
-    <view wx:if="{{ledger.length}}" class="card list-card">
-      <view class="list-item" wx:for="{{ledger}}" wx:key="id" data-id="{{item.id}}" bindtap="goRecord">
-        <view>
-          <view class="item-name">{{item.productName}}</view>
-          <view class="muted">{{item.timeText}}<text wx:if="{{item.isOut}}"> · {{item.qtyText}} 件</text><text wx:if="{{item.isMulti}}"> · {{item.lineCount}} 种</text></view>
-        </view>
-        <view class="item-right">
-          <text class="tag {{item.tagClass}}">{{item.typeText}}</text>
-          <view class="amount">¥{{item.amountText}}</view>
-        </view>
-      </view>
-    </view>
-    <view wx:elif="{{ledgerUnavailable}}" class="card quiet">往来明细没取到。上面的欠款和累计销售来自服务端，是准的。<text class="link" bindtap="retryLedger">重试</text></view>
-    <view wx:elif="{{ledgerLoading}}" class="card quiet">正在加载…</view>
-    <view wx:else class="card quiet">还没有往来记录</view>
-    <button wx:if="{{ledger.length && ledgerHasMore && !ledgerLoading}}" class="btn-ghost ledger-more js-ledger-more" bindtap="onLoadMoreLedger">加载更多</button>
-    <view wx:if="{{ledger.length && ledgerLoading}}" class="card quiet">正在加载…</view>
-    <view wx:elif="{{ledger.length && !ledgerHasMore}}" class="card quiet">没有更多了</view>
-  </block>
-
-  <button class="btn-primary save-btn" bindtap="save" hidden="{{showPay || showOpening}}">保存</button>
-  <button wx:if="{{isEdit && phone}}" class="btn-ghost call-btn" bindtap="callPhone" hidden="{{showPay || showOpening}}">拨打电话</button>
-  <button wx:if="{{isEdit}}" class="btn-danger" bindtap="remove" hidden="{{showPay || showOpening}}">删除客户</button>
-
-  <view wx:if="{{showPay}}" class="mask js-pay-sheet" bindtap="closePay">
-    <view class="sheet" catchtap="keepPay">
-      <view class="sheet-title">收款</view>
-      <view class="muted pay-hint">当前欠款 ¥{{receivableText}}，不能超过这个金额。</view>
-      <view class="field">
-        <view class="field-label">本次收款</view>
-        <input class="field-input" type="digit" data-field="payAmount" value="{{payAmount}}" bindinput="onField" placeholder="0.00" />
-      </view>
-      <view class="field">
-        <view class="field-label">备注</view>
-        <input class="field-input" data-field="payRemark" value="{{payRemark}}" bindinput="onField" placeholder="可选" />
-      </view>
-      <button class="btn-primary js-pay-submit" bindtap="submitPay">确认收款</button>
+    <!-- 稿 l4 4:1130 与 ph/备注 13:404 逐字 -->
+    <view class="field last">
+      <view class="field-label">内部备注（客户看不到）</view>
+      <input
+        class="field-input"
+        data-field="remark"
+        value="{{remark}}"
+        bindinput="onField"
+        placeholder="选填，仅店内可见"
+      />
     </view>
   </view>
 
-  <view wx:if="{{showOpening}}" class="mask js-opening-sheet" bindtap="closeOpening">
-    <view class="sheet" catchtap="keepOpening">
-      <view class="sheet-title">期初欠款</view>
-      <view class="muted pay-hint">使用本程序前已经欠的钱。只加欠款，不改库存、不计入销售。</view>
-      <view class="field">
-        <view class="field-label">欠款金额</view>
-        <input class="field-input js-opening-amount" type="digit" data-field="openingAmount" value="{{openingAmount}}" bindinput="onField" placeholder="0.00" />
-      </view>
-      <view class="field">
-        <view class="field-label">备注</view>
-        <input class="field-input" data-field="openingRemark" value="{{openingRemark}}" bindinput="onField" placeholder="例如 上线前旧账" />
-      </view>
-      <button class="btn-primary js-opening-submit" bindtap="submitOpening">确认记账</button>
+  <!-- 稿 card/危险区 4:1133。稿上只画了**禁用**那一档（有往来记录）：
+       14px neutral/600 的文字 + 12px neutral/500 的说明。
+       可删那一档稿上没画，按 docs/ui-scale.md「破坏性动作用 danger 视觉」
+       走共用类 .btn-danger（与「移出成员」同一级，见规格 §6-7）。 -->
+  <view wx:if="{{isEdit}}" class="card danger-card">
+    <block wx:if="{{canDelete}}">
+      <button class="btn-danger js-edit-delete" bindtap="remove">删除客户</button>
+      <view class="danger-note">这个客户从没记过账，删掉不影响任何流水。</view>
+    </block>
+    <block wx:else>
+      <view class="danger-off js-edit-delete-off">删除客户</view>
+      <view class="danger-note">{{deleteNote}}</view>
+    </block>
+  </view>
+
+  <!-- 底栏是 fixed，正常文档流要留出等高的空白，否则最后一块内容会被盖住 -->
+  <view class="cta-hold"></view>
+
+  <!-- 稿 bottom-cta 4:1136：hairline + 一枚保存 + 安全区。
+       名称为空时走稿 13:401 的 btn/保存·disabled，
+       正好是共用类 .btn-primary[disabled]（neutral/100 底 + neutral/500 字、opacity 1）。 -->
+  <view class="cta-bar">
+    <view class="cta-inner">
+      <button
+        class="btn-primary js-edit-save"
+        bindtap="save"
+        disabled="{{!canSave || saving}}"
+      >保存</button>
     </view>
   </view>
 </view>

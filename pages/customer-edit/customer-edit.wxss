@@ -1,116 +1,53 @@
+/* 客户编辑 / 新增。共用类（.page / .card / .field / .field-label / .field-input /
+   .field-textarea / .btn-primary / .btn-primary[disabled] / .btn-danger）
+   来自 app.wxss，这里只写本页布局。稿 Screen/09b 客户编辑 4:1116。 */
+
+/* 共用 .field 自带下外边距，卡里最后一格不要那一截 */
 .last {
-  margin-bottom: 8rpx;
+  margin-bottom: 0;
 }
 
-.tip {
-  margin-top: 0;
+/* 稿 card/危险区 4:1133：白卡 r12、内边距 16、行间 gap 10 */
+.danger-card {
+  margin-top: var(--gap);
 }
 
-.debt-card {
-  margin-top: 16rpx;
-}
-
-.debt-num {
-  margin: 8rpx 0 12rpx;
-  font-size: var(--fs-hero);
-  font-weight: 700;
-  color: #0F766E;
-}
-
-.debt-num.on {
-  color: #C2410C;
-}
-
-.collect-btn {
-  margin-top: 24rpx;
-}
-
-.opening-btn {
-  margin-top: 16rpx;
-}
-
-.list-card {
-  padding: 8rpx 28rpx;
-}
-
-.list-item {
+/* 稿 4:1134「删除客户·禁用（有往来记录）」：14px、neutral/600、**不透明**。
+   禁用一律 opacity: 1（docs/ui-scale.md「禁用态一律不用透明度」）；
+   这一档没有实底，是纯文字档，所以只降字色、不加灰底。 */
+.danger-off {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  padding: 24rpx 0;
-  border-bottom: 1rpx solid #F1F5F4;
+  min-height: var(--tap-min);
+  font-size: var(--fs-body);
+  color: var(--color-neutral-600);
+  opacity: 1;
 }
 
-.list-item:last-child {
-  border-bottom: none;
+/* 稿 note 4:1135：12px neutral/500 */
+.danger-note {
+  margin-top: var(--space-xs);
+  font-size: var(--fs-caption);
+  color: var(--color-neutral-500);
+  line-height: 1.5;
 }
 
-.item-name {
-  font-weight: 600;
-  margin-bottom: 8rpx;
+/* 底栏占位：高度 = 按钮 104 + 上内边距 12 + 下内边距 24 + 安全区 */
+.cta-hold {
+  height: calc(env(safe-area-inset-bottom) + 160rpx);
 }
 
-.item-right {
-  text-align: right;
-}
-
-.amount {
-  margin-top: 8rpx;
-  font-weight: 600;
-}
-
-.quiet {
-  text-align: center;
-  color: #64748B;
-}
-
-/* 明细取不到时的「重试」。和 index / products 的 .link 同一套，
-   字号不低于 --fs-sm，可点高度靠 .quiet 卡片的内边距撑住。 */
-.link {
-  margin-left: var(--space-xs);
-  color: #0F766E;
-  font-size: var(--fs-sm);
-}
-
-.save-btn {
-  margin: 32rpx 0 16rpx;
-}
-
-/* 往来明细触底不触发时的手动兜底。高度用共用 .btn-ghost（--tap-sm），
-   这里只管间距。 */
-.ledger-more {
-  margin: var(--space-md) 0;
-}
-
-.call-btn {
-  margin-bottom: 16rpx;
-}
-
-.mask {
+/* 稿 bottom-cta 4:1136：1px hairline（做成 border-top）+ 安全区 34 */
+.cta-bar {
   position: fixed;
-  top: 0;
   right: 0;
   bottom: 0;
   left: 0;
-  background: rgba(15, 23, 42, 0.45);
-  display: flex;
-  align-items: flex-end;
-  z-index: 20;
+  z-index: 10;
+  background: var(--color-bg-card);
+  border-top: 2rpx solid var(--color-border-default);
 }
 
-.sheet {
-  width: 100%;
-  background: #FFFFFF;
-  border-radius: 24rpx 24rpx 0 0;
-  padding: 28rpx 24rpx 48rpx;
-}
-
-.sheet-title {
-  font-size: var(--fs-lg);
-  font-weight: 600;
-  margin-bottom: 12rpx;
-}
-
-.pay-hint {
-  margin-bottom: 24rpx;
+.cta-inner {
+  padding: var(--space-sm) var(--page-pad) calc(env(safe-area-inset-bottom) + var(--space-lg));
 }

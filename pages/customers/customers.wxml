@@ -1,36 +1,71 @@
+<!-- 客户列表。稿 Screen/09 客户 4:291、UX注释/客户 4:362。
+     行内无按钮，整行可点进客户详情（稿 n2 4:365 逐字：
+     「行内无按钮，整行可点进客户详情（右侧 chevron）；收款 / 去销售在详情内」）。
+     新增客户入口 = 搜索行右侧的 ＋（稿 btn/新增客户 7:41）；
+     FAB 全站只服务「记一笔」（稿 n5 7:43），所以本页不留 FAB。 -->
 <view class="page">
   <page-loading wx:if="{{pageLoading}}" />
+
   <block wx:else>
-  <input
-    class="search"
-    placeholder="搜索名称 / 电话 / 地址"
-    value="{{keyword}}"
-    bindinput="onSearch"
-  />
+    <!-- 稿 row/搜索与新增 7:40：searchbar 占满 + 44x44 描边圆钮，横排 gap 10 -->
+    <view class="tool-row">
+      <input
+        class="search js-customer-search"
+        placeholder="搜索客户名称 / 电话"
+        value="{{keyword}}"
+        bindinput="onSearch"
+      />
+      <view class="add-btn js-customer-add" bindtap="goAdd">＋</view>
+    </view>
 
-  <view wx:if="{{!list.length}}" class="card empty">
-    <view class="empty-title">还没有客户</view>
-    <view class="muted">先建客户档案，销售出库时就能选到，并出现在送货单上。</view>
-    <button class="btn-primary seed-btn" bindtap="goAdd">新增客户</button>
-  </view>
+    <!-- 稿 sum/客户欠款 13:354：「4 位客户 · 欠款共 ¥2,960.00」，数的是屏上这一份 -->
+    <view wx:if="{{list.length}}" class="sum-row js-customer-sum">{{sumText}}</view>
 
-  <view class="card goods-card" wx:for="{{list}}" wx:key="id">
-    <view class="goods-main js-customer-item" data-id="{{item.id}}" bindtap="goEdit">
-      <view class="goods-top">
-        <view class="item-name">{{item.name}}</view>
-        <text class="tag {{item.hasDebt ? 'tag-credit' : 'tag-ok'}}">{{item.hasDebt ? '欠款' : item.saleCount + ' 笔'}}</text>
+    <!-- 稿 state/empty/cta·客户 12:10：人形 48 + 「还没有客户」+
+         「销售开单时选客户会自动建档」+ 一枚「＋ 新增客户」。
+         该实例的第二枚按钮（手动新增）是 visible:false，不实现。 -->
+    <view wx:if="{{!list.length}}" class="card empty">
+      <view class="empty-icon empty-icon-customers"></view>
+      <block wx:if="{{keyword}}">
+        <view class="empty-title">没有匹配的客户</view>
+        <view class="muted">换个名称、电话或地址再搜。</view>
+      </block>
+      <block wx:else>
+        <view class="empty-title">还没有客户</view>
+        <view class="muted">销售开单时选客户会自动建档</view>
+        <view class="empty-actions">
+          <button class="btn-primary js-customer-seed" bindtap="goAdd">＋ 新增客户</button>
+        </view>
+      </block>
+    </view>
+
+    <!-- 稿 card/客户列表 4:302：整卡内边距 0，行自己带 12，行间 1px 分隔线 4:318 -->
+    <view wx:else class="card list-card">
+      <view
+        class="crow js-customer-item"
+        wx:for="{{list}}"
+        wx:key="id"
+        data-id="{{item.id}}"
+        bindtap="goDetail"
+      >
+        <view class="crow-col">
+          <view class="crow-name">{{item.name}}</view>
+          <view class="crow-sub">{{item.metaText}}</view>
+        </view>
+        <view class="crow-amounts">
+          <!-- 稿 debt-row 4:309：k「欠款」muted + v 红字。
+               有欠款的行只写欠款，预收不并列（稿注释 10:139）。 -->
+          <view wx:if="{{item.hasDebt}}" class="debt-row">
+            <text class="debt-k">欠款</text>
+            <text class="debt-v js-customer-debt">¥{{item.receivableText}}</text>
+          </view>
+          <!-- 稿 nodebt 4:357 逐字：无欠款时才透出预收 -->
+          <view wx:else class="crow-nodebt js-customer-nodebt">{{item.nodebtText}}</view>
+          <view class="crow-total">累计销售 ¥{{item.saleAmountText}}</view>
+        </view>
+        <!-- 稿 chevron 13:355：16x16，描边绑 $13:6（黑 50%）= --color-text-faint -->
+        <view class="crow-chevron"></view>
       </view>
-      <view class="muted">{{item.phoneText}}</view>
-      <view class="muted">{{item.addressText}}</view>
-      <view class="price-row">累计销售 ¥{{item.saleAmountText}}</view>
-      <view class="price-row debt" wx:if="{{item.hasDebt}}">欠款 ¥{{item.receivableText}}</view>
     </view>
-    <view class="action-strip">
-      <button wx:if="{{item.hasDebt}}" class="btn-ghost js-collect" data-id="{{item.id}}" catchtap="goCollect">收款</button>
-      <button class="btn-ghost warm" data-id="{{item.id}}" catchtap="goSale">去销售</button>
-    </view>
-  </view>
-
-  <view class="fab" bindtap="goAdd">+ 新增</view>
   </block>
 </view>
