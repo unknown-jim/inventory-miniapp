@@ -325,10 +325,22 @@ orderPicker.openOrderPicker().then(function () {
   // 不居中就贴在 320px 盒子顶部、下面一大片空白（稿 11:55 / 11:77 都是居中的）。
   const emptyRule = /\.rs-picker-body\s*>\s*\.rs-empty\s*\{([^}]*)\}/.exec(wxss)
   assert.ok(emptyRule, '缺 .rs-picker-body > .rs-empty：空态会贴在固定高外壳顶部')
-  assert.ok(
-    /align-items:\s*center/.test(emptyRule[1]),
-    '外壳里的空态要垂直居中：' + emptyRule[1].trim()
-  )
+  // 四个声明少任何一个居中都坏，所以四个都要钉 —— 只钉 align-items 是不够的：
+  //   · 没有 display: flex，align-items 在非 flex 容器上完全失效（静默，看不出来）
+  //   · 没有 flex: 1，空态只有自身一行高（约 51px），居中的是它自己，照样贴外壳顶部
+  // 另外两个**有意不钉**，实测删掉居中仍成立，不是漏了：
+  //   · justify-content: center —— .rs-empty 自带 text-align: center 兜底
+  //   · min-height: 0 —— 空态内容比外壳矮，撑不破，这里不承重（.rs-list 那条才承重）
+  ;[
+    [/display:\s*flex/, 'display: flex —— 没有它 align-items 在非 flex 容器上静默失效'],
+    [/flex:\s*1/, 'flex: 1 —— 没有它空态只有自身一行高，居中的是它自己，仍贴顶'],
+    [/align-items:\s*center/, 'align-items: center —— 垂直居中本身']
+  ].forEach(function (pair) {
+    assert.ok(
+      pair[0].test(emptyRule[1]),
+      '外壳里的空态要垂直居中，缺 ' + pair[1] + '：' + emptyRule[1].trim()
+    )
+  })
 
   // 三个 picker 一个都不能漏：漏掉的那个搜不到时照样塌。
   const sheetWxml = read('components/record-sheet/index.wxml')
