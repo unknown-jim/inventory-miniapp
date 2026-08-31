@@ -1732,14 +1732,19 @@ async function runRecordsLoadMore(miniProgram) {
   }
 
   // ---- 第二层：手动按钮翻到头 -------------------------------------------
+  // 总数正好是分页 limit 的整数倍时，翻到底那一次点击会拿到一页空结果——
+  // 这不是 bug，是 cloudfunctions/ledger/ledger-records.js 里「游标翻页的
+  // hasMore 判条数不判页数」这条已知设计权衡（注释见该文件 :34-40 / :464-468，
+  // 仓库里同型的有界循环共享同一份取舍）。空页不会让列表变长，但服务端会正确地
+  // 把 hasMore 翻成 false，所以等待条件要认「变长」或「hasMore 变 false」任一个。
   let guard = 0
   for (;;) {
     const data = await records.data()
     if (!data.hasMore) break
     await tap(records, '.js-load-more')
     await waitForData(records, function (d) {
-      return d.list.length > data.list.length
-    }, '点「加载更多」之后第二页追加（上一次 ' + data.list.length + ' 条）')
+      return d.list.length > data.list.length || !d.hasMore
+    }, '点「加载更多」之后第二页追加或翻到底（上一次 ' + data.list.length + ' 条）')
     guard += 1
     if (guard > 10) throw new Error('点了 10 次还没翻完，不对劲')
   }
