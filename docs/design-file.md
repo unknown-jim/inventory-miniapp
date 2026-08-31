@@ -39,7 +39,7 @@ https://ardot.tencent.com/file/718738891083099
 - **禁用不要用 `fill/action-disabled` + `text/disabled`**（= `neutral/200` + `neutral/400`，合成只有 2.02:1）。各档配方与「禁用一律不透明、≥3:1」这条裁定见 [ui-scale.md](ui-scale.md#chip-的颜色铁律)。2026-08-30 收敛后这两个 token 在稿上已零引用。
 - 品牌青绿只做非语义场合的小剂量点缀（毛利 stat 数字、空态插画描边、border/focus 聚焦）；主行动一律黑，tabBar 不上品牌色——这两条是历轮评审的刻意决策，不要回退。
 
-## MCP 改稿的坑（2026-08-28 实战记录；8–10 为 2026-08-29 补，11–15 为 2026-08-30 补）
+## MCP 改稿的坑（2026-08-28 实战记录；8–10 为 2026-08-29 补，11–15 为 2026-08-30 补，16 为 2026-08-31 补）
 
 用 Ardot MCP 的 `batch_edit` 改稿时踩过这些，复查时可少走弯路：
 
@@ -61,6 +61,8 @@ https://ardot.tencent.com/file/718738891083099
 14. **`C()` 复制 COMPONENT 得到的是 INSTANCE，不是新本体。** 要建本体只能新建，不能复制。
 15. **绑变量的 paint，它的 opacity 由变量自身的 alpha 决定；你写进去的 paint 级 opacity 会被静默丢弃。** 给一枚 `{color: #6B7280, opacity: 0.5}` 的画笔绑上 alpha=1 的 token，透明度直接变成 100%——三种写法（`color` 简写 / 显式 `boundVariables` + 字面 color + opacity / 先写字面量再单独补绑定）全都拦不住，最后一种的绑定写入干脆是 no-op。实测全稿 3715 个节点的每一枚 paint，「paint.opacity ≠ 所绑变量 alpha」的例外是 **0**——这套模型没有「绑 token + 独立画笔透明度」的表达位。
     所以：**要保留画笔透明度就别绑 token**（或者给那个颜色建一枚自带 alpha 的变量）。而且**验收颜色一律用 `resolveVariables` 读回完整 paint 对象**——`batch_read` 的 token 简写会把 paint 级 opacity 藏掉，一次绑定把商品卡相机角标从「几乎看不见的浅灰」变成「实心深灰蓝」（ΔE00 22），实施者自查时报的却是「几乎恒等」，就是这么漏的。
+16. **`batch_edit` 在写入被拒时照样回 `success: true`，唯一的真信号是 `potentialIssues`。** 画布只读（编辑器处在 Dev Mode）时，一次 `U(node, {strokes: ...})` 返回的 `operations[].updated` 字段**回显的是旧值**——看起来像「写进去了、只是值没变」，实际是一个字节都没落。只有 `potentialIssues` 里那句 `failed to apply "strokes" — Setting the property "strokes" is not allowed in read-only mode` 能看出真失败。所以**任何写入之后都要用 `batch_read` 复读验证**，不要拿 `success` 或 `updated` 当验收依据；验收颜色仍按坑 15 用 `resolveVariables: true` 读完整 paint 对象。
+    判断编辑器是不是处在 Dev Mode，用 `fetch_file_info` 返回的 `fileUrl` 里**有没有 `&m=dev`**，比同一份返回里的 `permission` 字段准——Dev Mode 下 `permission` 照样是 `readwrite`，`&m=dev` 才是真的。卡在这个状态时没有绕过路径，只能请人把编辑器切回设计模式，反复重试是浪费。
 
 ## 过程文档不进仓库
 
