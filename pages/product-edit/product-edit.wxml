@@ -1,222 +1,230 @@
 <view class="page">
   <view class="card">
+    <view class="card-title">基础信息</view>
+
     <view class="field">
-      <view class="field-head">
-        <view class="field-label">种类模板</view>
-        <text class="link js-pe-categories" bindtap="goCategories">管理</text>
+      <view class="field-label">商品名称</view>
+      <input class="field-input js-pe-name" data-field="name" value="{{name}}" bindinput="onField" placeholder="请输入商品名称" />
+      <view class="chips name-chips" wx:if="{{nameSuggest.length}}">
+        <view class="chip js-pe-name-suggest" wx:for="{{nameSuggest}}" wx:key="*this" data-value="{{item}}" bindtap="pickName">{{item}}</view>
       </view>
-      <view class="chips" wx:if="{{categories.length}}">
-        <view
-          class="chip {{item.on ? 'on' : ''}}"
-          wx:for="{{categories}}"
-          wx:key="id"
-          data-id="{{item.id}}"
-          bindtap="applyCategory"
-        >{{item.name}}</view>
-      </view>
-      <view class="muted" wx:else>还没有种类。点管理添加，建档时就能带出名称和规格。</view>
     </view>
+
+    <view class="field-row">
+      <view class="field half">
+        <view class="field-label">货号</view>
+        <input class="field-input" data-field="sku" value="{{sku}}" bindinput="onField" placeholder="可选" />
+      </view>
+      <view class="field half">
+        <view class="field-label">条码</view>
+        <input class="field-input" data-field="barcode" value="{{barcode}}" bindinput="onField" placeholder="可选" />
+      </view>
+    </view>
+
+    <view class="field-row">
+      <view class="field half">
+        <view class="field-label">默认售价（元）</view>
+        <input
+          class="field-input js-pe-sale {{focusPrice ? 'input-focus' : ''}}"
+          type="digit"
+          data-field="salePrice"
+          value="{{salePrice}}"
+          focus="{{focusPrice}}"
+          bindinput="onField"
+          bindblur="onPriceBlur"
+          placeholder="0.00"
+        />
+      </view>
+      <view class="field half">
+        <view class="field-label">默认进价（元）</view>
+        <input class="field-input js-pe-cost" type="digit" data-field="costPrice" value="{{costPrice}}" bindinput="onField" placeholder="0.00" />
+      </view>
+    </view>
+
+    <view class="field-row" wx:if="{{!hasSpecs && isEdit}}">
+      <view class="field half">
+        <view class="field-label">当前库存</view>
+        <view class="field-input readonly js-pe-stock">{{stockText}}</view>
+      </view>
+      <view class="field half">
+        <view class="field-label">库存预警（件）</view>
+        <input class="field-input js-pe-alert" type="digit" data-field="alertQty" value="{{alertQty}}" bindinput="onField" placeholder="5" />
+      </view>
+    </view>
+    <view class="field" wx:elif="{{!hasSpecs}}">
+      <view class="field-label">库存预警（件）</view>
+      <input class="field-input js-pe-alert" type="digit" data-field="alertQty" value="{{alertQty}}" bindinput="onField" placeholder="5" />
+    </view>
+
     <view class="field" wx:if="{{showImage}}">
       <view class="field-label">商品图片</view>
       <view class="image-add" wx:if="{{!image}}" bindtap="pickImage">＋ 添加图片</view>
       <view class="image-box" wx:else>
         <image class="image-preview" src="{{image}}" mode="aspectFill" binderror="onImageError" />
         <view class="image-ops">
-          <text class="link" bindtap="pickImage">换图</text>
-          <text class="link danger" bindtap="removeImage">删除</text>
+          <text class="image-link" bindtap="pickImage">换图</text>
+          <text class="image-link danger" bindtap="removeImage">删除</text>
         </view>
       </view>
       <view class="field-hint">仅本店成员可见，用于快速认货</view>
     </view>
-    <view class="field">
-      <view class="field-label">商品名称</view>
-      <input class="field-input js-pe-name" data-field="name" value="{{name}}" bindinput="onField" placeholder="例如 纯牛奶 250ml" />
-      <view class="chips name-chips" wx:if="{{nameSuggest.length}}">
-        <view class="chip" wx:for="{{nameSuggest}}" wx:key="*this" data-value="{{item}}" bindtap="pickName">{{item}}</view>
-      </view>
+
+    <view class="muted margin-line">单件毛利 ¥{{marginText}} · 毛利率 {{rateText}}</view>
+  </view>
+
+  <view class="card fold-card">
+    <view class="fold-row js-pe-fold-spec" data-key="spec" bindtap="toggleFold">
+      <text class="fold-label">规格 · {{specSummary}}</text>
+      <view class="fold-chevron {{specOpen ? 'open' : ''}}"></view>
     </view>
-    <view class="field">
-      <view class="field-label">货号</view>
-      <input class="field-input" data-field="sku" value="{{sku}}" bindinput="onField" placeholder="可选" />
+    <view class="fold-row js-pe-fold-blank" data-key="blank" bindtap="toggleFold">
+      <text class="fold-label">半成品池 · {{blankSummary}}</text>
+      <view class="fold-chevron {{blankOpen ? 'open' : ''}}"></view>
     </view>
-    <view class="field">
-      <view class="field-label">条码</view>
-      <input class="field-input" data-field="barcode" value="{{barcode}}" bindinput="onField" placeholder="可选" />
-    </view>
-    <view class="field-row">
-      <view class="field half">
-        <view class="field-label">{{productKind === 'plain' || sharedPrice ? '进价' : '默认进价'}}</view>
-        <input class="field-input js-pe-cost" type="digit" data-field="costPrice" value="{{costPrice}}" bindinput="onField" placeholder="0.00" />
-      </view>
-      <view class="field half">
-        <view class="field-label">{{productKind === 'plain' || sharedPrice ? '售价' : '默认售价'}}</view>
-        <input class="field-input js-pe-sale" type="digit" data-field="salePrice" value="{{salePrice}}" bindinput="onField" placeholder="0.00" />
-      </view>
-    </view>
-    <view class="margin-box {{productKind === 'plain' ? 'last' : ''}}">
-      <text>单件毛利 ¥{{marginText}}</text>
-      <text>毛利率 {{rateText}}</text>
-    </view>
-    <view class="field last" wx:if="{{productKind !== 'plain'}}">
-      <view class="field-label">各规格价格</view>
-      <view class="seg">
-        <view class="seg-item {{sharedPrice ? 'on' : ''}}" data-on="1" bindtap="setSharedPrice">同价</view>
-        <view class="seg-item {{!sharedPrice ? 'on' : ''}}" data-on="0" bindtap="setSharedPrice">各格不同价</view>
-      </view>
+    <view class="fold-row js-pe-fold-sku" data-key="sku" bindtap="toggleFold">
+      <text class="fold-label">每个规格的库存与价格 · {{skuSummary}}</text>
+      <view class="fold-chevron {{skuOpen ? 'open' : ''}}"></view>
     </view>
   </view>
 
-  <view class="card spec-card">
-    <view class="spec-title">商品类型</view>
-    <view class="seg">
-      <view class="seg-item {{productKind === 'plain' ? 'on' : ''}}" data-kind="plain" bindtap="setProductKind">普通</view>
-      <view class="seg-item {{productKind === 'blank' ? 'on' : ''}}" data-kind="blank" bindtap="setProductKind">待加工</view>
-      <view class="seg-item js-pe-kind-finished {{productKind === 'finished' ? 'on' : ''}}" data-kind="finished" bindtap="setProductKind">分规格现货</view>
-    </view>
-    <view class="muted spec-desc" wx:if="{{productKind === 'plain'}}">库存记在这件商品上，不用规格。牛奶这类商品选这个。</view>
-    <view class="muted spec-desc" wx:elif="{{productKind === 'blank'}}">进货只进待加工库存。销售时选规格：先扣同一格现货，不够再扣待加工。规格格不是待加工库存。退货按卖掉的那一格入库；要换格请用「改规格」。</view>
-    <view class="muted spec-desc" wx:else>进货、销售都按规格组合记库存。可只用一根轴。</view>
+  <view class="card sub-card" id="pe-spec-card" wx:if="{{specOpen}}">
+    <view class="card-title">规格（可选，最多两项）</view>
 
-    <block wx:if="{{productKind === 'plain'}}">
-      <view class="field" wx:if="{{!isEdit}}">
-        <view class="field-label">初始库存</view>
-        <input class="field-input" type="digit" data-field="stock" value="{{stock}}" bindinput="onField" placeholder="0" />
+    <view class="field">
+      <view class="field-label">种类模板</view>
+      <view class="chips" wx:if="{{categories.length}}">
+        <view
+          class="chip js-pe-category {{item.on ? 'on' : ''}}"
+          wx:for="{{categories}}"
+          wx:key="id"
+          data-id="{{item.id}}"
+          bindtap="applyCategory"
+        >{{item.name}}</view>
       </view>
-      <view class="field" wx:else>
-        <view class="field-label">当前库存</view>
-        <view class="field-input readonly">{{stockText}}</view>
+      <view class="muted" wx:else>还没有种类模板。点下面的「管理模板」添加，建档时就能带出名称和规格。</view>
+    </view>
+
+    <view class="axis-row">
+      <text class="axis-label">规格一</text>
+      <input class="axis-input js-pe-axis1" data-field="specAxis1" value="{{specAxis1}}" bindinput="onField" placeholder="如 颜色、口味" />
+    </view>
+    <view class="chips">
+      <view class="chip chip-val js-pe-color-chip" wx:for="{{colors}}" wx:key="*this">
+        <text class="chip-text">{{item}}</text>
+        <view class="chip-del js-pe-color-del" data-value="{{item}}" catchtap="removeColor">×</view>
       </view>
-      <view class="field last">
-        <view class="field-label">库存预警数量</view>
-        <input class="field-input" type="digit" data-field="alertQty" value="{{alertQty}}" bindinput="onField" placeholder="5" />
+      <input
+        wx:if="{{adding === 'color'}}"
+        class="chip-input js-pe-spec-input"
+        value="{{specInput}}"
+        focus="{{true}}"
+        data-field="specInput"
+        bindinput="onField"
+        bindconfirm="commitSpec"
+        bindblur="commitSpec"
+        placeholder="输入取值"
+      />
+      <view wx:else class="chip add js-pe-color-add" data-axis="color" bindtap="startAdd">＋ 添加规格值</view>
+    </view>
+
+    <view class="axis-row">
+      <text class="axis-label">规格二</text>
+      <input class="axis-input js-pe-axis2" data-field="specAxis2" value="{{specAxis2}}" bindinput="onField" placeholder="如 尺码、容量（可空）" />
+    </view>
+    <view class="chips last-chips">
+      <view class="chip chip-val js-pe-size-chip" wx:for="{{sizes}}" wx:key="*this">
+        <text class="chip-text">{{item}}</text>
+        <view class="chip-del js-pe-size-del" data-value="{{item}}" catchtap="removeSize">×</view>
       </view>
+      <input
+        wx:if="{{adding === 'size'}}"
+        class="chip-input js-pe-spec-input"
+        value="{{specInput}}"
+        focus="{{true}}"
+        data-field="specInput"
+        bindinput="onField"
+        bindconfirm="commitSpec"
+        bindblur="commitSpec"
+        placeholder="输入取值"
+      />
+      <view wx:else class="chip add js-pe-size-add" data-axis="size" bindtap="startAdd">＋ 添加规格值</view>
+    </view>
+
+    <view class="link-row js-pe-categories" bindtap="goCategories">
+      <text class="link-label">管理模板</text>
+      <view class="fold-chevron"></view>
+    </view>
+  </view>
+
+  <view class="card sub-card" wx:if="{{blankOpen}}">
+    <view class="blank-head">
+      <view class="blank-icon"></view>
+      <text class="card-title blank-title">半成品池</text>
+      <view class="switch-hit js-pe-blank-switch" bindtap="toggleBlankPool">
+        <view class="switch {{blankPool ? 'on' : ''}}">
+          <view class="switch-knob"></view>
+        </view>
+      </view>
+    </view>
+    <block wx:if="{{blankPool}}">
+      <view class="blank-stats">
+        <view class="blank-stat">
+          <view class="field-label">半成品库存</view>
+          <view class="blank-readonly js-pe-blank-stock">{{blankStockText}} 件</view>
+        </view>
+        <view class="blank-stat">
+          <view class="field-label">预警线</view>
+          <input class="blank-input js-pe-blank-alert" type="digit" data-field="alertQty" value="{{alertQty}}" bindinput="onField" placeholder="5" />
+        </view>
+      </view>
+      <view class="blank-note">1 件半成品 = 1 件成品；现货不足时自动从这里扣，整单共享</view>
     </block>
+    <view class="muted" wx:else>打开后这件商品多一格未分规格的库存：进货只进这一格，销售时现货不够会自动从这里扣。要先添加规格取值才能打开。</view>
+  </view>
 
-    <block wx:if="{{productKind === 'blank'}}">
-      <view class="field">
-        <view class="field-label">待加工预警数量</view>
-        <input class="field-input" type="digit" data-field="alertQty" value="{{alertQty}}" bindinput="onField" placeholder="5" />
+  <view class="card sub-card" wx:if="{{skuOpen}}">
+    <view class="card-title">每个规格的库存与价格</view>
+    <block wx:if="{{skuRows.length}}">
+      <view class="sku-head">
+        <text class="sku-c1">规格</text>
+        <text class="sku-c2">库存</text>
+        <text class="sku-c3" wx:if="{{!blankPool}}">预警</text>
+        <text class="sku-c4">售价</text>
       </view>
-      <view class="field last" wx:if="{{!isEdit}}">
-        <view class="field-label">待加工初始库存</view>
-        <input class="field-input" type="digit" data-field="blankStock" value="{{blankStock}}" bindinput="onField" placeholder="0" />
+      <view class="sku-row js-pe-sku-row" wx:for="{{skuRows}}" wx:key="key">
+        <text class="sku-c1 js-pe-sku-title">{{item.specText}}</text>
+        <text class="sku-c2 sku-readonly js-pe-sku-stock">{{item.stock}}</text>
+        <input
+          wx:if="{{!blankPool}}"
+          class="sku-c3 sku-input js-pe-sku-alert"
+          type="digit"
+          data-index="{{index}}"
+          data-field="alertQty"
+          value="{{item.alertQty}}"
+          bindinput="onSkuField"
+          placeholder="5"
+        />
+        <input
+          class="sku-c4 sku-input js-pe-sku-price"
+          type="digit"
+          data-index="{{index}}"
+          data-field="salePrice"
+          value="{{item.salePrice}}"
+          bindinput="onSkuField"
+          placeholder="0.00"
+        />
       </view>
-      <view class="field last" wx:else>
-        <view class="field-label">待加工库存</view>
-        <view class="field-input readonly">{{blankStockText}}</view>
-      </view>
-      <view class="muted spec-desc" wx:if="{{specTip}}">{{specTip}}</view>
+      <view class="muted sku-note" wx:if="{{blankPool}}">件数只读，改数走商品详情的「库存修正」门。半成品商品的预警看半成品池那一格。</view>
+      <view class="muted sku-note" wx:else>件数只读，改数走商品详情的「库存修正」门。</view>
     </block>
-
-    <view class="field last" wx:if="{{productKind === 'finished' && isEdit}}">
-      <view class="field-label">库存合计</view>
-      <view class="field-input readonly">{{stockText}}（各规格相加）</view>
-    </view>
-    <block wx:if="{{isEdit}}">
-      <view class="muted spec-desc" wx:if="{{productKind === 'blank'}}">待加工和现货要分开调。库存调整不计入进货、不改进价。</view>
-      <view class="muted spec-desc" wx:else>件数通过进货、销售、退货、改规格或库存调整变动。库存调整不计入进货、不改进价。</view>
-      <view class="action-strip">
-        <button class="btn-ghost" bindtap="goAdjust">库存调整</button>
-        <button wx:if="{{productKind !== 'plain'}}" class="btn-ghost" bindtap="goConvert">改规格</button>
-      </view>
-    </block>
+    <view class="muted" wx:else>先在「规格」里添加取值，这里会自动列出每一格。</view>
   </view>
 
-  <view class="card spec-card" wx:if="{{productKind !== 'plain'}}">
-    <view class="spec-title">{{productKind === 'blank' ? '销售规格' : '规格'}}</view>
-    <view class="muted spec-desc" wx:if="{{productKind === 'blank'}}">可改、可删、可再加。销售时用这些规格格；格上的值和待加工库存不是一回事。</view>
-    <view class="muted spec-desc" wx:else>可改、可删、可再加。每个规格组合各记一份库存。可只用一根轴。</view>
-
-    <view class="field">
-      <input class="axis-title" data-field="specAxis1" value="{{specAxis1}}" bindinput="onField" placeholder="规格一，如 颜色、口味" />
-      <view class="chips" wx:if="{{colors.length}}">
-        <view class="chip on js-pe-color-chip" wx:for="{{colors}}" wx:key="*this" data-value="{{item}}" bindtap="removeColor">{{item}} ×</view>
-      </view>
-      <view class="add-spec">
-        <input class="field-input js-pe-color-input" data-field="colorInput" value="{{colorInput}}" bindinput="onField" bindconfirm="addColor" placeholder="添加取值" />
-        <button class="btn-ghost spec-add js-pe-color-add" bindtap="addColor">添加</button>
-      </view>
-    </view>
-
-    <view class="field last">
-      <input class="axis-title" data-field="specAxis2" value="{{specAxis2}}" bindinput="onField" placeholder="规格二，如 尺码、容量（可空）" />
-      <view class="chips" wx:if="{{sizes.length}}">
-        <view class="chip on" wx:for="{{sizes}}" wx:key="*this" data-value="{{item}}" bindtap="removeSize">{{item}} ×</view>
-      </view>
-      <view class="add-spec">
-        <input class="field-input js-pe-size-input" data-field="sizeInput" value="{{sizeInput}}" bindinput="onField" bindconfirm="addSize" placeholder="添加取值" />
-        <button class="btn-ghost spec-add js-pe-size-add" bindtap="addSize">添加</button>
-      </view>
-    </view>
-  </view>
-
-  <view class="card spec-card" wx:if="{{showFinishedSkuCard}}">
-    <view class="spec-title">规格库存</view>
-    <view class="muted spec-desc" wx:if="{{specTip}}">{{specTip}}</view>
-    <view class="sku-card js-pe-sku-row" wx:for="{{skuRows}}" wx:key="key">
-      <view class="sku-title js-pe-sku-title">{{item.specText}}</view>
-      <view class="field-row">
-        <view class="field half">
-          <view class="field-label">库存</view>
-          <input
-            wx:if="{{!isEdit || item.isNew}}"
-            class="field-input js-pe-sku-stock"
-            type="digit"
-            data-index="{{index}}"
-            data-field="stock"
-            value="{{item.stock}}"
-            bindinput="onSkuField"
-            placeholder="0"
-          />
-          <view wx:else class="field-input readonly">{{item.stock}}</view>
-        </view>
-        <view class="field half">
-          <view class="field-label">预警</view>
-          <input class="field-input" type="digit" data-index="{{index}}" data-field="alertQty" value="{{item.alertQty}}" bindinput="onSkuField" placeholder="5" />
-        </view>
-      </view>
-      <view class="field-row" wx:if="{{!sharedPrice}}">
-        <view class="field half">
-          <view class="field-label">进价</view>
-          <input class="field-input" type="digit" data-index="{{index}}" data-field="costPrice" value="{{item.costPrice}}" bindinput="onSkuField" placeholder="0.00" />
-        </view>
-        <view class="field half last">
-          <view class="field-label">售价</view>
-          <input class="field-input" type="digit" data-index="{{index}}" data-field="salePrice" value="{{item.salePrice}}" bindinput="onSkuField" placeholder="0.00" />
-        </view>
-      </view>
-    </view>
-  </view>
-
-  <view class="card spec-card" wx:if="{{showBlankPriceCard}}">
-    <view class="spec-title">各规格售价</view>
-    <view class="sku-card" wx:for="{{skuRows}}" wx:key="key">
-      <view class="sku-title">{{item.specText}}</view>
-      <view class="field-row">
-        <view class="field half">
-          <view class="field-label">进价</view>
-          <input class="field-input" type="digit" data-index="{{index}}" data-field="costPrice" value="{{item.costPrice}}" bindinput="onSkuField" placeholder="0.00" />
-        </view>
-        <view class="field half last">
-          <view class="field-label">售价</view>
-          <input class="field-input" type="digit" data-index="{{index}}" data-field="salePrice" value="{{item.salePrice}}" bindinput="onSkuField" placeholder="0.00" />
-        </view>
-      </view>
-    </view>
-  </view>
-
-  <view class="card spec-card" wx:if="{{showBlankStockCard}}">
-    <view class="spec-title">现货</view>
-    <view class="sku-card" wx:for="{{blankStockRows}}" wx:key="key">
-      <view class="sku-title">{{item.specText}}</view>
-      <view class="field last">
-        <view class="field-label">库存</view>
-        <view class="field-input readonly">{{item.stock}}</view>
-      </view>
-    </view>
-  </view>
+  <view class="danger-link js-pe-remove" wx:if="{{isEdit}}" bindtap="remove">删除商品</view>
 
   <canvas type="2d" id="imageCanvas" class="image-canvas"></canvas>
-  <button class="btn-primary save-btn js-pe-save" bindtap="save">保存</button>
-  <button wx:if="{{isEdit}}" class="btn-danger js-pe-remove" bindtap="remove">删除商品</button>
+
+  <view class="save-bar">
+    <button class="btn-primary save-btn js-pe-save" disabled="{{saving}}" bindtap="save">{{saving ? '保存中…' : '保存'}}</button>
+  </view>
 </view>

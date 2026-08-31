@@ -66,6 +66,11 @@ page {
   --color-fill-ghost: #F5F5F5;
   --color-border-brand: #171717;
   --color-neutral-500: #737373;
+  /* 5a 批新增。neutral/300 3:17 是 chip 铁律第五档「＋添加」的描边色
+     （docs/ui-scale.md：白底 + neutral/300 描边 = chip/add）。稿上的本体是
+     组件库 Row/Chip 的 13:703，Screen/04 与 Screen/16 共用同一枚，所以它归 app.wxss，
+     不留在页面里。 */
+  --color-neutral-300: #D4D4D4;
   /* 1a 批新增。全局阻断态的图标底与字形色，取自稿 Row/00「全局阻断态（4 种）」4:1099：
      维护 4:1100 与搬家中 4:1104 绑 Primitive amber/50 3:29 与 amber/700 3:33
      （Semantic 别名 fill/warning-subtle 3:96 与 text/warning 3:84）；
@@ -294,6 +299,15 @@ button::after {
   border-color: var(--color-border-brand);
   color: var(--color-text-primary);
   font-weight: 600;
+}
+
+/* chip 铁律的第五档：白底 + neutral/300 描边 = 「＋添加」（稿 chip/add 13:703）。
+   它靠**形**分家（白底描边）而不是靠字色 —— 只差字色的话屏上和禁用档读不出差别，
+   这条写在 docs/ui-scale.md 的铁律表里。字色用 neutral/500，与稿的 13:704 同值。 */
+.chip.add {
+  background: var(--color-bg-card);
+  border-color: var(--color-neutral-300);
+  color: var(--color-neutral-500);
 }
 
 .chip.low {

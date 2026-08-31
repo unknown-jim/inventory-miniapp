@@ -1913,7 +1913,7 @@ async function readLists(miniProgram) {
       skus: (wx.getStorageSync('inv_skus') || []).map(function (item) {
         return {
           id: item.id, productId: item.productId, color: item.color || '', size: item.size || '',
-          stock: Number(item.stock) || 0, isBlank: !!item.isBlank
+          stock: Number(item.stock) || 0, alertQty: Number(item.alertQty) || 0, isBlank: !!item.isBlank
         }
       }),
       categories: (wx.getStorageSync('inv_categories') || []).map(function (item) {
@@ -2617,10 +2617,17 @@ async function runProductDetail(miniProgram) {
 
 // ---- 商品编辑（规格编辑器 + SKU 矩阵）------------------------------------
 
-// 规格编辑器的核心是那张矩阵：颜色 × 尺码，加一个取值就多一行、删一个就少一行。
+// 规格编辑器的核心是那张矩阵：规格一 × 规格二，加一个取值就多一行、删一个就少一行。
 // 这条用例把矩阵**当着面改三次**（2×2 → 3×2 → 2×2），每次都核对行数和行名，
 // 再保存、从账本里核对真的落了 4 个规格格，最后删掉自己造的这件商品，
 // 不给后面的用例留垃圾。
+//
+// 【5a 批（B5）起变了三件事】
+//   1. 没有「商品类型」分段控件了（稿 UX注释 n1）——加了取值就是带规格的商品；
+//   2. 规格编辑器和 SKU 矩阵挂在折叠索引卡后面，要先点开那一行；
+//   3. 件数在这一页是**只读**的（稿 UX注释 n9），所以「逐格填一个互不相同的数、
+//      再逐格对回来」这条防数据丢失的钉子改填**预警数**，别的一个字没变 ——
+//      只断言「落了 4 个组合」是测不出矩阵内容丢失的，理由见下面那段长注释。
 async function runProductEdit(miniProgram) {
   step('商品编辑：新建带规格的商品，核对 SKU 矩阵随规格取值增减，保存后落盘，再删掉')
   const before = await readLists(miniProgram)
@@ -2639,24 +2646,40 @@ async function runProductEdit(miniProgram) {
   }, '停在新增模式')
 
   await typeInto(edit, '.js-pe-name', name, '商品名称', 'name')
-  await typeInto(edit, '.js-pe-cost', '10', '进价', 'costPrice')
-  await typeInto(edit, '.js-pe-sale', '25', '售价', 'salePrice')
-  await tapWhen(edit, '.js-pe-kind-finished')
-  await waitForData(edit, function (d) {
-    return d.productKind === 'finished'
-  }, '商品类型切到「分规格现货」')
+  await typeInto(edit, '.js-pe-cost', '10', '默认进价', 'costPrice')
+  await typeInto(edit, '.js-pe-sale', '25', '默认售价', 'salePrice')
 
-  const addSpec = async function (inputSel, addSel, value, axis, fieldName) {
-    await typeInto(edit, inputSel, value, axis + '取值输入框', fieldName)
+  // 规格编辑器在折叠索引第一行后面，先展开。
+  await tapWhen(edit, '.js-pe-fold-spec')
+  await waitForData(edit, function (d) {
+    return d.specOpen === true
+  }, '展开规格编辑器')
+
+  // 「＋ 添加规格值」点了原位变输入框，回车 / 失焦生成 chip（稿 UX注释 n6）。
+  // 提交这一步走 callMethod：automator 的 Element 没有可靠的 blur 触发口，
+  // 而「bindblur / bindconfirm 到底接没接上」由 tests/product-edit.test.js 的静态钉子管。
+  // 两边合起来才是完整的：这里证行为、那里证接线。
+  const addSpec = async function (addSel, value, axis, key) {
     await tapWhen(edit, addSel)
     await waitForData(edit, function (d) {
-      return (axis === '规格一' ? d.colors : d.sizes).indexOf(value) >= 0
+      return d.adding === key
+    }, axis + '：＋添加变成了输入框')
+    await typeInto(edit, '.js-pe-spec-input', value, axis + '取值输入框', 'specInput')
+    await edit.callMethod('commitSpec')
+    await waitForData(edit, function (d) {
+      return (key === 'color' ? d.colors : d.sizes).indexOf(value) >= 0
     }, axis + '加上取值「' + value + '」')
   }
-  await addSpec('.js-pe-color-input', '.js-pe-color-add', '红', '规格一', 'colorInput')
-  await addSpec('.js-pe-color-input', '.js-pe-color-add', '蓝', '规格一', 'colorInput')
-  await addSpec('.js-pe-size-input', '.js-pe-size-add', 'S', '规格二', 'sizeInput')
-  await addSpec('.js-pe-size-input', '.js-pe-size-add', 'M', '规格二', 'sizeInput')
+  await addSpec('.js-pe-color-add', '红', '规格一', 'color')
+  await addSpec('.js-pe-color-add', '蓝', '规格一', 'color')
+  await addSpec('.js-pe-size-add', 'S', '规格二', 'size')
+  await addSpec('.js-pe-size-add', 'M', '规格二', 'size')
+
+  // 矩阵在折叠索引第三行后面，展开它才看得见行。
+  await tapWhen(edit, '.js-pe-fold-sku')
+  await waitForData(edit, function (d) {
+    return d.skuOpen === true
+  }, '展开 SKU 矩阵')
 
   // 2×2：矩阵应当正好四行，而且行名就是笛卡尔积。
   const expectRows = async function (want, when) {
@@ -2686,34 +2709,39 @@ async function runProductEdit(miniProgram) {
     })
   })
 
-  // 3×2：再加一个颜色，矩阵要跟着长两行。
-  await addSpec('.js-pe-color-input', '.js-pe-color-add', '绿', '规格一', 'colorInput')
+  // 3×2：再加一个取值，矩阵要跟着长两行。
+  await addSpec('.js-pe-color-add', '绿', '规格一', 'color')
   await expectRows(6, '三色两码')
 
   // 删掉刚加的那个取值（点 chip 上的 ×），矩阵要缩回四行。
+  // 5a 批起 × 是 chip 里独立的 44×44 热区（稿 chip/取值·可删 10:158 的 hit/删 13:678），
+  // 整枚 chip 不再可点；`.js-pe-color-chip` 与 `.js-pe-color-del` 顺序一一对应。
   const chips = await textsOf(edit, '.js-pe-color-chip')
   const greenAt = chips.findIndex(function (text) { return text.indexOf('绿') >= 0 })
   assert.ok(greenAt >= 0, '颜色 chip 里找不到刚加的「绿」：' + JSON.stringify(chips))
-  await tapNth(edit, '.js-pe-color-chip', greenAt, '删掉「绿」')
-  await expectRows(4, '删掉一个颜色之后')
+  await tapNth(edit, '.js-pe-color-del', greenAt, '删掉「绿」')
+  await expectRows(4, '删掉一个取值之后')
 
-  // 【每一格填一个互不相同的件数，再核对它们逐格落盘】
+  // 【每一格填一个互不相同的预警数，再核对它们逐格落盘】
   // 这一步不是凑数。只断言「落了 4 个规格组合」是**测不出矩阵内容丢失**的：
   // 组合名是 saveProduct 从 colors × sizes 现推的，跟传进去的 skuRows 无关 ——
   // 实测把 product-edit.js 保存时的 skuRows 改成 .slice(1)（整整丢掉一行的数据），
-  // 那版用例照样 EXIT=0 全绿。给每格填一个不同的件数、再逐格对回来，才钉得住。
-  const stockOf = {}
+  // 那版用例照样 EXIT=0 全绿。给每格填一个不同的数、再逐格对回来，才钉得住。
+  // 5a 批起件数只读（稿 UX注释 n9），所以这个「互不相同的数」改用预警数。
+  // 注意这条路只对**没开半成品池**的商品成立：applyProductSkus 对待加工商品
+  // 把每格的 alertQty 强制写 0（utils/inventory.js:556），本用例建的正是分规格现货。
+  const alertOf = {}
   const rows = (await edit.data()).skuRows
   for (let i = 0; i < rows.length; i++) {
     const want = String(i + 1)
-    const inputs = await edit.$$('.js-pe-sku-stock')
+    const inputs = await edit.$$('.js-pe-sku-alert')
     assert.strictEqual(inputs.length, rows.length,
-      'SKU 矩阵的库存输入框有 ' + inputs.length + ' 个，行数却是 ' + rows.length)
+      'SKU 矩阵的预警输入框有 ' + inputs.length + ' 个，行数却是 ' + rows.length)
     await inputs[i].input(want)
     await waitForData(edit, function (d) {
-      return String(d.skuRows[i].stock) === want
-    }, '第 ' + (i + 1) + ' 格（' + rows[i].specText + '）的库存填成 ' + want)
-    stockOf[String(rows[i].specText)] = Number(want)
+      return String(d.skuRows[i].alertQty) === want
+    }, '第 ' + (i + 1) + ' 格（' + rows[i].specText + '）的预警填成 ' + want)
+    alertOf[String(rows[i].specText)] = Number(want)
   }
 
   await tapWhen(edit, '.js-pe-save')
@@ -2734,18 +2762,24 @@ async function runProductEdit(miniProgram) {
   const combos = createdSkus.map(function (s) { return s.color + '/' + s.size }).sort()
   assert.deepStrictEqual(combos, ['红/M', '红/S', '蓝/M', '蓝/S'].sort(),
     '落盘的规格组合不是那四格：' + JSON.stringify(combos))
-  // 逐格把件数对回来。specText 的拼法由 inventory.specText 决定，这里按「两个取值
+  // 建档件数一律 0（稿 UX注释 n9「建档初始 0。改数只走库存修正门」）。
+  createdSkus.forEach(function (item) {
+    assert.strictEqual(item.stock, 0,
+      '规格「' + item.color + '/' + item.size + '」建档时不该有件数，实为 ' + item.stock
+        + '（5a 批起件数只读，进货或库存修正才写它）')
+  })
+  // 逐格把预警数对回来。specText 的拼法由 inventory.specText 决定，这里按「两个取值
   // 都出现在里面」来配对，不去复刻它的分隔符 —— 复刻就是转写，分隔符一改就假绿。
-  Object.keys(stockOf).forEach(function (specText) {
+  Object.keys(alertOf).forEach(function (specText) {
     const hit = createdSkus.filter(function (item) {
       return String(specText).indexOf(item.color) >= 0 && String(specText).indexOf(item.size) >= 0
     })
     assert.strictEqual(hit.length, 1,
       '规格「' + specText + '」在落盘的格子里配到 ' + hit.length + ' 个，应当正好 1 个：'
         + JSON.stringify(combos))
-    assert.strictEqual(hit[0].stock, stockOf[specText],
-      '规格「' + specText + '」的件数没有逐格落盘：编辑器里填的是 ' + stockOf[specText]
-        + '，账本里是 ' + hit[0].stock
+    assert.strictEqual(hit[0].alertQty, alertOf[specText],
+      '规格「' + specText + '」的预警数没有逐格落盘：编辑器里填的是 ' + alertOf[specText]
+        + '，账本里是 ' + hit[0].alertQty
         + '（矩阵里某一行的数据被丢掉时就是这个样子 —— 只对组合名是查不出来的）')
   })
 
@@ -2781,6 +2815,11 @@ async function runCategories(miniProgram) {
   await waitForData(edit, function (d) {
     return d && d.isEdit === false
   }, '停在新增模式')
+  // 5a 批起「管理模板」在规格编辑器卡里（稿 4:117），先展开折叠索引第一行。
+  await tapWhen(edit, '.js-pe-fold-spec')
+  await waitForData(edit, function (d) {
+    return d.specOpen === true
+  }, '展开规格编辑器')
   await tapWhen(edit, '.js-pe-categories')
   const list = await waitForPage(miniProgram, 'pages/categories/categories', '种类模板列表')
   await waitForData(list, function (d) {

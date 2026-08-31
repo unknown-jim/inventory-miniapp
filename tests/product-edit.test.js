@@ -1,61 +1,109 @@
 const assert = require('assert')
 const fs = require('fs')
 const path = require('path')
-const skuCardView = require('../utils/sku-card-view').skuCardView
-
-const zeroRow = { stock: '0' }
-const stockRow = { stock: '2' }
-
-const sharedEmpty = skuCardView('blank', true, [zeroRow])
-assert.strictEqual(sharedEmpty.showBlankPriceCard, false)
-assert.strictEqual(sharedEmpty.showBlankStockCard, false)
-assert.strictEqual(sharedEmpty.blankStockRows.length, 0)
-
-const splitEmpty = skuCardView('blank', false, [zeroRow])
-assert.strictEqual(splitEmpty.showBlankPriceCard, true)
-assert.strictEqual(splitEmpty.showBlankStockCard, false)
-
-const sharedStock = skuCardView('blank', true, [zeroRow, stockRow])
-assert.strictEqual(sharedStock.showBlankPriceCard, false)
-assert.strictEqual(sharedStock.showBlankStockCard, true)
-assert.strictEqual(sharedStock.blankStockRows.length, 1)
-assert.strictEqual(sharedStock.blankStockRows[0].stock, '2')
-
-const splitStock = skuCardView('blank', false, [zeroRow, stockRow])
-assert.strictEqual(splitStock.showBlankPriceCard, true)
-assert.strictEqual(splitStock.showBlankStockCard, true)
-
-const finished = skuCardView('finished', true, [zeroRow])
-assert.strictEqual(finished.showFinishedSkuCard, true)
-assert.strictEqual(finished.showBlankPriceCard, false)
-assert.strictEqual(finished.showBlankStockCard, false)
 
 const wxml = fs.readFileSync(
   path.join(__dirname, '../pages/product-edit/product-edit.wxml'),
   'utf8'
 )
-assert.strictEqual((wxml.match(/'销售规格'/g) || []).length, 1)
-assert.ok(wxml.indexOf('各规格售价') >= 0)
-assert.ok(wxml.indexOf('showBlankPriceCard') >= 0)
-assert.ok(wxml.indexOf('showBlankStockCard') >= 0)
-assert.ok(wxml.indexOf('showFinishedSkuCard') >= 0)
-assert.ok(wxml.indexOf('blankStockRows') >= 0)
-assert.ok(wxml.indexOf('现货只在退货或改规格后才会有数') < 0)
-assert.ok(wxml.indexOf("productKind === 'blank' ? '销售规格' : '规格库存'") < 0)
-assert.ok(wxml.indexOf('库存调整') >= 0)
-assert.ok(wxml.indexOf('bindtap="goConvert"') >= 0)
-assert.ok(wxml.indexOf('不计入进货、不改进价') >= 0)
-assert.ok(wxml.indexOf('通过进货 / 销售变动') < 0)
+const editJs = fs.readFileSync(
+  path.join(__dirname, '../pages/product-edit/product-edit.js'),
+  'utf8'
+)
+const editWxss = fs.readFileSync(
+  path.join(__dirname, '../pages/product-edit/product-edit.wxss'),
+  'utf8'
+)
+
+// ---------------------------------------------------------------------------
+// 5a 批（B5）· 商品编辑按稿 Screen/04（3:651）重做。
+// 这一组钉的都是「看不见就会悄悄退回去」的事：类型分段控件复活、件数变回可填、
+// 保存时把默认进价冲进每一格、取值 chip 退回「已选中」的白底黑描边。
+// ---------------------------------------------------------------------------
+
+// 稿 UX注释 n1（3:664）：「无「类型」选择：商品 = 可选规格（0~2 项）+ 可选半成品池」。
+assert.ok(wxml.indexOf('setProductKind') < 0, '商品类型分段控件本批拿掉了')
+assert.ok(wxml.indexOf('productKind') < 0, 'wxml 上不该再有 productKind 这个派生态')
+assert.ok(editJs.indexOf('migrateBlankFinished') < 0, '切类型搬件数的迁移逻辑随之删除')
+assert.ok(editJs.indexOf('applyProductKind') < 0, '同上')
+assert.ok(wxml.indexOf('各格不同价') < 0, '「同价 / 各格不同价」分段控件稿上没有')
+
+// 稿 UX注释 n9（10:134）：库存只读，建档初始 0，改数只走库存修正门。
+assert.ok(!/<input[^>]*data-field="stock"/.test(wxml), '件数不许是输入框')
+assert.ok(!/<input[^>]*data-field="blankStock"/.test(wxml), '半成品件数不许是输入框')
+assert.ok(!/data-field="stock"[^>]*bindinput/.test(wxml), '同上（属性顺序反过来也拦）')
+assert.ok(wxml.indexOf('sku-readonly') >= 0, '矩阵库存列是只读纯文本')
+assert.ok(wxml.indexOf('blank-readonly') >= 0, '半成品池库存是只读纯文本')
+assert.ok(/stock:\s*0,/.test(editJs), '保存时商品件数写 0（建档初始 0）')
+// 收窄到 save() 里 payload 的形态（salePrice: row.salePrice 之后紧跟 stock: '0'）：
+// rebuildSkuRows 里新建行也有一处合法的 stock: '0'（初始 0 件），宽形态的
+// /stock:\s*'0'/ 在 save() 被改回 row.stock 时仍被它喂饱，变异验证 #2 实测拦不住。
+assert.ok(/salePrice: row\.salePrice,\s*stock:\s*'0'/.test(editJs), '保存时每一格件数写 0')
+
+// 保存不许带 costPrice：applyProductSkus 只有在 row.costPrice 缺席时才会回落到
+// 这一格原来的进价（进货写进去的那个）。带上默认进价会把它冲掉，毛利当场算错。
+assert.ok(!/costPrice:\s*row\./.test(editJs), '每格 payload 不许带 costPrice')
+assert.ok(!/costPrice:\s*sharedPrice/.test(editJs), '同上')
+
+// 折叠索引三行（稿 card/折叠·规格与SKU 15:19）
+assert.strictEqual(
+  (wxml.match(/bindtap="toggleFold"/g) || []).length,
+  3,
+  '折叠索引正好三行：规格 / 半成品池 / 每个规格的库存与价格'
+)
+assert.ok(wxml.indexOf('规格 · {{specSummary}}') >= 0, '第一行带规格副文案')
+assert.ok(wxml.indexOf('半成品池 · {{blankSummary}}') >= 0, '第二行带半成品池副文案')
+assert.ok(wxml.indexOf('每个规格的库存与价格 · {{skuSummary}}') >= 0, '第三行带条数副文案')
+
+// 取值 chip 从「白底黑描边」改回灰底（chip 铁律：白底黑描边 = 已选中，取值不是选择态）
+assert.ok(wxml.indexOf('chip on js-pe-color-chip') < 0, '取值 chip 不再借「已选中」的形')
+assert.ok(wxml.indexOf('chip chip-val') >= 0, '取值 chip 走灰底那一档')
+assert.ok(wxml.indexOf('chip-del') >= 0, '取值 chip 带独立的 44x44 删除热区（稿 13:678）')
+// ＋添加走 app.wxss 的 chip 铁律第五档（稿 chip/add 13:703）
+assert.ok(wxml.indexOf('chip add') >= 0, '＋添加用共用类 .chip.add')
+assert.ok(wxml.indexOf('＋ 添加规格值') >= 0, '文案照稿 3:675')
+// 点了原位变输入框，回车 / 失焦生成 chip（稿 UX注释 n6）
+assert.ok(wxml.indexOf('bindconfirm="commitSpec"') >= 0, '回车提交')
+assert.ok(wxml.indexOf('bindblur="commitSpec"') >= 0, '失焦提交')
+assert.ok(wxml.indexOf('bindtap="startAdd"') >= 0, '点＋添加先变输入框')
+
+// 保存在固定底栏、删除是危险红字链（稿 bottom-cta 4:997 与 画布规范 9:24）
+assert.ok(wxml.indexOf('save-bar') >= 0, '保存钮在固定底栏')
+assert.ok(wxml.indexOf('danger-link') >= 0, '删除商品是危险红字链那一档')
+assert.ok(wxml.indexOf('btn-danger') < 0, '不再是浅红底块')
+assert.ok(wxml.indexOf('action-strip') < 0, '页面操作区不再有灰底 ghost 横条（规范 9:24）')
+assert.ok(/\.save-btn \{[\s\S]*?height: 124rpx/.test(editWxss), 'xxl 62 = 124rpx（稿 7:501）')
+assert.ok(editWxss.indexOf('env(safe-area-inset-bottom)') >= 0, '底栏要留 34 安全区')
+
+// 库存调整 / 改规格两个入口挪到了商品详情（稿 UX注释/商品详情 3:628 的「库存修正」门）。
+// 两个页面本身没有变成孤岛：pages/adjust 由 product-detail 与记一笔面板进，
+// pages/convert 由记一笔面板进。
+assert.ok(wxml.indexOf('goAdjust') < 0, '库存调整入口不在商品编辑上')
+assert.ok(wxml.indexOf('goConvert') < 0, '改规格入口不在商品编辑上')
+
+// 锚点入参：category = 商品列表空态「从模板建档」，price = 商品详情「调价」
+assert.ok(editJs.indexOf("focus === 'category'") >= 0, '接得住 ?focus=category')
+assert.ok(editJs.indexOf("focus === 'price'") >= 0, '接得住 ?focus=price')
+assert.ok(wxml.indexOf('id="pe-spec-card"') >= 0, 'category 锚点要有滚动落点')
+assert.ok(wxml.indexOf('js-pe-categories') >= 0, '管理模板的钩子留着（ui.test.js 的种类用例走它进）')
 
 // 商品图：选图入口和压缩画布钉在 wxml，require 钉在 js
 assert.ok(wxml.indexOf('pickImage') >= 0)
 assert.ok(wxml.indexOf('image-canvas') >= 0)
 assert.ok(wxml.indexOf('id="imageCanvas"') >= 0)
-const editJs = fs.readFileSync(
-  path.join(__dirname, '../pages/product-edit/product-edit.js'),
-  'utf8'
-)
 assert.ok(editJs.indexOf('product-image') >= 0)
+
+// 三张旧 sku 卡合成一张矩阵，utils/sku-card-view.js 随之删除
+assert.ok(
+  !fs.existsSync(path.join(__dirname, '../utils/sku-card-view.js')),
+  'sku-card-view 本批删掉（三张旧卡的显隐判据没有消费方了）'
+)
+assert.ok(editJs.indexOf('sku-card-view') < 0, 'js 不再 require 它')
+assert.ok(
+  fs.readFileSync(path.join(__dirname, '../project.config.json'), 'utf8')
+    .indexOf('sku-card-view') < 0,
+  'packOptions.include 里也要摘掉'
+)
 
 const productsWxml = fs.readFileSync(
   path.join(__dirname, '../pages/products/products.wxml'),

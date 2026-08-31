@@ -1,104 +1,432 @@
-.margin-box {
-  display: flex;
-  justify-content: space-between;
-  margin-bottom: 24rpx;
-  padding: 18rpx 20rpx;
-  background: #ECFDF5;
-  color: #0F766E;
-  border-radius: 12rpx;
-  font-size: var(--fs-sm);
-  font-weight: 600;
+/* 商品编辑（稿 Screen/04 商品编辑 3:651）。共用类（.page .card .chips .chip .chip.on
+   .chip.add .field .field-row .half .field-input .field-label .field-hint .muted
+   .btn-primary）来自 app.wxss，这里只写本页布局。 */
+
+/* 保存钮钉在底栏（稿 bottom-cta 4:997），内容要让出这一条的高度，
+   否则「删除商品」那一行会被压在按钮底下。
+   24（上内边距）+ 124（xxl 62）+ 24（下内边距）+ 48（离底栏再空一口气）= 220rpx。 */
+.page {
+  padding-bottom: calc(env(safe-area-inset-bottom) + 220rpx);
 }
 
+/* 稿 3:656 / 3:669 / 3:683：卡标题 16px SemiBold。 */
+.card-title {
+  font-size: var(--fs-title);
+  font-weight: 600;
+  margin-bottom: var(--space-md);
+}
+
+/* 只读件数：稿 UX注释 n9「input/readonly 纯文本（无底无框）」。
+   这里挂在 .field-input 上，所以要把底和圆角压掉。 */
 .readonly {
+  background: transparent;
+  border-radius: 0;
+  padding-left: 0;
   line-height: var(--tap-md);
-  color: #64748B;
+  color: var(--color-text-muted);
 }
 
-.last {
-  margin-bottom: 0;
-}
-
-.save-btn {
-  margin: 32rpx 0 16rpx;
-}
-
-.spec-card {
-  margin-top: 16rpx;
-}
-
-.spec-title {
-  margin-bottom: 8rpx;
-  font-weight: 600;
-}
-
-.spec-desc {
-  margin-bottom: 20rpx;
-}
-
-.field.last + .spec-desc {
-  margin-top: 12rpx;
-  margin-bottom: 0;
-}
-
-.axis-title {
-  margin-bottom: 12rpx;
-  min-height: var(--tap-sm);
-  line-height: var(--tap-sm);
-  font-weight: 600;
-  font-size: var(--fs-md);
-}
-
-.add-spec {
-  display: flex;
-  gap: 12rpx;
-  align-items: center;
-}
-
-.add-spec .field-input {
-  flex: 1;
-}
-
-.spec-add {
-  width: 140rpx;
-  margin: 0;
-  height: var(--tap-md);
-  line-height: var(--tap-md);
-}
-
-.field-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 12rpx;
-}
-
-.field-head .field-label {
-  margin-bottom: 0;
-}
-
-.link {
-  color: #0F766E;
-  font-size: var(--fs-sm);
+/* 稿 4:756 毛利预览：12px text/muted 的一行式，不是原来那块青绿底。 */
+.margin-line {
+  margin-top: var(--space-sm);
 }
 
 .name-chips {
   margin-bottom: 0;
 }
 
-.sku-card {
-  padding: 20rpx 0;
-  border-top: 1rpx solid #F1F5F4;
+/* 稿 input/focus：border/focus 青绿 2px 描边。只用在「调价」锚点聚焦的售价框上，
+   全站输入件的聚焦态是共用批的事（见规格 OQ-10）。
+   docs/design-file.md：品牌青绿只做非语义场合的小剂量点缀，border/focus 是其中一处。
+   稿 4:976 解出来是 #0F756E，与仓库沿用的 #0F766E 每通道差 1/255，屏上不可分辨，
+   这里跟仓库既有字面量走。 */
+.input-focus {
+  box-sizing: border-box;
+  border: 4rpx solid #0F766E;
 }
 
-.sku-card:first-of-type {
-  border-top: none;
+/* 图片区（稿 row/图片 4:750）：56x56 缩略图 + 换图 / 删除两个文字链，链热区 44。 */
+.image-add {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--tap-lg);
+  border: 4rpx dashed var(--color-neutral-300);
+  border-radius: 16rpx;
+  color: var(--color-text-muted);
+  font-size: var(--fs-label);
+}
+
+.image-box {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xl);
+}
+
+.image-preview {
+  width: 112rpx;
+  height: 112rpx;
+  border-radius: 16rpx;
+  background: var(--color-fill-ghost);
+}
+
+.image-ops {
+  display: flex;
+  gap: var(--space-xl);
+}
+
+.image-link {
+  min-height: var(--tap-min);
+  line-height: var(--tap-min);
+  padding: 0 var(--space-md);
+  font-size: var(--fs-label);
+  color: var(--color-text-primary);
+}
+
+.image-link.danger {
+  color: var(--color-red-600);
+}
+
+/* 折叠索引卡（稿 card/折叠·规格与SKU 15:19）：三行，行间 1px hairline。
+   稿的行高是 44；仓库把可点列表行的地板定在 --tap-md（96rpx = 48px），跟文档走。 */
+.fold-card {
+  margin-top: var(--space-lg);
   padding-top: 0;
+  padding-bottom: 0;
 }
 
-.sku-title {
-  margin-bottom: 16rpx;
-  font-weight: 600;
+.fold-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  min-height: var(--tap-md);
+  border-top: 2rpx solid var(--color-border-default);
+}
+
+.fold-row:first-child {
+  border-top: none;
+}
+
+/* 稿 15:21 是 14px Medium。 */
+.fold-label {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-body);
+  font-weight: 500;
+}
+
+/* chevron 与 pages/product-detail 的 .cell-chevron 同一种写法（两条边 + 旋转 45 度）。
+   稿 15:23 的描边绑 text/faint（50% 黑）。展开时再转 90 度朝下。 */
+.fold-chevron {
+  width: 16rpx;
+  height: 16rpx;
+  flex-shrink: 0;
+  border-right: 3rpx solid var(--color-text-faint);
+  border-top: 3rpx solid var(--color-text-faint);
+  transform: rotate(45deg);
+  transition: transform var(--duration-fast) var(--easing-standard);
+}
+
+.fold-chevron.open {
+  transform: rotate(135deg);
+}
+
+/* 三张展开卡（稿 3:668 / 3:661 / 3:682）：与折叠卡之间的间距同 content 的 gap 12。 */
+.sub-card {
+  margin-top: var(--space-lg);
+}
+
+/* 规格编辑器（稿 card/规格编辑器 3:668）：轴名是行内输入框（稿 3:786 是 140x44），
+   不是原来那条占满整行的大标题输入框。 */
+.axis-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  margin-bottom: var(--space-md);
+}
+
+/* 稿 3:785 是 13px neutral/500。 */
+.axis-label {
+  flex-shrink: 0;
+  font-size: var(--fs-label);
+  color: var(--color-neutral-500);
+}
+
+.axis-input {
+  flex: 1;
+  min-width: 0;
+  max-width: 280rpx;
+  height: var(--tap-md);
+  padding: 0 var(--space-lg);
+  box-sizing: border-box;
+  background: var(--color-fill-ghost);
+  border: 2rpx solid var(--color-border-default);
+  border-radius: 20rpx;
+  font-size: var(--fs-body);
+}
+
+/* 取值 chip（稿 chip/取值·可删 10:158）：灰底 = 「未选中·可点」那一档（chip 铁律）。
+   原来这里用的是 .chip.on（白底黑描边），那是「已选中」的形，取值不是选择态。
+   右边挂 44x44 的删除热区，所以竖向内边距归零、由热区自己撑高。 */
+.chip-val {
+  padding: 0 0 0 28rpx;
+}
+
+.chip-text {
+  font-size: var(--fs-body);
+}
+
+.chip-del {
+  width: var(--tap-min);
+  height: var(--tap-min);
+  margin-left: var(--space-xs);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--color-text-muted);
+  font-size: var(--fs-body);
+}
+
+/* 「＋ 添加规格值」原位变输入框（稿 UX注释 n6）：与 chip 同高同圆角，
+   聚焦中所以用黑描边，和它替换掉的那枚 chip/add 占同一块地方。 */
+.chip-input {
+  width: 240rpx;
+  height: var(--tap-min);
+  padding: 0 28rpx;
+  box-sizing: border-box;
+  background: var(--color-bg-card);
+  border: 2rpx solid var(--color-border-brand);
+  border-radius: 999rpx;
+  font-size: var(--fs-body);
+}
+
+.last-chips {
+  margin-bottom: var(--space-md);
+}
+
+/* 管理模板（稿 link/管理模板 4:117）：44 高的一行，右边 chevron。 */
+.link-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  min-height: var(--tap-md);
+}
+
+.link-label {
+  font-size: var(--fs-body);
+  font-weight: 500;
+}
+
+/* 半成品池（稿 blank-pool 3:661）。 */
+.blank-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  margin-bottom: var(--space-md);
+}
+
+.blank-title {
+  flex: 1;
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+/* 半成品的靛蓝菱形标记，与 pages/product-detail 的 .blank-dot 同一份写法
+   （那一屏是本页的入口，两处必须长一样）。#4338CA 与 app.wxss 的 .tag-blank 同值：
+   状态语义色的 token 化是独立一批（A1 规格已划出去），本批不提前脱队。
+   稿 3:459 用的是 indigo/700 #4238C9，与它每通道差 1/255。 */
+.blank-icon {
+  width: 20rpx;
+  height: 20rpx;
+  flex-shrink: 0;
+  background: #4338CA;
+  border-radius: 4rpx;
+  transform: rotate(45deg);
+}
+
+/* 开关（稿 switch/on 3:272）：轨道 44x26、内边距 3、knob 20x20，开态 fill/action。
+   视觉 88x52rpx、热区 88x88rpx —— docs/ui-scale.md「视觉可以小于热区」。
+   关态轨道稿上没画变体，取 neutral/200（app.wxss 已有的 token）。 */
+.switch-hit {
+  width: var(--tap-min);
+  height: var(--tap-min);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.switch {
+  width: 88rpx;
+  height: 52rpx;
+  padding: 6rpx;
+  box-sizing: border-box;
+  background: var(--color-neutral-200);
+  border-radius: 999rpx;
+  transition: background var(--duration-fast) var(--easing-standard);
+}
+
+.switch.on {
+  background: var(--color-fill-action);
+}
+
+.switch-knob {
+  width: 40rpx;
+  height: 40rpx;
+  background: var(--color-bg-card);
+  border-radius: 999rpx;
+  transition: transform var(--duration-fast) var(--easing-standard);
+}
+
+.switch.on .switch-knob {
+  transform: translateX(36rpx);
+}
+
+/* 稿 stats 3:462：两格横排 gap 24，每格 label 12px + 96x44 的值。 */
+.blank-stats {
+  display: flex;
+  gap: 48rpx;
+  margin-bottom: var(--space-md);
+}
+
+.blank-stat {
+  min-width: 0;
+}
+
+/* 稿 3:781：无底无框的只读件数，16px Inter Medium。 */
+.blank-readonly {
+  height: var(--tap-md);
+  line-height: var(--tap-md);
+  font-size: var(--fs-title);
+  font-weight: 500;
+}
+
+/* 稿 3:782：有底有描边的可填预警线。 */
+.blank-input {
+  width: 192rpx;
+  height: var(--tap-md);
+  padding: 0 var(--space-lg);
+  box-sizing: border-box;
+  background: var(--color-fill-ghost);
+  border: 2rpx solid var(--color-border-default);
+  border-radius: 20rpx;
+  font-size: var(--fs-body);
+}
+
+/* 稿 note 3:469：indigo/50 底 + indigo/700 字，radius 8。色值同 .blank-icon 那条注释。 */
+.blank-note {
+  padding: 20rpx;
+  background: #EEF2FF;
+  color: #4338CA;
+  border-radius: 16rpx;
+  font-size: var(--fs-label);
+}
+
+/* SKU 矩阵（稿 card/SKU矩阵 3:682）：规格列自适应，库存 / 预警 / 售价三列定宽。
+   稿的列宽是 56 / 56 / 64（px）。库存那列是只读纯文本，比稿窄一点让给规格列。 */
+.sku-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-xs);
+}
+
+.sku-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-sm);
+}
+
+.sku-c1 {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-label);
+  word-break: break-all;
+}
+
+.sku-c2 {
+  width: 96rpx;
+  flex-shrink: 0;
+  font-size: var(--fs-label);
+}
+
+.sku-c3 {
+  width: 112rpx;
+  flex-shrink: 0;
+}
+
+.sku-c4 {
+  width: 140rpx;
+  flex-shrink: 0;
+}
+
+.sku-head .sku-c1,
+.sku-head .sku-c2,
+.sku-head .sku-c3,
+.sku-head .sku-c4 {
+  color: var(--color-text-muted);
+  font-size: var(--fs-label);
+}
+
+/* 稿 input/readonly 3:259：纯文本、无底无框（UX注释 n9）。 */
+.sku-readonly {
+  color: var(--color-text-muted);
+  text-align: right;
+}
+
+/* 稿 3:793 / 3:794 input/预警 与 input/价格：neutral/100 底 + border/default 描边、r8。 */
+.sku-input {
+  height: var(--tap-md);
+  padding: 0 var(--space-md);
+  box-sizing: border-box;
+  background: var(--color-fill-ghost);
+  border: 2rpx solid var(--color-border-default);
+  border-radius: 16rpx;
+  font-size: var(--fs-label);
+  text-align: right;
+}
+
+.sku-note {
+  margin-top: var(--space-sm);
+}
+
+/* 危险入口放在滚动区末尾、不进底栏（稿 画布规范 9:24 与 UX注释/模板编辑 7:71），
+   形是「危险红字链 44」那一档（稿 删除模板 4:643 是 13px red/600 的 52x44 纯文字），
+   不是实底按钮。原来的 .btn-danger 浅红底块比这一档重。 */
+.danger-link {
+  display: flex;
+  align-items: center;
+  min-height: var(--tap-min);
+  margin-top: var(--space-lg);
+  padding: 0 var(--space-xs);
+  color: var(--color-red-600);
+  font-size: var(--fs-label);
+}
+
+/* 稿 bottom-cta 4:997：1px hairline + 62 高实心黑 + 34 安全区。
+   62px = 124rpx，档位表里没有这一档（--tap-lg 是 52px = 104rpx），按稿写字面量，
+   同 pages/records 的 FAB 写 112rpx 那处的处理方式。
+   层级 10 = 稿「动效与层级」里 sticky 那一档；层级 token 还没进 app.wxss（B1 刻意没加），
+   这里先写字面量。 */
+.save-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10;
+  box-sizing: border-box;
+  padding: var(--space-lg) var(--page-pad) calc(env(safe-area-inset-bottom) + var(--space-lg));
+  background: var(--color-bg-card);
+  border-top: 2rpx solid var(--color-border-default);
+}
+
+.save-btn {
+  height: 124rpx;
+  line-height: 124rpx;
+  margin: 0;
 }
 
 /* 隐藏压缩画布：canvas 实际像素由 node.width/height 决定，CSS 尺寸只是占位。 */
@@ -109,37 +437,4 @@
   width: 600px;
   height: 600px;
   pointer-events: none;
-}
-
-.image-add {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: var(--tap-lg);
-  border: 2rpx dashed #CBD5E1;
-  border-radius: 12rpx;
-  color: #64748B;
-  font-size: var(--fs-sm);
-}
-
-.image-box {
-  display: flex;
-  align-items: center;
-  gap: var(--gap);
-}
-
-.image-preview {
-  width: 112rpx;
-  height: 112rpx;
-  border-radius: 8rpx;
-  background: #F1F5F4;
-}
-
-.image-ops {
-  display: flex;
-  gap: var(--gap);
-}
-
-.danger {
-  color: #DC2626;
 }

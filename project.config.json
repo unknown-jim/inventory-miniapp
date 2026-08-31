@@ -90,10 +90,6 @@
       },
       {
         "type": "file",
-        "value": "utils/sku-card-view.js"
-      },
-      {
-        "type": "file",
         "value": "utils/product-image.js"
       },
       {

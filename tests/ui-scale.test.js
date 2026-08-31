@@ -491,4 +491,43 @@ assert.ok(adjustWxml.indexOf('js-adjust-submit') >= 0, 'pages/adjust 仍是「�
 assert.ok(adjustWxml.indexOf('只改这一个格子的件数，不是整单盘点。') >= 0,
   'pages/adjust 那句「不是整单盘点」要留着 —— 它正是两屏分工的说明')
 
+// ---------------------------------------------------------------------------
+// 5a 批（B5）· 商品编辑（稿 Screen/04 = 3:651）
+// 这一组钉的是跨文件的接缝：chip 铁律第五档落在 app.wxss（Screen/04 与 Screen/16
+// 共用同一枚 chip/add，留在页面里必然写两遍）、底栏 CTA 的 62 档、以及本页最后
+// 两处青绿的去向。
+// ---------------------------------------------------------------------------
+const peWxml = read('pages/product-edit/product-edit.wxml')
+const peWxss = read('pages/product-edit/product-edit.wxss')
+
+assert.ok(
+  appWxss.indexOf('--color-neutral-300:') >= 0,
+  'chip/add 的描边色 neutral/300 3:17 要进 app.wxss'
+)
+assert.ok(
+  /\.chip\.add\s*\{/.test(appWxss),
+  'chip 铁律第五档（白底 + neutral/300 描边 = ＋添加）落在 app.wxss，不留在页面里'
+)
+assert.ok(peWxml.indexOf('class="page"') >= 0, '商品编辑根节点要 class="page"')
+assert.ok(peWxml.indexOf('js-pe-kind-finished') < 0, '商品类型分段控件本批拿掉（稿 UX注释 n1）')
+assert.ok(peWxml.indexOf('js-pe-save') >= 0, '保存钩子留着')
+assert.ok(peWxml.indexOf('js-pe-remove') >= 0, '删除钩子留着')
+assert.ok(
+  peWxss.indexOf('.save-bar') >= 0 && peWxss.indexOf('position: fixed') >= 0,
+  '保存钮钉底栏（稿 bottom-cta 4:997）'
+)
+assert.ok(
+  peWxss.indexOf('#ECFDF5') < 0,
+  '毛利预览的青绿底块本批清掉（稿 4:756 是一行 muted 小字）'
+)
+assert.ok(
+  peWxss.indexOf('var(--fs-sm)') < 0 && peWxss.indexOf('var(--fs-md)') < 0
+    && peWxss.indexOf('var(--tap-sm)') < 0,
+  'product-edit.wxss 脱离 --fs-sm / --fs-md / --tap-sm 三个 A2 待删的旧别名'
+)
+assert.ok(
+  !fs.existsSync(path.join(root, 'utils/sku-card-view.js')),
+  'sku-card-view 本批删掉'
+)
+
 console.log('ui-scale tests passed')
