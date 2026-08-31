@@ -4,6 +4,12 @@ const records = require('./ledger-records')
 const migrate = require('./ledger-migrate')
 
 const NOT_MEMBER = '不是该店成员'
+const ONLY_OWNER_LEDGER = '只有店主能清空、恢复或重灌账本'
+// 要店主才能做的写操作。判据是「会整本换账套」，不是「危险」—— 删商品、删记录
+// 同样不可逆，但它们是日常记账的一部分，收进来会把店员挡在正常工作之外。
+// 与 requireOwner 分开：那个的报错文案写死成「只有店主能改成员」，用在这里
+// 会给出指错方向的提示。
+const OWNER_ONLY_MUTATIONS = ['clearAll', 'restoreCleared', 'loadSeed']
 
 function publicShop(shop, role) {
   return {
@@ -1086,7 +1092,17 @@ async function dispatchAction(input) {
   // 单事务写入量：ledgers 1 个 + 目标记录 1 条 + （改销售单/退货时）该销售单的全部退货单。
   const outcome = await db.runTransaction(async function (tx) {
     const members = await membersOfShop(db, tx, shopId)
-    requireMember(members, shopId, openid)
+    const actor = requireMember(members, shopId, openid)
+    // 破坏性动作要店主。这三个都会**整本换账套**，不是日常记账：clearAll 清空、
+    // restoreCleared 拿快照盖回去、loadSeed 灌演示数据。在此之前它们只过
+    // requireMember，任何店员都能清空整店账本 —— 客户端把按钮藏起来只是 UX，
+    // 直接调云函数照样能过。
+    //
+    // **不要顺手把账本升级那三个运维动作也收进来**：它们故意不做 owner 闸，
+    // 理由见上面 isPlatformAction 那段（平台运营方不是任何一家店的成员）。
+    if (OWNER_ONLY_MUTATIONS.indexOf(action) >= 0 && actor.role !== 'owner') {
+      throw new Error(ONLY_OWNER_LEDGER)
+    }
     let current = await tx.getLedger(shopId)
     if (!current) {
       throw new Error('店铺账本不存在')
@@ -1411,6 +1427,8 @@ async function migrateLocalShard(db, shopId, openid, payload, now, nextId) {
 
 module.exports = {
   NOT_MEMBER: NOT_MEMBER,
+  ONLY_OWNER_LEDGER: ONLY_OWNER_LEDGER,
+  OWNER_ONLY_MUTATIONS: OWNER_ONLY_MUTATIONS,
   API_VERSION: API_VERSION,
   PLATFORM_ACTIONS: PLATFORM_ACTIONS,
   dispatch: dispatch,

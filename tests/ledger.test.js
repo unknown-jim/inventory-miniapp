@@ -453,6 +453,24 @@ async function rejects(promise, re) {
     /请选择店铺/
   )
 
+  // 换账套的三个写操作要店主。在补这一闸之前它们只过 requireMember，
+  // staff-c 直接调云函数就能清空整店账本 —— 客户端把按钮藏起来只是 UX。
+  await rejects(
+    call(db, ids, 'staff-c', 'clearAll', shopA),
+    /只有店主能清空、恢复或重灌账本/
+  )
+  await rejects(
+    call(db, ids, 'staff-c', 'restoreCleared', shopA),
+    /只有店主能清空、恢复或重灌账本/
+  )
+  await rejects(
+    call(db, ids, 'staff-c', 'loadSeed', shopA),
+    /只有店主能清空、恢复或重灌账本/
+  )
+  // 闸只挡这三个，不能顺手把店员挡在日常记账之外。
+  const staffStillWrites = await call(db, ids, 'staff-c', 'saveCustomer', shopA, { name: '店员记的客户' })
+  assert.ok(staffStillWrites.result.customer.id, 'staff should still be able to record day-to-day')
+
   const tempShop = await call(db, ids, 'user-a', 'createShop', '', { name: '临时店' })
   await call(db, ids, 'user-a', 'deleteShop', tempShop.shop.id)
   const shopsAfterTemp = await call(db, ids, 'user-a', 'listShops')
