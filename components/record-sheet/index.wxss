@@ -172,6 +172,17 @@
   text-align: center;
 }
 
+/* 固定高之后才出现的新差异：空态文案自身只有一行高，贴在 320px 外壳的顶部，
+   下面一大片空白。稿 11:55 / 11:73 的空态是在这块区域里**垂直居中**的。
+   只有在外壳里的那几个 .rs-empty 要居中；外壳之外没有别处用它。 */
+.rs-picker-body > .rs-empty {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 /* picker 列表区**固定高**，不随内容涨落 —— 稿 UX注释/骨架 的 n-picker列表高。
    外壳罩住 loading / 列表 / 空态三个分支，所以搜不到结果时不会从满高塌成一行文案。
    选客户和选商品两个 picker 带搜索框，满足条件的行随输入变化；若高度跟着变，
