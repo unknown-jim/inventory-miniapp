@@ -1,4 +1,18 @@
 page {
+  /* 旧档位。2026-08-26 起 docs/ui-scale.md 已废止「正文 36rpx、可点 96rpx」这一套，
+     这里保留为别名过渡，新代码一律不要再用；等 pages 全部迁完由收尾批统一删除。
+     --chip-min 已并入 --tap-min（88rpx），0b 批起全仓零消费，同样保留待删。
+
+     --fs-hero 是唯一还带着旧值的名字：文档定 80rpx，这里仍是 48rpx。0b 批刻意不动它，
+     因为它的 5 个消费点语义互不相同，翻值会一次改错三处：
+       · pages/index/index.wxss 的 .hero-title 与 .hero-profit-num 才是文档说的看板 hero，
+         但改到 80rpx 之前必须先落地文档要求的按位数降档 class，否则 549 万那种
+         13 字符金额在首屏排不下。
+       · pages/customer-edit/customer-edit.wxss 的 .debt-num 是客户欠款，
+         文档 2026-08-30 已把它迁到 --fs-hero-md（68rpx），不是 --fs-hero。
+       · pages/products 与 pages/product-detail 的 .thumb-text 是商品图占位文字，
+         根本不属于 hero 档，48rpx 提到 80rpx 会把两列图卡里的占位字撑爆。
+     交给各自的逐屏批处理。tests/record-sheet.test.js 有断言钉着 48rpx。 */
   --fs-xs: 32rpx;
   --fs-sm: 34rpx;
   --fs-md: 36rpx;
@@ -6,22 +20,16 @@ page {
   --fs-xl: 44rpx;
   --fs-hero: 48rpx;
   --tap-sm: 96rpx;
-  --tap-md: 104rpx;
-  --tap-lg: 112rpx;
   --chip-min: 80rpx;
 
-  /* docs/ui-scale.md（2026-08-26 改版）的完整档位表。补全而不是只补本批要用的几个：
-     文档描述的这套 token 在代码里一个都不存在，每一批 UI 都会撞到同一个洞。
-     **旧的 --fs-xs/sm/md/lg/xl 和 --tap-sm/md/lg 一个都没改**：把它们重指到新值
-     会一次性改掉每一页的字号和行高，那是独立的一批迁移，不该搭在面板这批里。
-
-     三个名字在旧表里已被占用、值又对不上，本批一律不重定义（重定义会当场改掉
-     不在本批范围内的页面）：
-       · --fs-hero  文档 80rpx / 这里 48rpx，4 处消费（index.wxss:43,53、
-         customer-edit.wxss:15、products.wxss:62）→ 原样留着，登记为遗留。
-       · --tap-md   文档 96rpx / 这里 104rpx。文档的 --tap-lg(104rpx) 恰好等于
-         这里的 --tap-md，主按钮就用它，用处已标注。
-       · --tap-lg   文档 104rpx / 这里 112rpx。 */
+  /* docs/ui-scale.md（2026-08-26 改版）的完整档位表，值与文档表格逐格对齐。
+     0b 批把 --tap-md 与 --tap-lg 这两个名字从旧值翻到文档值：
+       · --tap-md  104rpx -> 96rpx （输入框、次级按钮、可点列表行）
+       · --tap-lg  112rpx -> 104rpx（主按钮、底部固定 CTA）
+     两处按设计稿把数值钉死的消费点已同批改绑，视觉零变化：
+       · pages/index 的记一笔主入口改用 --tap-lg，仍是 104rpx = 稿 4:983 的 52px。
+       · pages/records 的 FAB 改写字面量 112rpx，稿 4:985 是 56×56，
+         新档位表里没有这一档，不该再借 --tap-lg 的数值。 */
   --fs-caption: 24rpx;
   --fs-label: 26rpx;
   --fs-body: 28rpx;
@@ -33,6 +41,8 @@ page {
   --fs-hero-sm: 56rpx;
   --fs-hero-md: 68rpx;
   --tap-min: 88rpx;
+  --tap-md: 96rpx;
+  --tap-lg: 104rpx;
 
   /* 颜色取自设计稿 Semantic 层（ui-scale.md 只管字号热区密度，没有颜色表）。
      0a 批起，app.wxss 的共用类全部消费这些变量，不再写死颜色。
@@ -67,7 +77,7 @@ page {
   min-height: 100%;
   background: var(--color-bg-page);
   color: var(--color-text-primary);
-  font-size: var(--fs-md);
+  font-size: var(--fs-body);
   box-sizing: border-box;
 }
 
@@ -81,7 +91,7 @@ button::after {
 
 .page {
   padding: var(--page-pad) var(--page-pad) calc(var(--page-pad) * 2);
-  font-size: var(--fs-md);
+  font-size: var(--fs-body);
 }
 
 .card {
@@ -96,13 +106,13 @@ button::after {
   align-items: center;
   justify-content: space-between;
   margin: 36rpx 8rpx var(--space-md);
-  font-size: var(--fs-lg);
+  font-size: var(--fs-title);
   font-weight: 600;
 }
 
 .muted {
   color: var(--color-text-muted);
-  font-size: var(--fs-sm);
+  font-size: var(--fs-label);
 }
 
 .row {
@@ -120,7 +130,7 @@ button::after {
   background: var(--color-fill-action);
   color: var(--color-text-on-action);
   border-radius: 16rpx;
-  font-size: var(--fs-lg);
+  font-size: var(--fs-title);
   font-weight: 600;
 }
 
@@ -131,12 +141,12 @@ button::after {
 }
 
 .btn-ghost {
-  height: var(--tap-sm);
-  line-height: var(--tap-sm);
+  height: var(--tap-md);
+  line-height: var(--tap-md);
   background: var(--color-fill-ghost);
   color: var(--color-text-primary);
   border-radius: 14rpx;
-  font-size: var(--fs-md);
+  font-size: var(--fs-body);
 }
 
 .btn-danger {
@@ -145,14 +155,14 @@ button::after {
   background: #FEF2F2;
   color: #DC2626;
   border-radius: 14rpx;
-  font-size: var(--fs-md);
+  font-size: var(--fs-body);
 }
 
 .tag {
   display: inline-block;
   padding: var(--space-xs) var(--space-md);
   border-radius: 8rpx;
-  font-size: var(--fs-xs);
+  font-size: var(--fs-caption);
 }
 
 .tag-alert {
@@ -233,14 +243,14 @@ button::after {
 .chip {
   display: flex;
   align-items: center;
-  min-height: var(--chip-min);
+  min-height: var(--tap-min);
   padding: var(--space-sm) 28rpx;
   box-sizing: border-box;
   background: var(--color-fill-ghost);
   border: 2rpx solid transparent;
   border-radius: 999rpx;
   color: var(--color-neutral-600);
-  font-size: var(--fs-sm);
+  font-size: var(--fs-body);
   white-space: normal;
   line-height: 1.3;
 }
@@ -263,7 +273,7 @@ button::after {
 
 .field-label {
   color: var(--color-text-muted);
-  font-size: var(--fs-sm);
+  font-size: var(--fs-label);
   margin-bottom: var(--space-sm);
 }
 
@@ -272,7 +282,7 @@ button::after {
   padding: 0 var(--space-lg);
   background: var(--color-fill-ghost);
   border-radius: 14rpx;
-  font-size: var(--fs-md);
+  font-size: var(--fs-body);
 }
 
 .field-textarea {
@@ -290,7 +300,7 @@ button::after {
   background: var(--color-fill-ghost);
   border-radius: 40rpx;
   margin-bottom: 20rpx;
-  font-size: var(--fs-md);
+  font-size: var(--fs-body);
 }
 
 .empty {
@@ -300,7 +310,7 @@ button::after {
 }
 
 .empty-title {
-  font-size: var(--fs-lg);
+  font-size: var(--fs-title);
   color: var(--color-text-primary);
   margin-bottom: var(--space-sm);
 }
@@ -320,7 +330,7 @@ button::after {
 }
 
 .stat-num {
-  font-size: var(--fs-lg);
+  font-size: var(--fs-amount-lg);
   font-weight: 700;
 }
 
@@ -344,7 +354,7 @@ button::after {
 .action-strip .btn-ghost,
 .action-strip .btn-primary {
   height: auto;
-  min-height: var(--tap-sm);
+  min-height: var(--tap-md);
   line-height: 1.3;
   padding-top: var(--space-sm);
   padding-bottom: var(--space-sm);
@@ -359,7 +369,7 @@ button::after {
   border: 2rpx solid var(--color-border-brand);
   color: var(--color-text-primary);
   border-radius: 16rpx;
-  font-size: var(--fs-lg);
+  font-size: var(--fs-body);
   white-space: normal;
 }
 
@@ -383,7 +393,7 @@ button::after {
 .seg-item {
   flex: 1 1 28%;
   min-width: 160rpx;
-  min-height: var(--tap-sm);
+  min-height: var(--tap-md);
   padding: var(--space-sm) var(--space-md);
   box-sizing: border-box;
   display: flex;
@@ -394,7 +404,7 @@ button::after {
   border: 2rpx solid transparent;
   border-radius: 14rpx;
   color: var(--color-neutral-500);
-  font-size: var(--fs-md);
+  font-size: var(--fs-body);
   white-space: normal;
   line-height: 1.3;
 }

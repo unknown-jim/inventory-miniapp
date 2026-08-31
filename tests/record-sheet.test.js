@@ -297,11 +297,14 @@ orderPicker.openOrderPicker().then(function () {
   ;['--fs-caption', '--fs-label', '--fs-body', '--fs-title', '--tap-min'].forEach(function (token) {
     assert.ok(appWxss.indexOf(token + ':') >= 0, 'app.wxss 缺少 ui-scale.md 的 ' + token)
   })
-  // --fs-hero 旧表是 48rpx、文档是 80rpx，本批不许动：看板 hero、客户编辑、
-  // 商品页三处在消费它，都不在本批范围内。
+  // --fs-hero 旧表是 48rpx、文档是 80rpx，逐屏批全部迁完之前不许动。实读 5 个消费点、
+  // 4 个页面，语义互不相同：pages/index 的 .hero-title 与 .hero-profit-num 才是看板
+  // hero（且要先有按位数降档的 class），pages/customer-edit 的 .debt-num 该走
+  // --fs-hero-md(68rpx)，pages/products 与 pages/product-detail 的 .thumb-text 是
+  // 图卡占位文字、根本不属于 hero 档。移交清单见 0b 批 PR 正文。
   assert.ok(
     /--fs-hero:\s*48rpx/.test(appWxss),
-    '--fs-hero 必须留在 48rpx；改成文档的 80rpx 会顺手改掉三个不在本批范围的页面'
+    '--fs-hero 必须留在 48rpx；改成文档的 80rpx 会一次改错 5 个消费点里的 3 个'
   )
 
   console.log('record-sheet tests passed')
