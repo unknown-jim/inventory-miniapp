@@ -1261,10 +1261,26 @@ async function assertSheetEmptyCentered(miniProgram, host, label) {
   const maxPx = screenWidth * 640 / 750
   const sheetEl = await waitInSheet(host, '.rs-sheet', label + ' 的面板本体')
   const sheetH = (await sheetEl.size()).height
-  const capPx = await miniProgram.evaluate(function () {
-    return wx.getSystemInfoSync().windowHeight * 0.8
-  })
+  // 上限直接读计算样式，不自己算 windowHeight * 0.8：实测计算值 537.067px 而自算
+  // 536.8px，差 0.27px，而总余量只有 3px —— 这个自造误差不该有；而且把 0.8 写死在
+  // 测试里等于和 CSS 的 80vh 有了两份真相。
+  const capPx = parseFloat(await sheetEl.style('max-height'))
   const squeezed = sheetH >= capPx - 2      // 顶到 80vh 才算发生让位
+  // **面板其余部分要有预算**（稿 n-面板其余预算）。面板离上限只剩 3px，所以在标题下
+  // 随手加一条两态都在的说明文字（wxss 一个字节不改）就会立刻顶到上限，把列表区从
+  // 332px 压到 291px、丢掉 12%，而「让位」那条裁定会把它当成合规放行 —— 从数学上看
+  // 它确实合规，区分不了「窗口矮」和「自己变胖」。换成「让位量 == 超出上限的量」那种
+  // 会计恒等式也一样放行。所以预算必须单独钉：grabber + 标题 + searchbar + 取消
+  // 合计不超过 390rpx（基线实测 388.5rpx）。
+  const chromePx = sheetH - bodyBox.height
+  const chromeBudgetPx = screenWidth * 390 / 750
+  assert.ok(
+    chromePx <= chromeBudgetPx,
+    label + '：面板除列表区之外的部分超预算 —— 实测 ' + Math.round(chromePx)
+      + 'px（' + Math.round(chromePx * 750 / screenWidth) + 'rpx），预算 '
+      + Math.round(chromeBudgetPx) + 'px（390rpx）。要加常驻元素先看预算够不够，'
+      + '不够得先减别的，不能默默吃掉列表区'
+  )
   if (!squeezed) {
     assert.ok(
       Math.abs(bodyBox.height - maxPx) <= 2,
