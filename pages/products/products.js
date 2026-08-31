@@ -80,6 +80,6 @@ Page({
   },
 
   goRecords() {
-    wx.navigateTo({ url: '/pages/records/records' })
+    wx.switchTab({ url: '/pages/records/records' })
   }
 })

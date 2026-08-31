@@ -123,14 +123,16 @@ function tapMain(action) {
   return { inst: inst, calls: wxStub.calls }
 }
 
-// 销售和进货现在还是 tabBar 页，只能 switchTab。**撤 tab 那批要把这两条连同
-// 组件里的 _goTab 一起改成 navigateTo**，页面不在 tabBar 里之后 switchTab 会直接 fail。
+// A3 批把 tabBar 收到 4 个（看板/商品/流水/客户），销售和进货已撤出 tabBar，
+// 是普通页，只能 navigateTo —— 它们不在 tabBar 里，switchTab 会直接 fail。
+// makeWx() 的 switchTab stub **故意留着**：谁把 switchTab 加回组件，下面两条
+// deepStrictEqual 会立刻红。
 const sale = tapMain('sale')
-assert.deepStrictEqual(sale.calls, [['switchTab', '/pages/sale/sale']], '销售没去销售页')
+assert.deepStrictEqual(sale.calls, [['navigateTo', '/pages/sale/sale']], '销售没去销售页')
 assert.strictEqual(sale.inst.closed, 1, '跳转后面板要关掉')
 
 const purchase = tapMain('purchase')
-assert.deepStrictEqual(purchase.calls, [['switchTab', '/pages/purchase/purchase']], '进货没去进货页')
+assert.deepStrictEqual(purchase.calls, [['navigateTo', '/pages/purchase/purchase']], '进货没去进货页')
 
 // 库存修正是展开二级，不是跳页
 const adjustTap = tapMain('adjust')

@@ -1492,9 +1492,8 @@ async function runRecordSheetProductPicker(miniProgram, home) {
 
 async function runRecordSheetFabEntry(miniProgram) {
   step('流水页：右下角 FAB 打开的是同一张面板')
-  // 流水页现在还不是 tabBar 页，所以走 navigateTo。tabBar 5→4 那批把流水升成 tab
-  // 之后，这里要改成 switchTab（和组件里 _goTab 那两处一起改）。
-  const records = await goto(miniProgram, 'navigateTo', '/pages/records/records', '流水页')
+  // 流水在 A3 批升成了 tab 页，只能 switchTab（navigateTo 到 tab 页会直接 fail）。
+  const records = await goto(miniProgram, 'switchTab', '/pages/records/records', '流水页')
   await waitFor(records, '.js-record-fab', '出现 .js-record-fab')
   const host = await openRecordSheet(records, '.js-record-fab', '流水页 FAB')
   const labels = await sheetRowLabels(host)
@@ -1512,7 +1511,10 @@ async function runRecordSheetFabEntry(miniProgram) {
 
 async function runSalePickerAndSlip(miniProgram) {
   step('销售：点选商品、客户，一分未收出库，核对送货单')
-  const sale = await goto(miniProgram, 'switchTab', '/pages/sale/sale', '销售页')
+  // 销售已撤出 tabBar，走 navigateTo。它不像 switchTab 会重置页面栈，所以先退回
+  // tab 根再进，保持和改版前一样的"从干净栈进入"前提（上一段停在进货页上）。
+  await backToTabRoot(miniProgram)
+  const sale = await goto(miniProgram, 'navigateTo', '/pages/sale/sale', '销售页')
   await waitPageReady(sale)
   await waitFor(sale, '.js-product-picker', '出现 .js-product-picker')
 
@@ -1565,7 +1567,7 @@ async function runSalePickerAndSlip(miniProgram) {
 
 async function runRecordSlipExport(miniProgram) {
   step('流水：打开销售记录，默认只读，再次打开送货单')
-  const records = await goto(miniProgram, 'navigateTo', '/pages/records/records', '流水页')
+  const records = await goto(miniProgram, 'switchTab', '/pages/records/records', '流水页')
   await waitFor(records, '.js-record-out', '出现 .js-record-out')
   const items = await records.$$('.js-record-out')
   assert.ok(items.length > 0, '流水里没有销售记录')
@@ -1688,7 +1690,7 @@ async function runRecordsLoadMore(miniProgram) {
   assert.ok(expectedTotal > 20, '前提：当前账套的流水超过一页（实为 ' + expectedTotal + ' 条）')
 
   await backToTabRoot(miniProgram)
-  const records = await goto(miniProgram, 'navigateTo', '/pages/records/records', '流水页')
+  const records = await goto(miniProgram, 'switchTab', '/pages/records/records', '流水页')
   await waitForData(records, function (data) { return data.loaded }, '流水页首屏加载完成')
   const first = await records.data()
   assert.strictEqual(first.list.length, 20, '首屏只给一页 20 条，不多给')
@@ -2071,7 +2073,9 @@ async function runPurchase(miniProgram) {
   assert.notStrictEqual(target.costPrice, unitPrice,
     '本次进价必须和原进价不同，否则「进价被改写」这条断言恒真、等于没测')
 
-  const purchase = await goto(miniProgram, 'switchTab', '/pages/purchase/purchase', '进货页')
+  // 进货已撤出 tabBar，走 navigateTo。理由同销售那一段：先退回 tab 根再进。
+  await backToTabRoot(miniProgram)
+  const purchase = await goto(miniProgram, 'navigateTo', '/pages/purchase/purchase', '进货页')
   await waitPageReady(purchase)
   await tapWhen(purchase, '.js-purchase-picker')
   await waitFor(purchase, '.js-purchase-item', '商品弹层里出现商品行')
@@ -2237,7 +2241,7 @@ async function runSaleReturn(miniProgram) {
   assert.ok(credited.paidAmount === 0,
     '前提：最新那张销售单应当是「一分未收」（runSalePickerAndSlip 做的），实收却是 '
       + credited.paidAmount + ' —— 用例顺序被改过的话这里要跟着改')
-  const list = await goto(miniProgram, 'navigateTo', '/pages/records/records', '流水页')
+  const list = await goto(miniProgram, 'switchTab', '/pages/records/records', '流水页')
   await waitFor(list, '.js-record-out', '流水里出现销售记录')
   await tapNth(list, '.js-record-out', 0, '最新一条销售')
   const detail = await waitForPage(miniProgram, 'pages/record-edit/record-edit', '销售流水详情页')
@@ -2441,9 +2445,9 @@ async function runConvert(miniProgram) {
 // WXSS 注释 bug（现在由 tests/wxss-wxml.test.js 静态拦着）。这里补运行时的网：
 // 从商品列表点卡片进详情、头卡与库存全景渲染正确、**四个动作按钮各自的落点**。
 //
-// 四个按钮里「去销售」「去进货」走的是 switchTab（product-detail.js 里写明了
-// 这两页现在还是 tabBar 页），switchTab 会把页面栈重置掉 —— 所以这两个放在最后测，
-// 中间需要回到详情页时直接带 id 重进。
+// 四个按钮里「去销售」「去进货」在 A3 批之后走 navigateTo（两页已撤出 tabBar）。
+// 它们不再重置页面栈，但这两个仍放在最后测、中间带 id 重进详情 —— 这个写法在
+// 压栈语义下照样成立，本批不改流程，只把注释说的机制改对。
 async function runProductDetail(miniProgram) {
   step('商品详情：从商品列表进详情，核对头卡与库存全景，再逐个验四个动作按钮的落点')
   const lists = await readLists(miniProgram)
@@ -2517,13 +2521,13 @@ async function runProductDetail(miniProgram) {
   }, '调整页拿到了 productId')
   await goBackTo(miniProgram, '商品详情页')
 
-  // 落点④「去进货」→ switchTab 到进货 tab。**页面栈在这里被重置**，
-  // 所以下一步要回详情只能重新带 id 进。
+  // 落点④「去进货」→ navigateTo 到进货页（已不是 tab）。下一步用带 id 重进详情，
+  // 这条路在压栈语义下一样通。
   await tapWhen(detail, '.js-detail-purchase')
   const purchase = await waitForPage(miniProgram, 'pages/purchase/purchase', '进货页（从详情「去进货」）')
   await waitPageReady(purchase)
 
-  // 落点⑤「去销售」→ switchTab 到销售 tab
+  // 落点⑤「去销售」→ navigateTo 到销售页（已不是 tab）
   const again = await goto(miniProgram, 'navigateTo',
     '/pages/product-detail/product-detail?id=' + target.id, '商品详情页（重进）')
   await waitPageReady(again)

@@ -58,6 +58,6 @@ Page({
 
   goSale(e) {
     getApp().setSelectedCustomer(e.currentTarget.dataset.id)
-    wx.switchTab({ url: '/pages/sale/sale' })
+    wx.navigateTo({ url: '/pages/sale/sale' })
   }
 })

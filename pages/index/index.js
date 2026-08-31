@@ -115,11 +115,14 @@ Page({
   },
 
   goRecords() {
-    wx.navigateTo({ url: '/pages/records/records' })
+    wx.switchTab({ url: '/pages/records/records' })
   },
 
   goTodaySales() {
-    wx.navigateTo({ url: '/pages/records/records?type=out' })
+    // 流水是 tab 页，switchTab 不支持 query，类型只能走 app 全局暂存交接
+    // （同 openGoods 用 setPendingInventoryFilter 带筛选进商品 tab 的既有做法）。
+    getApp().setPendingRecordType('out')
+    wx.switchTab({ url: '/pages/records/records' })
   },
 
   goProducts() {

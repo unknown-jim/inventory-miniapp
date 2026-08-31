@@ -163,18 +163,17 @@ assert.strictEqual(missingFiles.length, 0, 'referenced file missing on disk:\n' 
 assert.strictEqual(missingInclude.length, 0, 'referenced file not in packOptions.include:\n' + missingInclude.join('\n'))
 
 const tabList = appJson.tabBar && appJson.tabBar.list ? appJson.tabBar.list : []
-assert.strictEqual(tabList.length, 5, 'tabBar should have 5 items')
+assert.strictEqual(tabList.length, 4, 'tabBar should have 4 items')
 assert.deepStrictEqual(
   tabList.map(function (item) { return item.text }),
-  ['看板', '商品', '进货', '销售', '客户']
+  ['看板', '商品', '流水', '客户']
 )
 assert.deepStrictEqual(
   tabList.map(function (item) { return item.pagePath }),
   [
     'pages/index/index',
     'pages/products/products',
-    'pages/purchase/purchase',
-    'pages/sale/sale',
+    'pages/records/records',
     'pages/customers/customers'
   ]
 )
@@ -183,6 +182,20 @@ tabList.forEach(function (item) {
   assert.ok(
     item.selectedIconPath && fs.existsSync(path.join(root, item.selectedIconPath)),
     'missing selected tab icon: ' + item.selectedIconPath
+  )
+})
+
+// tabBar 5→4（A3 批）：进货、销售撤出一级导航，改由看板「记一笔」+ 流水页 FAB 承载。
+// 它们**不再是 tab 页**，但**必须仍在 pages 数组里**（AGENTS.md：不要顺手挪进分包）。
+// 这两条一起钉：只钉前者，有人把页面删了不会红；只钉后者，有人把 tab 加回来不会红。
+;['pages/purchase/purchase', 'pages/sale/sale'].forEach(function (page) {
+  assert.ok(
+    (appJson.pages || []).indexOf(page) >= 0,
+    page + ' 必须留在 app.json 的 pages 数组里（撤出 tabBar 不等于挪出主包）'
+  )
+  assert.ok(
+    !tabList.some(function (item) { return item.pagePath === page }),
+    page + ' 已在 A3 批撤出 tabBar，不要加回 tabBar.list'
   )
 })
 

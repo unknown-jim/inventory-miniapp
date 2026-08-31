@@ -115,15 +115,14 @@ Page({
     this.setData({ imageFailed: true })
   },
 
-  // 「去销售」「去进货」这两页现在还是 tabBar 页，必须 switchTab。
-  // 另一批次会把 tabBar 从 5 个收到 4 个、把这两页撤下 tabBar，
-  // 届时这两处要跟着改成 navigateTo——不要提前改。
+  // 「去销售」「去进货」在 tabBar 收到 4 个之后是普通页，走 navigateTo。
+  // 和 switchTab 不同，navigateTo 不重置页面栈，从落点页能直接返回本详情页。
   goSale() {
-    wx.switchTab({ url: '/pages/sale/sale' })
+    wx.navigateTo({ url: '/pages/sale/sale' })
   },
 
   goPurchase() {
-    wx.switchTab({ url: '/pages/purchase/purchase' })
+    wx.navigateTo({ url: '/pages/purchase/purchase' })
   },
 
   // 设计要求「调价」进编辑页并锚定价格区（售价/进价聚焦），锚定由后续批次补；
