@@ -44,6 +44,10 @@
       <text class="muted">实收</text>
       <text class="slip-val js-slip-paid">¥{{slip.paidText}}</text>
     </view>
+    <view class="slip-row" wx:if="{{slip.hasPrepayUsed}}">
+      <text class="muted">预收抵扣</text>
+      <text class="slip-val js-slip-prepay">¥{{slip.prepayUsedText}}</text>
+    </view>
     <view class="slip-total">
       <text class="muted">应收</text>
       <text class="slip-total-num">¥{{slip.dueText}}</text>

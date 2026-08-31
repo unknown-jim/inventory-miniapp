@@ -460,11 +460,19 @@ function layoutTable(cmds, slip, cols, y, measure) {
 // 画布跟着窄，字号就能再大一点；合计本身也不再受列宽约束，可以用最大的字。
 function summaryRows(slip) {
   // 结算方式去掉了：应收 1582 / 实收 0 已经把赊账说清楚，再写一遍是废话。
-  return [
+  const rows = [
     { label: '总数', value: qtyTotalText(slip.lines) + ' 件' },
     { label: '应收', value: '¥' + slip.dueText },
     { label: '实收', value: '¥' + slip.paidText }
   ]
+  // 【G1】抵了预收才多这一格。没抵的单子（含全部老单）格数与改动前逐字相同，
+  // 所以 tests/slip-image.test.js 那批静态钉子一条都不动。
+  // 布局不用跟着改：layoutSummary 的 cellW = boxW / main.length 是现算的，
+  // 多一格自己会窄，数字宽度由 fitFont 兜住。
+  if (slip.hasPrepayUsed) {
+    rows.push({ label: '预收抵扣', value: '¥' + slip.prepayUsedText })
+  }
+  return rows
 }
 
 function debtRow(slip) {

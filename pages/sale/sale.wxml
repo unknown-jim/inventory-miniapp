@@ -1,21 +1,32 @@
+<!-- 销售出库。稿 Screen/05 销售出库 3:704 + Col/注释与弹层 3:731。
+     首屏自上而下：客户卡 / 经手人备注折叠行 / 商品字段 / 规格卡 / 数量+售价 /
+     加入清单 / 清单折叠行；底部固定 = 实收摘要行 + 确认销售（稿 bottom-cta 4:112）。
+     实收、清单展开、商品 picker、客户 picker 四个弹层共用 .mask + .sheet。 -->
 <view class="page">
   <page-loading wx:if="{{pageLoading}}" />
   <block wx:else>
-  <view class="card">
-    <view class="field">
-      <view class="field-head">
-        <view class="field-label">客户</view>
-        <text class="link" bindtap="goCustomers">管理</text>
-      </view>
-      <view class="field-input picker js-customer-picker" bindtap="openCustomerPicker">{{customerName}}</view>
+
+  <!-- 稿 card/客户 3:708：白卡 r12，左名称 + 副行账户句，右 chevron。
+       副行口径见 n-客户卡预收 10:155：有欠款只写欠款，无欠款有预收才写「预收可抵」。 -->
+  <view class="cust-card js-customer-picker" bindtap="openCustomerPicker">
+    <view class="cust-col">
+      <view class="cust-name">{{customerName}}</view>
+      <view class="cust-sub">{{customerSub}}</view>
+      <view wx:if="{{customerMeta}}" class="cust-sub">{{customerMeta}}</view>
     </view>
-    <view class="customer-meta" wx:if="{{customerPhone || customerAddress || hasDebt}}">
-      {{customerPhone}}<text wx:if="{{customerPhone && customerAddress}}"> · </text>{{customerAddress}}
-      <text wx:if="{{hasDebt}}"> · 当前欠款 ¥{{receivableText}}</text>
-    </view>
+    <view class="chev"></view>
+  </view>
+
+  <!-- 稿 row/经手人备注·收起 4:653 + n10 4:690：默认收起，展开 = 经手人输入 + 成员 chips + 备注框 -->
+  <view class="fold-row js-info-row" bindtap="toggleInfo">
+    <text class="fold-title">经手人 · 备注</text>
+    <text class="fold-hint">{{infoHint}}</text>
+    <view class="chev"></view>
+  </view>
+  <view wx:if="{{infoOpen}}" class="card info-card">
     <view class="field">
       <view class="field-label">经手人</view>
-      <input class="field-input" maxlength="32" value="{{operatorName}}" bindinput="onOperatorName" placeholder="可选，默认自己" hidden="{{showPicker || showCustomerPicker || showSlip}}" />
+      <input class="field-input" maxlength="32" value="{{operatorName}}" bindinput="onOperatorName" placeholder="可选，默认自己" hidden="{{showPicker || showCustomerPicker || showSlip || showPaid || showCart}}" />
       <view wx:if="{{members.length}}" class="muted field-hint">点选本店成员，也可手写</view>
       <view class="chips" wx:if="{{members.length}}">
         <view
@@ -27,102 +38,164 @@
         >{{item.label}}</view>
       </view>
     </view>
-    <view class="field">
+    <view class="field last">
       <view class="field-label">备注</view>
-      <input class="field-input" data-field="remark" value="{{remark}}" bindinput="onField" placeholder="可选，会写在送货单上" hidden="{{showPicker || showCustomerPicker || showSlip}}" />
+      <input class="field-input" data-field="remark" value="{{remark}}" bindinput="onField" placeholder="可选，会写在送货单上" hidden="{{showPicker || showCustomerPicker || showSlip || showPaid || showCart}}" />
     </view>
   </view>
 
-  <view class="card add-card">
-    <view class="field">
-      <view class="field-label">商品</view>
-      <view class="field-input picker js-product-picker" bindtap="openPicker">{{productName}}</view>
-    </view>
-    <view class="meta">当前可出 {{stockText}} · 进价 ¥{{costText}}</view>
-    <view class="spec-block" wx:if="{{hasSpecs}}">
-      <view class="field" wx:if="{{colors.length}}">
-        <view class="field-label">{{specAxis1}}</view>
-        <view class="chips">
-          <view
-            class="chip {{item.on ? 'on' : ''}}"
-            wx:for="{{colorOptions}}"
-            wx:key="value"
-            data-value="{{item.value}}"
-            bindtap="pickColor"
-          >{{item.value}}</view>
-        </view>
-      </view>
-      <view class="field" wx:if="{{sizes.length}}">
-        <view class="field-label">{{specAxis2}}</view>
-        <view class="chips">
-          <view
-            class="chip {{item.on ? 'on' : ''}} {{item.low ? 'low' : ''}}"
-            wx:for="{{sizeOptions}}"
-            wx:key="value"
-            data-value="{{item.value}}"
-            bindtap="pickSize"
-          >{{item.value}} {{item.stock}}</view>
-        </view>
-      </view>
-    </view>
-    <view class="field-row">
-      <view class="field half">
-        <view class="field-label">数量</view>
-        <input class="field-input js-qty" type="digit" data-field="qty" value="{{qty}}" bindinput="onField" placeholder="0" hidden="{{showPicker || showCustomerPicker || showSlip}}" />
-      </view>
-      <view class="field half">
-        <view class="field-label">本次售价</view>
-        <input class="field-input" type="digit" data-field="unitPrice" value="{{unitPrice}}" bindinput="onField" placeholder="0.00" hidden="{{showPicker || showCustomerPicker || showSlip}}" />
-      </view>
-    </view>
-    <view class="line-amount">本行 ¥{{lineAmountText}}</view>
-    <button class="btn-ghost add-btn js-add-cart" bindtap="addCart" hidden="{{showPicker || showCustomerPicker || showSlip}}">加入清单</button>
+  <!-- 稿 picker/字段/selected 4:52：neutral/100 底 + border/default 描边 + chevron -->
+  <view class="pick-field js-product-picker" bindtap="openPicker">
+    <text class="pick-value">{{productName}}</text>
+    <view class="chev"></view>
   </view>
 
-  <view class="card cart-card" wx:if="{{cart.length}}">
-    <view class="cart-head">本单商品 {{cart.length}}</view>
-    <view class="cart-item" wx:for="{{cart}}" wx:key="key">
-      <view>
-        <view class="item-name">{{item.name}}</view>
-        <view class="muted">
-          <block wx:if="{{item.specText}}">{{item.specText}} · </block>{{item.qtyText}} 件 × ¥{{item.priceText}}
-        </view>
-      </view>
-      <view class="cart-right">
-        <view class="cart-amount">¥{{item.amountText}}</view>
-        <text class="link" data-key="{{item.key}}" bindtap="removeCart">删除</text>
-      </view>
-    </view>
-  </view>
-
-  <view class="card total-card">
-    <view class="total">
-      <view>
-        <view class="muted">本单应收</view>
-        <view class="total-num">¥{{amountText}}</view>
-      </view>
-      <view class="right">
-        <view class="muted">预估毛利</view>
-        <view class="profit-num">¥{{profitText}}</view>
-      </view>
-    </view>
-    <view class="field paid-field">
-      <view class="field-label">本单实收</view>
-      <input class="field-input js-paid" type="digit" value="{{paidAmount}}" bindinput="onPaidInput" placeholder="0.00" hidden="{{showPicker || showCustomerPicker || showSlip}}" />
-      <view class="muted field-hint">默认收满全款；收多少填多少，差额记成这位客户的欠款</view>
+  <!-- 稿 picker/格选择器 3:716：白卡 r12，label「选择规格」+ chips 折行 + 琥珀说明。
+       两条轴仍然分两行（n5 3:767「双规格级联：先选规格一取值、再选规格二取值」）。 -->
+  <view class="card spec-card" wx:if="{{hasSpecs}}">
+    <view class="spec-label">选择规格</view>
+    <view class="field" wx:if="{{colors.length}}">
+      <view class="field-label">{{specAxis1}}</view>
       <view class="chips">
-        <view class="chip js-paid-full" bindtap="fillPaidFull">收满 ¥{{amountText}}</view>
-        <view class="chip js-paid-none" bindtap="fillPaidNone">一分未收</view>
+        <view
+          class="chip {{item.on ? 'on' : ''}}"
+          wx:for="{{colorOptions}}"
+          wx:key="value"
+          data-value="{{item.value}}"
+          bindtap="pickColor"
+        >{{item.value}}</view>
       </view>
     </view>
-    <view class="paid-note over" wx:if="{{paidOver}}">实收比应收多 ¥{{overText}}，多收的钱请单独记收款</view>
-    <view class="paid-note debt" wx:elif="{{hasNewDebt}}">本单欠款 ¥{{debtText}}</view>
-    <view class="paid-note done" wx:else>本单已收讫</view>
-    <view class="muted tip">可加入多种商品，确认后开一张送货单。实收少于应收要先选客户。待加工款先扣同一格现货，不够再扣待加工库存。</view>
+    <view class="field last" wx:if="{{sizes.length}}">
+      <view class="field-label">{{specAxis2}}</view>
+      <view class="chips">
+        <view
+          class="chip {{item.on ? 'on' : ''}} {{item.low ? 'low' : ''}}"
+          wx:for="{{sizeOptions}}"
+          wx:key="value"
+          data-value="{{item.value}}"
+          bindtap="pickSize"
+        >{{item.value}} {{item.stock}}</view>
+      </view>
+    </view>
+    <!-- 稿 13:139;3:429：仅现货不足、真的要从半成品扣时才出现（n9 4:19 / n16 7:33） -->
+    <view wx:if="{{blankNote}}" class="blank-note js-blank-note">{{blankNote}}</view>
   </view>
 
-  <button class="btn-primary save-btn js-sale-submit" bindtap="submit" hidden="{{showPicker || showCustomerPicker || showSlip}}">确认出库</button>
+  <!-- 稿 field-row/数量+售价 7:1：数量框内右侧带「件 · 可出 N」（unit 7:6） -->
+  <view class="field-row">
+    <view class="field half">
+      <view class="field-label">数量</view>
+      <view class="qty-box">
+        <input class="qty-input js-qty" type="digit" data-field="qty" value="{{qty}}" bindinput="onField" placeholder="0" hidden="{{showPicker || showCustomerPicker || showSlip || showPaid || showCart}}" />
+        <text class="qty-unit">件 · 可出 {{stockText}}</text>
+      </view>
+    </view>
+    <view class="field half">
+      <view class="field-label">本次售价</view>
+      <view class="qty-box">
+        <input class="qty-input price-input" type="digit" data-field="unitPrice" value="{{unitPrice}}" bindinput="onField" placeholder="0.00" hidden="{{showPicker || showCustomerPicker || showSlip || showPaid || showCart}}" />
+      </view>
+    </view>
+  </view>
+  <view class="line-amount">本行 ¥{{lineAmountText}}</view>
 
+  <!-- 稿 13:614：清单累计超出现货且半成品不够时的红字拦截（n16 7:33） -->
+  <view wx:if="{{overNote}}" class="over-note js-over-note">{{overNote}}</view>
+
+  <!-- 稿 btn/加入清单 4:65 / 拦截样张 13:615：禁用走 app.wxss 的 .btn-primary[disabled] 实底档 -->
+  <button class="add-btn js-add-cart" bindtap="addCart" disabled="{{!canAdd}}" hidden="{{showPicker || showCustomerPicker || showSlip || showPaid || showCart}}">加入清单</button>
+
+  <!-- 稿 row/销售清单·折叠 7:11：点开走弹层，不在首屏内联撑开（n15 7:32） -->
+  <view wx:if="{{cart.length}}" class="fold-row cart-row js-cart-row" bindtap="openCart">
+    <text class="fold-title">{{cartHead}}</text>
+    <text class="cart-total">合计 ¥{{amountText}}</text>
+    <view class="chev"></view>
+  </view>
+
+  <!-- 底栏占位：底栏是 fixed，正常文档流要留出等高的空白，否则清单行会被盖住 -->
+  <view class="cta-hold"></view>
+
+  <!-- 稿 bottom-cta 4:112：hairline + 实收摘要行 + 确认销售 + 安全区 -->
+  <view class="cta-bar">
+    <view class="cta-inner">
+      <view class="paid-row js-paid-row" bindtap="openPaid">
+        <view class="paid-left">
+          <text class="paid-k">实收</text>
+          <text class="paid-v">¥{{paidAmount || '0.00'}}</text>
+        </view>
+        <text class="paid-hint">{{summaryHint}}</text>
+        <view class="chev"></view>
+      </view>
+      <button class="btn-primary submit-btn js-sale-submit" bindtap="submit" disabled="{{!cart.length && !canAdd}}" hidden="{{showPicker || showCustomerPicker || showSlip || showPaid || showCart}}">确认销售</button>
+    </view>
+  </view>
+
+  <!-- ============ 实收 sheet。稿 7:25 / 7:404 / 10:180 / 7:230 四态同一套结构 ============ -->
+  <view wx:if="{{showPaid}}" class="mask" bindtap="closePaid">
+    <view class="sheet" catchtap="closePickerKeep">
+      <view class="sheet-title center">{{sheetTitle}}</view>
+      <view class="pay-row">
+        <view class="pay-total">合计 ¥{{amountText}}</view>
+        <view class="muted">共 {{qtyTotal}} 件</view>
+      </view>
+
+      <!-- 稿 hint/预收未用 13:330：抵扣关且客户有余额时出现，整行可点打开抵扣 -->
+      <view wx:if="{{customerPrepay > 0 && !prepayOn}}" class="prepay-hint js-prepay-hint" bindtap="togglePrepay">预收可抵 ¥{{prepayText}} · 本单未用（可点打开抵扣）</view>
+
+      <!-- 稿 row/预收抵扣 7:424：k + 绿色负数 + 44 热区的 × 关抵扣 -->
+      <view wx:if="{{prepayOn && prepayUsed > 0}}" class="prepay-row">
+        <text class="prepay-k">预收款抵扣（{{customerName}}预存）</text>
+        <text class="prepay-v">−¥{{prepayUsedText}}</text>
+        <view class="prepay-x js-prepay-off" catchtap="togglePrepay">×</view>
+      </view>
+
+      <input class="paid-input js-paid" type="digit" value="{{paidAmount}}" bindinput="onPaidInput" placeholder="0.00" hidden="{{showPicker || showCustomerPicker || showSlip}}" />
+
+      <!-- 稿 快捷chips 4:658 / 7:408 / 10:184：第三枚只在客户有预收余额时出现（n11 4:691） -->
+      <view class="chips">
+        <view class="chip js-paid-full" bindtap="fillPaidFull">收满 ¥{{cashDueText}}</view>
+        <view class="chip js-paid-none" bindtap="fillPaidNone">一分未收</view>
+        <view wx:if="{{customerPrepay > 0}}" class="chip {{prepayOn ? 'on' : ''}} js-paid-prepay" bindtap="togglePrepay">抵预收 ¥{{prepayText}}</view>
+      </view>
+
+      <view wx:if="{{feedbackText}}" class="pay-feedback {{feedbackDanger ? 'danger' : ''}} js-paid-feedback">{{feedbackText}}</view>
+
+      <!-- 稿 散客拦截态 7:230 的 btn/选客户 13:522 -->
+      <button wx:if="{{paidBlocked && !customerId}}" class="pick-cust-btn js-paid-pick-cust" bindtap="goPickCustomer">选客户</button>
+
+      <button class="btn-primary sheet-confirm js-paid-confirm" bindtap="confirmPaid" disabled="{{paidBlocked}}" hidden="{{showPicker || showCustomerPicker || showSlip}}">{{confirmText}}</button>
+      <view class="sheet-cancel js-paid-cancel" bindtap="closePaid">取消</view>
+    </view>
+  </view>
+
+  <!-- ============ 清单展开 sheet。稿 card/销售清单·展开态 3:746 + 清单行 3:722 ============ -->
+  <view wx:if="{{showCart}}" class="mask" bindtap="closeCart">
+    <view class="sheet" catchtap="closePickerKeep">
+      <view class="sheet-title">{{cartHead}}</view>
+      <scroll-view scroll-y class="sheet-list">
+        <view class="cart-item" wx:for="{{cart}}" wx:key="key">
+          <view class="cart-head">
+            <view class="cart-col">
+              <view class="item-name">{{item.name}}</view>
+              <view class="muted"><block wx:if="{{item.specText}}">{{item.specText}}</block></view>
+            </view>
+            <text class="cart-amount">¥{{item.amountText}}</text>
+          </view>
+          <view class="cart-ctrl">
+            <view class="step-btn js-cart-minus" data-key="{{item.key}}" bindtap="stepDown">−</view>
+            <input class="step-input js-cart-qty" type="digit" value="{{item.qtyText}}" data-key="{{item.key}}" bindinput="onCartQty" hidden="{{showPicker || showCustomerPicker || showSlip}}" />
+            <view class="step-btn js-cart-plus" data-key="{{item.key}}" bindtap="stepUp">＋</view>
+            <view class="cart-spacer"></view>
+            <view class="del-btn js-cart-del {{cart.length <= 1 ? 'off' : ''}}" data-key="{{item.key}}" bindtap="removeCart">×</view>
+          </view>
+        </view>
+      </scroll-view>
+      <view class="sheet-cancel js-cart-close" bindtap="closeCart">收起</view>
+    </view>
+  </view>
+
+  <!-- ============ 商品 picker。稿 sheet/商品picker 4:667 ============ -->
   <view wx:if="{{showPicker}}" class="mask" bindtap="closePicker">
     <view class="sheet" catchtap="closePickerKeep">
       <view class="sheet-title">选择商品</view>
@@ -144,11 +217,19 @@
           </view>
           <text class="muted">售价 ¥{{item.saleText}}</text>
         </view>
-        <view wx:if="{{!filtered.length}}" class="empty">没有匹配商品</view>
+        <view wx:if="{{!filtered.length}}" class="empty">
+          <view class="empty-title">无匹配</view>
+          <view class="muted">无匹配时的空态。点「＋ 新增商品」建档，不取消开单。</view>
+        </view>
       </scroll-view>
+      <view class="chips">
+        <view class="chip add js-add-product" bindtap="goAddProduct">＋ 新增商品</view>
+      </view>
+      <view class="sheet-cancel js-picker-cancel" bindtap="closePicker">取消</view>
     </view>
   </view>
 
+  <!-- ============ 客户 picker。稿 sheet/select 7:90 与散客置灰变体 7:325 ============ -->
   <view wx:if="{{showCustomerPicker}}" class="mask" bindtap="closeCustomerPicker">
     <view class="sheet" catchtap="closePickerKeep">
       <view class="sheet-head">
@@ -157,10 +238,11 @@
       </view>
       <input class="search" placeholder="搜索客户" value="{{customerKeyword}}" bindinput="onCustomerSearch" />
       <scroll-view scroll-y class="sheet-list">
-        <view class="sheet-item js-walkin" bindtap="clearCustomer">
+        <!-- 稿 7:324：实收 ≠ 应收时散客置灰不可选，与 sheet 内禁用确认钮成双闸（n2 3:737） -->
+        <view class="sheet-item js-walkin {{walkinDisabled ? 'off' : ''}}" bindtap="clearCustomer">
           <view>
             <view class="item-name">散客</view>
-            <view class="muted">不填写客户，送货单不显示收货人</view>
+            <view class="muted">{{walkinDisabled ? '本单实收不等于应收，散客不能选' : '不填写客户，送货单不显示收货人'}}</view>
           </view>
         </view>
         <view
@@ -177,6 +259,7 @@
         </view>
         <view wx:if="{{!filteredCustomers.length}}" class="empty">没有匹配客户</view>
       </scroll-view>
+      <view class="sheet-cancel js-cust-cancel" bindtap="closeCustomerPicker">取消</view>
     </view>
   </view>
 
