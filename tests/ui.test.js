@@ -1202,6 +1202,18 @@ async function tapInSheet(host, selector) {
   await el.tap()
 }
 
+// 面板里的输入框。**不能用 typeInto** —— 那个收的是 page，而面板是组件，host 上没有
+// page.waitFor / page.data，实测抛 `page.waitFor is not a function`。
+// 落值改用 waitSheetData（组件的 data），与 tapInSheet / waitInSheet 同一路。
+async function typeInSheet(host, selector, value, label, field) {
+  const el = await waitInSheet(host, selector, '出现 ' + selector + '（' + label + '）')
+  await el.input(String(value))
+  if (!field) return
+  await waitSheetData(host, function (d) {
+    return String(d[field]) === String(value)
+  }, label + '：输入的「' + value + '」要落进面板 data.' + field)
+}
+
 async function sheetRowLabels(host) {
   const nodes = await host.$$('.rs-row .rs-label')
   const texts = []
@@ -1469,6 +1481,7 @@ async function runRecordSheetProductPicker(miniProgram, home) {
     await assertSheetFitsWindow(miniProgram, host, '商品 picker（' + padded.products.length + ' 行）')
     step('picker 列表结论：' + rows.length + ' 行合计 ' + Math.round(rowSum)
       + 'px，容器夹到 ' + Math.round(listSize.height) + 'px' + scrollNote)
+
   } finally {
     // 还原必须在 finally 里：上面任何一条断言挂掉都不能把假商品留给后面的用例
     await miniProgram.evaluate(function (before) {
@@ -1479,6 +1492,35 @@ async function runRecordSheetProductPicker(miniProgram, home) {
       return d && d.products && d.products.length === baseRows.length
     }, '商品表还原')
   }
+
+  // 搜不到结果时面板高度不许变（稿 UX注释/骨架 的 n-picker列表高）。
+  // 这一条是本批真正要防的回归：静态断言只能守「写法对不对」，守不住「高度真的没变」。
+  // 之前 .rs-list 只有 max-height，搜空时整个列表分支被 wx:elif 跳过、换成一行 rs-empty，
+  // 面板从满高塌成一行；而 sheet 从底部升起，塌陷会把上面的搜索框一起往下拽 ——
+  // 手指还在键盘上，面板在底下跳。
+  const bodyBefore = await waitInSheet(host, '.rs-picker-body', 'picker 固定高外壳')
+  const heightWithRows = (await bodyBefore.size()).height
+  await typeInSheet(host, '.js-rs-product-search', 'zzz绝不匹配zzz', '商品 picker 搜索（空结果）', 'productKeyword')
+  await waitSheetData(host, function (d) {
+    return d && d.products && d.products.length === 0
+  }, '商品 picker 搜到零结果')
+  const emptyRow = await host.$$('.rs-pick')
+  assert.strictEqual(emptyRow.length, 0, '搜到零结果时不该还剩商品行')
+  const bodyAfter = await waitInSheet(host, '.rs-picker-body', 'picker 固定高外壳（空结果）')
+  const heightWhenEmpty = (await bodyAfter.size()).height
+  assert.ok(
+    Math.abs(heightWhenEmpty - heightWithRows) <= 1,
+    'picker 搜不到结果时面板高度变了：有结果 ' + Math.round(heightWithRows)
+      + 'px → 空结果 ' + Math.round(heightWhenEmpty) + 'px。'
+      + '外壳 .rs-picker-body 必须固定高罩住 loading / 列表 / 空态三个分支'
+  )
+  step('picker 空结果高度不变：' + Math.round(heightWithRows) + 'px → '
+    + Math.round(heightWhenEmpty) + 'px')
+  // 关键词还回去，后面的用例按顺序点第一个商品，不能停在空列表上
+  await typeInSheet(host, '.js-rs-product-search', '', '商品 picker 清空搜索', 'productKeyword')
+  await waitSheetData(host, function (d) {
+    return d && d.products && d.products.length > 0
+  }, '商品 picker 清空搜索后恢复')
 
   await tapInSheet(host, '.js-rs-product')
   const adjust = await waitForPage(miniProgram, 'pages/adjust/adjust', '库存调整页')

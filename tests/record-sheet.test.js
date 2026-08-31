@@ -303,6 +303,32 @@ orderPicker.openOrderPicker().then(function () {
     assert.ok(wxss.indexOf(token) >= 0, '面板应当消费 ' + token)
   })
 
+  // picker 列表区固定高（稿 UX注释/骨架 的 n-picker列表高）。搜不到结果时若高度跟着塌，
+  // 面板会在手指还在键盘上时在底下跳，而 sheet 从底部升起，塌陷还会把搜索框一起往下拽。
+  const bodyRule = /\.rs-picker-body\s*\{([^}]*)\}/.exec(wxss)
+  assert.ok(bodyRule, '缺 .rs-picker-body：三个 picker 的 loading / 列表 / 空态要罩在同一个固定高外壳里')
+  assert.ok(
+    /(^|[^-])height:\s*640rpx/.test(bodyRule[1]),
+    '.rs-picker-body 必须是固定 height 而不是 max-height，否则空态照样会塌：' + bodyRule[1].trim()
+  )
+  const listRule = /\.rs-list\s*\{([^}]*)\}/.exec(wxss)
+  assert.ok(listRule, '缺 .rs-list')
+  assert.ok(
+    !/max-height/.test(listRule[1]),
+    '.rs-list 不该再自己夹高度 —— 高度由 .rs-picker-body 决定，两处都夹会打架：' + listRule[1].trim()
+  )
+  assert.ok(
+    /min-height:\s*0/.test(listRule[1]),
+    '.rs-list 作为 flex 子项要 min-height: 0，否则默认 auto 会被内容撑破外壳、把面板重新顶高'
+  )
+  // 三个 picker 一个都不能漏：漏掉的那个搜不到时照样塌。
+  const sheetWxml = read('components/record-sheet/index.wxml')
+  assert.strictEqual(
+    (sheetWxml.match(/class="rs-picker-body"/g) || []).length,
+    3,
+    '三个 picker（选客户 / 选原销售单 / 选商品）都要套 .rs-picker-body'
+  )
+
   // 组件不许开 virtualHost：开了页面侧就没有宿主节点，automator 从页面够不到组件里
   // 的任何东西（tests/ui.test.js 在 slip-overlay 上实测过 page.$$ / >>> / selectComponent
   // 全是 0），tests/ui.test.js 里那一整组面板用例会当场失效。面板本体 position: fixed
