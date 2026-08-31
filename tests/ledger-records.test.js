@@ -3279,6 +3279,50 @@ function totalStock(skus, productId) {
   assert.strictEqual(countShopDocs(pgOps, 'ghost-shop'), 0, '21k：孤儿流水一条不剩')
   assert.strictEqual(countShopDocs(pgOps, 'live-shop'), 20, '21k：活店的流水始终没被动过')
 
+  // --- deleteCustomer 软删除 ---------------------------------------------
+  // 客户的欠款 / 预收不存在客户对象上，是按 customerId 从流水聚合出来的。
+  // 老实现直接把客户从 customers 里 filter 掉，钱不会跟着消失：照样计进应收
+  // 总额，但列表里没有这一行了，变成「看得见总额、找不到人收」。
+  const softShop = await new Shop({ ids: idFactory('soft') }).open('软删店')
+  const settled = (await softShop.call('saveCustomer', { name: '已结清' }, 100)).result.customer
+  const owing = (await softShop.call('saveCustomer', { name: '还欠钱' }, 110)).result.customer
+  const stocked = (await softShop.call('saveCustomer', { name: '有预收' }, 120)).result.customer
+
+  await softShop.call('addOpening', { customerId: settled.id, amount: 50 }, 200)
+  await softShop.call('addPayment', { customerId: settled.id, amount: 50 }, 300)
+  await softShop.call('addOpening', { customerId: owing.id, amount: 84 }, 400)
+  await softShop.call('addPayment', { customerId: stocked.id, amount: 200 }, 500)
+
+  const beforeDelete = await softShop.ledger()
+  const receivableBefore = beforeDelete.totals.receivable
+  assert.strictEqual(beforeDelete.customers.length, 3, '软删：删之前三个客户都在')
+
+  await softShop.call('deleteCustomer', { id: settled.id }, 600)
+  await softShop.call('deleteCustomer', { id: owing.id }, 610)
+  await softShop.call('deleteCustomer', { id: stocked.id }, 620)
+
+  const afterDelete = await softShop.ledger()
+  const stillListed = afterDelete.customers.map(function (item) { return item.id })
+  assert.ok(stillListed.indexOf(settled.id) < 0, '软删：结清的客户从列表上消失')
+  assert.ok(stillListed.indexOf(owing.id) >= 0, '软删：还欠 84 的客户必须继续露面，否则这笔钱从界面上蒸发')
+  assert.ok(stillListed.indexOf(stocked.id) >= 0, '软删：还存着 200 预收的客户必须继续露面')
+
+  // 钱一分都不能因为「删客户」而变。这是本组断言的真正靶心。
+  assert.strictEqual(afterDelete.totals.receivable, receivableBefore,
+    '软删：应收总额不因删客户而变')
+  const owingRow = afterDelete.customers.find(function (item) { return item.id === owing.id })
+  assert.strictEqual(owingRow.account.receivable, 84, '软删：欠款金额原样保留')
+  assert.strictEqual(owingRow.archived, true, '软删：露面的同时要带着 archived 标记，界面才能区别对待')
+  const stockedRow = afterDelete.customers.find(function (item) { return item.id === stocked.id })
+  assert.strictEqual(stockedRow.account.prepay, 200, '软删：预收金额原样保留')
+
+  // 删不存在的客户要报错，不能像老实现那样静默 no-op。
+  await assert.rejects(
+    softShop.call('deleteCustomer', { id: 'no-such-customer' }, 700),
+    /客户不存在/,
+    '软删：删不存在的客户要报错'
+  )
+
   console.log('ledger records tests passed')
 })().catch(function (error) {
   console.error(error && error.stack ? error.stack : error)

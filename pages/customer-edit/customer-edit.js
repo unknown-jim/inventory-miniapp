@@ -51,8 +51,12 @@ Page({
     const account = customer.account || inventory.accountOf(null)
     // 稿注释 4:411：「删除客户限制：有往来记录不可删，仅无记录客户可删（danger 二次确认）」；
     // caption 9:52：「置为不可点并说明原因，**不要点了才报错**」。
-    // 服务端 deleteCustomer（utils/ledger-apply.js:868-872）一道守卫都没有，
-    // 所以这是唯一的闸，必须 fail-safe：判不出来就当成不可删。
+    // 服务端 deleteCustomer 现在是**软删除**（utils/ledger-apply.js 的
+    // deleteCustomer 分支）：打 archived 标记而不真删，还欠钱 / 存着预收的
+    // 客户照样留在列表上，所以钱不会因为删客户而从界面上蒸发。
+    // 这道客户端闸比服务端更严（有任何往来就不可删），保留它是为了满足
+    // caption 9:52「置为不可点并说明原因，**不要点了才报错**」。
+    // 仍然 fail-safe：判不出来就当成不可删。
     // 判据用已经在手的 account 六项，不额外发请求（理由见规格 §5.7）。
     const hasLedger = inventory.toNumber(account.count) > 0
       || inventory.round2(account.amount) !== 0

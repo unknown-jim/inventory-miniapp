@@ -354,6 +354,15 @@ function withAggregates(lists) {
     return Object.assign({}, customer, {
       account: terms ? inventory.accountOf(terms) : emptyCustomerAccount()
     })
+  }).filter(function (customer) {
+    // 归档（deleteCustomer 的软删除）只在**已经结清**时才让客户从列表上消失。
+    // 还欠着钱或存着预收的，归档了也要继续露面：那笔钱仍然计进应收总额，
+    // 藏掉这一行就等于让它从界面上蒸发。receivable 与 prepay 互不相消、
+    // 各自 >= 0，两个都要看（客户可以同时欠 84 又存着 200 预收）。
+    if (!customer.archived) {
+      return true
+    }
+    return customer.account.receivable !== 0 || customer.account.prepay !== 0
   })
   lists.totals = inventory.totalsOf(lists.aggregate)
   return lists
@@ -867,9 +876,23 @@ function applyMutation(ledger, action, payload, now, nextId, loaded) {
     result.customer = saved
   } else if (action === 'deleteCustomer') {
     const id = payload.id
-    next.customers = next.customers.filter(function (item) {
-      return item.id !== id
+    const customers = next.customers
+    const index = customers.findIndex(function (item) {
+      return item.id === id
     })
+    if (index < 0) {
+      throw new Error('客户不存在')
+    }
+    // **软删除，不真删。** 客户的欠款 / 预收不存在客户对象上，是按 customerId
+    // 从流水聚合出来的（inventory.termsCustomerId）。真删掉客户对象，钱不会跟着
+    // 消失 —— 它照样计进应收总额，但客户列表里没有这一行了，变成「看得见总额、
+    // 找不到人收」。归档之后余额照常算，列表由 withAggregates 决定露不露面。
+    customers[index] = Object.assign({}, customers[index], {
+      archived: true,
+      archivedAt: now
+    })
+    next.customers = customers
+    result.customer = customers[index]
   } else if (action === 'saveCategory') {
     const categories = next.categories
     let saved
