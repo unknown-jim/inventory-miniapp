@@ -77,6 +77,19 @@ page {
   --color-amber-700: #B5540A;
   --color-slate-100: #F2F5FA;
   --color-slate-700: #334054;
+  /* 2a 批新增。取自稿 Row/01：
+     amber/600 3:32 是欠款横幅 banner/debt 3:402 的图标与 chevron 描边色
+     （B1 已加的 amber/50 3:29 是它的底、amber/700 3:33 是它的文字）；
+     red/600 3:37 是要补货行「剩 X」的红 —— 与已有的 --color-text-debt 同值，
+     但 design-file.md 记着红的三种语义（欠款金额 / 危险动作 / 库存预警）是三条，
+     借用会在任何一条改色时一次改错两处，所以按 Primitive 名单列；
+     green/700 3:83 是今日毛利数字（Semantic 别名 text/success，但落点是毛利不是「成功」，
+     不复用那个名字）。
+     对比度：#DB2626 压白 4.86:1；#D97805 压 #FFFAEB 3.03:1（非文字，过 3:1）；
+     #057857 压白 5.48:1。 */
+  --color-amber-600: #D97805;
+  --color-red-600: #DB2626;
+  --color-green-700: #057857;
   /* 1a 批新增。动效 token 取自稿「Section/动效与层级」13:90 的 b1MotionTokens（13:60），
      原话是「实现用这些名，不要在页面里另写毫秒数」。
      层级 token（sticky 10 · fab 100 · overlay 1000 · sheet 1001 · dialog 1100）本批不加：

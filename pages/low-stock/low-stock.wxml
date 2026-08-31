@@ -1,0 +1,35 @@
+<view class="page">
+  <block wx:if="{{pageLoading}}">
+    <page-loading />
+  </block>
+
+  <block wx:else>
+    <!-- 稿 Screen/01b 7:274：「共 3 种低于预警线 · 点行进商品详情」 -->
+    <view class="summary js-low-stock-summary">{{summaryText}}</view>
+
+    <view wx:if="{{rows.length}}" class="card list-card">
+      <view
+        class="restock-row js-restock-row"
+        hover-class="press"
+        wx:for="{{rows}}"
+        wx:key="key"
+        data-id="{{item.productId}}"
+        bindtap="goDetail"
+      >
+        <view class="restock-name">{{item.name}}</view>
+        <view class="restock-qty">
+          <text class="restock-remain">{{item.remainText}}</text>
+          <text class="restock-threshold">{{item.thresholdText}}</text>
+        </view>
+        <view class="restock-chevron">›</view>
+      </view>
+    </view>
+
+    <!-- 稿上没画这一屏的空态（看板无预警时入口本身就不出现，进不来）。
+         这是防御位：真进来了要说人话，不要留白屏。 -->
+    <view wx:else class="card empty">
+      <view class="empty-title">暂时不用补货</view>
+      <view class="muted">所有商品的库存都在预警线以上。</view>
+    </view>
+  </block>
+</view>

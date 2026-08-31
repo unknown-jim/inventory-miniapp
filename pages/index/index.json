@@ -1,7 +1,6 @@
 {
   "navigationBarTitleText": "今日看板",
   "usingComponents": {
-    "page-loading": "/components/page-loading/index",
     "state-blocking": "/components/state-blocking/index",
     "record-sheet": "/components/record-sheet/index"
   }

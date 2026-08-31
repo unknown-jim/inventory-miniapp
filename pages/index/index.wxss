@@ -1,154 +1,155 @@
-.hero {
-  background: linear-gradient(160deg, #115E59 0%, #0F766E 58%, #0D9488 100%);
-  color: #ECFDF5;
-  padding: 36rpx 32rpx 28rpx;
-}
+/* 看板。稿 Screen/01 看板 3:548 的 content 3:556。
+   页面外框 padding 走共用 .page（--page-pad 24rpx = 12px），稿上是 16px；
+   差 4px 是全站页边距口径，不在本批单独改，见规格 OQ-1。
+   卡片圆角 / 阴影 / 内边距一律吃共用 .card，不在这里重定义。 */
 
-.hero-shop {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  min-height: var(--tap-sm);
-  margin-bottom: var(--space-md);
-  border-bottom: 1rpx solid rgba(255, 255, 255, 0.16);
-}
-
-.hero-shop-name {
-  flex: 1;
-  min-width: 0;
-  font-size: var(--fs-lg);
-  word-break: break-word;
-}
-
-.hero-shop-go {
-  flex-shrink: 0;
-  margin-left: var(--gap);
-  font-size: var(--fs-sm);
-  opacity: 0.78;
-}
-
-.hero-top {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-}
-
-.hero-kicker {
-  font-size: var(--fs-xs);
-  opacity: 0.78;
-}
-
-.hero-title {
-  margin-top: 8rpx;
-  font-size: var(--fs-hero);
-  font-weight: 700;
-}
-
-.hero-profit {
-  text-align: right;
-}
-
-.hero-profit-num {
-  margin-top: 8rpx;
-  font-size: var(--fs-hero);
-  font-weight: 700;
-}
-
-.hero .stat-grid {
-  margin-top: var(--space-xl);
-  padding-top: var(--space-lg);
-  border-top: 1rpx solid rgba(255, 255, 255, 0.16);
-}
-
-.hero-press {
+/* 按下反馈。这是**按下态**不是禁用态 —— docs/ui-scale.md 那条
+   「禁用一律 opacity: 1」管的是禁用档，不管 hover-class。 */
+.press {
   opacity: 0.72;
 }
 
-.hero .stat-num {
-  margin-bottom: 6rpx;
-}
+/* ---- hero（稿 hero/今日实收 3:557） ---- */
 
-.stat .muted,
-.hero-profit .muted {
-  color: rgba(236, 253, 245, 0.72);
-}
-
-.stat-alert .stat-num {
-  color: #FECACA;
-}
-
-.debt-banner {
+.hero-head {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  margin-top: 8rpx;
+  justify-content: space-between;
+  min-height: var(--tap-min);
 }
 
-.debt-banner-num {
-  margin-top: 8rpx;
-  font-size: var(--fs-xl);
+.hero-shop {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-title);
+  font-weight: 600;
+  color: var(--color-text-primary);
+  word-break: break-word;
+}
+
+.hero-date {
+  flex-shrink: 0;
+  margin-left: var(--gap);
+  font-size: var(--fs-caption);
+  color: var(--color-text-muted);
+}
+
+.hero-body {
+  margin-top: var(--space-xs);
+}
+
+.hero-label {
+  font-size: var(--fs-label);
+  color: var(--color-text-muted);
+}
+
+/* 稿 number 3:559 是 40px Bold。docs/ui-scale.md 的降档表：
+   看板 hero ≤10 字符 80rpx、11–13 字符 --fs-hero-md(68rpx)、≥14 字符 --fs-hero-sm(56rpx)。
+   挑档在 JS 里做（utils/util.js 的 heroAmountClass），这里只放三档字号。 */
+.hero-num {
+  margin-top: var(--space-xs);
   font-weight: 700;
-  color: #C2410C;
+  color: var(--color-text-primary);
+  line-height: 1.15;
 }
 
-.seed-btn {
-  margin-top: 28rpx;
+/* 最高一档写字面量 80rpx，是本批唯一一处不走 --fs- 变量的字号。
+   原因：文档定 --fs-hero = 80rpx，但 app.wxss 里它仍是旧值 48rpx，
+   A2 规格 8.3 把翻值排给收尾批，前提是「五个消费点全部迁完」；
+   本批只迁走其中两个，还剩 pages/customer-edit 的 .debt-num 与
+   pages/products、pages/product-detail 的 .thumb-text 三处。
+   tests/record-sheet.test.js 有断言钉着 48rpx 不许动。
+   收尾批把 --fs-hero 翻到 80rpx 之后，把下面这一行改成 var(--fs-hero) 即可，
+   一行回滚。见规格 OQ-2。 */
+.amount-hero {
+  font-size: 80rpx;
 }
 
-.btn-ghost {
-  margin-top: 16rpx;
+.amount-hero-md {
+  font-size: var(--fs-hero-md);
 }
 
-.empty-card,
-.quiet {
-  text-align: center;
-  color: #64748B;
+.amount-hero-sm {
+  font-size: var(--fs-hero-sm);
 }
 
-.list-card {
-  padding: 8rpx 28rpx;
+.hero-sub {
+  margin-top: var(--space-xs);
+  font-size: var(--fs-caption);
+  color: var(--color-text-muted);
 }
 
-.list-item {
+/* ---- 空店引导（稿 card/空店引导 4:821，也用在 Screen/01c 无店 15:260） ---- */
+
+.guide {
+  margin-top: var(--space-md);
+}
+
+.guide-title {
+  margin-top: var(--space-md);
+  font-size: var(--fs-title);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.guide-step {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  padding: 24rpx 0;
-  border-bottom: 1rpx solid #F1F5F4;
+  margin-top: var(--space-lg);
 }
 
-.list-item:last-child {
-  border-bottom: none;
+.guide-dot {
+  flex-shrink: 0;
+  width: 40rpx;
+  height: 40rpx;
+  margin-right: 20rpx;
+  border-radius: 999rpx;
+  background: var(--color-fill-ghost);
+  color: var(--color-text-primary);
+  font-size: var(--fs-caption);
+  line-height: 40rpx;
+  text-align: center;
 }
 
-.item-name {
-  font-weight: 600;
-  margin-bottom: 8rpx;
+.guide-dot-done {
+  background: var(--color-fill-action);
+  color: var(--color-text-on-action);
 }
 
-.item-right {
-  text-align: right;
+.guide-name {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-label);
+  color: var(--color-text-primary);
 }
 
-.amount {
-  margin-top: 8rpx;
-  font-weight: 600;
+.guide-status {
+  flex-shrink: 0;
+  margin-left: var(--gap);
+  font-size: var(--fs-caption);
+  color: var(--color-text-muted);
 }
 
-.link {
-  color: #0F766E;
-  font-size: var(--fs-sm);
+.guide-status-done {
+  color: var(--color-green-700);
 }
 
-/* 记一笔主入口（稿 btn/记一笔 4:983：343×52 实心黑，圆角 8px、标题字号 16 SemiBold）。
-   高度用 --tap-lg：0b 批把它翻到文档值 104rpx = 稿上的 52px，正是「主按钮、
-   底部固定 CTA」那一档。改绑前后渲染值都是 104rpx，视觉零变化。 */
+.guide-note {
+  margin-top: var(--space-lg);
+  font-size: var(--fs-caption);
+  color: var(--color-text-muted);
+  line-height: 1.5;
+}
+
+/* ---- 记一笔主入口（稿 btn/记一笔 4:983：343×52 实心黑、圆角 8px、标题字号 16 SemiBold）。
+       高度用 --tap-lg = 104rpx = 稿上的 52px，正是「主按钮、底部固定 CTA」那一档。 ---- */
+
 .record-entry {
   display: flex;
   align-items: center;
   justify-content: center;
   height: var(--tap-lg);
-  margin: 8rpx 0;
+  margin: var(--space-xs) 0;
   background: var(--color-fill-action);
   border-radius: var(--space-md);
   font-size: var(--fs-title);
@@ -158,4 +159,303 @@
 
 .record-entry-press {
   background: var(--color-fill-action-pressed);
+}
+
+.quiet {
+  text-align: center;
+  color: var(--color-text-muted);
+}
+
+/* ---- 欠款横幅（稿 banner/debt 3:561 -> 本体 3:402：343×44、r12、padding 12、gap 8） ---- */
+
+.debt-banner {
+  display: flex;
+  align-items: center;
+  min-height: var(--tap-min);
+  margin-top: var(--space-xs);
+  padding: var(--space-lg) var(--space-lg);
+  box-sizing: border-box;
+  background: var(--color-amber-50);
+  border-radius: 24rpx;
+}
+
+.debt-icon {
+  flex-shrink: 0;
+  width: 32rpx;
+  height: 32rpx;
+  margin-right: var(--space-md);
+  border-radius: 999rpx;
+  border: 2rpx solid var(--color-amber-600);
+  color: var(--color-amber-600);
+  font-size: var(--fs-caption);
+  line-height: 28rpx;
+  text-align: center;
+}
+
+.debt-text {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-label);
+  font-weight: 500;
+  color: var(--color-amber-700);
+}
+
+.debt-chevron {
+  flex-shrink: 0;
+  margin-left: var(--space-md);
+  color: var(--color-amber-600);
+  font-size: var(--fs-title);
+  line-height: 1;
+}
+
+/* ---- 两格统计（稿 stat-grid 3:562 + stat/block 3:391：165 宽、r12、1px 描边、padding 12/10） ----
+       .stat-grid 是 app.wxss 的共用类（页面 wxss 不许重定义它，tests/ui-scale.test.js 会拦），
+       这里只用 .dash-stats 这个修饰类把列间距从 --gap(16rpx=8px) 调到稿上的 12px。 */
+
+.dash-stats {
+  gap: var(--space-lg);
+  margin-top: var(--space-md);
+}
+
+.dash-stat {
+  min-width: 0;
+  padding: 20rpx var(--space-lg);
+  box-sizing: border-box;
+  background: var(--color-bg-card);
+  border: 2rpx solid var(--color-border-default);
+  border-radius: 24rpx;
+}
+
+.dash-stat-label {
+  font-size: var(--fs-caption);
+  color: var(--color-text-muted);
+}
+
+/* 稿 number 3:393 是 24px Bold。docs/ui-scale.md 的降档表：
+   半宽统计块 ≤9 字符 --fs-display(48rpx)、10–12 --fs-amount-lg(40rpx)、
+   ≥13 --fs-amount-lg-sm(32rpx)。挑档在 utils/util.js 的 statAmountClass。 */
+.dash-stat-num {
+  margin-top: var(--space-xs);
+  font-weight: 700;
+  color: var(--color-text-primary);
+  line-height: 1.2;
+}
+
+.amount-stat {
+  font-size: var(--fs-display);
+}
+
+.amount-stat-md {
+  font-size: var(--fs-amount-lg);
+}
+
+.amount-stat-sm {
+  font-size: var(--fs-amount-lg-sm);
+}
+
+/* 品牌青绿只做非语义场合的小剂量点缀，毛利 stat 数字是稿上点名的落点之一
+   （docs/design-file.md「Token 与语义」）。稿 3:569 的 number 绑的是 3:83。 */
+.dash-stat-profit {
+  color: var(--color-green-700);
+}
+
+.dash-stat-delta {
+  margin-top: var(--space-xs);
+  font-size: var(--fs-caption);
+  color: var(--color-text-muted);
+}
+
+/* ---- 要补货（稿 row/要补货标题 11:99 + card/要补货 4:807） ---- */
+
+.restock-head {
+  display: flex;
+  align-items: center;
+  min-height: var(--tap-min);
+  margin: var(--space-md) var(--space-xs) var(--space-sm);
+}
+
+.restock-title {
+  font-size: var(--fs-title);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.restock-count {
+  margin-left: var(--space-sm);
+  font-size: var(--fs-label);
+  color: var(--color-text-muted);
+}
+
+.restock-all {
+  margin-left: auto;
+  padding-left: var(--space-lg);
+  font-size: var(--fs-label);
+  font-weight: 500;
+  color: var(--color-text-primary);
+}
+
+.list-card {
+  padding: 0 28rpx;
+}
+
+/* 稿 row/预警 4:815 高 44px = 88rpx = --tap-min。docs/ui-scale.md 热区表把
+   「可点列表行」列在 --tap-md(96rpx)，但同一份文档的地板是 --tap-min，
+   稿上的 UX注释 3:777 也只要求「热区 ≥ 44（tap/min）」。这里按稿取 88rpx，
+   仍然过地板。见规格 OQ-8。 */
+.restock-row {
+  display: flex;
+  align-items: center;
+  min-height: var(--tap-min);
+  border-bottom: 2rpx solid var(--color-border-default);
+}
+
+.restock-row:last-child {
+  border-bottom: none;
+}
+
+.restock-name {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-label);
+  color: var(--color-text-primary);
+  word-break: break-word;
+}
+
+.restock-qty {
+  flex-shrink: 0;
+  margin-left: var(--gap);
+  font-size: var(--fs-caption);
+  font-weight: 600;
+}
+
+/* 红只给警报，阈值不是警报（稿 UX注释 7:261 逐字） */
+.restock-remain {
+  color: var(--color-red-600);
+}
+
+.restock-threshold {
+  margin-left: 6rpx;
+  color: var(--color-text-muted);
+}
+
+.restock-chevron {
+  flex-shrink: 0;
+  margin-left: var(--space-sm);
+  color: var(--color-text-faint);
+  font-size: var(--fs-title);
+  line-height: 1;
+}
+
+/* ---- 最新流水（稿 section/最新流水 3:573 + card/流水行组 3:742） ---- */
+
+/* 稿上这个标题右边没有链接，所以不能吃带 space-between 的共用类 .section-title。 */
+.section-plain {
+  margin: var(--space-md) var(--space-xs) var(--space-sm);
+  font-size: var(--fs-title);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.record-row {
+  display: flex;
+  align-items: center;
+  min-height: var(--tap-md);
+  padding: var(--space-lg) 0;
+  border-bottom: 2rpx solid var(--color-border-default);
+}
+
+.record-row:last-child {
+  border-bottom: none;
+}
+
+.record-col {
+  flex: 1;
+  min-width: 0;
+  margin-left: 20rpx;
+}
+
+.record-title {
+  font-size: var(--fs-body);
+  font-weight: 500;
+  color: var(--color-text-primary);
+  word-break: break-word;
+}
+
+.record-sub {
+  margin-top: 4rpx;
+  font-size: var(--fs-caption);
+  color: var(--color-text-muted);
+  word-break: break-word;
+}
+
+.record-amount {
+  flex-shrink: 0;
+  margin-left: var(--space-md);
+  font-size: var(--fs-amount);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+/* ---- 骨架屏（稿 Screen/00b 看板骨架 13:216 的 content 13:219） ----
+       灰条色是 neutral/200 3:16，圆角 8px = 16rpx，外框 gap 10px = 20rpx。
+       高度逐条对稿：hero 135 / cta 52 / banner 44 / stat 165x91（间距 13）
+       / 两处小标题 80x20 / restock-card 72 / records 63，全部 x2 换算成 rpx。
+       闪动照稿用 duration-base + easing-standard 循环（稿 13:61）。
+       200ms 半程确实快，B1 的 OQ-6 已经预告过同一个疑问，处置一致：照稿执行，
+       改一个 token 名就能回滚。 */
+
+.skel {
+  display: flex;
+  flex-direction: column;
+  gap: 20rpx;
+}
+
+.skel-bar {
+  background: var(--color-neutral-200);
+  border-radius: 16rpx;
+  animation: skel-blink var(--duration-base) var(--easing-standard) infinite alternate;
+}
+
+@keyframes skel-blink {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0.55;
+  }
+}
+
+.skel-hero {
+  height: 270rpx;
+}
+
+.skel-cta {
+  height: 104rpx;
+}
+
+.skel-banner {
+  height: 88rpx;
+}
+
+.skel-stats {
+  display: flex;
+  gap: 26rpx;
+}
+
+.skel-stat {
+  flex: 1;
+  height: 182rpx;
+}
+
+.skel-line {
+  width: 160rpx;
+  height: 40rpx;
+}
+
+.skel-restock {
+  height: 144rpx;
+}
+
+.skel-records {
+  height: 126rpx;
 }

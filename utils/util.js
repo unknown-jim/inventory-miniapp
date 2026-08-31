@@ -224,6 +224,97 @@ function withCustomerView(customer, summary) {
   })
 }
 
+// ---------------------------------------------------------------------------
+// 「要补货」的行集合。稿 Screen/01 的 card/要补货 4:807 与 Screen/01b 的 7:275
+// 用的是**同一份数据、同一套排序**，看板只露第 1 条（UX注释/看板 4:826 逐字：
+// 「首屏只露第 1 条」「无预警不显示整段」）。
+//
+// 粒度是**规格**不是商品：稿上行文案是「全棉斜纹布 · 本白/2.0m」，
+// 标题上的「3 种」= 本函数返回的行数，01b 的摘要「共 3 种低于预警线」同源。
+//
+// 三条分支**逐字镜像** inventory.isLowStock（utils/inventory.js:394-412）的分支顺序：
+//   1. 待加工（isBlankProcess 且找得到 blank sku）：blank.stock 对 **product.alertQty**
+//   2. 分规格且有非 blank 规格：每枚 sku 自己的 stock 对自己的 alertQty
+//   3. 其余：product.stock 对 product.alertQty
+// 不要「优化」成一条 filter —— 三条分支的阈值来源互不相同，合并必然改判。
+//
+// 排序逐字取自 UX注释/要补货 9:46：缺口（预警 − 剩）大优先；同缺口按商品名
+// zh-CN 音序（localeCompare('zh-CN')）；同商品名再按规格名同一套音序。
+// localeCompare 在没有 ICU 的运行时会退化成码位序 —— 这是**展示顺序不是账**，
+// 退化了也不会算错钱，所以不做 polyfill、不加兜底表。
+function lowStockRow(product, spec, stock, alertQty) {
+  const left = inventory.round2(inventory.toNumber(stock))
+  const line = inventory.round2(inventory.toNumber(alertQty))
+  return {
+    key: String(product.id) + '|' + String(spec),
+    productId: product.id,
+    productName: String(product.name || ''),
+    specText: String(spec || ''),
+    name: spec ? String(product.name || '') + ' · ' + spec : String(product.name || ''),
+    stock: left,
+    alertQty: line,
+    gap: inventory.round2(line - left),
+    remainText: '剩 ' + left,
+    thresholdText: '/ 预警 ' + line
+  }
+}
+
+function lowStockRows(products, skus) {
+  const rows = []
+  ;(products || []).forEach(function (product) {
+    const blank = inventory.isBlankProcess(product)
+      ? inventory.findBlankSku(skus, product.id)
+      : null
+    if (blank) {
+      if (inventory.toNumber(blank.stock) <= inventory.toNumber(product.alertQty)) {
+        rows.push(lowStockRow(product, inventory.blankStockLabel(), blank.stock, product.alertQty))
+      }
+      return
+    }
+    const list = inventory.productHasSpecs(product)
+      ? inventory.skusOfProduct(skus, product.id).filter(function (sku) {
+        return !sku.isBlank
+      })
+      : []
+    if (list.length) {
+      list.forEach(function (sku) {
+        if (inventory.toNumber(sku.stock) > inventory.toNumber(sku.alertQty)) return
+        rows.push(lowStockRow(product, inventory.specText(sku.color, sku.size), sku.stock, sku.alertQty))
+      })
+      return
+    }
+    if (inventory.toNumber(product.stock) <= inventory.toNumber(product.alertQty)) {
+      rows.push(lowStockRow(product, '', product.stock, product.alertQty))
+    }
+  })
+  return rows.sort(function (a, b) {
+    const gapDiff = b.gap - a.gap
+    if (gapDiff) return gapDiff
+    const nameDiff = a.productName.localeCompare(b.productName, 'zh-CN')
+    if (nameDiff) return nameDiff
+    return a.specText.localeCompare(b.specText, 'zh-CN')
+  })
+}
+
+// docs/ui-scale.md「金额按位数自动降档」那张表。入参是**屏上可见的那一串字**
+// （含 ¥、千分位逗号、小数点，算不出来时是「—」），返回该挂哪一个 class。
+// 549 万那家店的 ¥5,490,000.00 是 13 个字符，看板 hero 走中间那档。
+// **不许用 CSS transform: scale 或 fit-text 之类的运行时缩放**（文档明令：
+// 那会让同屏金额的视觉字重不一致，rpx 布局下还容易半像素模糊）。
+function heroAmountClass(text) {
+  const n = String(text == null ? '' : text).length
+  if (n >= 14) return 'amount-hero-sm'
+  if (n >= 11) return 'amount-hero-md'
+  return 'amount-hero'
+}
+
+function statAmountClass(text) {
+  const n = String(text == null ? '' : text).length
+  if (n >= 13) return 'amount-stat-sm'
+  if (n >= 10) return 'amount-stat-md'
+  return 'amount-stat'
+}
+
 // 报错的统一出口：先过 utils/messages.js 的店员话术层，命中的按话术显示
 //（长话术走 modal，toast 会被真机腰斩），没命中保持今天的行为 —— toast + 原文，
 // 一个字节不变。两种情况都把原文 console.warn 一份，排查不受影响。
@@ -260,5 +351,8 @@ module.exports = {
   withRecordView: withRecordView,
   withCustomerView: withCustomerView,
   withSlipView: withSlipView,
+  lowStockRows: lowStockRows,
+  heroAmountClass: heroAmountClass,
+  statAmountClass: statAmountClass,
   showError: showError
 }

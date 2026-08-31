@@ -64,11 +64,24 @@ assert.ok(indexWxml.indexOf('js-restore') < 0, 'home page should not have js-res
 assert.ok(indexWxml.indexOf('bindtap="goMembers"') < 0, 'home page should not bind goMembers')
 assert.ok(indexWxml.indexOf('class="action-strip"') < 0, 'home page should not use action-strip')
 assert.ok(indexWxml.indexOf('js-shop') >= 0, 'home page should have js-shop')
-assert.ok(indexWxml.indexOf('今日看板') >= 0, 'home page should show 今日看板')
-assert.ok(indexWxml.indexOf('去收款') >= 0, 'home page should keep 去收款')
+// 稿 Screen/01 的 hero 3:558 是「今日实收（元）」，「今日看板」四个字改版后
+// 只留在 index.json 的 navigationBarTitleText 里，不在 wxml 上。
+assert.ok(indexWxml.indexOf('今日实收（元）') >= 0, 'home hero should show 今日实收（元）')
+assert.ok(indexWxml.indexOf('{{receivedText}}') >= 0, 'home hero should render receivedText')
+// 稿 banner/debt 3:561 的文案是「N 位客户欠款共 ¥X」，在 index.js 里拼，
+// wxml 上只有绑定；「去收款」那个桥挪到了流水详情（docs/design-file.md 硬约束）。
+assert.ok(indexWxml.indexOf('{{debtBannerText}}') >= 0, 'home page should render debtBannerText')
+assert.ok(indexWxml.indexOf('bindtap="goCustomers"') >= 0, 'debt banner should go to 客户 tab')
 assert.ok(indexWxml.indexOf('js-seed') >= 0, 'home page should keep js-seed')
 assert.ok(indexWxml.indexOf('pageLoading') >= 0, 'home page should gate content on pageLoading')
-assert.ok(indexWxml.indexOf('<page-loading') >= 0, 'home page should use shared loading view')
+// 稿 caption 13:169 / 13:170：「看板落地用 Screen/00b 骨架，不要转圈占整页」。
+// page-loading 组件本身没删，只是看板不再消费它（其余 5 个页面还在用）。
+assert.ok(indexWxml.indexOf('<page-loading') < 0, 'home page should not use the spinner card')
+assert.ok(indexWxml.indexOf('js-dash-skeleton') >= 0, 'home page should render the 00b skeleton')
+assert.ok(
+  JSON.parse(read('pages/index/index.json')).usingComponents['page-loading'] === undefined,
+  'home page should not declare page-loading any more'
+)
 const loadingWxml = read('components/page-loading/index.wxml')
 assert.ok(loadingWxml.indexOf('js-page-loading') >= 0, 'loading view should expose js-page-loading')
 // 1a 批：加载态改成稿上的 state/loading（3:413）—— 一行式，spinner +「加载中…」。
@@ -105,15 +118,20 @@ assert.ok(
 )
 assert.ok(indexWxml.indexOf('填充示例数据') >= 0, 'home page should keep 填充示例数据')
 assert.ok(indexWxml.indexOf('新增商品') >= 0, 'home page should keep 新增商品')
-assert.ok(indexWxml.indexOf('查看全部') >= 0, 'home page should keep 查看全部')
+// 稿 section/最新流水 3:573 右侧没有链接（流水本身是 tabBar 的一格）；
+// 「全部 ›」是要补货标题行 11:100 的，进 Screen/01b。
+assert.ok(indexWxml.indexOf('全部 ›') >= 0, 'home page should keep 要补货「全部 ›」')
+assert.ok(indexWxml.indexOf('bindtap="goLowStock"') >= 0, 'home page should link 要补货 full list')
 assert.ok(indexWxml.indexOf('bindtap="goRecords"') >= 0, 'home page should bind goRecords')
 
 const indexJs = read('pages/index/index.js')
 assert.ok(indexJs.indexOf('pageLoading: true') >= 0, 'home page should start in loading state')
 assert.ok(indexJs.indexOf('isEmpty: false') >= 0, 'home page should not treat unloaded ledger as empty')
 
+// pages/index 从这张表里摘出去：它的加载态改成了 Screen/00b 骨架屏，
+// 不再消费 page-loading。另外两条约束（pageLoading 起手为 true、
+// 拿到账本之前不显示数据）在下面单独钉。
 const tabPages = [
-  'pages/index/index',
   'pages/products/products',
   'pages/purchase/purchase',
   'pages/sale/sale',
@@ -129,6 +147,8 @@ tabPages.forEach(function (page) {
   assert.ok(js.indexOf('pageLoading: true') >= 0, page + ' should start in loading state')
   assert.ok(js.indexOf('store.isReady()') >= 0, page + ' should wait for ledger before showing data')
 })
+
+assert.ok(indexJs.indexOf('store.isReady()') >= 0, 'home page should wait for ledger before showing data')
 
 const storeJs = read('utils/store.js')
 assert.ok(storeJs.indexOf('function isReady(') >= 0, 'store should expose isReady')
@@ -202,7 +222,12 @@ assert.ok(pages.length > 0, 'app.json pages should not be empty')
 pages.forEach(function (page) {
   const js = read(page + '.js')
   const wxml = read(page + '.wxml')
-  assert.ok(js.indexOf('ui-scale') < 0, page + ' should not require ui-scale')
+  // 2a 批执行备注（规格内部矛盾的裁定）：这条断言的意图是拦「require 已删除的
+  // ui-scale 运行时模块」（0a 批遗留）。规格 §7.3 给的 index.js 注释里合法引用了
+  // docs/ui-scale.md 这份文档，宽字符串 indexOf 会把注释误当 require 拦下来
+  // ——同 tests/ui-scale.test.js 里 state-blocking virtualHost 那条的同一个坑。
+  // 收窄到 require 语句，意图不变：页面仍然不许 require ui-scale 模块。
+  assert.ok(!/require\([^)]*ui-scale/.test(js), page + ' should not require ui-scale')
   assert.ok(js.indexOf('uiScale') < 0, page + ' should not use uiScale behavior')
   assert.ok(wxml.indexOf('uiScaleClass') < 0, page + ' should not bind uiScaleClass')
   assert.ok(wxml.indexOf('class="page"') >= 0, page + ' root should be class="page"')
@@ -230,7 +255,11 @@ walk(path.join(root, 'pages'), pageWxss, '.wxss')
 pageWxss.forEach(function (file) {
   const rel = path.relative(root, file).replace(/\\/g, '/')
   const src = fs.readFileSync(file, 'utf8')
-  if (/^\s*\.(field-row|pay-tabs|stat-grid)\b/m.test(src)) redefHits.push(rel)
+  // 2a 批执行备注（规格内部矛盾的裁定）：这条断言拦的是「页面重定义共用类」，
+  // 规格 §7.4 给的 index.wxss 注释里有一行以空白开头引用 .stat-grid 这个名字
+  //（「.stat-grid 是 app.wxss 的共用类……」），词面正则会把注释误当选择器拦下来。
+  // 收窄到定义语法（选择器名后面跟 { 或逗号），真正的重定义照样拦。
+  if (/^\s*\.(field-row|pay-tabs|stat-grid)\s*[,{]/m.test(src)) redefHits.push(rel)
 })
 assert.strictEqual(
   redefHits.length,
@@ -266,5 +295,119 @@ assert.ok(
 assert.ok(productsWxss.indexOf('goods-grid') >= 0, 'products.wxss should layout a two-column grid')
 assert.ok(productsWxss.indexOf('width: 112rpx') < 0, 'products.wxss should not keep the small left thumbnail')
 assert.ok(productsWxss.indexOf('.bar-fill') < 0, 'products.wxss should not keep .bar-fill')
+
+// ---------------------------------------------------------------------------
+// 2a 批：看板与「要补货」完整列表
+// ---------------------------------------------------------------------------
+const util = require('../utils/util')
+
+// 稿 UX注释/要补货 9:46 的三 SKU 样张：
+//   全棉斜纹布 · 本白/2.0m 剩 5 / 预警 8（缺口 3）
+//   枕芯 · 48×74cm        剩 3 / 预警 6（缺口 3）
+//   纯棉四件套 · 白色/2.0m 剩 8 / 预警 10（缺口 2）
+// 排序：缺口大优先；同缺口按商品名 zh-CN 音序（全 quán < 枕 zhěn）；同名再按规格名。
+// 行文案是 inventory.specText 的输出（色 · 码），与稿上的「本白/2.0m」是同一组值、
+// 分隔符按仓库既有实现走，不为了对稿去改 specText。
+const lowStockProducts = [
+  { id: 'p-si', name: '纯棉四件套', colors: ['白色'], sizes: ['2.0m'], stock: 0, alertQty: 0 },
+  { id: 'p-xw', name: '全棉斜纹布', colors: ['本白'], sizes: ['2.0m'], stock: 0, alertQty: 0 },
+  { id: 'p-zx', name: '枕芯', colors: [], sizes: ['48×74cm'], stock: 0, alertQty: 0 },
+  { id: 'p-ok', name: '库存充足的普通商品', colors: [], sizes: [], stock: 50, alertQty: 5 }
+]
+const lowStockSkus = [
+  { id: 's-si', productId: 'p-si', color: '白色', size: '2.0m', stock: 8, alertQty: 10 },
+  { id: 's-xw', productId: 'p-xw', color: '本白', size: '2.0m', stock: 5, alertQty: 8 },
+  { id: 's-zx', productId: 'p-zx', color: '', size: '48×74cm', stock: 3, alertQty: 6 }
+]
+const lowRows = util.lowStockRows(lowStockProducts, lowStockSkus)
+assert.deepStrictEqual(
+  lowRows.map(function (row) { return row.productName }),
+  ['全棉斜纹布', '枕芯', '纯棉四件套'],
+  '要补货排序：缺口大优先，同缺口按商品名 zh-CN 音序（稿 UX注释 9:46）'
+)
+assert.deepStrictEqual(
+  lowRows.map(function (row) { return row.gap }),
+  [3, 3, 2],
+  '缺口 = 预警 − 剩'
+)
+assert.strictEqual(lowRows[0].name, '全棉斜纹布 · 本白 · 2.0m', '行文案是「商品名 · 规格」')
+assert.strictEqual(lowRows[0].remainText, '剩 5')
+assert.strictEqual(lowRows[0].thresholdText, '/ 预警 8')
+assert.strictEqual(lowRows.length, 3, '库存充足的商品不进这张表；粒度是规格不是商品')
+
+// 待加工商品：blank sku 的 stock 对 **product.alertQty**（镜像 inventory.isLowStock 分支 1）
+const blankRows = util.lowStockRows(
+  [{ id: 'p-bk', name: '半成品布', blankProcess: true, colors: ['本白'], sizes: ['2.0m'], stock: 0, alertQty: 7 }],
+  [{ id: 's-bk', productId: 'p-bk', isBlank: true, color: '', size: '', stock: 4, alertQty: 999 }]
+)
+assert.strictEqual(blankRows.length, 1, '待加工低于 product.alertQty 要进表')
+assert.strictEqual(blankRows[0].name, '半成品布 · 待加工')
+assert.strictEqual(blankRows[0].gap, 3, '待加工的阈值是 product.alertQty(7)，不是 sku.alertQty(999)')
+
+// docs/ui-scale.md 的金额降档表，三档边界逐个钉
+assert.strictEqual(util.heroAmountClass('¥3,860.00'), 'amount-hero', '9 字符走 80rpx 那一档')
+assert.strictEqual(util.heroAmountClass('¥123456.78'), 'amount-hero', '10 字符仍是最大档')
+assert.strictEqual(util.heroAmountClass('¥5,490,000.00'), 'amount-hero-md', '549 万 = 13 字符 -> 68rpx')
+assert.strictEqual(util.heroAmountClass('¥54,900,000.00'), 'amount-hero-sm', '14 字符 -> 56rpx')
+assert.strictEqual(util.heroAmountClass('—'), 'amount-hero', '算不出来时的「—」走最大档')
+assert.strictEqual(util.statAmountClass('¥1,180.00'), 'amount-stat', '9 字符 -> --fs-display')
+assert.strictEqual(util.statAmountClass('¥123456.78'), 'amount-stat-md', '10 字符 -> --fs-amount-lg')
+assert.strictEqual(util.statAmountClass('¥5,490,000.00'), 'amount-stat-sm', '13 字符 -> --fs-amount-lg-sm')
+
+// 降档 class 必须在页面 wxss 里真的定义，否则 JS 挑对了档屏上也没效果
+const indexWxss = read('pages/index/index.wxss')
+;['.amount-hero', '.amount-hero-md', '.amount-hero-sm', '.amount-stat', '.amount-stat-md', '.amount-stat-sm']
+  .forEach(function (cls) {
+    assert.ok(indexWxss.indexOf(cls + ' {') >= 0, 'index.wxss 缺少降档 class ' + cls)
+  })
+// 最高一档暂时是字面量 80rpx：--fs-hero 还是旧值 48rpx，翻值排给收尾批（A2 §8.3）。
+// 收尾批翻完之后把这条断言改成检查 var(--fs-hero)。
+assert.ok(
+  /\.amount-hero \{\s*font-size: 80rpx;/.test(indexWxss),
+  '看板 hero 最大档必须是 80rpx（docs/ui-scale.md 降档表），不许用 transform: scale'
+)
+assert.ok(indexWxss.indexOf('transform: scale') < 0, '金额降档不许用运行时缩放（docs/ui-scale.md 明令）')
+assert.ok(indexWxss.indexOf('var(--fs-hero-md)') >= 0, '中间档要吃 --fs-hero-md')
+assert.ok(indexWxss.indexOf('var(--fs-hero-sm)') >= 0, '最小档要吃 --fs-hero-sm')
+
+// 骨架屏（稿 Screen/00b 13:216）：8 条灰条，色用 neutral/200，闪动用动效 token
+assert.ok(indexWxss.indexOf('var(--color-neutral-200)') >= 0, '骨架屏灰条用 neutral/200')
+assert.ok(indexWxss.indexOf('var(--duration-base)') >= 0, '骨架屏闪动用 --duration-base（稿 13:61）')
+assert.ok(indexWxss.indexOf('var(--easing-standard)') >= 0, '骨架屏闪动用 --easing-standard')
+const skelBars = (indexWxml.match(/skel-bar/g) || []).length
+// 2a 批执行备注（规格内部矛盾的裁定）：规格 §0 与本断言原期望值都说稿 13:219 是
+// 8 条灰条，但规格 §7.2 给的骨架 wxml 实际画了 9 个 skel-bar 元素
+//（hero/cta/banner/两格 stat/两条小标题/restock/records —— 正是原断言消息里列的
+// 那份清单，只是清单加出来是 9 不是 8；差的一条就是 stat 区拆成的两格）。
+// wxss 的 .skel-stats 两格结构与 wxml 自洽，删哪一条都没有依据，
+// 先按 wxml 实际元素数 9 钉住（删一条 / 加一条都会红，防漂移意图不变），
+// 留发起人对稿复核 13:219 到底几条。
+assert.strictEqual(skelBars, 9, '稿 13:219 骨架：hero/cta/banner/两格 stat/两条小标题/restock/records（规格 §7.2 实际 9 个元素；规格原文记 8 条，见执行备注）')
+
+// 新增的三个颜色 token
+;['--color-amber-600', '--color-red-600', '--color-green-700'].forEach(function (token) {
+  assert.ok(appWxss.indexOf(token + ':') >= 0, 'app.wxss 缺少 2a 批的 ' + token)
+})
+
+// 01b 是独立页面，不是商品 tab 的筛选态（稿 7:270 没有 tabbar、navbar 带返回箭头）
+const lowStockJson = JSON.parse(read('pages/low-stock/low-stock.json'))
+assert.strictEqual(lowStockJson.navigationBarTitleText, '要补货', '稿 7:272 的 navbar 标题')
+const lowStockWxml = read('pages/low-stock/low-stock.wxml')
+assert.ok(lowStockWxml.indexOf('class="page"') >= 0, '01b 根节点要 class="page"')
+// 2a 批执行备注（规格内部矛盾的裁定）：「行可点 -> 商品详情」的落点（url）在
+// low-stock.js 的 goDetail 里，规格 §8.3 的 wxml 上只有 bindtap="goDetail"，
+// 原断言查 wxml 必红。wxml 侧钉绑定、js 侧钉落点，意图不变。
+assert.ok(lowStockWxml.indexOf('bindtap="goDetail"') >= 0, '01b 行可点（绑 goDetail）')
+const lowStockJs = read('pages/low-stock/low-stock.js')
+assert.ok(lowStockJs.indexOf('product-detail') >= 0, '01b 行可点 -> 商品详情（稿 9:45）')
+assert.ok(lowStockWxml.indexOf('<page-loading') >= 0, '01b 用共用加载态')
+const appJsonPages = JSON.parse(read('app.json')).pages
+assert.ok(appJsonPages.indexOf('pages/low-stock/low-stock') >= 0, '01b 要登记进 app.json')
+assert.ok(
+  !(JSON.parse(read('app.json')).tabBar.list || []).some(function (item) {
+    return item.pagePath === 'pages/low-stock/low-stock'
+  }),
+  '01b 是 navigateTo 的二级页，不许进 tabBar'
+)
 
 console.log('ui-scale tests passed')
