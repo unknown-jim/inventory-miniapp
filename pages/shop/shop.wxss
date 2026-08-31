@@ -111,6 +111,41 @@
   font-size: var(--fs-body);
 }
 
+/* 稿 Screen/14c 的 card/怎么进店 15:188：卡内三行，横排 gap10。
+   圈 15:191 是 20x20 圆，底 3:15 = neutral/100 = 本仓 --color-fill-ghost，
+   圈内序号 15:194 是 12px = --fs-caption、字色 3:23 = --color-text-primary；
+   说明 15:192 是 13px = --fs-label、同一个字色。
+   三行不可点，所以不受 --tap-min 88rpx 那条地板管；也不要给它们加 bindtap。
+   与 pages/index 的 guide-dot 一族是同一档的两份实现（本批 OPEN-Q-1 登记，
+   收尾批一起提到 app.wxss）—— 现在提上去会让 pages/index/index.wxss 里那几条
+   变成重定义，而那是本批范围外的文件。 */
+.step-row {
+  display: flex;
+  align-items: flex-start;
+  margin-top: var(--space-md);
+}
+
+.step-dot {
+  flex-shrink: 0;
+  width: 40rpx;
+  height: 40rpx;
+  margin-right: 20rpx;
+  border-radius: 999rpx;
+  background: var(--color-fill-ghost);
+  color: var(--color-text-primary);
+  font-size: var(--fs-caption);
+  line-height: 40rpx;
+  text-align: center;
+}
+
+.step-name {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-label);
+  line-height: 40rpx;
+  color: var(--color-text-primary);
+}
+
 /* ---- 危险三级分层（规格 5.3；稿注 4:584 与十二轮收口裁定 3）----
    删除店铺 7:212       实心 red/600 底 + 白字        = 最强
    清空本店数据 4:574   白底 + red/600 描边与字        = 中

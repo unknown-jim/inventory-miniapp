@@ -53,6 +53,19 @@
       <view class="muted gap-top">没有邀请码。把这串身份码发给店主，店主添加后你就在店里了。</view>
     </view>
 
+    <!-- 稿 Screen/14c 的 card/怎么进店 15:188。这一屏（无店）里没有 card/其他店，
+         也就没有「加入别人的店」那一行 —— 而稿注 15:282 逐字写着「店员路径在店铺页
+         「加入别人的店」（Screen/14c），不在本屏分叉」。所以无店时这三步的承载物
+         就是身份码卡下面这一张，最需要它的人（还没有店的店员）才看得到。
+         三行不带状态列、不可点：进度在店主侧，本人推不出来（稿 15:210 n1）。 -->
+    <view class="card">
+      <view class="card-title">怎么进店</view>
+      <view class="step-row" wx:for="{{joinSteps}}" wx:key="n">
+        <view class="step-dot">{{item.n}}</view>
+        <view class="step-name">{{item.name}}</view>
+      </view>
+    </view>
+
     <view class="safe-area"></view>
   </block>
 
@@ -151,9 +164,18 @@
         <view class="list-title">加入别人的店（把身份码发给店主）</view>
         <view class="cell-go">{{showJoin ? '收起' : '展开'}}</view>
       </view>
+      <!-- 稿 Screen/14c 15:177：lead 15:181 + card/身份码 15:182 + card/怎么进店 15:188。
+           身份码卡 B11 已经提成常驻卡放在这张卡上方，所以这里只剩 lead 与三步。
+           三步不套白卡：折叠体本身在 .card.list-card 里，再套一张会是「白卡里的白卡」。
+           原来那句「加入不切店：新店会出现在「我加入的店」里，点它才进去记账。」被 step/3
+           吃掉了 —— 那句的出处是 UX 注释 15:211，稿上的屏元素是 15:202 这一步。 -->
       <view wx:if="{{showJoin}}" class="fold-body">
         <view class="muted">没有邀请码。把上面的身份码发给店主，店主添加后你就在店里了。</view>
-        <view class="muted gap-top">加入不切店：新店会出现在「我加入的店」里，点它才进去记账。</view>
+        <view class="card-title gap-top">怎么进店</view>
+        <view class="step-row" wx:for="{{joinSteps}}" wx:key="n">
+          <view class="step-dot">{{item.n}}</view>
+          <view class="step-name">{{item.name}}</view>
+        </view>
       </view>
     </view>
 
