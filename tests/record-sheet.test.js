@@ -303,6 +303,74 @@ orderPicker.openOrderPicker().then(function () {
     assert.ok(wxss.indexOf(token) >= 0, '面板应当消费 ' + token)
   })
 
+  // picker 列表区固定高（稿 UX注释/骨架 的 n-picker列表高）。搜不到结果时若高度跟着塌，
+  // 面板会在手指还在键盘上时在底下跳，而 sheet 从底部升起，塌陷还会把搜索框一起往下拽。
+  const bodyRule = /\.rs-picker-body\s*\{([^}]*)\}/.exec(wxss)
+  assert.ok(bodyRule, '缺 .rs-picker-body：三个 picker 的 loading / 列表 / 空态要罩在同一个固定高外壳里')
+  assert.ok(
+    /(^|[^-])height:\s*640rpx/.test(bodyRule[1]),
+    '.rs-picker-body 必须是固定 height 而不是 max-height，否则空态照样会塌：' + bodyRule[1].trim()
+  )
+  const listRule = /\.rs-list\s*\{([^}]*)\}/.exec(wxss)
+  assert.ok(listRule, '缺 .rs-list')
+  assert.ok(
+    !/max-height/.test(listRule[1]),
+    '.rs-list 不该再自己夹高度 —— 高度由 .rs-picker-body 决定，两处都夹会打架：' + listRule[1].trim()
+  )
+  assert.ok(
+    /min-height:\s*0/.test(listRule[1]),
+    '.rs-list 作为 flex 子项要 min-height: 0，否则默认 auto 会被内容撑破外壳、把面板重新顶高'
+  )
+  // 空态要在固定高外壳里垂直居中。固定高之后才需要这条：空态文案自身只有一行，
+  // 不居中就贴在 320px 盒子顶部、下面一大片空白（稿 11:55 / 11:77 都是居中的）。
+  const emptyRule = /\.rs-picker-body\s*>\s*\.rs-empty\s*\{([^}]*)\}/.exec(wxss)
+  assert.ok(emptyRule, '缺 .rs-picker-body > .rs-empty：空态会贴在固定高外壳顶部')
+  // 四个声明少任何一个居中都坏，所以四个都要钉 —— 只钉 align-items 是不够的：
+  //   · 没有 display: flex，align-items 在非 flex 容器上完全失效（静默，看不出来）
+  //   · 没有 flex: 1，空态只有自身一行高（约 51px），居中的是它自己，照样贴外壳顶部
+  // 另外两个**有意不钉**，实测删掉居中仍成立，不是漏了：
+  //   · justify-content: center —— .rs-empty 自带 text-align: center 兜底
+  //   · min-height: 0 —— 空态内容比外壳矮，撑不破，这里不承重（.rs-list 那条才承重）
+  ;[
+    [/display:\s*flex/, 'display: flex —— 没有它 align-items 在非 flex 容器上静默失效'],
+    [/flex:\s*1/, 'flex: 1 —— 没有它空态只有自身一行高，居中的是它自己，仍贴顶'],
+    [/align-items:\s*center/, 'align-items: center —— 垂直居中本身']
+  ].forEach(function (pair) {
+    assert.ok(
+      pair[0].test(emptyRule[1]),
+      '外壳里的空态要垂直居中，缺 ' + pair[1] + '：' + emptyRule[1].trim()
+    )
+  })
+
+  // 三个 picker 一个都不能漏：漏掉的那个搜不到时照样塌。
+  const sheetWxml = read('components/record-sheet/index.wxml')
+  assert.strictEqual(
+    (sheetWxml.match(/class="rs-picker-body"/g) || []).length,
+    3,
+    '三个 picker（选客户 / 选原销售单 / 选商品）都要套 .rs-picker-body'
+  )
+
+  // 每个外壳里的 loading 与空态**自身**必须带 class="rs-empty"，不能套在别的节点里。
+  // 这条守的是 DOM 结构、不是 CSS 文本，所以不吃层叠和注释那套问题；它补的是运行时
+  // 覆盖不到的那一格：选原销售单没有搜索框，进不了「搜到零结果」，运行时用例够不着，
+  // 但它的空态照样渲染在 320px 外壳里，不居中就是一行字贴顶、下面 280px 空白 ——
+  // 这跟有没有搜索框无关。反讽的是，稿上唯一画了「空态居中」的样张恰恰就是它
+  // （11:55 sheet/选原销售单·空态，fill_container + textAlignVertical: CENTER）。
+  const bodyBlocks = sheetWxml.split('<view class="rs-picker-body">').slice(1)
+  assert.strictEqual(bodyBlocks.length, 3, '应当有三个 .rs-picker-body 外壳')
+  bodyBlocks.forEach(function (block, i) {
+    assert.ok(
+      /<view wx:if="\{\{loading\}\}" class="rs-empty"/.test(block),
+      '第 ' + (i + 1) + ' 个外壳里的 loading 节点自身要带 class="rs-empty"（不要套在别的节点里）'
+    )
+    assert.ok(
+      /<view wx:else class="rs-empty"/.test(block),
+      '第 ' + (i + 1) + ' 个外壳里的空态节点自身要带 class="rs-empty"：套一层 view 之后 '
+        + '.rs-picker-body > .rs-empty 这条子选择器就不再命中，居中会静默失效，'
+        + '而 wxss 一个字节都没改、静态颜色断言也看不出来'
+    )
+  })
+
   // 组件不许开 virtualHost：开了页面侧就没有宿主节点，automator 从页面够不到组件里
   // 的任何东西（tests/ui.test.js 在 slip-overlay 上实测过 page.$$ / >>> / selectComponent
   // 全是 0），tests/ui.test.js 里那一整组面板用例会当场失效。面板本体 position: fixed

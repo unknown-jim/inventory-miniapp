@@ -172,8 +172,39 @@
   text-align: center;
 }
 
+/* 固定高之后才出现的新差异：空态文案自身只有一行高，贴在 320px 外壳的顶部，
+   下面一大片空白。稿 11:55 / 11:73 的空态是在这块区域里**垂直居中**的。
+   只有在外壳里的那几个 .rs-empty 要居中；外壳之外没有别处用它。 */
+.rs-picker-body > .rs-empty {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* picker 列表区**固定高**，不随内容涨落 —— 稿 UX注释/骨架 的 n-picker列表高。
+   外壳罩住 loading / 列表 / 空态三个分支，所以搜不到结果时不会从满高塌成一行文案。
+   选客户和选商品两个 picker 带搜索框，满足条件的行随输入变化；若高度跟着变，
+   面板会在手指还在键盘上时在底下跳，而 sheet 从底部升起，塌陷会把上面的搜索框
+   一起往下拽。代价是只有两三个客户的小店会看到一块空白，已接受。 */
+.rs-picker-body {
+  height: 640rpx;
+  /* **必须有 min-height: 0**，跟下面 .rs-list 那条同源、但守的是另一件事。
+     sheet 封顶 80vh，窗口不够高时这一块要让位（稿 n-小屏让位）。让位时若这里是
+     默认的 min-height: auto，有结果态会被列表内容顶住压不下去、空态压得下去，
+     于是高度重新随搜索结果变 —— 实测等比模拟 375×667：287px → 259px，
+     28px 的跳动回来了，正是本批要消灭的那个。行数越多下限越高。 */
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 列表吃掉外壳里除 rs-sum / rs-hint 之外的剩余高度。min-height: 0 是必须的：
+   flex 子项默认 min-height: auto，会被内容撑破外壳，反而又把面板顶高。 */
 .rs-list {
-  max-height: 640rpx;
+  flex: 1;
+  min-height: 0;
 }
 
 .rs-pick {

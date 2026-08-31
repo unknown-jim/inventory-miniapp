@@ -106,53 +106,57 @@
           bindinput="onCustomerSearch"
         />
       </view>
-      <view wx:if="{{loading}}" class="rs-empty">正在读取…</view>
-      <block wx:elif="{{customers.length}}">
+      <view class="rs-picker-body">
+        <view wx:if="{{loading}}" class="rs-empty">正在读取…</view>
+        <block wx:elif="{{customers.length}}">
         <view class="rs-sum">{{debtCount}} 位 · 欠款共 ¥{{debtTotalText}}</view>
         <view class="rs-hint">只列有欠款的客户</view>
         <scroll-view class="rs-list" scroll-y>
-          <view
-            class="rs-pick js-rs-customer"
-            wx:for="{{customers}}"
-            wx:key="id"
-            data-id="{{item.id}}"
-            bindtap="onPickCustomer"
-            hover-class="rs-option-press"
-          >
-            <view class="rs-pick-label">{{item.name}}</view>
-            <view class="rs-debt">欠 ¥{{item.receivableText}}</view>
-          </view>
+        <view
+        class="rs-pick js-rs-customer"
+        wx:for="{{customers}}"
+        wx:key="id"
+        data-id="{{item.id}}"
+        bindtap="onPickCustomer"
+        hover-class="rs-option-press"
+        >
+        <view class="rs-pick-label">{{item.name}}</view>
+        <view class="rs-debt">欠 ¥{{item.receivableText}}</view>
+        </view>
         </scroll-view>
-      </block>
-      <view wx:else class="rs-empty">没有欠款客户，都收清了</view>
+        </block>
+        <view wx:else class="rs-empty">没有欠款客户，都收清了</view>
+      </view>
     </block>
 
     <!-- 退货 › 选原销售单：只列可退 > 0，时间倒序，不开空白退货单 -->
     <block wx:elif="{{step === 'order'}}">
       <view class="rs-title">选择原销售单</view>
-      <view wx:if="{{loading}}" class="rs-empty">正在读取…</view>
-      <block wx:elif="{{orders.length}}">
+      <view class="rs-picker-body">
+        <view wx:if="{{loading}}" class="rs-empty">正在读取…</view>
+        <block wx:elif="{{orders.length}}">
         <view class="rs-hint">只列出还没退完的销售单</view>
         <scroll-view class="rs-list" scroll-y>
-          <view
-            class="rs-order js-rs-order"
-            wx:for="{{orders}}"
-            wx:key="id"
-            data-id="{{item.id}}"
-            bindtap="onPickOrder"
-            hover-class="rs-option-press"
-          >
-            <text class="tag tag-out rs-order-tag">销售</text>
-            <view class="rs-col">
-              <view class="rs-label">{{item.customerText}}</view>
-              <view class="rs-desc">{{item.subText}}</view>
-              <view class="rs-desc">{{item.returnText}}</view>
-            </view>
-            <view class="rs-order-amount">¥{{item.amountText}}</view>
-          </view>
+        <view
+        class="rs-order js-rs-order"
+        wx:for="{{orders}}"
+        wx:key="id"
+        data-id="{{item.id}}"
+        bindtap="onPickOrder"
+        hover-class="rs-option-press"
+        >
+        <text class="tag tag-out rs-order-tag">销售</text>
+        <view class="rs-col">
+        <view class="rs-label">{{item.customerText}}</view>
+        <view class="rs-desc">{{item.subText}}</view>
+        <view class="rs-desc">{{item.returnText}}</view>
+        </view>
+        <view class="rs-order-amount">¥{{item.amountText}}</view>
+        </view>
         </scroll-view>
-      </block>
-      <view wx:else class="rs-empty">没有可退的销售单</view>
+        </block>
+        <view wx:else class="rs-empty">没有可退的销售单</view>
+      </view>
     </block>
 
     <!-- 库存修正 › 选商品：两个落点共用这一个 picker（数量对不上 -> pages/adjust，
@@ -168,24 +172,26 @@
           bindinput="onProductSearch"
         />
       </view>
-      <view wx:if="{{loading}}" class="rs-empty">正在读取…</view>
-      <block wx:elif="{{products.length}}">
+      <view class="rs-picker-body">
+        <view wx:if="{{loading}}" class="rs-empty">正在读取…</view>
+        <block wx:elif="{{products.length}}">
         <view class="rs-hint">{{productHint}}</view>
         <scroll-view class="rs-list" scroll-y>
-          <view
-            class="rs-pick js-rs-product"
-            wx:for="{{products}}"
-            wx:key="id"
-            data-id="{{item.id}}"
-            bindtap="onPickProduct"
-            hover-class="rs-option-press"
-          >
-            <view class="rs-pick-label">{{item.name}}</view>
-            <view class="rs-stock">库存 {{item.stockText}}</view>
-          </view>
+        <view
+        class="rs-pick js-rs-product"
+        wx:for="{{products}}"
+        wx:key="id"
+        data-id="{{item.id}}"
+        bindtap="onPickProduct"
+        hover-class="rs-option-press"
+        >
+        <view class="rs-pick-label">{{item.name}}</view>
+        <view class="rs-stock">库存 {{item.stockText}}</view>
+        </view>
         </scroll-view>
-      </block>
-      <view wx:else class="rs-empty">没有找到商品</view>
+        </block>
+        <view wx:else class="rs-empty">没有找到商品</view>
+      </view>
     </block>
 
     <view class="rs-cancel js-rs-cancel" bindtap="onClose">取消</view>
