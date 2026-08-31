@@ -3342,12 +3342,14 @@ reWaitForPage.lastIndex = 0
 while ((hit = reWaitForPage.exec(routeSource)) !== null) waitForPageTargets.push(hit[1])
 assert.strictEqual(
   waitForPageTargets.length,
-  27,
+  28,
   // 4 处是最早的 tap 跳转；3 处是「记一笔」面板三个 picker 的落点
   //（customer-edit / sale-return / adjust）—— 面板的全部意义就是把人送到这三页；
-  // 剩下 20 处是 2026-08-31 那一批新覆盖（进货 / 退货 / 库存调整 / 换规格 /
-  // 商品详情四个动作按钮 / 商品编辑 / 种类模板 / 建店与成员）各自的落点确认。
-  '自检：waitForPage 的字面量调用点应当正好 27 处，实为 '
+  // 20 处是 2026-08-31 那一批新覆盖（进货 / 退货 / 库存调整 / 换规格 /
+  // 商品详情四个动作按钮 / 商品编辑 / 种类模板 / 建店与成员）各自的落点确认；
+  // 1 处是 B4 批新增的盘点流程：确认调整成功后自动 navigateBack 回看板，
+  // runStockTake 里用 waitForPage(miniProgram, 'pages/index/index', ...) 验这个退栈。
+  '自检：waitForPage 的字面量调用点应当正好 28 处，实为 '
     + waitForPageTargets.length + ' 处：' + JSON.stringify(waitForPageTargets)
     + ' —— 数目对不上说明要么正则失效了（钉子④是假绿的），要么调用点增减了，两种都要人看一眼'
 )
