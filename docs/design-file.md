@@ -62,7 +62,8 @@ https://ardot.tencent.com/file/718738891083099
 15. **绑变量的 paint，它的 opacity 由变量自身的 alpha 决定；你写进去的 paint 级 opacity 会被静默丢弃。** 给一枚 `{color: #6B7280, opacity: 0.5}` 的画笔绑上 alpha=1 的 token，透明度直接变成 100%——三种写法（`color` 简写 / 显式 `boundVariables` + 字面 color + opacity / 先写字面量再单独补绑定）全都拦不住，最后一种的绑定写入干脆是 no-op。实测全稿 3715 个节点的每一枚 paint，「paint.opacity ≠ 所绑变量 alpha」的例外是 **0**——这套模型没有「绑 token + 独立画笔透明度」的表达位。
     所以：**要保留画笔透明度就别绑 token**（或者给那个颜色建一枚自带 alpha 的变量）。而且**验收颜色一律用 `resolveVariables` 读回完整 paint 对象**——`batch_read` 的 token 简写会把 paint 级 opacity 藏掉，一次绑定把商品卡相机角标从「几乎看不见的浅灰」变成「实心深灰蓝」（ΔE00 22），实施者自查时报的却是「几乎恒等」，就是这么漏的。
 16. **`batch_edit` 在写入被拒时照样回 `success: true`，唯一的真信号是 `potentialIssues`。** 画布只读（编辑器处在 Dev Mode）时，一次 `U(node, {strokes: ...})` 返回的 `operations[].updated` 字段**回显的是旧值**——看起来像「写进去了、只是值没变」，实际是一个字节都没落。只有 `potentialIssues` 里那句 `failed to apply "strokes" — Setting the property "strokes" is not allowed in read-only mode` 能看出真失败。所以**任何写入之后都要用 `batch_read` 复读验证**，不要拿 `success` 或 `updated` 当验收依据；验收颜色仍按坑 15 用 `resolveVariables: true` 读完整 paint 对象。
-    判断编辑器是不是处在 Dev Mode，用 `fetch_file_info` 返回的 `fileUrl` 里**有没有 `&m=dev`**，比同一份返回里的 `permission` 字段准——Dev Mode 下 `permission` 照样是 `readwrite`，`&m=dev` 才是真的。卡在这个状态时没有绕过路径，只能请人把编辑器切回设计模式，反复重试是浪费。
+    **`fetch_file_info` 的两个字段都判不出能不能写。** `permission` 在只读状态下照样返回 `readwrite`；`fileUrl` 里的 `&m=dev` 也不行——2026-08-31 实测，编辑器切回设计模式、写入已经成功之后，`fileUrl` 里的 `&m=dev` **仍然在**（`cocraft://localhost/file/718738891083099?node_id=3%3A159&m=dev`）。它跟着当前选中节点更新 `node_id`，说明连接是活的，但 `m=dev` 这一段是打开文件时定死的，不反映当前模式。中间那一轮据此判定「还锁着」是误判。
+    **唯一可靠的判据是试写一次**：发一条最小的 `U()`，看返回里有没有 `potentialIssues`——有 `read-only mode` 就是锁着，没有 `potentialIssues` 且 `updated` 回显新值就是通了，再 `batch_read` 复读坐实。真锁着时没有绕过路径，只能请人把编辑器切回设计模式；但**判断锁没锁要靠试写，不要靠读 URL**。
 
 ## 过程文档不进仓库
 
