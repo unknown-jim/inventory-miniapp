@@ -169,5 +169,8 @@ const recordsJs = fs.readFileSync(
 assert.ok(/\{\s*key:\s*'adjust',\s*label:\s*'调整'\s*\}/.test(recordsJs))
 assert.ok(recordsWxml.indexOf('wx:for="{{typeOptions}}"') >= 0)
 assert.ok(recordsWxml.indexOf('data-type="{{item.key}}"') >= 0)
+// 光有数组和 wxml 动态渲染语法还不够：数组必须真的接到 data.typeOptions
+// 上，否则 wx:for 绑定的是个 undefined，chip 一枚都渲染不出来也测不出来。
+assert.ok(recordsJs.indexOf('typeOptions: TYPE_OPTIONS') >= 0)
 
 console.log('product-edit tests passed')
