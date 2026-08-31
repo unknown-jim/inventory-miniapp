@@ -78,10 +78,6 @@
   font-size: var(--fs-label);
 }
 
-.press {
-  background: var(--color-fill-ghost);
-}
-
 .fold-body {
   padding: var(--space-md) 0 var(--space-lg);
   border-top: 2rpx solid var(--color-border-default);
