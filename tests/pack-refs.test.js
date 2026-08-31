@@ -185,6 +185,84 @@ tabList.forEach(function (item) {
   )
 })
 
+// --- 原生外壳的颜色 -------------------------------------------------------
+// 这一组守的是 WXSS 够不着的地方：导航栏、tabBar 的文字色、以及 tabBar 图标
+// **像素本身**。它们只在 app.json 和 PNG 里，A1（主题绑 token）当时把整个
+// app.json 划出了范围，A3（tabBar 5→4）沿用旧图标画法并登记为「不足」，于是
+// 13 个批次逐个把它标成「原生外壳，实现侧不动」跳过——直到真机上看见「顶部
+// 还是绿的、tab 图标还是绿的」才发现。没有断言守着，它就会再漏一次。
+const BRAND_TEAL = [0x0F, 0x76, 0x6E]     // 旧品牌青绿，主行动改黑后全站不该再有
+const TAB_ON = [0x17, 0x17, 0x17]         // 稿 text/primary 3:23
+const TAB_OFF = [0x6F, 0x6F, 0x6F]        // 稿 text/muted 3:79（#171717 @62%）白底合成
+
+assert.strictEqual(appJson.window.navigationBarBackgroundColor, '#FFFFFF',
+  '导航栏底色要跟稿的 navbar/自定义（4:69 绑 3:13 = 白）一致，不要回退成品牌青绿')
+assert.strictEqual(appJson.window.navigationBarTextStyle, 'black',
+  '白底导航栏的标题必须是 black；留成 white 会得到白底白字')
+assert.strictEqual(appJson.tabBar.selectedColor, '#171717',
+  'tabBar 选中态跟稿 3:23 一致。裁定「tabBar 不上品牌色」见 docs/design-file.md')
+assert.strictEqual(appJson.tabBar.color, '#6F6F6F',
+  'tabBar 未选中态是 text/muted 在白底上的合成值')
+
+// 只认 8 位 RGBA、非隔行、单/多 IDAT —— 本仓库四组 tab 图标都是这个形状。
+// 形状变了就抛，不要静默跳过：静默跳过的颜色检查等于没有检查。
+function dominantColorOf(rel) {
+  const buf = fs.readFileSync(path.join(root, rel))
+  assert.strictEqual(buf[24], 8, rel + ' 不是 8 位深，颜色检查失效')
+  assert.strictEqual(buf[25], 6, rel + ' 不是 RGBA（colorType 6），颜色检查失效')
+  assert.strictEqual(buf[28], 0, rel + ' 是隔行 PNG，本解码器不支持')
+  const width = buf.readUInt32BE(16)
+  const height = buf.readUInt32BE(20)
+  const parts = []
+  let off = 8
+  while (off < buf.length) {
+    const len = buf.readUInt32BE(off)
+    if (buf.toString('ascii', off + 4, off + 8) === 'IDAT') parts.push(buf.slice(off + 8, off + 8 + len))
+    off += 12 + len
+  }
+  const raw = require('zlib').inflateSync(Buffer.concat(parts))
+  const bpp = 4
+  const stride = width * bpp
+  const out = Buffer.alloc(height * stride)
+  for (let y = 0; y < height; y++) {
+    const filter = raw[y * (stride + 1)]
+    const line = raw.slice(y * (stride + 1) + 1, y * (stride + 1) + 1 + stride)
+    for (let x = 0; x < stride; x++) {
+      const a = x >= bpp ? out[y * stride + x - bpp] : 0
+      const b = y > 0 ? out[(y - 1) * stride + x] : 0
+      const c = (x >= bpp && y > 0) ? out[(y - 1) * stride + x - bpp] : 0
+      let v = line[x]
+      if (filter === 1) v += a
+      else if (filter === 2) v += b
+      else if (filter === 3) v += (a + b) >> 1
+      else if (filter === 4) {
+        const p = a + b - c
+        const pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c)
+        v += (pa <= pb && pa <= pc) ? a : (pb <= pc ? b : c)
+      } else if (filter !== 0) throw new Error(rel + ' 未知 PNG filter ' + filter)
+      out[y * stride + x] = v & 0xFF
+    }
+  }
+  const tally = new Map()
+  for (let i = 0; i < out.length; i += bpp) {
+    if (out[i + 3] < 128) continue
+    const key = out[i] + ',' + out[i + 1] + ',' + out[i + 2]
+    tally.set(key, (tally.get(key) || 0) + 1)
+  }
+  let best = null, bestN = 0
+  tally.forEach(function (n, key) { if (n > bestN) { bestN = n; best = key } })
+  return best ? best.split(',').map(Number) : null
+}
+
+tabList.forEach(function (item) {
+  ;[[item.selectedIconPath, TAB_ON, '选中'], [item.iconPath, TAB_OFF, '未选中']].forEach(function (pair) {
+    const got = dominantColorOf(pair[0])
+    assert.deepStrictEqual(got, pair[1],
+      pair[0] + '（' + pair[2] + '态）主色应为 rgb(' + pair[1] + ')，实测 rgb(' + got + ')')
+    assert.notDeepStrictEqual(got, BRAND_TEAL, pair[0] + ' 还是旧的品牌青绿')
+  })
+})
+
 // tabBar 5→4（A3 批）：进货、销售撤出一级导航，改由看板「记一笔」+ 流水页 FAB 承载。
 // 它们**不再是 tab 页**，但**必须仍在 pages 数组里**（AGENTS.md：不要顺手挪进分包）。
 // 这两条一起钉：只钉前者，有人把页面删了不会红；只钉后者，有人把 tab 加回来不会红。
