@@ -321,6 +321,15 @@ orderPicker.openOrderPicker().then(function () {
     /min-height:\s*0/.test(listRule[1]),
     '.rs-list 作为 flex 子项要 min-height: 0，否则默认 auto 会被内容撑破外壳、把面板重新顶高'
   )
+  // 空态要在固定高外壳里垂直居中。固定高之后才需要这条：空态文案自身只有一行，
+  // 不居中就贴在 320px 盒子顶部、下面一大片空白（稿 11:55 / 11:77 都是居中的）。
+  const emptyRule = /\.rs-picker-body\s*>\s*\.rs-empty\s*\{([^}]*)\}/.exec(wxss)
+  assert.ok(emptyRule, '缺 .rs-picker-body > .rs-empty：空态会贴在固定高外壳顶部')
+  assert.ok(
+    /align-items:\s*center/.test(emptyRule[1]),
+    '外壳里的空态要垂直居中：' + emptyRule[1].trim()
+  )
+
   // 三个 picker 一个都不能漏：漏掉的那个搜不到时照样塌。
   const sheetWxml = read('components/record-sheet/index.wxml')
   assert.strictEqual(
