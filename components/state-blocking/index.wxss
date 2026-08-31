@@ -1,0 +1,72 @@
+/* 稿 4:1100 / 4:1104 / 4:1107 / 4:1110（1px = 2rpx）：
+   白卡、padding 20（40rpx）、纵向 gap 8（16rpx）、左对齐；
+   40×40（80rpx）圆形图标 r999，里面 20px Medium 的字形；
+   标题 16 SemiBold（--fs-title）；正文 14 Regular neutral/600（--fs-body）。
+   颜色一律走 app.wxss 的变量，本文件一个颜色字面量都没有。
+
+   .card.sb 用两段选择器（特指度 0,2,0）压过 app.wxss 里 .card 的 padding，
+   这样就不依赖「组件样式和 app.wxss 谁后加载」这种不该赌的事。 */
+.card.sb {
+  padding: 40rpx;
+  text-align: left;
+}
+
+.sb-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 80rpx;
+  height: 80rpx;
+  border-radius: 999rpx;
+}
+
+/* 琥珀 = 暂时性、等一等（维护、搬家中）；石板灰 = 要动手做点什么（版本过旧、未建店）。
+   兜底档 generic 归石板灰：认不出是哪一种时，说「等一等」比说「去做点什么」更容易骗人。 */
+.sb-icon-maintenance,
+.sb-icon-migrating {
+  background: var(--color-amber-50);
+}
+
+.sb-icon-maintenance .sb-glyph,
+.sb-icon-migrating .sb-glyph {
+  color: var(--color-amber-700);
+}
+
+.sb-icon-outdated,
+.sb-icon-no-shop,
+.sb-icon-generic {
+  background: var(--color-slate-100);
+}
+
+.sb-icon-outdated .sb-glyph,
+.sb-icon-no-shop .sb-glyph,
+.sb-icon-generic .sb-glyph {
+  color: var(--color-slate-700);
+}
+
+/* 40rpx = 稿上的 20px。docs/ui-scale.md 的字号表里没有「图标字形」这一档，
+   而这一枚不是正文、是插画，所以写字面量而不是硬套一个语义不对的 --fs-*。
+   同一条理由的先例：0b 批给 pages/records 的 FAB 写死 112rpx。
+   40rpx 高于 --fs-caption 的 24rpx 地板，tests/ui-scale.test.js 的字面量扫描放行。 */
+.sb-glyph {
+  font-size: 40rpx;
+  line-height: 1;
+}
+
+.sb-title {
+  margin-top: var(--space-md);
+  font-size: var(--fs-title);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.sb-body {
+  margin-top: var(--space-md);
+  font-size: var(--fs-body);
+  line-height: 1.5;
+  color: var(--color-neutral-600);
+}
+
+.sb-action {
+  margin-top: var(--space-md);
+}

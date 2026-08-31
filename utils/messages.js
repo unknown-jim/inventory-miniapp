@@ -127,6 +127,45 @@ const RULES = [
   }
 ]
 
+// ---------------------------------------------------------------------------
+// 全局阻断态（稿 Row/00「全局阻断态（4 种）」4:1099，四个本体 4:1100 / 4:1104 /
+// 4:1107 / 4:1110）。
+//
+// **这张表不放文案正文。** 正文一律是上面 forStaff() 的话术 —— 阻断位上那句话
+// 和 toast 里那句必须是同一句，不许在仓库里存第二份。这张表只回答三件事：
+//   1. 这个错误属于哪一种阻断态（决定图标字形和配色，见 components/state-blocking）
+//   2. 卡片标题是什么（稿上的设计决策；RULES 里 title 是给 modal 用的，
+//      「还没有选择店铺」那条是 toast 档、title 本来就是空串，所以标题得单独有一张表）
+//   3. 给不给按钮、按钮上写什么
+//
+// 标题逐字取自稿：4:1101 / 4:1105 / 4:1108 / 4:1111。其中 migrating、outdated
+// 两条与上面 RULES 里同一条规则的 title 逐字相同，maintenance 与
+// utils/maintenance.js 的 modal 标题逐字相同 —— 三处交叉验证过。
+//
+// **稿上那四行 body 是缩写版，不要抄。** 它们缺了 RULES 里「我该做什么、找谁」
+// 那半句，而那正是本文件顶部定的话术标准。稿上 4:1115 的注记自己写着
+// 「四段文案逐字取自 utils/messages.js…设计稿不要另写文案」，所以代码是权威源。
+//
+// maintenance 这一档 **当前没有页面消费**：维护状态走 utils/maintenance.js 的
+// wx.showModal，而 docs/cloud-ledger.md「维护模式」明写维护期只拦写、读全放行，
+// 不该用整页阻断盖住可读内容（稿上 4:1115 说的是同一件事）。表里留着它是因为
+// 稿上画了四种；它的 match 是 null，只能由调用方用 kindHint 显式点名 ——
+// 维护文案由服务端给，可能是「今晚 22:00-23:00 升级」这种任意一句话，
+// 正则认不出来。
+const BLOCKING = [
+  { kind: 'outdated', match: /请更新小程序到最新版本/, title: '小程序需要更新', action: '' },
+  { kind: 'migrating', match: /本店账本还没完成流水升级/, title: '账目正在整理', action: '' },
+  { kind: 'no-shop', match: /还没有选择店铺/, title: '还没有选店', action: '去店铺页' },
+  { kind: 'maintenance', match: null, title: '后台维护中', action: '' }
+]
+
+// 兜底档。能落到阻断位的错误比稿上画的四种多（未配置云环境 ID、找不到云环境、
+// 基础库太旧、账本没取到，以及任何未命中 RULES 的原文），稿上没画第五种。
+// 标题沿用今天 pages/index 已经在用的那句。
+// **按钮保留**：阻断分支里 hero 店名那条路没有渲染，A3 之后原生 tabBar 也没有
+// 「店铺」那一格，去掉按钮等于把人关在一个没有出口的屏上。
+const BLOCKING_FALLBACK = { kind: 'generic', title: '还不能记账', action: '去店铺页' }
+
 // 接受 Error 或字符串。永远返回 { text, title, modal, raw, matched }。
 // raw 永远是原文（给日志和排查用，不显示给店员）。
 // matched 为假时 text === raw —— 翻译不出来就原样透传，不吞。
@@ -165,4 +204,33 @@ function forStaff(errorOrMessage) {
   return { text: raw, title: '', modal: false, raw: raw, matched: false }
 }
 
-module.exports = { RULES: RULES, forStaff: forStaff, rawOf: rawOf }
+// 阻断位专用：把一个错误（或一句 message）翻成 { kind, title, body, action }。
+// body **永远等于** forStaff(x).text —— 也就是各页现在放在 blockedMessage 里的
+// 那一句，一个字都没变。kindHint 用于正则认不出的那一种（当前只有 maintenance）。
+function blockingFor(errorOrMessage, kindHint) {
+  const staff = forStaff(errorOrMessage)
+  let hit = null
+  for (let i = 0; i < BLOCKING.length; i++) {
+    const rule = BLOCKING[i]
+    if (kindHint) {
+      if (rule.kind === kindHint) { hit = rule; break }
+      continue
+    }
+    if (rule.match && rule.match.test(staff.raw)) { hit = rule; break }
+  }
+  if (!hit) hit = BLOCKING_FALLBACK
+  return {
+    kind: hit.kind,
+    title: hit.title,
+    body: staff.text,
+    action: hit.action
+  }
+}
+
+module.exports = {
+  RULES: RULES,
+  BLOCKING: BLOCKING,
+  forStaff: forStaff,
+  blockingFor: blockingFor,
+  rawOf: rawOf
+}

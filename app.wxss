@@ -66,6 +66,27 @@ page {
   --color-fill-ghost: #F5F5F5;
   --color-border-brand: #171717;
   --color-neutral-500: #737373;
+  /* 1a 批新增。全局阻断态的图标底与字形色，取自稿 Row/00「全局阻断态（4 种）」4:1099：
+     维护 4:1100 与搬家中 4:1104 绑 Primitive amber/50 3:29 与 amber/700 3:33
+     （Semantic 别名 fill/warning-subtle 3:96 与 text/warning 3:84）；
+     版本过旧 4:1107 与未建店 4:1110 绑 Primitive slate/100 3:65 与 slate/700 3:68。
+     slate 那一对的 Semantic 别名叫 tag/adjust-bg 3:111 与 tag/adjust-fg 3:110，语义是
+     库存调整标签色，**不要复用那两个名字**，复用会把两条语义焊死。
+     对比度：#B5540A 压 #FFFAEB = 4.79:1；#334054 压 #F2F5FA = 9.66:1，都过 4.5:1。 */
+  --color-amber-50: #FFFAEB;
+  --color-amber-700: #B5540A;
+  --color-slate-100: #F2F5FA;
+  --color-slate-700: #334054;
+  /* 1a 批新增。动效 token 取自稿「Section/动效与层级」13:90 的 b1MotionTokens（13:60），
+     原话是「实现用这些名，不要在页面里另写毫秒数」。
+     层级 token（sticky 10 · fab 100 · overlay 1000 · sheet 1001 · dialog 1100）本批不加：
+     现有弹层写的是字面量，改它们属于弹层批，本批一个消费点都没有。 */
+  --duration-fast: 120ms;
+  --duration-base: 200ms;
+  --duration-slow: 320ms;
+  --easing-standard: cubic-bezier(0.2, 0, 0, 1);
+  --easing-enter: cubic-bezier(0, 0, 0, 1);
+  --easing-exit: cubic-bezier(0.3, 0, 1, 1);
   --space-xs: 8rpx;
   --space-sm: 12rpx;
   --space-md: 16rpx;
@@ -311,8 +332,39 @@ button::after {
 
 .empty-title {
   font-size: var(--fs-title);
+  font-weight: 600;
   color: var(--color-text-primary);
   margin-bottom: var(--space-sm);
+}
+
+/* 空态插画的槽位。稿 state/empty 3:408 的 icon 框是 48×48（= 96rpx）、居中、
+   与标题之间 gap 8（= 16rpx）。**本类只给几何，不给图**：三枚插画
+   （纸箱 10:36 / 票据 10:28 / 人形 10:32）是各屏自己的内容，规则已导出到
+   inventory-miniapp-handoffs/spec-1a-assets/empty-icons.wxss，哪一屏要就把
+   对应那一条粘进那一屏的 wxss，用法是 class="empty-icon empty-icon-products"。 */
+.empty-icon {
+  width: 96rpx;
+  height: 96rpx;
+  margin: 0 auto var(--space-md);
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 96rpx 96rpx;
+}
+
+/* 空态的引导操作行。稿 state/empty/cta 3:751 的 cta-row 3:756：横排、居中、
+   按钮间 gap 12（= 24rpx = --space-lg），与上面副文案之间 gap 8（= 16rpx）。
+   窄屏允许折行（docs/ui-scale.md 密度规则：并排操作允许折行，不缩小字号）。 */
+.empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-lg);
+  margin-top: var(--space-md);
+}
+
+.empty-actions > button {
+  flex: 0 1 auto;
+  margin: 0;
 }
 
 .page-loading {

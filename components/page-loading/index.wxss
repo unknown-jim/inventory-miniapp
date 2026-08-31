@@ -1,1 +1,37 @@
+/* 稿 state/loading 3:413（1px = 2rpx）：白卡、横向、gap 8（16rpx）、padding 24（48rpx），
+   居中 = 18×18（36rpx）spinner + 13px 正文 text/muted「加载中…」（走共用类 .muted）。
 
+   .card.page-loading 用两段选择器（特指度 0,2,0）压过 app.wxss 里 .card 的 padding，
+   不依赖样式表先后顺序。app.wxss 的 .page-loading 只管 margin-top，两者不冲突。 */
+.card.page-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-md);
+  padding: 48rpx;
+}
+
+/* 稿上 spinner 4:60 是 18×18 里一段 90° 圆弧、粗 2.25px。这里用 border 画：
+   4rpx（= 2px）的圆环只留顶边有色，转起来与那段弧等效，省掉一整段内联 SVG。
+   转速用 --duration-base（200ms，稿 b1MotionTokens 13:60）；easing 按稿 b1MotionSpec
+   13:61 的例外规定走 linear —— 无限旋转不套那三条 cubic。 */
+.page-loading-spin {
+  flex: none;
+  box-sizing: border-box;
+  width: 36rpx;
+  height: 36rpx;
+  border: 4rpx solid transparent;
+  border-top-color: var(--color-text-primary);
+  border-radius: 50%;
+  animation: page-loading-spin var(--duration-base) linear infinite;
+}
+
+@keyframes page-loading-spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
