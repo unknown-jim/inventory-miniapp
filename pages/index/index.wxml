@@ -1,6 +1,20 @@
 <view class="page">
   <block wx:if="{{pageLoading}}">
-    <page-loading />
+    <!-- 稿 Screen/00b 看板骨架 13:216 的 content 13:219：8 条 neutral/200 灰条、r8，
+         外框 gap 10。几何逐条对 Screen/01 现布局（caption 13:170）。 -->
+    <view class="skel js-dash-skeleton">
+      <view class="skel-bar skel-hero"></view>
+      <view class="skel-bar skel-cta"></view>
+      <view class="skel-bar skel-banner"></view>
+      <view class="skel-stats">
+        <view class="skel-bar skel-stat"></view>
+        <view class="skel-bar skel-stat"></view>
+      </view>
+      <view class="skel-bar skel-line"></view>
+      <view class="skel-bar skel-restock"></view>
+      <view class="skel-bar skel-line"></view>
+      <view class="skel-bar skel-records"></view>
+    </view>
   </block>
 
   <block wx:elif="{{blocked}}">
@@ -11,111 +25,127 @@
       action="{{blockedAction}}"
       bindaction="goShop"
     />
+    <!-- 稿 Screen/01c 无店 15:255：阻断卡下面还有一张三步全「待做」的引导卡 15:260。
+         只有 no-shop 这一档有；维护 / 搬家中 / 版本过旧那三档下建店也做不了任何事。 -->
+    <view wx:if="{{blockedKind === 'no-shop'}}" class="card guide">
+      <view class="guide-title">新手引导</view>
+      <view class="guide-step" wx:for="{{guideSteps}}" wx:key="n">
+        <view class="guide-dot {{item.done ? 'guide-dot-done' : ''}}">{{item.done ? '✓' : item.n}}</view>
+        <view class="guide-name">{{item.name}}</view>
+        <view class="guide-status {{item.done ? 'guide-status-done' : ''}}">{{item.done ? '已完成' : '待做'}}</view>
+      </view>
+      <view class="guide-note">店里已有现货？商品详情 →「库存修正」→「盘一遍这个商品」把货架数入账</view>
+    </view>
   </block>
 
   <block wx:else>
-  <view class="hero card">
-    <view class="hero-shop js-shop" hover-class="hero-press" bindtap="goShop">
-      <view class="hero-shop-name">{{shopName || '未命名店铺'}}</view>
-      <view class="hero-shop-go">店铺 ›</view>
+    <!-- 稿 hero/今日实收 3:557。空店时下半身换成新手引导卡（UX注释 3:568 / 4:828），
+         店名行保留：它是店铺设置的唯一入口，A3 之后 tabBar 没有「店铺」那一格。 -->
+    <view class="card hero">
+      <view class="hero-head js-shop" hover-class="press" bindtap="goShop">
+        <view class="hero-shop">{{shopName || '未命名店铺'}} ›</view>
+        <view class="hero-date">{{dateText}}</view>
+      </view>
+
+      <block wx:if="{{isEmpty}}">
+        <view class="guide-title">新手引导</view>
+        <view class="guide-step" wx:for="{{guideSteps}}" wx:key="n">
+          <view class="guide-dot {{item.done ? 'guide-dot-done' : ''}}">{{item.done ? '✓' : item.n}}</view>
+          <view class="guide-name">{{item.name}}</view>
+          <view class="guide-status {{item.done ? 'guide-status-done' : ''}}">{{item.done ? '已完成' : '待做'}}</view>
+        </view>
+        <view class="guide-note">店里已有现货？商品详情 →「库存修正」→「盘一遍这个商品」把货架数入账</view>
+        <view class="empty-actions">
+          <button class="btn-primary js-seed" bindtap="seedDemo">填充示例数据</button>
+          <button class="btn-ghost" bindtap="goAddProduct">新增商品</button>
+        </view>
+      </block>
+
+      <block wx:else>
+        <view class="hero-body" hover-class="press" bindtap="goRecords">
+          <view class="hero-label">今日实收（元）</view>
+          <view class="hero-num {{receivedClass}}">{{receivedText}}</view>
+          <view wx:if="{{todaySubText}}" class="hero-sub">{{todaySubText}}</view>
+        </view>
+      </block>
     </view>
-    <view class="hero-top" hover-class="hero-press" bindtap="goRecords">
-      <view>
-        <view class="hero-kicker">{{dateText}}</view>
-        <view class="hero-title">今日看板</view>
-      </view>
-      <view class="hero-profit">
-        <view class="muted">今日毛利</view>
-        <view class="hero-profit-num">{{todayAvailable ? '¥' + todayProfit : '—'}}</view>
-      </view>
+
+    <!-- 记一笔主入口。稿 btn/记一笔（主入口）4:983：343×52 实心黑。#94 已做完，本批不动。 -->
+    <view class="record-entry js-record-entry" hover-class="record-entry-press" bindtap="openRecordSheet">＋ 记一笔</view>
+
+    <view wx:if="{{!todayAvailable}}" class="card quiet js-today-unavailable">今天的汇总暂时算不出来，上面几项先显示「—」。稍后重新进这个页面再看。</view>
+
+    <view wx:if="{{aggregatesStale}}" class="card quiet js-aggregates-stale">这里的汇总金额正在核对，可能不准；单张单据上的金额是准的。请把这个情况告诉店主。</view>
+
+    <!-- 稿 banner/debt 3:561：琥珀横幅，点进客户 tab（那边已按欠款降序） -->
+    <view wx:if="{{hasReceivable}}" class="debt-banner js-debt-banner" hover-class="press" bindtap="goCustomers">
+      <view class="debt-icon">!</view>
+      <view class="debt-text">{{debtBannerText}}</view>
+      <view class="debt-chevron">›</view>
     </view>
-    <view class="stat-grid">
-      <view class="stat" hover-class="hero-press" bindtap="goProducts">
-        <view class="stat-num">{{productCount}}</view>
-        <view class="muted">商品数</view>
+
+    <block wx:if="{{!isEmpty}}">
+      <!-- 稿 stat-grid 3:562：**只有两格**，今日毛利 / 今日进货。库存预警不占数字块（UX注释 3:566）。 -->
+      <view class="stat-grid dash-stats">
+        <view class="dash-stat">
+          <view class="dash-stat-label">今日毛利</view>
+          <view class="dash-stat-num dash-stat-profit {{profitClass}}">{{profitText}}</view>
+          <view class="dash-stat-delta">{{profitRateText}}</view>
+        </view>
+        <view class="dash-stat">
+          <view class="dash-stat-label">今日进货</view>
+          <view class="dash-stat-num {{inClass}}">{{inText}}</view>
+          <view class="dash-stat-delta">{{inCountText}}</view>
+        </view>
       </view>
-      <view class="stat" hover-class="hero-press" bindtap="goInventory">
-        <view class="stat-num">{{totalStock}}</view>
-        <view class="muted">库存总量</view>
-      </view>
-      <view class="stat" hover-class="hero-press" bindtap="goTodaySales">
-        <view class="stat-num">{{todaySalesAmount}}</view>
-        <view class="muted">今日销售额</view>
-      </view>
-      <view class="stat {{alertCount ? 'stat-alert' : ''}}" hover-class="hero-press" bindtap="goAlerts">
-        <view class="stat-num">{{alertCount}}</view>
-        <view class="muted">库存预警</view>
-      </view>
-    </view>
-  </view>
 
-  <!-- 记一笔主入口。稿上 btn/记一笔（主入口）4:983：343×52 实心黑，紧贴 hero 下方。 -->
-  <view class="record-entry js-record-entry" hover-class="record-entry-press" bindtap="openRecordSheet">＋ 记一笔</view>
-
-  <view wx:if="{{!todayAvailable}}" class="card quiet js-today-unavailable">今天的汇总暂时算不出来，上面几项先显示「—」。稍后重新进这个页面再看。</view>
-
-  <view wx:if="{{aggregatesStale}}" class="card quiet js-aggregates-stale">这里的汇总金额正在核对，可能不准；单张单据上的金额是准的。请把这个情况告诉店主。</view>
-
-  <view wx:if="{{hasReceivable}}" class="card debt-banner" bindtap="goCustomers">
-    <view>
-      <view class="muted">客户欠款</view>
-      <view class="debt-banner-num">¥{{totalReceivable}}</view>
-    </view>
-    <text class="link">去收款</text>
-  </view>
-
-  <view wx:if="{{isEmpty}}" class="card empty-card">
-    <view class="empty-title">还没有商品</view>
-    <view class="muted">可以先填一份示例数据，看看进货、销售、预警和毛利怎么记。</view>
-    <button class="btn-primary seed-btn js-seed" bindtap="seedDemo">填充示例数据</button>
-    <button class="btn-ghost" bindtap="goAddProduct">新增商品</button>
-  </view>
-
-  <block wx:else>
-    <view class="section-title">
-      <text>库存预警</text>
-      <text class="link" bindtap="goInventory">全部库存</text>
-    </view>
-    <view wx:if="{{alerts.length}}" class="card list-card">
-      <view
-        class="list-item"
-        wx:for="{{alerts}}"
-        wx:key="id"
-        data-id="{{item.id}}"
-        bindtap="onAlertTap"
-      >
-        <view>
-          <view class="item-name">{{item.name}}</view>
-          <view class="muted">
-            <block wx:if="{{item.hasSpecs}}">{{item.specHint || item.specTag}} · </block>货号 {{item.sku || '未填'}} · 预警 ≤ {{item.alertQty}}
+      <!-- 稿 row/要补货标题 11:99 + card/要补货 4:807。无预警不显示整段（UX注释 4:826）。 -->
+      <block wx:if="{{lowStockCount}}">
+        <view class="restock-head">
+          <view class="restock-title">要补货</view>
+          <view class="restock-count">{{lowStockCount}} 种</view>
+          <view class="restock-all js-low-stock-all" hover-class="press" bindtap="goLowStock">全部 ›</view>
+        </view>
+        <view class="card list-card">
+          <view
+            class="restock-row js-restock-row"
+            hover-class="press"
+            wx:for="{{lowStockTop}}"
+            wx:key="key"
+            data-id="{{item.productId}}"
+            bindtap="onRestockTap"
+          >
+            <view class="restock-name">{{item.name}}</view>
+            <view class="restock-qty">
+              <text class="restock-remain">{{item.remainText}}</text>
+              <text class="restock-threshold">{{item.thresholdText}}</text>
+            </view>
+            <view class="restock-chevron">›</view>
           </view>
         </view>
-        <view class="item-right">
-          <text class="tag tag-alert">库存 {{item.stock}}</text>
-        </view>
-      </view>
-    </view>
-    <view wx:else class="card quiet">暂时没有需要补货的商品</view>
+      </block>
 
-    <view class="section-title">
-      <text>最近流水</text>
-      <text class="link" bindtap="goRecords">查看全部</text>
-    </view>
-    <view wx:if="{{recent.length}}" class="card list-card">
-      <view class="list-item" wx:for="{{recent}}" wx:key="id" data-id="{{item.id}}" bindtap="onRecordTap">
-        <view>
-          <view class="item-name">{{item.productName}}</view>
-          <view class="muted">{{item.timeText}}<block wx:if="{{item.hasSpec}}"> · {{item.specText}}</block><block wx:if="{{item.isOut}}"> · {{item.qtyText}} 件</block><block wx:if="{{item.isMulti}}"> · {{item.lineCount}} 种</block><text wx:if="{{item.customerText}}"> · {{item.customerText}}</text></view>
-        </view>
-        <view class="item-right">
+      <!-- 稿 section/最新流水 3:573：右侧**没有**「查看全部」链接，见规格 §4.6 -->
+      <view class="section-plain">最新流水</view>
+      <view wx:if="{{recent.length}}" class="card list-card">
+        <view
+          class="record-row js-record-row"
+          hover-class="press"
+          wx:for="{{recent}}"
+          wx:key="id"
+          data-id="{{item.id}}"
+          bindtap="onRecordTap"
+        >
           <text class="tag {{item.tagClass}}">{{item.typeText}}</text>
-          <view class="amount">¥{{item.amountText}}</view>
-          <view wx:if="{{item.isOut || item.isReturn}}" class="muted">毛利 ¥{{item.profitText}}</view>
+          <view class="record-col">
+            <view class="record-title">{{item.rowTitle}}</view>
+            <view class="record-sub">{{item.rowSub}}</view>
+          </view>
+          <view class="record-amount">{{item.amountSigned}}</view>
         </view>
       </view>
-    </view>
-    <view wx:else class="card quiet">还没有进货或销售记录</view>
-  </block>
+      <view wx:else class="card quiet">还没有进货或销售记录</view>
+    </block>
   </block>
 
   <record-sheet id="record-sheet" show="{{showRecordSheet}}" bindclose="closeRecordSheet" />

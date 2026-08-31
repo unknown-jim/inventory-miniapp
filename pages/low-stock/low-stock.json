@@ -1,0 +1,6 @@
+{
+  "navigationBarTitleText": "要补货",
+  "usingComponents": {
+    "page-loading": "/components/page-loading/index"
+  }
+}

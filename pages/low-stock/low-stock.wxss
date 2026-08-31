@@ -1,0 +1,62 @@
+/* 要补货 · 完整列表。稿 Screen/01b 要补货·完整列表 7:270 的 content 7:273。
+   行的几何与看板 card/要补货 完全同源，两屏各写一份 —— 它们分属两个页面作用域，
+   共用只能靠抽组件，而这块结构简单到抽组件反而更贵（AGENTS.md 那条
+   「不要为了用时注入去硬拆页面」的反向同理）。改一处记得改另一处。 */
+
+.press {
+  opacity: 0.72;
+}
+
+.summary {
+  margin: 0 var(--space-xs) var(--space-lg);
+  font-size: var(--fs-caption);
+  color: var(--color-text-muted);
+}
+
+.list-card {
+  padding: 0 28rpx;
+}
+
+/* 稿 row/预警 7:296 高 44px = 88rpx = --tap-min，与看板那份逐格相同 */
+.restock-row {
+  display: flex;
+  align-items: center;
+  min-height: var(--tap-min);
+  border-bottom: 2rpx solid var(--color-border-default);
+}
+
+.restock-row:last-child {
+  border-bottom: none;
+}
+
+.restock-name {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-label);
+  color: var(--color-text-primary);
+  word-break: break-word;
+}
+
+.restock-qty {
+  flex-shrink: 0;
+  margin-left: var(--gap);
+  font-size: var(--fs-caption);
+  font-weight: 600;
+}
+
+.restock-remain {
+  color: var(--color-red-600);
+}
+
+.restock-threshold {
+  margin-left: 6rpx;
+  color: var(--color-text-muted);
+}
+
+.restock-chevron {
+  flex-shrink: 0;
+  margin-left: var(--space-sm);
+  color: var(--color-text-faint);
+  font-size: var(--fs-title);
+  line-height: 1;
+}

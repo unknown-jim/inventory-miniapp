@@ -3,6 +3,7 @@
     "pages/index/index",
     "pages/products/products",
     "pages/product-detail/product-detail",
+    "pages/low-stock/low-stock",
     "pages/purchase/purchase",
     "pages/sale/sale",
     "pages/records/records",
