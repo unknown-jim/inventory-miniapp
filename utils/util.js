@@ -49,8 +49,15 @@ function withSlipView(order, receivable, products, shopName) {
     }, 0))
   // amount 允许从 lines[] 求和补出来，settledAmount 却按 record.amount 收口；
   // 不把补出来的 amount 递给它，缺 amount 的单据实收会被夹成 0，送货单印错。
-  const paidAmount = inventory.settledAmount(Object.assign({}, order, { amount: amount }))
-  const thisDebt = inventory.round2(amount - paidAmount)
+  const normalized = Object.assign({}, order, { amount: amount })
+  const paidAmount = inventory.settledAmount(normalized)
+  // 【G1】本次欠款要按「已结清额」算，不是按现金实收：抵掉的预收也是结清了的。
+  // 不这么改，一张「应收 352 = 现金 152 + 抵预收 200」的单会在送货单上印出
+  // 本次欠款 ¥200.00 —— 屏上和客户账上都是 0，只有这张纸是错的。
+  // 口径读 inventory.creditedAmount（G1 契约定的那个函数，带取小），
+  // 不在这里另写算式。实收那一格仍然只印现金，预收抵扣单独占一行。
+  const prepayUsed = inventory.round2(inventory.toNumber(order.prepayUsed))
+  const thisDebt = inventory.round2(amount - inventory.creditedAmount(normalized))
   const totalDebt = inventory.toNumber(receivable)
   const prevDebt = inventory.round2(totalDebt - thisDebt)
   const productsMap = productById(products)
@@ -82,6 +89,10 @@ function withSlipView(order, receivable, products, shopName) {
     // 应收恒等于货物总额；实收是开单时填的那个数，欠款是两者之差。
     dueText: money(amount),
     paidText: money(paidAmount),
+    // 【G1】预收抵扣。为 0 时 hasPrepayUsed 为 false，送货单与导出图**逐字段
+    // 与改动前相同** —— 老单据（以及全部没抵过预收的单）不受影响。
+    prepayUsedText: money(prepayUsed),
+    hasPrepayUsed: prepayUsed > 0,
     remark: order.remark || '',
     hasCustomer: !!order.customerName,
     customerName: order.customerName || '',

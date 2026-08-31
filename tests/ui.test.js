@@ -1543,18 +1543,32 @@ async function runSalePickerAndSlip(miniProgram) {
     return data && data.cart && data.cart.length > 0
   }, '商品进购物车')
 
-  // 默认实收等于应收，本单不欠钱
-  const fullPaid = await sale.data()
-  assert.strictEqual(fullPaid.paidAmount, fullPaid.amountText)
-  assert.strictEqual(fullPaid.hasNewDebt, false)
+  // 6a 批：实收搬进 sheet（稿 bottom-cta 4:112 的实收摘要行点开 sheet/实收修改 7:25）。
+  await tapWhen(sale, '.js-paid-row')
+  await waitFor(sale, '.js-paid-none', '出现 .js-paid-none')
 
-  // 点「一分未收」：欠款等于整单应收
+  // 默认收满：实收（现金）+ 预收抵扣 == 应收。**不能直接断言 paidAmount === amountText**
+  // ——这个客户如果有预收余额，抵扣默认是开着的，现金那一格就只有差额（G1 契约
+  // n-预收抵扣 7:428「刚打开实收 sheet 默认抵扣开」）。
+  const fullPaid = await sale.data()
+  assert.strictEqual(
+    Math.round((Number(fullPaid.paidAmount) + Number(fullPaid.prepayUsed)) * 100),
+    Math.round(Number(fullPaid.amountText) * 100),
+    '默认收满时 实收 + 预收抵扣 应当等于应收：' + fullPaid.paidAmount + ' + ' + fullPaid.prepayUsed + ' vs ' + fullPaid.amountText
+  )
+  assert.strictEqual(fullPaid.hasNewDebt, false)
+  assert.strictEqual(fullPaid.paidOver, false, '默认收满不该判成超收')
+
+  // 点「一分未收」：欠款等于应收减掉预收抵扣（没有抵扣时就是整单应收）
   await tapWhen(sale, '.js-paid-none')
   await sale.waitFor(200)
   const nonePaid = await sale.data()
   assert.strictEqual(nonePaid.paidAmount, '0')
   assert.strictEqual(nonePaid.hasNewDebt, true)
-  assert.strictEqual(nonePaid.debtText, nonePaid.amountText)
+  assert.strictEqual(nonePaid.debtText, nonePaid.cashDueText, '一分未收时欠款应当等于「收满」那个数')
+
+  await tapWhen(sale, '.js-paid-confirm')
+  await waitGone(sale, '.js-paid-none')
 
   await tapWhen(sale, '.js-sale-submit')
   await waitSlipOpen(sale, '送货单')

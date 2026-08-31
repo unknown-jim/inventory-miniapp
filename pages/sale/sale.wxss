@@ -1,145 +1,338 @@
-.picker {
-  line-height: var(--tap-md);
+/* 销售出库。共用类（.page / .card / .btn-primary / .chip / .chips / .field /
+   .field-row / .half / .muted / .empty / .search）来自 app.wxss，这里只写本页布局。
+   稿 Screen/05 销售出库 3:704、Col 注释与弹层 3:731。
+   颜色一律走 app.wxss 的变量（见规格 4.0 的 token 映射表），本页不写死颜色。 */
+
+/* 底栏是 fixed，页面底部要留出等高空白，否则清单折叠行会被盖住。
+   104rpx 主钮 + 96rpx 摘要行 + 三段间距 + 安全区，取整 320rpx。 */
+.page {
+  padding-bottom: calc(320rpx + env(safe-area-inset-bottom));
 }
 
-.meta {
-  margin: -8rpx 0 24rpx;
-  color: #C2410C;
-  font-size: var(--fs-sm);
+/* ---------- 通用 chevron。稿上是 6x8 的矢量箭头，这里用两条边旋转 45 度画。
+   容器 88rpx 是热区地板；整行可点时它只是视觉，父行自己吃热区。 ---------- */
+.chev {
+  flex: none;
+  width: 88rpx;
+  height: 88rpx;
+  position: relative;
 }
 
-.spec-block .field {
-  margin-bottom: 8rpx;
+.chev::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: 34rpx;
+  width: 16rpx;
+  height: 16rpx;
+  margin-top: -8rpx;
+  border-top: 3rpx solid var(--color-text-faint);
+  border-right: 3rpx solid var(--color-text-faint);
+  transform: rotate(45deg);
 }
 
-.spec-block .chips {
-  margin-bottom: 8rpx;
-}
-
-.customer-meta {
-  margin: -8rpx 0 24rpx;
-  color: #64748B;
-  font-size: var(--fs-sm);
-}
-
-.field-head {
+/* ---------- 稿 card 客户 3:708：白卡 r12（= 24rpx），padding 12（= 24rpx），gap 12 ---------- */
+.cust-card {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  margin-bottom: 12rpx;
+  gap: var(--space-lg);
+  box-sizing: border-box;
+  min-height: var(--tap-md);
+  padding: var(--space-lg);
+  padding-right: 0;
+  background: var(--color-bg-card);
+  border-radius: 24rpx;
 }
 
-.field-head .field-label {
+.cust-col {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 稿 name 3:712：14px SemiBold */
+.cust-name {
+  font-size: var(--fs-body);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+/* 稿 sub 3:713：12px text/muted */
+.cust-sub {
+  margin-top: 4rpx;
+  font-size: var(--fs-caption);
+  color: var(--color-text-muted);
+}
+
+/* ---------- 稿 row 经手人备注·收起 4:653 与 row 销售清单·折叠 7:11：
+   同一种折叠行，白底 r10（= 20rpx），左标题 + 右副信息 + chevron ---------- */
+.fold-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  box-sizing: border-box;
+  min-height: var(--tap-md);
+  margin-top: var(--space-lg);
+  padding-left: var(--space-lg);
+  background: var(--color-bg-card);
+  border-radius: 20rpx;
+}
+
+/* 稿 4:654 与 7:12：13px Medium */
+.fold-title {
+  flex: none;
+  font-size: var(--fs-label);
+  font-weight: 500;
+  color: var(--color-text-primary);
+}
+
+/* 稿 4:655：12px muted，右对齐吃掉剩余宽度 */
+.fold-hint {
+  flex: 1;
+  min-width: 0;
+  text-align: right;
+  font-size: var(--fs-caption);
+  color: var(--color-text-muted);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* 稿 amount 7:13：13px Inter SemiBold */
+.cart-total {
+  flex: 1;
+  min-width: 0;
+  text-align: right;
+  font-size: var(--fs-label);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.info-card {
+  margin-top: var(--space-md);
+}
+
+.info-card .field.last {
   margin-bottom: 0;
 }
 
-.link {
-  color: #0F766E;
-  font-size: var(--fs-sm);
-}
-
-.total,
-.sheet-item {
+/* ---------- 稿 picker 字段 selected 4:52：44 高（本仓归 --tap-md）、r10、
+   neutral/100 底 + border/default 描边 ---------- */
+.pick-field {
   display: flex;
-  justify-content: space-between;
   align-items: center;
+  box-sizing: border-box;
+  min-height: var(--tap-md);
+  margin-top: var(--space-lg);
+  padding-left: 28rpx;
+  background: var(--color-fill-ghost);
+  border: 2rpx solid var(--color-border-default);
+  border-radius: 20rpx;
 }
 
-.right {
-  text-align: right;
+.pick-value {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-body);
+  color: var(--color-text-primary);
 }
 
-.total-num,
-.profit-num {
-  margin-top: 8rpx;
-  font-size: var(--fs-xl);
-  font-weight: 700;
+/* ---------- 稿 picker 格选择器 3:716：白卡 r12，label 13px muted ---------- */
+.spec-card {
+  margin-top: var(--space-lg);
 }
 
-.total-num {
-  color: #C2410C;
+.spec-label {
+  margin-bottom: var(--space-md);
+  font-size: var(--fs-label);
+  color: var(--color-text-muted);
 }
 
-.profit-num {
-  color: #0F766E;
+.spec-card .field.last {
+  margin-bottom: 0;
 }
 
-.tip {
-  margin-top: 16rpx;
+/* 稿 13:139;3:429：琥珀说明，仅现货不足、真要从半成品扣时出现 */
+.blank-note {
+  margin-top: var(--space-md);
+  font-size: var(--fs-caption);
+  color: var(--color-amber-700);
 }
 
-.add-card {
-  margin-top: 16rpx;
+/* ---------- 稿 field-row 数量+售价 7:1：数量框里右侧带「件 · 可出 N」 ----------
+   用 .page 作用域的组合选择器增补顶距，不重定义共用类 .field-row
+   （tests/ui-scale.test.js 与本仓硬约束都禁页面重定义它）。 */
+.page .field-row {
+  margin-top: var(--space-lg);
+}
+
+.qty-box {
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  height: var(--tap-md);
+  padding: 0 var(--space-lg);
+  background: var(--color-fill-ghost);
+  border: 2rpx solid var(--color-border-default);
+  border-radius: 20rpx;
+}
+
+.qty-input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  font-size: var(--fs-body);
+  color: var(--color-text-primary);
+}
+
+/* 稿 value 7:10：本次售价是 16px Inter SemiBold */
+.price-input {
+  font-size: var(--fs-title);
+  font-weight: 600;
+}
+
+/* 稿 unit 7:6：12px neutral/500 */
+.qty-unit {
+  flex: none;
+  margin-left: var(--space-xs);
+  font-size: var(--fs-caption);
+  color: var(--color-neutral-500);
 }
 
 .line-amount {
-  margin-bottom: 16rpx;
-  color: #64748B;
-  font-size: var(--fs-sm);
+  margin-top: var(--space-sm);
+  font-size: var(--fs-caption);
+  color: var(--color-text-muted);
 }
 
+/* 稿 13:614：清单超额的红字拦截说明 */
+.over-note {
+  margin-top: var(--space-sm);
+  font-size: var(--fs-caption);
+  color: var(--color-red-600);
+}
+
+/* 稿 btn 加入清单 4:65：44 高（本仓归 --tap-md）、r8（= 16rpx）、neutral/100 底。
+   启用态用正文黑字；禁用态走 app.wxss 的 .btn-primary[disabled] 那一档配方
+   （neutral/100 底 + neutral/500 字 + opacity 1），稿 13:615 就是这一档。 */
 .add-btn {
-  margin: 0;
+  height: var(--tap-md);
+  line-height: var(--tap-md);
+  margin: var(--space-md) 0 0;
+  background: var(--color-fill-ghost);
+  border-radius: 16rpx;
+  color: var(--color-text-primary);
+  font-size: var(--fs-title);
+  font-weight: 500;
 }
 
-.cart-card,
-.total-card {
-  margin-top: 16rpx;
+.add-btn[disabled] {
+  background: var(--color-fill-ghost);
+  color: var(--color-neutral-500);
+  opacity: 1;
 }
 
-.cart-head {
-  margin-bottom: 8rpx;
-  font-weight: 600;
+.cart-row {
+  margin-top: var(--space-lg);
 }
 
-.cart-item {
+/* ---------- 稿 bottom-cta 4:112：固定底栏 ---------- */
+.cta-hold {
+  height: 1rpx;
+}
+
+.cta-bar {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 10;
+  background: var(--color-bg-card);
+  border-top: 2rpx solid var(--color-border-default);
+}
+
+.cta-inner {
+  padding: var(--space-xs) var(--page-pad) calc(env(safe-area-inset-bottom) + var(--space-lg));
+}
+
+/* 稿 row 实收摘要 7:16：白底 + neutral/200 描边、r10、44 高（本仓归 --tap-md） */
+.paid-row {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  padding: 18rpx 0;
-  border-bottom: 1rpx solid #F1F5F4;
+  gap: var(--space-md);
+  box-sizing: border-box;
+  min-height: var(--tap-md);
+  padding-left: var(--space-lg);
+  background: var(--color-bg-card);
+  border: 2rpx solid var(--color-neutral-200);
+  border-radius: 20rpx;
 }
 
-.cart-item:last-child {
-  border-bottom: none;
-  padding-bottom: 0;
+.paid-left {
+  flex: none;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-sm);
 }
 
-.cart-right {
-  text-align: right;
+/* 稿 7:18：13px Medium */
+.paid-k {
+  font-size: var(--fs-label);
+  font-weight: 500;
+  color: var(--color-text-primary);
 }
 
-.cart-amount {
-  margin-bottom: 6rpx;
+/* 稿 7:19：16px Inter SemiBold */
+.paid-v {
+  font-size: var(--fs-title);
   font-weight: 600;
+  color: var(--color-text-primary);
 }
 
+/* 稿 hint 7:20：12px muted，右对齐 */
+.paid-hint {
+  flex: 1;
+  min-width: 0;
+  text-align: right;
+  font-size: var(--fs-caption);
+  color: var(--color-text-muted);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.submit-btn {
+  margin: var(--space-sm) 0 0;
+}
+
+/* ---------- 弹层骨架：四个 sheet 共用 ---------- */
 .mask {
   position: fixed;
   top: 0;
   right: 0;
   bottom: 0;
   left: 0;
-  background: rgba(15, 23, 42, 0.45);
+  z-index: 1000;
   display: flex;
   align-items: flex-end;
-  z-index: 1000;
+  background: var(--color-bg-overlay);
 }
 
 .sheet {
-  width: 100%;
-  background: #FFFFFF;
-  border-radius: 24rpx 24rpx 0 0;
-  padding: 28rpx 24rpx 12rpx;
   position: relative;
   z-index: 1001;
+  box-sizing: border-box;
+  width: 100%;
+  max-height: 84vh;
+  padding: 28rpx var(--space-xl) var(--space-lg);
+  background: var(--color-bg-card);
+  border-radius: 24rpx 24rpx 0 0;
 }
 
 .sheet-head {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 16rpx;
+  margin-bottom: var(--space-md);
 }
 
 .sheet-head .sheet-title {
@@ -147,27 +340,47 @@
 }
 
 .sheet-title {
-  font-size: var(--fs-lg);
+  margin-bottom: var(--space-md);
+  font-size: var(--fs-title);
   font-weight: 600;
-  margin-bottom: 16rpx;
+  color: var(--color-text-primary);
+}
+
+.sheet-title.center {
+  text-align: center;
 }
 
 .sheet-list {
-  height: 560rpx;
+  max-height: 560rpx;
 }
 
 .sheet-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  box-sizing: border-box;
+  min-height: var(--tap-md);
   padding: 22rpx 0;
-  border-bottom: 1rpx solid #F1F5F4;
+  border-bottom: 2rpx solid var(--color-border-default);
+}
+
+/* 稿 7:325 的散客置灰：禁用一律不透明，用 neutral/500 字色（ui-scale 禁用五档） */
+.sheet-item.off {
+  color: var(--color-neutral-500);
+  opacity: 1;
+}
+
+.sheet-item.off .item-name {
+  color: var(--color-neutral-500);
 }
 
 .sheet-thumb {
+  flex: none;
   width: 72rpx;
   height: 72rpx;
-  border-radius: 6rpx;
-  flex-shrink: 0;
   margin-right: var(--gap);
-  background: #f3f4f6;
+  border-radius: 12rpx;
+  background: var(--color-fill-ghost);
 }
 
 .sheet-body {
@@ -176,37 +389,229 @@
 }
 
 .item-name {
-  font-weight: 600;
   margin-bottom: 6rpx;
+  font-weight: 600;
 }
 
+.link {
+  font-size: var(--fs-label);
+  color: var(--color-text-primary);
+  font-weight: 500;
+}
+
+/* 稿全部 sheet 底部的「取消」：14px、44 高（本仓归 --tap-md），居中 */
+.sheet-cancel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--tap-md);
+  margin-top: var(--space-xs);
+  font-size: var(--fs-body);
+  color: var(--color-neutral-600);
+}
+
+/* 稿 chip/add 13:556：chip 铁律的「＋添加」档 = 白底 + 浅灰描边，靠形分家不靠字色。
+   铁律写的是 neutral/300，app.wxss 目前只有 neutral/200（#E5E5E5），本批不新增 token
+   （见规格 3 硬约束 8），所以借 neutral/200 —— 差一档色阶，形还是白底描边，
+   与「灰底未选中 / 白底黑描边已选中 / 灰底灰字禁用」三档仍然一眼可分。
+   要补 neutral/300 归收尾批一次性加。 */
+.chip.add {
+  background: var(--color-bg-card);
+  border-color: var(--color-neutral-200);
+  color: var(--color-text-primary);
+}
+
+/* ---------- 实收 sheet。稿 7:25 / 7:404 / 10:180 / 7:230 ---------- */
+.pay-row {
+  margin-bottom: var(--space-md);
+}
+
+/* 稿 total 3:726：20px Inter Bold = --fs-amount-lg */
+.pay-total {
+  font-size: var(--fs-amount-lg);
+  font-weight: 700;
+  color: var(--color-text-primary);
+}
+
+/* 稿 hint 预收未用 13:330：整行可点打开抵扣，所以吃满热区 */
+.prepay-hint {
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  min-height: var(--tap-min);
+  font-size: var(--fs-caption);
+  color: var(--color-text-muted);
+}
+
+/* 稿 row 预收抵扣 7:424：k 12px muted + v 12px green/700 + 44 热区的 × */
+.prepay-row {
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  min-height: var(--tap-min);
+}
+
+.prepay-k {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-caption);
+  color: var(--color-text-muted);
+}
+
+.prepay-v {
+  flex: none;
+  font-size: var(--fs-caption);
+  font-weight: 600;
+  color: var(--color-green-700);
+}
+
+.prepay-x {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--tap-min);
+  height: var(--tap-min);
+  font-size: var(--fs-title);
+  color: var(--color-text-primary);
+}
+
+/* 稿 input 金额·实收 13:331：48 高（= --tap-md）、r10、neutral/100 + border/default，
+   值 16px Inter SemiBold */
+.paid-input {
+  box-sizing: border-box;
+  width: 100%;
+  height: var(--tap-md);
+  margin-bottom: var(--space-md);
+  padding: 0 var(--space-lg);
+  background: var(--color-fill-ghost);
+  border: 2rpx solid var(--color-border-default);
+  border-radius: 20rpx;
+  font-size: var(--fs-title);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+/* 稿 feedback 3:772 / 10:185 / 7:409：12px muted；散客拦截那两句（7:235 与 n2 的超收句）走 red/600 */
+.pay-feedback {
+  margin-bottom: var(--space-md);
+  font-size: var(--fs-caption);
+  color: var(--color-text-muted);
+}
+
+.pay-feedback.danger {
+  color: var(--color-red-600);
+}
+
+/* 稿 btn 选客户 13:522：48 高的白底黑描边次级钮 */
+.pick-cust-btn {
+  height: var(--tap-md);
+  line-height: var(--tap-md);
+  margin: 0 0 var(--space-md);
+  background: var(--color-bg-card);
+  border: 2rpx solid var(--color-border-brand);
+  border-radius: 16rpx;
+  color: var(--color-text-primary);
+  font-size: var(--fs-body);
+}
+
+.sheet-confirm {
+  margin: 0;
+}
+
+/* ---------- 清单展开 sheet。稿 card 销售清单·展开态 3:746 与 清单行 3:722 ---------- */
+.cart-item {
+  padding: var(--space-lg) 0;
+  border-bottom: 2rpx solid var(--color-border-default);
+}
+
+.cart-item:last-child {
+  border-bottom: none;
+}
+
+.cart-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-lg);
+}
+
+.cart-col {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 稿 amount 3:722;3:443：16px Inter SemiBold */
+.cart-amount {
+  flex: none;
+  font-size: var(--fs-title);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.cart-ctrl {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  margin-top: var(--space-md);
+}
+
+/* 稿 stepper/default 3:722;7:224：44x44 加减（本仓热区地板 88rpx），r8 */
+.step-btn {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--tap-min);
+  height: var(--tap-min);
+  background: var(--color-fill-ghost);
+  border-radius: 16rpx;
+  font-size: var(--fs-title);
+  color: var(--color-text-primary);
+}
+
+/* 稿 qty-input 3:722;7:224;7:220：56x44 可点开输入。
+   docs/ui-scale.md 要求容器按四位数排宽，所以取 144rpx 不取稿的 112rpx。 */
+.step-input {
+  flex: none;
+  box-sizing: border-box;
+  width: 144rpx;
+  height: var(--tap-min);
+  background: var(--color-fill-ghost);
+  border-radius: 20rpx;
+  font-size: var(--fs-title);
+  font-weight: 600;
+  color: var(--color-text-primary);
+  text-align: center;
+}
+
+.cart-spacer {
+  flex: 1;
+}
+
+/* 稿 btn 删行 3:722;10:87：44x44 热区，视觉是 14x14 的 ×，neutral/500。
+   仅剩 1 行时禁用（n-删行 10:90），禁用走图标档：不加实底、opacity 1、只降字色。 */
+.del-btn {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--tap-min);
+  height: var(--tap-min);
+  font-size: var(--fs-title);
+  color: var(--color-neutral-500);
+}
+
+.del-btn.off {
+  color: var(--color-neutral-200);
+  opacity: 1;
+}
+
+/* ---------- 送货单导出用的离屏画布 ---------- */
 .slip-canvas {
   position: fixed;
-  /* 挪出屏幕，避免 type=2d 原生组件盖住按钮；宽高由导出时写入，必须 ≥ dest 像素 */
+  /* 挪出屏幕，避免 type=2d 原生组件盖住按钮；宽高由导出时写入，必须不小于 dest 像素 */
   left: -20000px;
   top: 0;
   pointer-events: none;
   opacity: 0;
-}
-
-.paid-field {
-  margin-top: 24rpx;
-}
-
-.paid-note {
-  margin-top: 16rpx;
-  font-size: var(--fs-sm);
-  font-weight: 600;
-}
-
-.paid-note.debt {
-  color: #C2410C;
-}
-
-.paid-note.over {
-  color: #DC2626;
-}
-
-.paid-note.done {
-  color: #0F766E;
 }
