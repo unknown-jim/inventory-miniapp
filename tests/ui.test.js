@@ -1913,7 +1913,7 @@ async function readLists(miniProgram) {
       skus: (wx.getStorageSync('inv_skus') || []).map(function (item) {
         return {
           id: item.id, productId: item.productId, color: item.color || '', size: item.size || '',
-          stock: Number(item.stock) || 0, isBlank: !!item.isBlank
+          stock: Number(item.stock) || 0, alertQty: Number(item.alertQty) || 0, isBlank: !!item.isBlank
         }
       }),
       categories: (wx.getStorageSync('inv_categories') || []).map(function (item) {
