@@ -5,10 +5,6 @@
 
 /* 按下反馈。这是**按下态**不是禁用态 —— docs/ui-scale.md 那条
    「禁用一律 opacity: 1」管的是禁用档，不管 hover-class。 */
-.press {
-  opacity: 0.72;
-}
-
 /* ---- hero（稿 hero/今日实收 3:557） ---- */
 
 .hero-head {

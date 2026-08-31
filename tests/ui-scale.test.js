@@ -297,12 +297,29 @@ pageWxss.forEach(function (file) {
   // 规格 §7.4 给的 index.wxss 注释里有一行以空白开头引用 .stat-grid 这个名字
   //（「.stat-grid 是 app.wxss 的共用类……」），词面正则会把注释误当选择器拦下来。
   // 收窄到定义语法（选择器名后面跟 { 或逗号），真正的重定义照样拦。
-  if (/^\s*\.(field-row|pay-tabs|stat-grid)\s*[,{]/m.test(src)) redefHits.push(rel)
+  // .press 进这张名单是因为它真出过事：index / low-stock / records / shop 各自定义过
+  // 一份，前三份是 opacity: 0.72、shop 那份是 background，于是 13 处引用拿到两种效果，
+  // 而背景色那种在卡内会因为卡的 28rpx 内边距铺不满，看着像一块没对齐的灰方块。
+  if (/^\s*\.(field-row|pay-tabs|stat-grid|press)\s*[,{]/m.test(src)) redefHits.push(rel)
 })
 assert.strictEqual(
   redefHits.length,
   0,
-  'page wxss should not redefine .field-row / .pay-tabs / .stat-grid:\n' + redefHits.join('\n')
+  'page wxss should not redefine .field-row / .pay-tabs / .stat-grid / .press:\n' + redefHits.join('\n')
+)
+
+// .press 的实现方式本身也钉住：必须是透明度，不能回退成背景色。
+// 背景色画在卡内行上会被卡的 28rpx 内边距夹住（铺不到卡边、圆角对不上），
+// 而且会把 .debt-banner 自带的 amber-50 底盖成灰、让窄文字链的灰块谎称整行可点。
+const pressRule = /\.press\s*\{([^}]*)\}/.exec(appWxss)
+assert.ok(pressRule, 'app.wxss 必须定义唯一的 .press 按下态')
+assert.ok(
+  /opacity\s*:/.test(pressRule[1]),
+  '.press 要用 opacity 表达按下，实为：' + pressRule[1].trim()
+)
+assert.ok(
+  !/background\s*:/.test(pressRule[1]),
+  '.press 不要用 background —— 卡内行会被卡的内边距夹住、自带底色的块会被盖掉，实为：' + pressRule[1].trim()
 )
 
 const tinyHits = []

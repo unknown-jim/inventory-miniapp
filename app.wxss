@@ -134,6 +134,23 @@ button::after {
   border: none;
 }
 
+/* 全站统一的按下态。**用透明度，不用背景色**，理由是它要罩住三类形状完全不同的东西：
+   卡内整行（restock-row / record-row / list-item）、自带底色的块（debt-banner 是
+   amber-50）、以及窄文字链（「全部 ›」「改名」）。背景色对后两类都是错的——会把
+   debt-banner 的琥珀底盖成灰，也会让文字链的灰块谎称整行可点。透明度对三类一视同仁，
+   而且不受盒模型影响：卡有 28rpx 内边距，背景色画在行上就铺不到卡边，那正是店铺页
+   曾经的样子（灰块浮在卡里、右侧留白、圆角对不上）。
+
+   与「禁用态一律不用透明度」那条裁定不冲突：禁用态改成实底之后，透明度不再表示
+   「不可用」，所以拿它表示「正按着」没有歧义。反过来若两者都用透明度才是错的。
+
+   **这一条只此一份。** 此前 index / low-stock / records / shop 各自定义过 .press，
+   前三份是这个值、shop 那份是背景色，13 处引用拿到两种效果。
+   tests/ui-scale.test.js 有断言钉着不许再出现页面级重定义。 */
+.press {
+  opacity: 0.72;
+}
+
 .page {
   padding: var(--page-pad) var(--page-pad) calc(var(--page-pad) * 2);
   font-size: var(--fs-body);

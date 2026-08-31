@@ -3,10 +3,6 @@
    共用只能靠抽组件，而这块结构简单到抽组件反而更贵（AGENTS.md 那条
    「不要为了用时注入去硬拆页面」的反向同理）。改一处记得改另一处。 */
 
-.press {
-  opacity: 0.72;
-}
-
 .summary {
   margin: 0 var(--space-xs) var(--space-lg);
   font-size: var(--fs-caption);
