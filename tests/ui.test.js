@@ -1246,18 +1246,33 @@ async function assertSheetEmptyCentered(miniProgram, host, label) {
     label + '：空态没有垂直居中（align-items 实为 ' + align + '）：会贴在固定高外壳顶部')
   const body = await waitInSheet(host, '.rs-picker-body', label + ' 的固定高外壳')
   const bodyBox = await body.size()
-  // **外壳的绝对高度也要钉**，不能只查相对关系。在 height: 640rpx 后面再加一行
+  // **外壳高度要钉绝对值，不能只查相对关系。** 在 height: 640rpx 后面再加一行
   // height: 200rpx（层叠覆盖）时，「高度不变」「占满外壳」「行数溢出」「能滚」四条
   // 全都照样成立（104 == 104），静态正则也照样命中 640rpx 那几个字 —— 全套绿而
-  // 列表区只剩三分之一。320px 是稿 nSheetListHeight 和四个外壳节点白纸黑字的裁定。
-  const windowWidth = await miniProgram.evaluate(function () {
-    return wx.getSystemInfoSync().windowWidth
+  // 列表区只剩三分之一。
+  //
+  // 但要写成 **≤ 上限**而不是等于：稿 n-小屏让位 裁定「80vh 优先、320px 让位」。
+  // .rs-sheet 封顶 80vh，而 .rs-picker-body 是里面最大的一块且没有 flex-shrink: 0，
+  // 窗口不够高时压力全落在它身上 —— windowHeight=671 的机型上余量只剩 3px，
+  // 375×667 那类小屏估计会被压到 250px 左右。写死等于 320 会在小屏上变成偶发红。
+  // 让位不会把跳动带回来：压缩后的高度对同一台机器仍是固定的，不随搜索结果多少而变，
+  // 「高度不变」那条断言仍然守着真正要防的回归。
+  //
+  // rpx 的基准是**屏幕**宽，用 screenWidth；windowWidth 只是在手机上恰好相等。
+  const screenWidth = await miniProgram.evaluate(function () {
+    return wx.getSystemInfoSync().screenWidth
   })
-  const expectedPx = windowWidth * 640 / 750
+  const maxPx = screenWidth * 640 / 750
   assert.ok(
-    Math.abs(bodyBox.height - expectedPx) <= 2,
-    label + '：外壳高度不是稿定的 640rpx —— 实测 ' + Math.round(bodyBox.height)
-      + 'px，' + windowWidth + 'px 宽屏上应为 ' + Math.round(expectedPx) + 'px'
+    bodyBox.height <= maxPx + 2,
+    label + '：外壳比稿定的 640rpx 还高 —— 实测 ' + Math.round(bodyBox.height)
+      + 'px，' + screenWidth + 'px 屏宽上限应为 ' + Math.round(maxPx) + 'px'
+  )
+  // 压到只剩一半以下就不是「让位」而是坏了，兜一个下限。
+  assert.ok(
+    bodyBox.height >= maxPx / 2,
+    label + '：外壳被压得只剩 ' + Math.round(bodyBox.height) + 'px（上限 '
+      + Math.round(maxPx) + 'px）—— 让位过头了，列表几乎看不见'
   )
   assert.strictEqual(String(await body.style('flex-direction')), 'column',
     label + '：外壳必须竖排 —— 变横排的话 sum / hint / 列表会并排，面板明显坏掉')

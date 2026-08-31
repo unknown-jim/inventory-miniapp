@@ -359,7 +359,6 @@ orderPicker.openOrderPicker().then(function () {
   const bodyBlocks = sheetWxml.split('<view class="rs-picker-body">').slice(1)
   assert.strictEqual(bodyBlocks.length, 3, '应当有三个 .rs-picker-body 外壳')
   bodyBlocks.forEach(function (block, i) {
-    const head = block.slice(0, block.indexOf('</view>') + 7)
     assert.ok(
       /<view wx:if="\{\{loading\}\}" class="rs-empty"/.test(block),
       '第 ' + (i + 1) + ' 个外壳里的 loading 节点自身要带 class="rs-empty"（不要套在别的节点里）'
@@ -370,7 +369,6 @@ orderPicker.openOrderPicker().then(function () {
         + '.rs-picker-body > .rs-empty 这条子选择器就不再命中，居中会静默失效，'
         + '而 wxss 一个字节都没改、静态颜色断言也看不出来'
     )
-    void head
   })
 
   // 组件不许开 virtualHost：开了页面侧就没有宿主节点，automator 从页面够不到组件里
