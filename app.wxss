@@ -484,6 +484,32 @@ button::after {
   padding-bottom: var(--space-sm);
 }
 
+/* 行内文字链。原来只在 pages/members/members.wxss 里有一份，店铺页的「改名」
+   要用同一个形，所以提上来 —— 逐字搬，规则本身一个字没改。
+   稿 15:230「改称呼」/ 15:236「移出」/ 4:545：视觉 13px，热区靠透明 padding 撑到 44。
+   docs/ui-scale.md 的「视觉小、热区不小」就是这一条。
+   相邻两枚之间 16rpx 加容器 gap，凑够稿 15:235 那枚 sp-热区间距 的 16px，
+   保证两个 44 热区不重叠。 */
+.row-link {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  min-height: var(--tap-min);
+  padding: 0 var(--space-xs);
+  color: var(--color-text-primary);
+  font-size: var(--fs-label);
+}
+
+.row-link + .row-link {
+  margin-left: var(--space-md);
+}
+
+/* 危险三级里最轻的一档：红字链，比店铺页清空的白底红描边轻一级、
+   比删除店铺的实心红轻两级。 */
+.row-link.danger {
+  color: var(--color-red-600);
+}
+
 .action {
   min-height: var(--tap-md);
   height: auto;

@@ -1,6 +1,7 @@
 /* 成员。共用类来自 app.wxss，这里只写本页布局：
    .page 与 .card 与 .muted 与 .tag 与 .tag-owner 与 .tag-staff 与 .section-title 与
-   .field 与 .field-label 与 .field-input 与 .action-strip 与 .btn-primary 与 .btn-ghost。
+   .field 与 .field-label 与 .field-input 与 .action-strip 与 .btn-primary 与 .btn-ghost
+   与 .row-link（含 .danger）。
    稿 Screen/14d 添加店员 15:214。 */
 
 .card + .card {
@@ -41,30 +42,8 @@
   min-width: var(--space-sm);
 }
 
-/* 稿 15:230「改称呼」与 15:236「移出」：视觉 13px，热区靠透明 padding 撑到 44。
-   docs/ui-scale.md 的「视觉小、热区不小」就是这一条。
-   两枚之间的间距 = member-line 的 gap 16rpx 加上这里的 16rpx = 32rpx = 16px，
-   正是稿 15:235 那枚 sp-热区间距 的宽度，保证两个 44 热区不重叠。 */
-.row-link {
-  display: flex;
-  align-items: center;
-  flex-shrink: 0;
-  min-height: var(--tap-min);
-  padding: 0 var(--space-xs);
-  color: var(--color-text-primary);
-  font-size: var(--fs-label);
-}
-
-.row-link + .row-link {
-  margin-left: var(--space-md);
-}
-
-/* 危险三级里最轻的一档：红字链，比店铺页清空的白底红描边轻一级、
-   比删除店铺的实心红轻两级（规格 5.3）。形与 pages/product-edit 的
-   danger-link 同源（那一处是 B5 落的，注释里记着同一条理由）。 */
-.row-link.danger {
-  color: var(--color-red-600);
-}
+/* .row-link / .row-link + .row-link / .row-link.danger 已提到 app.wxss 共用
+   （店铺页的「改名」用同一个形）。本页只消费，不再定义。 */
 
 /* 共用 .field 自带下外边距，卡里最后一格不要那一截 */
 .last {

@@ -3032,6 +3032,27 @@ async function runShopAndMembers(miniProgram) {
   await waitFor(members, '.js-member-add', '店主看得到「添加店员」按钮')
   await goBackTo(miniProgram, '店铺页')
 
+  // 改名：点链接 → 改字 → 保存 → 头卡与 storage 都换成新名。
+  // 内存模式的 memoryCall renameShop 只动 SHOP_NAME_KEY，不换账套，
+  // 所以这一段跑完后面的建店步骤前提不变。
+  await tapWhen(shop, '.js-shop-rename')
+  await waitForData(shop, function (d) {
+    return d.renaming === true && d.renameName === before.shopName
+  }, '改名展开并带出当前店名')
+  const renamedTo = 'UI 改名店'
+  await typeInto(shop, '.js-shop-rename-input', renamedTo, '新店名', 'renameName')
+  await tapWhen(shop, '.js-shop-rename-save')
+  await waitForData(shop, function (d) {
+    return d.shopName === renamedTo && d.renaming === false && d.pageLoading === false
+  }, '改名之后当前店名换了、展开体收起了')
+  assert.strictEqual(await textOf(shop, '.js-shop-current', '当前店名'), renamedTo,
+    '改名之后头卡没换成新店名')
+  const afterRename = await readLists(miniProgram)
+  assert.strictEqual(afterRename.shopName, renamedTo, '改名之后 storage 里的店名没换')
+  assert.strictEqual(afterRename.shopId, before.shopId, '改名不许换 shopId')
+  assert.strictEqual(afterRename.products.length, before.products.length,
+    '改名不许动账本，商品数变了：' + afterRename.products.length)
+
   // 建店：展开「再建一家」→ 填名字 → 创建并进入。
   await tapWhen(shop, '.js-shop-create-toggle')
   await waitForData(shop, function (d) {

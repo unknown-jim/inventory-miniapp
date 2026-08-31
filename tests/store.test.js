@@ -1357,6 +1357,69 @@ require.cache[require.resolve('../utils/cloud-config')].exports = {
   }
 
   // -------------------------------------------------------------------------
+  // 13c) 改店名（renameShop）。
+  //
+  //     云上：成功后只换 SHOP_NAME_KEY，shopId 原样；不换账套（不许触发
+  //     invalidateReady / ensureReady 那一轮整本重拉）；失败时本地缓存必须
+  //     原封不动，否则屏上会显示一个云端根本不存在的店名。
+  //     内存模式：与云上同一份校验（inventory.normalizeShopName），成功后
+  //     同样只换名字 —— 替身宽松一分，测试就假绿一分。
+  // -------------------------------------------------------------------------
+  {
+    // 云上：S1-S3
+    const h = newHarness({ ids: idFactory('rn') })
+    await openShop(h, '改名前店')
+    const store = loadStore(h)
+    await store.ready()
+
+    // S1：成功后 storage 换名，shopId 原封不动
+    const shopIdBefore = h.storage['inv_shop_id']
+    await store.renameShop('改名后的店')
+    assert.strictEqual(h.storage['inv_shop_name'], '改名后的店')
+    assert.strictEqual(h.storage['inv_shop_id'], shopIdBefore, '改名不许换 shopId')
+
+    // S2：不换账套 —— 商品逐字相等、isReady 仍为 true、没有多发一次 getLedger
+    const productsBefore = clone(store.getProducts())
+    const getLedgerCallsBefore = countCalls(h, 'getLedger')
+    await store.renameShop('再改一次')
+    assert.deepStrictEqual(store.getProducts(), productsBefore)
+    assert.strictEqual(store.isReady(), true, '改名不该把账套打成未就绪')
+    assert.strictEqual(countCalls(h, 'getLedger'), getLedgerCallsBefore,
+      '改名不许触发整本账重拉')
+
+    // S3：失败（这里造网络失败；店员点会被服务端拒，同理）不动本地缓存
+    h.failures.renameShop = { times: 1, message: '网络抖动' }
+    await rejects(function () { return store.renameShop('失败也不许改缓存') }, /网络抖动/)
+    h.failures.renameShop = { times: 0 }
+    assert.strictEqual(h.storage['inv_shop_name'], '再改一次',
+      '改名失败后本地缓存必须还是旧名')
+
+    // S4：没选店 → 请选择店铺，且一次云调用都不发
+    const hNoShop = newHarness({ ids: idFactory('rn0') })
+    const storeNoShop = loadStore(hNoShop)
+    await rejects(function () { return storeNoShop.renameShop('X') }, /请选择店铺/)
+    assert.strictEqual(countCalls(hNoShop, 'renameShop'), 0,
+      '没选店时不许发出 renameShop')
+
+    // 内存模式：S5 与云上同一条校验；S6 成功只换名字
+    const hm = newHarness({ ids: idFactory('rnm') })
+    hm.storage['inv_test_memory_ledger'] = true
+    hm.storage['inv_shop_id'] = 'mem-shop'
+    hm.storage['inv_shop_name'] = '内存老店'
+    const memStore = loadStore(hm)
+    assert.strictEqual(await memStore.ready(), true)
+    // S5
+    await rejects(function () { return memStore.renameShop('字'.repeat(17)) },
+      /店铺名称最多 16 个字/)
+    await rejects(function () { return memStore.renameShop('   ') },
+      /请填写店铺名称/)
+    // S6
+    await memStore.renameShop('内存新店')
+    assert.strictEqual(hm.storage['inv_shop_name'], '内存新店')
+    assert.strictEqual(hm.storage['inv_shop_id'], 'mem-shop', '内存模式改名也不许换 shopId')
+  }
+
+  // -------------------------------------------------------------------------
   // 14) 本机账本分片上传（2b-3）
   //
   //     切法本身会改钱：把退货单和它的被退销售单切到两片里，

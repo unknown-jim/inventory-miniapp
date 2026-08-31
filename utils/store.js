@@ -600,8 +600,8 @@ async function memoryCall(action, shopId, payload) {
   }
   if (action === 'createShop') {
     const id = uid()
-    const name = String((payload && payload.name) || '').trim()
-    if (!name) throw new Error('请填写店铺名称')
+    // 与云上共用同一条校验，免得内存替身比真云宽松（同上）
+    const name = inventory.normalizeShopName(payload && payload.name)
     setShopMeta(id, name)
     wx.removeStorageSync(ARCHIVE_KEY)
     wx.removeStorageSync(LAST_RESTORED_KEY)
@@ -625,6 +625,18 @@ async function memoryCall(action, shopId, payload) {
   }
   if (action === 'addMember' || action === 'removeMember' || action === 'updateMember') {
     throw new Error('本地测试账本不能改成员')
+  }
+  // 改名在内存模式下是**支持**的（不像加减成员和删店那样直接抛）：它只动
+  // SHOP_NAME_KEY，不换账套、不碰账本，内存替身完全做得到。所以 UI 冒烟能端到端
+  // 验一次改名，而不是只验到那句抛错。
+  // 校验走 inventory.normalizeShopName —— 与云上同一份实现。
+  // tests/memory-db.js 顶部那条教训是「替身宽松一分，测试就假绿一分」，
+  // 这里照真云最严的一侧写。
+  if (action === 'renameShop') {
+    const name = inventory.normalizeShopName(payload && payload.name)
+    const id = shopId || getShopId() || 'ui-test-shop'
+    setShopMeta(id, name)
+    return { shop: { id: id, name: name, role: 'owner', createdAt: 0 } }
   }
   if (action === 'deleteShop') {
     throw new Error('本地测试账本不能删店')
@@ -1141,6 +1153,28 @@ async function selectShop(shopId, shopName) {
   await ensureReady()
 }
 
+// 改店名。**刻意不调 invalidateReady / ensureReady** —— 那两个是给「换店 / 换账套」
+// 用的（createShop 和 selectShop 调它们是因为 shopId 变了）。改名不换账套、不动账本，
+// 调它们只会白白触发一次整本账的重拉。
+//
+// setShopMeta 只能放在 await 成功**之后**：改名失败（店员点了、断网、维护期）时
+// 本地缓存必须原封不动，否则屏上会显示一个云端根本不存在的店名。
+// shopId 原样传回去，只换名字。
+async function renameShop(name) {
+  const shopId = getShopId()
+  if (!shopId) {
+    throw new Error('请选择店铺')
+  }
+  showBusy()
+  try {
+    const res = await request('renameShop', { name: name }, { shopId: shopId })
+    setShopMeta(shopId, res.shop.name)
+    return res.shop
+  } finally {
+    hideBusy()
+  }
+}
+
 async function deleteShop() {
   const shopId = getShopId()
   if (!shopId) {
@@ -1358,6 +1392,7 @@ module.exports = {
   listShops: listShops,
   createShop: createShop,
   selectShop: selectShop,
+  renameShop: renameShop,
   deleteShop: deleteShop,
   listMembers: listMembers,
   addMember: addMember,

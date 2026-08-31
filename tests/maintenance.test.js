@@ -331,6 +331,26 @@ function noMaintenanceKey(res, label) {
     assert.strictEqual(caught.maintenance.message, CUSTOM_MESSAGE)
   }
 
+  // ---------------------------------------------------------------- 13b
+  // renameShop 维护期被挡：allowedDuringMaintenance 是白名单，renameShop 不在
+  // MAINTENANCE_READS 里，所以不用写一行拦截代码它就自动落在「不许」那一侧。
+  // 这条钉住的是「没有人把它加进白名单」—— 加进去这条就红。
+  {
+    const db = new MemoryDb()
+    const ids = idFactory()
+    const shopId = await setupShop(db, ids)
+    db.maintenance = { _id: 'maintenance', on: true, message: CUSTOM_MESSAGE }
+    let caught = null
+    try {
+      await call(db, ids, 'owner-a', 'renameShop', shopId, { name: '维护期改名' })
+    } catch (error) {
+      caught = error
+    }
+    assert.ok(caught, '维护期改名必须被拒')
+    assert.strictEqual(caught.message, CUSTOM_MESSAGE)
+    assert.ok(caught.maintenance, '改名失败的回包也要带 maintenance 标志')
+  }
+
   // ---------------------------------------------------------------- 14
   // 判据必须是**严格** on === true。
   //
