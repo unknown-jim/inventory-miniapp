@@ -16,7 +16,7 @@
 //      手动「加载更多」（onLoadMore / onLoadMoreLedger）连点走同一套锁
 //    6 dataVersion 语义：读不涨、记账涨、页面据此决定要不要重来
 //    7 记账之后不再重拉整本（recordDelta / refillRecords 都已删）
-//    8 customer-edit：明细取不到时金额仍是服务端权威值（2b-1a 的 B1 回归）
+//    8 customer-detail：明细取不到时金额仍是服务端权威值（2b-1a 的 B1 回归）
 //    9 record-edit：算不出当时欠款就不开单
 //   10 打开一张不在任何已加载页里的单
 //   11 内存模式一整节（memoryRecordStore.page / getRecord / getSlip / today）
@@ -37,7 +37,8 @@ const memory = require('./memory-db')
 const MemoryDb = memory.MemoryDb
 
 const STORE_PATH = require.resolve('../utils/store')
-const CUSTOMER_EDIT_PATH = require.resolve('../pages/customer-edit/customer-edit')
+// B9：欠款卡与往来明细搬到了客户详情页；customer-edit 收缩成纯表单，本文件不再测它。
+const CUSTOMER_DETAIL_PATH = require.resolve('../pages/customer-detail/customer-detail')
 const RECORDS_PATH = require.resolve('../pages/records/records')
 const RECORD_EDIT_PATH = require.resolve('../pages/record-edit/record-edit')
 const INDEX_PATH = require.resolve('../pages/index/index')
@@ -297,7 +298,7 @@ async function rejects(fn, re) {
 const PAGE_LOADERS = {
   [RECORDS_PATH]: function () { return require('../pages/records/records') },
   [RECORD_EDIT_PATH]: function () { return require('../pages/record-edit/record-edit') },
-  [CUSTOMER_EDIT_PATH]: function () { return require('../pages/customer-edit/customer-edit') },
+  [CUSTOMER_DETAIL_PATH]: function () { return require('../pages/customer-detail/customer-detail') },
   [INDEX_PATH]: function () { return require('../pages/index/index') }
 }
 
@@ -763,7 +764,7 @@ require.cache[require.resolve('../utils/cloud-config')].exports = {
   }
 
   // -------------------------------------------------------------------------
-  // 8) customer-edit：明细取不到时金额仍是服务端权威值（2b-1a 的 B1 回归）。
+  // 8) customer-detail：明细取不到时金额仍是服务端权威值（2b-1a 的 B1 回归）。
   //
   //    submitPay / submitOpening 记完账直接调 fillCustomer，**不经过
   //    store.ready() 的门**。金额三项必须当场就对。
@@ -797,7 +798,7 @@ require.cache[require.resolve('../utils/cloud-config')].exports = {
 
     // 明细取不到（网络抖动）：金额三项照样是权威值，明细明确标成不可用
     h.failures.listRecords = { times: 99, message: '网络抖动' }
-    const page = mountPage(loadPage(CUSTOMER_EDIT_PATH), { id: customer.id, isEdit: true })
+    const page = mountPage(loadPage(CUSTOMER_DETAIL_PATH), { id: customer.id })
     const pending = page.fillCustomer(customer.id)
     // fillCustomer 是同步的：金额当场就对，**不等明细**（下面才 await）
     assert.strictEqual(page.data.receivable, 1700, '客户页的欠款必须等于服务端权威值')
@@ -823,12 +824,12 @@ require.cache[require.resolve('../utils/cloud-config')].exports = {
     assert.deepStrictEqual(
       page.data.ledger.map(function (item) { return item.id }),
       expected.map(function (item) { return item.id }),
-      'customer-edit 的往来明细必须和 summarizeCustomerAccount 口径一致'
+      'customer-detail 的往来明细必须和 summarizeCustomerAccount 口径一致'
     )
   }
 
   // -------------------------------------------------------------------------
-  // 8b) customer-edit 的明细也会触底加载：条数超过一页时翻得下去
+  // 8b) customer-detail 的明细也会触底加载：条数超过一页时翻得下去
   // -------------------------------------------------------------------------
   {
     const h = newHarness({ ids: idFactory('cl') })
@@ -837,7 +838,7 @@ require.cache[require.resolve('../utils/cloud-config')].exports = {
     const store = loadStore(h)
     await store.ready()
 
-    const page = mountPage(loadPage(CUSTOMER_EDIT_PATH), { id: 'cust-1', isEdit: true })
+    const page = mountPage(loadPage(CUSTOMER_DETAIL_PATH), { id: 'cust-1' })
     await page.fillCustomer('cust-1')
     assert.strictEqual(page.data.ledger.length, 20, '明细第一页 20 条')
     assert.strictEqual(page.data.ledgerHasMore, true)
@@ -857,7 +858,7 @@ require.cache[require.resolve('../utils/cloud-config')].exports = {
   }
 
   // -------------------------------------------------------------------------
-  // 8c) customer-edit 的手动「加载更多」（onLoadMoreLedger）：连点走和触底
+  // 8c) customer-detail 的手动「加载更多」（onLoadMoreLedger）：连点走和触底
   //     同一套锁，不重复加载；翻到部分页之后游标不回退、不再发请求。
   // -------------------------------------------------------------------------
   {
@@ -867,7 +868,7 @@ require.cache[require.resolve('../utils/cloud-config')].exports = {
     const store = loadStore(h)
     await store.ready()
 
-    const page = mountPage(loadPage(CUSTOMER_EDIT_PATH), { id: 'cm-1', isEdit: true })
+    const page = mountPage(loadPage(CUSTOMER_DETAIL_PATH), { id: 'cm-1' })
     await page.fillCustomer('cm-1')
     assert.strictEqual(page.data.ledger.length, 20, '明细第一页 20 条')
     const before = countCalls(h, 'listRecords')

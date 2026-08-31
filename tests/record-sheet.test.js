@@ -155,8 +155,8 @@ const payWx = makeWx()
 loadComponent({}, payWx).onPickCustomer({ currentTarget: { dataset: { id: 'c1' } } })
 assert.deepStrictEqual(
   payWx.calls,
-  [['navigateTo', '/pages/customer-edit/customer-edit?id=c1&pay=1']],
-  '收款要带客户 id 进 customer-edit 的收款态'
+  [['navigateTo', '/pages/customer-detail/customer-detail?id=c1&pay=1']],
+  '收款要带客户 id 进客户详情页的收款态'
 )
 
 const retWx = makeWx()

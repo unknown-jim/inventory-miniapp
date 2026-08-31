@@ -1,56 +1,151 @@
-.goods-card {
-  margin-bottom: 16rpx;
-  padding: 24rpx 28rpx 20rpx;
-}
+/* 客户列表。共用类（.page / .card / .search / .muted / .empty / .empty-title /
+   .empty-icon / .empty-actions / .btn-primary）来自 app.wxss，这里只写本页布局。
+   稿 Screen/09 客户 4:291。 */
 
-.goods-top {
+/* 稿 row/搜索与新增 7:40：横排 gap 10。与 pages/products 的 .tool-row 同一份写法
+   （那一屏右边的 ＋ 就是同一枚稿组件），间距同取 --space-lg。 */
+.tool-row {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  margin-bottom: 8rpx;
+  gap: var(--space-lg);
+  margin-bottom: var(--space-md);
 }
 
-.item-name {
-  font-size: var(--fs-lg);
-  font-weight: 600;
+/* 全局 .search 自带 margin-bottom，放进 flex 行会把右边的 ＋ 顶偏；
+   竖向间距统一交给 .tool-row 的 margin。 */
+.tool-row .search {
+  flex: 1;
+  min-width: 0;
+  margin-bottom: 0;
 }
 
-.price-row {
-  margin-top: 16rpx;
-  color: #0F766E;
-  font-size: var(--fs-sm);
-  font-weight: 600;
-}
-
-.price-row.debt {
-  margin-top: 8rpx;
-  color: #C2410C;
-}
-
-.warm {
-  background: #FFF7ED;
-  color: #C2410C;
-}
-
-.seed-btn {
-  margin-top: 24rpx;
-}
-
-.fab {
-  position: fixed;
-  right: 32rpx;
-  bottom: 48rpx;
-  padding: 0 28rpx;
+/* 稿 btn/新增客户 7:41：44x44 白底、neutral/900 描边的圆，字 18 SemiBold。
+   高宽取 --tap-md（96rpx = 48px）与左边 .search 齐平，48 >= 44 地板；
+   字号取档位表里离 18px 最近的 --fs-title。逐条与 pages/products 的 .add-btn 相同。 */
+.add-btn {
+  flex: 0 0 auto;
+  width: var(--tap-md);
   height: var(--tap-md);
   line-height: var(--tap-md);
-  font-size: var(--fs-lg);
-  background: #0F766E;
-  color: #FFFFFF;
-  border-radius: 40rpx;
+  box-sizing: border-box;
+  text-align: center;
+  background: var(--color-bg-card);
+  border: 2rpx solid var(--color-border-brand);
+  border-radius: 999rpx;
+  color: var(--color-text-primary);
+  font-size: var(--fs-title);
   font-weight: 600;
-  box-shadow: 0 12rpx 24rpx rgba(15, 118, 110, 0.28);
 }
 
-.page {
-  padding-bottom: 140rpx;
+/* 稿 sum/客户欠款 13:354：13px Medium、text/primary、行高 44 */
+.sum-row {
+  min-height: var(--tap-min);
+  line-height: var(--tap-min);
+  padding: 0 var(--space-xs);
+  font-size: var(--fs-label);
+  font-weight: 500;
+  color: var(--color-text-primary);
+}
+
+/* 稿 card/客户列表 4:302：整卡内边距 0，行自己带 12 */
+.list-card {
+  padding: 0;
+  overflow: hidden;
+}
+
+/* 稿 row/李老板 4:303 + top 4:304：横排 gap 10、内边距 12，
+   行间 1px 分隔线 4:318（border/default）。整行可点，高度 >= --tap-md。 */
+.crow {
+  display: flex;
+  align-items: center;
+  gap: 20rpx;
+  box-sizing: border-box;
+  min-height: var(--tap-md);
+  padding: var(--space-lg);
+  border-bottom: 2rpx solid var(--color-border-default);
+}
+
+.crow:last-child {
+  border-bottom: none;
+}
+
+.crow-col {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 稿 name 4:306：16px Medium */
+.crow-name {
+  font-size: var(--fs-title);
+  font-weight: 500;
+  color: var(--color-text-primary);
+  word-break: break-all;
+}
+
+/* 稿 sub 4:307：12px text/muted */
+.crow-sub {
+  margin-top: 4rpx;
+  font-size: var(--fs-caption);
+  color: var(--color-text-muted);
+  word-break: break-all;
+}
+
+/* 稿 amounts 4:308：右对齐一列，行间 gap 2 */
+.crow-amounts {
+  flex: 0 1 auto;
+  text-align: right;
+}
+
+.debt-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: var(--space-xs);
+}
+
+/* 稿 k 4:310：12px text/muted */
+.debt-k {
+  font-size: var(--fs-caption);
+  color: var(--color-text-muted);
+}
+
+/* 稿 v 4:311：14px SemiBold，绑 $7:346 = text/debt。
+   欠款红是红的三种语义里的第一种，不要换成 --color-red-600（那是库存预警）。 */
+.debt-v {
+  font-size: var(--fs-body);
+  font-weight: 600;
+  color: var(--color-text-debt);
+}
+
+/* 稿 nodebt 4:357：12px text/muted，「无欠款 · 预收 ¥200.00 可抵」 */
+.crow-nodebt {
+  font-size: var(--fs-caption);
+  color: var(--color-text-muted);
+}
+
+/* 稿 total 4:312：12px text/muted，右对齐 */
+.crow-total {
+  margin-top: 4rpx;
+  font-size: var(--fs-caption);
+  color: var(--color-text-muted);
+}
+
+/* 稿 chevron 13:355：16x16，描边绑 $13:6（黑 50%）。两条边 + 旋转 45 度的画法
+   与 pages/product-detail 的 .cell-chevron 同源，颜色改绑 --color-text-faint
+   （docs/ui-scale.md 的 alpha 黑三档：text/faint 是 50%，对白 3.41:1）。 */
+.crow-chevron {
+  flex: none;
+  width: 14rpx;
+  height: 14rpx;
+  border-top: 3rpx solid var(--color-text-faint);
+  border-right: 3rpx solid var(--color-text-faint);
+  transform: rotate(45deg);
+}
+
+/* 空态插画「人形 48」。原样取自 inventory-miniapp-handoffs/spec-1a-assets/empty-icons.wxss
+   的 .empty-icon-customers 一条（稿组件 icon/empty/customers 10:32 的 svg 导出，
+   几何一个数没动）。几何槽位在 app.wxss 的 .empty-icon 里，这里只补背景图。
+   描边色 #0F756E 是稿上的字面量：data URI 里引用不到 CSS 变量。 */
+.empty-icon-customers {
+  background-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='48'%20height='48'%3E%3Ccircle%20fill='none'%20stroke='%230F756E'%20stroke-width='1.5'%20transform='matrix(1%200%200%201%2016.8%208.8)'%20cx='7.2'%20cy='7.2'%20r='7.2'/%3E%3Cpath%20fill='%230F756E'%20transform='matrix(1%200%200%201%2010.4%2028.8)'%20d='M4.2975%202.2496Q0.243%205.4256%20-0.7389%2011.0715Q-0.8017%2011.3797%20-0.6133%2011.6316Q-0.4398%2011.894%20-0.1285%2011.9389Q0.1797%2012.0017%200.4316%2011.8134Q0.694%2011.6398%200.7389%2011.3285Q1.622%206.2508%205.2225%203.4304Q8.6443%200.75%2013.6%200.75Q18.5557%200.75%2021.9775%203.4304Q25.578%206.2508%2026.4611%2011.3285Q26.5061%2011.6398%2026.7684%2011.8134Q27.0203%2012.0017%2027.3285%2011.9389Q27.6398%2011.894%2027.8134%2011.6316Q28.0017%2011.3797%2027.9389%2011.0715Q26.957%205.4256%2022.9025%202.2496Q19.0732%20-0.75%2013.6%20-0.75Q8.1268%20-0.75%204.2975%202.2496Z'%20fill-rule='evenodd'/%3E%3C/svg%3E");
 }

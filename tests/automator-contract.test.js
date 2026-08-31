@@ -164,7 +164,10 @@ const HAS_PAGE_LOADING = [
   'pages/members/members.js',
   // B8：退货页重做之后有了 pageLoading（onLoad 里要先 fetchRecord 才画得出东西），
   // tests/ui.test.js 的 returnWholeOrder 已经改成调 waitPageReady。
-  'pages/sale-return/sale-return.js'
+  'pages/sale-return/sale-return.js',
+  // B9：客户详情是新页面，onShow 要先等 store.ready() 才画得出东西；
+  // tests/ui.test.js 里三处落点都调了 waitPageReady。
+  'pages/customer-detail/customer-detail.js'
 ]
 
 // tests/ui.test.js 现在不对这几个页面调 waitPageReady —— 调了就会撞上那句假报错。

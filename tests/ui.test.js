@@ -1363,9 +1363,10 @@ async function runRecordSheetPayPicker(miniProgram, home) {
   }
 
   await tapInSheet(host, '.js-rs-customer')
-  const edit = await waitForPage(miniProgram, 'pages/customer-edit/customer-edit', '客户编辑页')
+  const detail = await waitForPage(miniProgram, 'pages/customer-detail/customer-detail', '客户详情页')
+  await waitPageReady(detail)
   // 落点带的是 ?id=<客户id>&pay=1，收款层应当自己打开。不提交，看一眼就退。
-  await waitFor(edit, '.js-pay-sheet', '收款层自动打开')
+  await waitFor(detail, '.js-pay-sheet', '收款层自动打开')
   return await goBackTo(miniProgram, '看板')
 }
 
@@ -1616,38 +1617,54 @@ async function runRecordSlipExport(miniProgram) {
 }
 
 async function runOpeningSheet(miniProgram) {
-  step('客户页：记期初欠款，弹出层并确认')
+  step('客户页：进客户详情记期初欠款，弹出层并确认')
   const list = await goto(miniProgram, 'switchTab', '/pages/customers/customers', '客户页')
   await waitFor(list, '.js-customer-item', '出现 .js-customer-item')
   await tap(list, '.js-customer-item')
 
-  const edit = await waitForPage(miniProgram, 'pages/customer-edit/customer-edit', '客户编辑页')
-  await waitFor(edit, '.js-opening', '出现 .js-opening')
-  await tapWhen(edit, '.js-opening')
-  await waitFor(edit, '.js-opening-sheet', '出现 .js-opening-sheet')
-  const amount = await edit.$('.js-opening-amount')
+  // B9 起客户列表整行进的是**客户详情**（稿 n2 4:365：行内无按钮，收款 / 去销售在详情内）
+  const detail = await waitForPage(miniProgram, 'pages/customer-detail/customer-detail', '客户详情页')
+  await waitPageReady(detail)
+  await waitFor(detail, '.js-opening', '出现 .js-opening')
+  await tapWhen(detail, '.js-opening')
+  await waitFor(detail, '.js-opening-sheet', '出现 .js-opening-sheet')
+  const amount = await detail.$('.js-opening-amount')
   if (!amount) {
     throw new Error('找不到期初欠款金额输入框')
   }
   await amount.input('20')
-  await tapWhen(edit, '.js-opening-submit')
-  await waitGone(edit, '.js-opening-sheet')
+  await tapWhen(detail, '.js-opening-submit')
+  await waitGone(detail, '.js-opening-sheet')
   await trace(miniProgram, 'runOpeningSheet 结尾 navigateBack 之前')
   await goBackTo(miniProgram, '客户页')
   await trace(miniProgram, 'runOpeningSheet 结尾 navigateBack 之后')
 }
 
 async function runPaySheet(miniProgram) {
-  step('客户页：点收款，弹出收款层并确认')
+  step('客户页：进客户详情点收款，弹出收款层并确认')
   const list = await goto(miniProgram, 'switchTab', '/pages/customers/customers', '客户页')
   await waitPageReady(list)
-  await waitFor(list, '.js-collect', '出现 .js-collect')
-  await tap(list, '.js-collect')
+  await waitFor(list, '.js-customer-item', '出现 .js-customer-item')
+  // B9 起行内不再有「收款」按钮（稿 n2 4:365），收款在详情里。
+  // 列表按欠款从多到少排（customers.js 的 refresh），第一行就是欠得最多的那位；
+  // 这一步要提交一笔「收满」，所以先把这个前提断言出来，免得默认金额是 0、
+  // 确认钮禁用、报出来的却是「等 .js-pay-sheet 消失超时」这种不着边的原因。
+  const listData = await list.data()
+  assert.ok(
+    listData.list && listData.list.length && Number(listData.list[0].receivable) > 0,
+    '客户页第一行应当是有欠款的客户（runRecordSheetPayPicker 靠的是同一个前提），实为 '
+      + JSON.stringify((listData.list || []).slice(0, 3).map(function (c) {
+        return [c.name, c.receivable]
+      }))
+  )
+  await tap(list, '.js-customer-item')
 
-  const edit = await waitForPage(miniProgram, 'pages/customer-edit/customer-edit', '客户编辑页')
-  await waitFor(edit, '.js-pay-sheet', '出现 .js-pay-sheet')
-  await tapWhen(edit, '.js-pay-submit')
-  await waitGone(edit, '.js-pay-sheet')
+  const detail = await waitForPage(miniProgram, 'pages/customer-detail/customer-detail', '客户详情页')
+  await waitPageReady(detail)
+  await tapWhen(detail, '.js-pay-open')
+  await waitFor(detail, '.js-pay-sheet', '出现 .js-pay-sheet')
+  await tapWhen(detail, '.js-pay-submit')
+  await waitGone(detail, '.js-pay-sheet')
 }
 
 // 造超过一页（> 20 条）的收款流水，写进内存模式的流水仓（inv_record_docs）。
@@ -1794,8 +1811,9 @@ async function runCustomerLedgerLoadMore(miniProgram) {
   })
   assert.ok(customerId, '前提：示例数据里有客户')
   await seedExtraPayDocs(miniProgram, 30, customerId, 'cust')
+  // B9：往来记录搬到了客户详情页。变量名保持 edit 不改，只为把本次 diff 收在两行内。
   const edit = await goto(miniProgram, 'navigateTo',
-    '/pages/customer-edit/customer-edit?id=' + customerId, '客户编辑页')
+    '/pages/customer-detail/customer-detail?id=' + customerId, '客户详情页')
   await waitForData(edit, function (data) { return data.ledger.length === 20 }, '往来记录首屏一页 20 条')
   await waitFor(edit, '.js-ledger-more', '往来记录的「加载更多」按钮')
   let guard = 0
@@ -1824,7 +1842,8 @@ async function runCustomerLedgerLoadMore(miniProgram) {
 
 async function runNativeClearModal(miniProgram) {
   step('店铺页：点清空（原生弹窗用 mock 自动确认）')
-  // 上一步停在 customer-edit，直接 reLaunch 会超时，见 backToTabRoot。
+  // 上一步停在客户页（runCustomerLedgerLoadMore 结尾退过栈），直接 reLaunch 会超时，
+  // 见 backToTabRoot。
   // 这一整段逐条打了 mark：两轮 UI 测试都在本函数里以「timeout waiting for automator
   // response」告终，但一次在结尾的 navigateBack 之后、一次早到连 trace 都没来得及打，
   // 需要夹逼出到底是哪条命令把工具卡住的。mark 不发 RPC，工具卡死了它也打得出来。

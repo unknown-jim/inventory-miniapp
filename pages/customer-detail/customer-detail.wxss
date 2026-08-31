@@ -1,0 +1,324 @@
+/* 客户详情。共用类（.page / .card / .muted / .empty / .empty-title /
+   .empty-actions / .btn-primary / .btn-ghost / .section-title / .tag /
+   .chips / .chip / .field-input）来自 app.wxss，这里只写本页布局。
+   稿 Screen/10 客户详情 4:297。 */
+
+/* 稿 card/当前欠款 4:368：白卡 r12、上下内边距 8、行间 gap 8。
+   左右沿用共用 .card 的 --card-pad。 */
+.hero-card {
+  padding: var(--space-md) var(--card-pad);
+}
+
+/* 稿 label 4:369：12px text/muted */
+.hero-label {
+  font-size: var(--fs-caption);
+  color: var(--color-text-muted);
+}
+
+/* 稿 amount 4:370：34px Bold = --fs-hero-md（docs/ui-scale.md 2026-08-30 把
+   「客户欠款、单据合计」迁到这一档，且**不降档**）。默认中性黑；
+   欠款档绑 text/debt、预收档绑 green/700（稿 7:252 的 $3:28）。 */
+.hero-num {
+  margin-top: var(--space-xs);
+  font-size: var(--fs-hero-md);
+  font-weight: 700;
+  color: var(--color-text-primary);
+}
+
+.hero-num.debt {
+  color: var(--color-text-debt);
+}
+
+.hero-num.prepay {
+  color: var(--color-green-700);
+}
+
+/* 稿 hint 7:253 / 9:7：12px text/muted，两行也要读得动 */
+.hero-hint {
+  margin-top: var(--space-xs);
+  font-size: var(--fs-caption);
+  color: var(--color-text-muted);
+  line-height: 1.5;
+}
+
+.hero-meta {
+  margin-top: var(--space-xs);
+  font-size: var(--fs-caption);
+  color: var(--color-text-muted);
+}
+
+/* 稿 btn-row 4:371：横排 gap 10，两枚各占一半、都是 48 高 */
+.btn-row {
+  display: flex;
+  gap: var(--space-lg);
+  margin-top: var(--space-md);
+}
+
+.hero-btn {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  height: var(--tap-md);
+  line-height: var(--tap-md);
+}
+
+/* 稿 btn/去销售 13:332 与 btn/拨打电话 13:377 / btn/编辑客户资料 13:378：
+   fill x 48、r8、白底 + 黑描边、16px Medium。与 pages/stock-take 的 .take-exit
+   同一份写法（那一枚就是稿上的白底黑描边件）。 */
+.hero-ghost {
+  flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
+  height: var(--tap-md);
+  line-height: var(--tap-md);
+  margin: 0;
+  background: var(--color-bg-card);
+  border: 2rpx solid var(--color-border-brand);
+  border-radius: 16rpx;
+  color: var(--color-text-primary);
+  font-size: var(--fs-title);
+  font-weight: 500;
+}
+
+/* 稿 link/记期初欠款 7:38：13px Medium、整行热区 44 */
+.card-link {
+  display: flex;
+  align-items: center;
+  min-height: var(--tap-min);
+  margin-top: var(--space-xs);
+  font-size: var(--fs-label);
+  font-weight: 500;
+  color: var(--color-text-primary);
+}
+
+/* 稿 card/往来记录 4:375：整卡内边距 0，行自己带 12 */
+.list-card {
+  padding: 0;
+  overflow: hidden;
+}
+
+/* 稿 row/销售 4:383：横排 gap 10、内边距 12，tag 在最左，金额在最右 */
+.lrow {
+  display: flex;
+  align-items: center;
+  gap: 20rpx;
+  box-sizing: border-box;
+  min-height: var(--tap-md);
+  padding: var(--space-lg);
+  border-bottom: 2rpx solid var(--color-border-default);
+}
+
+.lrow:last-child {
+  border-bottom: none;
+}
+
+.lrow-tag {
+  flex: none;
+}
+
+.lrow-col {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 稿 title 4:386：14px Medium */
+.lrow-title {
+  font-size: var(--fs-body);
+  font-weight: 500;
+  color: var(--color-text-primary);
+  word-break: break-all;
+}
+
+/* 稿 sub 4:387：12px text/muted */
+.lrow-sub {
+  margin-top: 4rpx;
+  font-size: var(--fs-caption);
+  color: var(--color-text-muted);
+  word-break: break-all;
+}
+
+/* 稿 amount 4:388：16px SemiBold、text/primary（**不是红**，四行同色） */
+.lrow-amount {
+  flex: none;
+  font-size: var(--fs-amount);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.quiet {
+  text-align: center;
+  color: var(--color-text-muted);
+}
+
+/* 明细取不到时的「重试」。和 pages/index / pages/products 的 .link 同一套，
+   可点高度靠 .quiet 卡片的内边距撑住。 */
+.link {
+  margin-left: var(--space-xs);
+  color: var(--color-text-primary);
+  font-size: var(--fs-label);
+  font-weight: 500;
+}
+
+.ledger-more {
+  margin: var(--space-md) 0;
+}
+
+/* 稿 card/联系 4:397：上下内边距 8、行间 gap 10 */
+.contact-card {
+  margin-top: var(--gap);
+  padding: var(--space-md) var(--card-pad);
+}
+
+.kv {
+  display: flex;
+  align-items: baseline;
+}
+
+.kv + .kv {
+  margin-top: var(--space-lg);
+}
+
+/* 稿 k 4:399：13px text/muted、定宽 56（= 112rpx） */
+.kv-k {
+  flex: none;
+  width: 112rpx;
+  font-size: var(--fs-label);
+  color: var(--color-text-muted);
+}
+
+/* 稿 v 4:400：14px text/primary */
+.kv-v {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-body);
+  color: var(--color-text-primary);
+  word-break: break-all;
+}
+
+.contact-btn {
+  width: 100%;
+  margin-top: var(--space-lg);
+}
+
+/* 弹层。与 pages/sale 的 .mask / .sheet 同一份写法（层级 token 见稿
+   Section/动效与层级 13:90：overlay 1000 / sheet 1001）。 */
+.mask {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: flex-end;
+  background: var(--color-bg-overlay);
+}
+
+.sheet {
+  position: relative;
+  z-index: 1001;
+  box-sizing: border-box;
+  width: 100%;
+  max-height: 84vh;
+  padding: 28rpx var(--space-xl) calc(env(safe-area-inset-bottom) + var(--space-lg));
+  background: var(--color-bg-card);
+  border-radius: 32rpx 32rpx 0 0;
+}
+
+/* 稿 grabber 13:450;4:1073：36x4 r999，底 $3:16 = neutral/200 */
+.grabber {
+  width: 72rpx;
+  height: 8rpx;
+  margin: 0 auto var(--space-md);
+  background: var(--color-neutral-200);
+  border-radius: 999rpx;
+}
+
+/* 稿 title 13:450;4:1074：16px SemiBold */
+.sheet-title {
+  font-size: var(--fs-title);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+/* 稿 debt 13:450;4:1075：13px neutral/500 */
+.sheet-note {
+  margin-top: var(--space-xs);
+  font-size: var(--fs-label);
+  color: var(--color-neutral-500);
+}
+
+/* 稿 body 13:451;4:1092：13px neutral/600 */
+.sheet-body {
+  margin-top: var(--space-xs);
+  font-size: var(--fs-label);
+  color: var(--color-neutral-600);
+  line-height: 1.5;
+}
+
+/* 稿 label 13:450;4:1076 / 13:451;4:1093：13px neutral/500 */
+.sheet-label {
+  margin-top: var(--space-lg);
+  margin-bottom: var(--space-sm);
+  font-size: var(--fs-label);
+  color: var(--color-neutral-500);
+}
+
+/* 稿 input/金额 13:450;13:366：fill x 48 r10、底 neutral/100、描边 border/default、
+   数字 16px SemiBold */
+.amount-input {
+  box-sizing: border-box;
+  width: 100%;
+  height: var(--tap-md);
+  padding: 0 var(--space-lg);
+  background: var(--color-fill-ghost);
+  border: 2rpx solid var(--color-border-default);
+  border-radius: 20rpx;
+  font-size: var(--fs-title);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.pay-chips {
+  margin-top: var(--space-md);
+  margin-bottom: 0;
+}
+
+/* 稿 feedback 13:450;4:1085：13px。已清 / 转预收走 green/700，
+   还欠着走 text/muted（稿只画了绿的那一档，muted 那一档见规格 §6）。 */
+.feedback {
+  margin-top: var(--space-lg);
+  font-size: var(--fs-label);
+  color: var(--color-text-muted);
+  line-height: 1.5;
+}
+
+.feedback.ok {
+  color: var(--color-green-700);
+}
+
+/* 稿 warn 13:450;4:1086 / note 13:451;4:1096：12px neutral/500 */
+.sheet-warn {
+  margin-top: var(--space-sm);
+  font-size: var(--fs-caption);
+  color: var(--color-neutral-500);
+  line-height: 1.5;
+}
+
+/* 稿 btn/确认收款 13:450;7:503：fill x 52 r8 黑底。档位表里没有 52，
+   取 --tap-lg（104rpx = 52px）正好同值。禁用态直接吃共用类
+   .btn-primary[disabled]（neutral/100 底 + neutral/500 字、opacity 1）。 */
+.sheet-cta {
+  margin-top: var(--space-lg);
+}
+
+/* 稿 cancel 13:450;7:331：14px neutral/600、整行热区 44 */
+.sheet-cancel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--tap-min);
+  margin-top: var(--space-xs);
+  font-size: var(--fs-body);
+  color: var(--color-neutral-600);
+}

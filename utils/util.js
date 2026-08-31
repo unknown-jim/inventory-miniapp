@@ -180,6 +180,22 @@ function withRecordView(record) {
   else if (isOpening) productName = '期初欠款'
   else if (isOut || isReturn) productName = inventory.orderProductTitle(lines)
   else productName = line.productName || ''
+  // 【9a】这条流水对**这个客户欠款**的影响（元，带符号）。客户详情的往来记录
+  // （稿 Screen/10 的 card/往来记录 4:375）右侧那一列印的就是它：现结销售那行是
+  // ¥0.00、应收 2300 实收 1500 那行是 +¥800.00、收款那行是 -¥300.00。
+  //
+  // **定义只有一份**：utils/inventory.js 里「单条流水折成累加器」+「累加器投影成
+  // 客户账户」那一对纯函数 —— 服务端把每条流水折进 customers[].account 用的就是
+  // 它们（foldAccountTerms），所以这一列**逐条相加恒等于**客户详情首卡那个
+  // 「当前欠款」。不要在页面里按 amount / creditedAmount / prepayAdded 自己拼一遍：
+  // 那是同一条规则的第二份实现，四种流水的符号改一处就错。
+  //
+  // 为什么算在这里而不是页面里：tests/no-client-cloud-db.test.js 的 T-S3 禁止
+  // pages/ 与 components/ 出现这两个名字（扫描面**不含 utils/**，理由写在该文件的
+  // 注释里）；T-S3b 禁的是把它们**导出**（判据是「出现在 module.exports 之后」），
+  // 而这里导出的是算好的数和字符串，页面拿不到任何折钱的零件。
+  // 同一层已有先例：下面 creditedAmount / returnedAmount 两格也是这么算的（7a 批）。
+  const debtDelta = inventory.accountOf(inventory.recordTerms(record)).receivable
   const view = Object.assign({}, record, {
     productName: productName,
     sku: single ? (line.sku || '') : '',
@@ -217,6 +233,10 @@ function withRecordView(record) {
     paidText: money(paidAmount),
     debtText: money(debtAmount),
     hasDebt: debtAmount > 0,
+    // 【9a】见上面 debtDelta 那一段。零的时候不带符号（稿 13:658 是「¥0.00」）。
+    debtDelta: debtDelta,
+    debtDeltaText: (debtDelta > 0 ? '+' : (debtDelta < 0 ? '-' : ''))
+      + '¥' + money(Math.abs(debtDelta)),
     // 【7a】列表行要的两个派生量。都用 utils/inventory.js 的现成纯函数算，
     // **不在页面里从流水折钱**（tests/no-client-cloud-db.test.js 的 T-S3 禁令）。
     //

@@ -2,6 +2,14 @@ const store = require('../../utils/store')
 const util = require('../../utils/util')
 const inventory = require('../../utils/inventory')
 
+// 客户编辑 / 新增。设计稿 Screen/09b 客户编辑 4:1116、变体/名称空底栏 13:395、
+// caption 9:56。B9 起本页只剩「一张表单」这一件事：
+// 欠款卡、往来记录、收款 / 记期初两枚 sheet 全部搬去 pages/customer-detail。
+//
+// 三个入口：
+//   pages/customers/customers.js:goAdd              无参 = 新增
+//   pages/sale/sale.js / pages/record-edit          ?select=1  新增并回选
+//   pages/customer-detail/customer-detail.js:goEdit ?id=<客户id>  编辑
 Page({
   data: {
     id: '',
@@ -10,27 +18,14 @@ Page({
     phone: '',
     address: '',
     remark: '',
-    openingAmount: '',
-    saleCount: 0,
-    saleAmountText: '0.00',
-    receivable: 0,
-    receivableText: '0.00',
-    hasDebt: false,
-    ledger: [],
-    ledgerCursor: '',
-    ledgerHasMore: false,
-    ledgerLoading: false,
-    ledgerUnavailable: false,
-    showPay: false,
-    payAmount: '',
-    payRemark: '',
-    showOpening: false,
-    openingRemark: ''
+    canSave: false,
+    saving: false,
+    canDelete: false,
+    deleteNote: ''
   },
 
   onLoad(query) {
     this.selectAfterSave = query.select === '1'
-    this.openPayAfter = query.pay === '1'
     if (!query.id) {
       wx.setNavigationBarTitle({ title: '新增客户' })
       return
@@ -51,15 +46,20 @@ Page({
       wx.showToast({ title: '客户不存在', icon: 'none' })
       return
     }
-    // 金额三项（累计销售笔数 / 累计销售额 / 当前欠款）一律用服务端权威的
-    // customers[].account，不要拿流水缓存现算：submitPay / submitOpening 直接调
-    // 这里，**不经过 store.ready() 的门**，缓存这时可能还没补齐（delta 条数对不上
-    // 且重拉又失败），现算出来会是一个偏小的欠款。account 的字段口径与
-    // summarizeCustomerAccount 逐字段相等，见 tests/ledger-terms.test.js。
+    // accountOf(null) 是「空账户」构造器，是 tests/no-client-cloud-db.test.js
+    // 明文放行的唯一用法。
     const account = customer.account || inventory.accountOf(null)
-    const hasDebt = account.receivable > 0
-    // fillCustomer 保持**同步**：submitPay / submitOpening 记完账直接调它，
-    // 金额必须当场就对。往来明细是分页取的，异步跟在后面，取不到也只影响明细。
+    // 稿注释 4:411：「删除客户限制：有往来记录不可删，仅无记录客户可删（danger 二次确认）」；
+    // caption 9:52：「置为不可点并说明原因，**不要点了才报错**」。
+    // 服务端 deleteCustomer（utils/ledger-apply.js:868-872）一道守卫都没有，
+    // 所以这是唯一的闸，必须 fail-safe：判不出来就当成不可删。
+    // 判据用已经在手的 account 六项，不额外发请求（理由见规格 §5.7）。
+    const hasLedger = inventory.toNumber(account.count) > 0
+      || inventory.round2(account.amount) !== 0
+      || inventory.round2(account.creditAmount) !== 0
+      || inventory.round2(account.paidAmount) !== 0
+      || inventory.round2(account.receivable) !== 0
+      || inventory.round2(account.prepay) !== 0
     this.setData({
       id: customer.id,
       isEdit: true,
@@ -67,171 +67,29 @@ Page({
       phone: customer.phone,
       address: customer.address,
       remark: customer.remark,
-      saleCount: account.count,
-      saleAmountText: util.money(account.amount),
-      receivable: account.receivable,
-      receivableText: util.money(account.receivable),
-      hasDebt: hasDebt
-    }, () => {
-      if (this.openPayAfter) {
-        this.openPayAfter = false
-        if (hasDebt) this.openPay()
-      }
+      canSave: !!String(customer.name || '').trim(),
+      canDelete: !hasLedger,
+      // 稿 note 4:1135 少了条数：条数要翻完全部分页才数得出来，
+      // 为一句提示语发 N 次云调用不值（规格 §6-8）。
+      deleteNote: hasLedger
+        ? (customer.name + '有往来记录，不能删。只有从没记过账的客户可以删。')
+        : ''
     })
-    // 返回 promise 只为可测：金额那几项在上面已经**同步**设好了，
-    // tests/store.test.js 正是先断言金额、再 await 这个 promise 断言明细。
-    return this.reloadLedger()
-  },
-
-  // 往来明细：listRecords({customerId}) 触底加载。
-  // 口径和 summarizeCustomerAccount(...).ledger 相等 —— 只有 out / pay /
-  // return / opening 四种记录带 customerId，而 isCustomerAccountRecord 恰好
-  // 就是这四种，由 tests/ledger-records.test.js 的 T-A4 钉住。
-  reloadLedger() {
-    this.ledgerToken = (this.ledgerToken || 0) + 1
-    this.ledgerLock = false
-    this.setData({
-      ledger: [],
-      ledgerCursor: '',
-      ledgerHasMore: false,
-      ledgerUnavailable: false
-    })
-    return this.loadLedgerPage(true)
-  },
-
-  async loadLedgerPage(isFirst) {
-    if (!this.data.id) return
-    // 实例级的锁，不能用 data.ledgerLoading：setData 异步，触底连发会重复请求
-    if (this.ledgerLock) return
-    if (!isFirst && !this.data.ledgerHasMore) return
-    this.ledgerLock = true
-    const token = this.ledgerToken
-    this.setData({ ledgerLoading: true })
-    try {
-      const res = await store.listRecords({
-        customerId: this.data.id,
-        cursor: isFirst ? '' : this.data.ledgerCursor,
-        limit: 20
-      })
-      if (token !== this.ledgerToken) return
-      this.setData({
-        ledger: this.data.ledger.concat(res.records.map(util.withRecordView)),
-        // 空页时服务端回 ''，直接赋值会把游标冲回开头
-        ledgerCursor: res.cursor || this.data.ledgerCursor,
-        ledgerHasMore: res.hasMore,
-        ledgerUnavailable: false
-      })
-    } catch (error) {
-      // 明细拿不到就明确标成不可用 —— 直接给空数组会被界面说成
-      // 「还没有往来记录」，那是在撒谎。上面的金额来自服务端权威值，仍然是准的。
-      if (token === this.ledgerToken) this.setData({ ledgerUnavailable: true })
-    } finally {
-      if (token === this.ledgerToken) {
-        this.ledgerLock = false
-        this.setData({ ledgerLoading: false })
-      }
-    }
-  },
-
-  // 返回 promise 只为可测（tests/store.test.js），小程序不看返回值
-  onReachBottom() {
-    return this.loadLedgerPage(false)
-  },
-
-  // 手动「加载更多」：和 onReachBottom 走**同一个** loadLedgerPage(false)，
-  // 不复制逻辑。触底在真机上没实测过，这个按钮是明细翻页的兜底出路。
-  onLoadMoreLedger() {
-    return this.loadLedgerPage(false)
-  },
-
-  retryLedger() {
-    return this.reloadLedger()
-  },
-
-  goRecord(e) {
-    wx.navigateTo({ url: '/pages/record-edit/record-edit?id=' + e.currentTarget.dataset.id })
   },
 
   onField(e) {
     const patch = {}
-    patch[e.currentTarget.dataset.field] = e.detail.value
+    const field = e.currentTarget.dataset.field
+    patch[field] = e.detail.value
+    // 稿 13:395 变体：名称为空 ⇒ 保存钮禁用
+    if (field === 'name') patch.canSave = !!String(e.detail.value || '').trim()
     this.setData(patch)
   },
 
-  openPay() {
-    if (!(this.data.receivable > 0)) {
-      wx.showToast({ title: '当前没有欠款', icon: 'none' })
-      return
-    }
-    this.setData({
-      showPay: true,
-      showOpening: false,
-      payAmount: util.money(this.data.receivable),
-      payRemark: ''
-    })
-  },
-
-  closePay() {
-    this.setData({ showPay: false })
-  },
-
-  keepPay() {},
-
-  async submitPay() {
-    try {
-      await store.addPayment({
-        customerId: this.data.id,
-        amount: this.data.payAmount,
-        remark: this.data.payRemark
-      })
-      this.setData({ showPay: false })
-      this.fillCustomer(this.data.id)
-      wx.showToast({ title: '已收款', icon: 'success' })
-    } catch (error) {
-      util.showError(error)
-    }
-  },
-
-  openOpening() {
-    this.setData({
-      showOpening: true,
-      showPay: false,
-      openingAmount: '',
-      openingRemark: ''
-    })
-  },
-
-  closeOpening() {
-    this.setData({ showOpening: false })
-  },
-
-  keepOpening() {},
-
-  async submitOpening() {
-    try {
-      await store.addOpening({
-        customerId: this.data.id,
-        amount: this.data.openingAmount,
-        remark: this.data.openingRemark
-      })
-      this.setData({ showOpening: false })
-      this.fillCustomer(this.data.id)
-      wx.showToast({ title: '已记账', icon: 'success' })
-    } catch (error) {
-      util.showError(error)
-    }
-  },
-
   async save() {
+    if (!this.data.canSave || this.data.saving) return
+    this.setData({ saving: true })
     try {
-      const openingText = String(this.data.openingAmount || '').trim()
-      let opening = 0
-      if (!this.data.isEdit && openingText) {
-        opening = inventory.round2(openingText)
-        if (opening <= 0) {
-          throw new Error('期初欠款必须大于 0')
-        }
-      }
       const saved = await store.saveCustomer({
         id: this.data.id,
         name: this.data.name,
@@ -239,45 +97,26 @@ Page({
         address: this.data.address,
         remark: this.data.remark
       })
-      if (opening > 0) {
-        await store.addOpening({
-          customerId: saved.id,
-          amount: opening,
-          remark: '上线前欠款'
-        })
-      }
       if (this.selectAfterSave) {
         getApp().setSelectedCustomer(saved.id)
       }
+      // 成功之后**不复位 saving**：页面正在退出，复位只会给连点留一个窗口
       wx.showToast({ title: '已保存', icon: 'success' })
       setTimeout(function () {
         wx.navigateBack()
       }, 400)
     } catch (error) {
+      this.setData({ saving: false })
       util.showError(error)
     }
   },
 
-  callPhone() {
-    if (!this.data.phone) {
-      wx.showToast({ title: '还没有电话', icon: 'none' })
-      return
-    }
-    wx.makePhoneCall({ phoneNumber: this.data.phone })
-  },
-
   remove() {
-    if (this.data.hasDebt) {
-      wx.showModal({
-        title: '还有欠款',
-        content: '当前欠款 ¥' + this.data.receivableText + '，请先收款后再删除。',
-        showCancel: false
-      })
-      return
-    }
+    // 不可删时按钮压根不渲染；这一句是防御，不是判据
+    if (!this.data.canDelete) return
     wx.showModal({
       title: '删除客户',
-      content: '历史送货记录会保留当时的客户信息，只是以后不能再选这个客户。',
+      content: '「' + this.data.name + '」从没记过账，删掉不影响任何流水。删了不能撤销。',
       confirmColor: '#DC2626',
       success: async (res) => {
         if (!res.confirm) return

@@ -689,15 +689,15 @@ Page({
     wx.navigateTo({ url: '/pages/sale-return/sale-return?id=' + this.data.id })
   },
 
-  // 「去收款」桥（稿 btn/去收款 13:446）。落点是客户详情页的收款弹层 ——
-  // 和客户列表那颗「收款」钮走**同一条 URL**（pages/customers/customers.js:53-57
-  // 的 goCollect：`?id=<客户>&pay=1`），customer-edit 那边 `query.pay === '1'`
-  // 时自动开收款弹层（customer-edit.js:33 / :76-78），且只在 hasDebt 时开。
-  // 收款额本身归 B9，本批只负责把人送过去。
+  // 「去收款」桥（稿 btn/去收款 13:446）。落点是客户详情页的收款弹层
+  // （pages/customer-detail，稿 Screen/10 + sheet/收款 13:450）：
+  // `?id=<客户>&pay=1`，那边 `query.pay === '1'` 时自动开层。
+  // B9 起**无条件开层**（G1 之后收款可以超欠款，多出的记预收），
+  // 而这颗桥本来就只在 canCollect 时才出现。
   goCollect() {
     if (!this.data.canCollect) return
     wx.navigateTo({
-      url: '/pages/customer-edit/customer-edit?id=' + this.data.customerId + '&pay=1'
+      url: '/pages/customer-detail/customer-detail?id=' + this.data.customerId + '&pay=1'
     })
   },
 

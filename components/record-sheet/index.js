@@ -117,7 +117,7 @@ Component({
       if (action === 'take') return this.openProductPicker('take')
     },
 
-    // ---- 收款：先选客户（只列有欠款），落点 customer-edit 的收款态 ----
+    // ---- 收款：先选客户（只列有欠款），落点客户详情页的收款弹层 ----
 
     async openCustomerPicker() {
       this.setData({ step: 'customer', loading: true })
@@ -157,7 +157,9 @@ Component({
     },
 
     onPickCustomer(e) {
-      this._go('/pages/customer-edit/customer-edit?id=' + e.currentTarget.dataset.id + '&pay=1')
+      // B9 起收款弹层在客户详情页（稿 Screen/10）。customer-edit 收缩成纯表单，
+      // 不再认 &pay=1。落点的静态断言在 tests/record-sheet.test.js:157-160。
+      this._go('/pages/customer-detail/customer-detail?id=' + e.currentTarget.dataset.id + '&pay=1')
     },
 
     // ---- 退货：先选原销售单，不开空白退货单（设计稿 n5）----
