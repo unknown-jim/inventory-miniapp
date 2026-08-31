@@ -4,11 +4,13 @@
   </block>
 
   <block wx:elif="{{blocked}}">
-    <view class="card empty-card">
-      <view class="empty-title">还不能记账</view>
-      <view class="muted">{{blockedMessage}}</view>
-      <button class="btn-primary seed-btn" bindtap="goShop">创建或选择店铺</button>
-    </view>
+    <state-blocking
+      kind="{{blockedKind}}"
+      title="{{blockedTitle}}"
+      body="{{blockedMessage}}"
+      action="{{blockedAction}}"
+      bindaction="goShop"
+    />
   </block>
 
   <block wx:else>

@@ -24,7 +24,12 @@ Page({
     pageLoading: true,
     showRecordSheet: false,
     blocked: false,
+    // 阻断态四件套。kind 决定图标（components/state-blocking），title / action 来自
+    // utils/messages.js 的 BLOCKING 表，blockedMessage 仍然是话术层那一句。
+    blockedKind: 'generic',
+    blockedTitle: '',
     blockedMessage: '',
+    blockedAction: '',
     shopName: ''
   },
 
@@ -34,10 +39,16 @@ Page({
       // 整页阻断位是**技术文案最刺眼的落点**：它不是一闪而过的 toast，而是占满首页。
       // 过一层 utils/messages.js 换成店员话术；原文仍在 error.message 上，
       // console 里也还看得到（forStaff 里 warn 了），排查不受影响。
+      // blockingFor 在话术之外还给出「是哪一种阻断」和「给不给按钮」，
+      // 正文 body 就是 forStaff().text，没有第二份文案。
+      const blocking = messages.blockingFor(status.message)
       this.setData({
         pageLoading: false,
         blocked: true,
-        blockedMessage: messages.forStaff(status.message).text,
+        blockedKind: blocking.kind,
+        blockedTitle: blocking.title,
+        blockedMessage: blocking.body,
+        blockedAction: blocking.action,
         shopName: '',
         dateText: util.formatDate(Date.now()),
         productCount: 0,
@@ -62,10 +73,14 @@ Page({
     try {
       await store.ensureReady()
     } catch (error) {
+      const blocking = messages.blockingFor(error)
       this.setData({
         pageLoading: false,
         blocked: true,
-        blockedMessage: messages.forStaff(error).text || '暂时不能记账',
+        blockedKind: blocking.kind,
+        blockedTitle: blocking.title,
+        blockedMessage: blocking.body || '暂时不能记账',
+        blockedAction: blocking.action,
         isEmpty: false
       })
       return
@@ -76,7 +91,10 @@ Page({
     await store.refreshIfStale()
     this.setData({
       blocked: false,
+      blockedKind: 'generic',
+      blockedTitle: '',
       blockedMessage: '',
+      blockedAction: '',
       shopName: status.shopName
     })
     this.refresh()

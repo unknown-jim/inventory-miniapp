@@ -200,4 +200,64 @@ assert.strictEqual(messages.forStaff(new Error('一个 Error')).raw, '一个 Err
   }
 })()
 
+// ---------------------------------------------------------------------------
+// 10) 全局阻断态分类（1a 批，稿 Row/00「全局阻断态（4 种）」4:1099）。
+//     blockingFor 只回答「哪一种 + 标题 + 给不给按钮」；**正文一律等于
+//     forStaff().text** —— 阻断位上那句话和 toast 里那句必须是同一句，
+//     仓库里不许出现第二份文案。这一条是这组里最重要的断言。
+// ---------------------------------------------------------------------------
+;[
+  ['请更新小程序到最新版本', 'outdated', '小程序需要更新', ''],
+  ['本店账本还没完成流水升级，暂时不能记账', 'migrating', '账目正在整理', ''],
+  ['还没有选择店铺。请先建店，或等老板把你的 openid 加进白名单。', 'no-shop', '还没有选店', '去店铺页']
+].forEach(function (row) {
+  const got = messages.blockingFor(row[0])
+  assert.strictEqual(got.kind, row[1], '阻断态分类错了：' + row[0])
+  assert.strictEqual(got.title, row[2], '阻断态标题错了：' + row[0])
+  assert.strictEqual(got.action, row[3], '阻断态按钮错了：' + row[0])
+  assert.strictEqual(
+    got.body, forStaff(row[0]).text,
+    '阻断态正文必须就是话术层那一句，不许另写一份：' + row[0]
+  )
+})
+
+// 认不出的错误落兜底档：标题是今天那句「还不能记账」，**按钮保留** ——
+// 阻断分支里没有别的入口（hero 店名不渲染、tabBar 没有店铺格），
+// 去掉按钮等于把人关在一个没有出口的屏上。
+// kindHint 优先于正则：维护文案由服务端给，可能是任意一句话，正则认不出来。
+;(function () {
+  const origWarn = console.warn
+  console.warn = function () {}
+  try {
+    const fallback = messages.blockingFor(new Error('一句没人认识的错误'))
+    assert.strictEqual(fallback.kind, 'generic')
+    assert.strictEqual(fallback.title, '还不能记账')
+    assert.strictEqual(fallback.action, '去店铺页')
+    assert.strictEqual(fallback.body, '一句没人认识的错误', '兜底也不吞原文')
+
+    const hinted = messages.blockingFor('今晚 22:00-23:00 升级', 'maintenance')
+    assert.strictEqual(hinted.kind, 'maintenance')
+    assert.strictEqual(hinted.title, '后台维护中')
+    assert.strictEqual(hinted.action, '', '维护态不给按钮：等一等，点什么都没用')
+    assert.strictEqual(hinted.body, '今晚 22:00-23:00 升级', '服务端给的维护文案原样显示')
+  } finally {
+    console.warn = origWarn
+  }
+})()
+
+// BLOCKING 的四个 kind 必须和 components/state-blocking 的 GLYPHS 对得上，
+// 少一个 kind 就会渲染成兜底字形而没人发现。
+;(function () {
+  const fs2 = require('fs')
+  const path2 = require('path')
+  const src = fs2.readFileSync(path2.join(root, 'components/state-blocking/index.js'), 'utf8')
+  messages.BLOCKING.forEach(function (rule) {
+    assert.ok(
+      src.indexOf("'" + rule.kind + "'") >= 0 || src.indexOf(rule.kind + ':') >= 0,
+      'components/state-blocking 的 GLYPHS 里没有 ' + rule.kind + ' 这一档'
+    )
+  })
+  assert.ok(src.indexOf('generic') >= 0, 'GLYPHS 里必须有兜底档 generic')
+})()
+
 console.log('messages tests passed')

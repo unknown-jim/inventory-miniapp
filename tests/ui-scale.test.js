@@ -71,7 +71,38 @@ assert.ok(indexWxml.indexOf('pageLoading') >= 0, 'home page should gate content 
 assert.ok(indexWxml.indexOf('<page-loading') >= 0, 'home page should use shared loading view')
 const loadingWxml = read('components/page-loading/index.wxml')
 assert.ok(loadingWxml.indexOf('js-page-loading') >= 0, 'loading view should expose js-page-loading')
-assert.ok(loadingWxml.indexOf('正在加载') >= 0, 'loading view should say 正在加载')
+// 1a 批：加载态改成稿上的 state/loading（3:413）—— 一行式，spinner +「加载中…」。
+// 旧文案是「正在加载」+「请稍候，正在读取本店账本。」两行整卡。
+assert.ok(loadingWxml.indexOf('加载中') >= 0, 'loading view should say 加载中')
+assert.ok(
+  loadingWxml.indexOf('page-loading-spin') >= 0,
+  'loading view should render the spinner element'
+)
+
+// 1a 批：全局阻断态组件（稿 Row/00「全局阻断态（4 种）」4:1099）。
+const blockingWxml = read('components/state-blocking/index.wxml')
+const blockingJs = read('components/state-blocking/index.js')
+assert.ok(
+  blockingWxml.indexOf('js-state-blocking') >= 0,
+  'state-blocking should expose js-state-blocking'
+)
+// 1a 批执行备注（规格 §6.2 与 §10.1 内部矛盾的裁定）：组件文件顶部的注释**必须**提到
+// virtualHost 这个词（说明为什么不开），词面 indexOf 会把注释误当字段拦下来。
+// 这里只拦「virtualHost 后跟 ASCII 冒号」的字段赋值语法；注释里的「virtualHost。」
+// 是全角句号，不匹配。意图与规格 §10.3 的变异验证一致：加 virtualHost: true 必须红。
+assert.ok(
+  !/virtualHost\s*:/.test(blockingJs),
+  'state-blocking 不要开 virtualHost：开了 automator 从页面查不到卡片里的标题和按钮，'
+    + 'record-sheet 和 slip-overlay 都为此摘掉过'
+)
+assert.ok(
+  indexWxml.indexOf('<state-blocking') >= 0,
+  'home page blocked branch should use the shared blocking card'
+)
+assert.ok(
+  indexWxml.indexOf('还不能记账') < 0,
+  '阻断态标题现在由 utils/messages.js 的 BLOCKING 表给，不再写死在 index.wxml 里'
+)
 assert.ok(indexWxml.indexOf('填充示例数据') >= 0, 'home page should keep 填充示例数据')
 assert.ok(indexWxml.indexOf('新增商品') >= 0, 'home page should keep 新增商品')
 assert.ok(indexWxml.indexOf('查看全部') >= 0, 'home page should keep 查看全部')

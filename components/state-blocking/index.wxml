@@ -1,0 +1,12 @@
+<view class="card sb js-state-blocking">
+  <view class="sb-icon sb-icon-{{kind}}">
+    <text class="sb-glyph">{{glyph}}</text>
+  </view>
+  <view class="sb-title js-state-blocking-title">{{title}}</view>
+  <view class="sb-body">{{body}}</view>
+  <button
+    wx:if="{{action}}"
+    class="btn-primary sb-action js-state-blocking-action"
+    bindtap="onAction"
+  >{{action}}</button>
+</view>
