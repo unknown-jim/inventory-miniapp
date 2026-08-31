@@ -1,89 +1,147 @@
+/* 稿 Screen/11 进货入库 4:417。颜色全部绑 app.wxss 的 token（A1 批起不写死）。
+   字号一律写变量名：tests/ui-scale.test.js 拦所有小于 32rpx 的字面量 font-size。
+   注意注释里不要写以星号结尾再跟斜杠的选择器通配（会提前闭合块注释，
+   tests/wxss-wxml.test.js 拦这条）。 */
+
+/* 钉底 CTA 要让位。同 pages/product-edit 与 pages/sale 的做法。 */
+.page {
+  padding-bottom: calc(env(safe-area-inset-bottom) + 220rpx);
+}
+
+.recent-label {
+  margin-bottom: var(--space-sm);
+}
+
+.recent-chips {
+  margin-bottom: var(--space-sm);
+}
+
+/* 稿 picker/字段/selected 4:440：44 高、灰底 + 描边、行尾 chevron。
+   chevron 用 ::after 画（content 为空串，不产生文本节点）——
+   tests/ui.test.js:2142 逐字比这个节点的文本，多一个字符就红。 */
 .picker {
-  line-height: var(--tap-md);
+  position: relative;
+  display: flex;
+  align-items: center;
+  padding-right: 56rpx;
+  border: 2rpx solid var(--color-border-default);
+  box-sizing: border-box;
 }
 
+.picker::after {
+  content: '';
+  position: absolute;
+  right: var(--space-lg);
+  top: 50%;
+  width: 16rpx;
+  height: 16rpx;
+  margin-top: -10rpx;
+  border-right: 3rpx solid var(--color-text-faint);
+  border-bottom: 3rpx solid var(--color-text-faint);
+  transform: rotate(-45deg);
+}
+
+/* 稿 库存meta 4:441 */
 .meta {
-  margin: -8rpx 0 24rpx;
-  color: #0F766E;
-  font-size: var(--fs-sm);
+  margin: -8rpx 0 var(--space-lg);
 }
 
-.spec-block .field {
-  margin-bottom: 8rpx;
+.spec-block {
+  margin-bottom: var(--space-xs);
 }
 
-.spec-block .chips {
-  margin-bottom: 8rpx;
-}
-
-.total,
-.sheet-item {
+/* 稿 row/合计 4:709：k 左、v 右，v 是 16px SemiBold */
+.total {
   display: flex;
   justify-content: space-between;
   align-items: center;
-}
-
-.total {
-  padding-top: 8rpx;
-  font-weight: 600;
+  padding-top: var(--space-xs);
 }
 
 .total-num {
-  font-size: var(--fs-xl);
-  color: #0F766E;
+  font-size: var(--fs-amount);
+  font-weight: 600;
+  color: var(--color-text-primary);
 }
 
 .tip {
-  margin-top: 16rpx;
+  margin-top: var(--space-md);
+}
+
+.field.last {
+  margin-top: var(--space-lg);
+  margin-bottom: 0;
+}
+
+/* 稿 bottom-cta 4:421。范式同 pages/product-edit 的 save-bar。 */
+.save-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10;
+  box-sizing: border-box;
+  padding: var(--space-lg) var(--page-pad) calc(env(safe-area-inset-bottom) + var(--space-lg));
+  background: var(--color-bg-card);
+  border-top: 2rpx solid var(--color-border-default);
 }
 
 .save-btn {
-  margin-top: 32rpx;
+  margin: 0;
 }
 
+/* 弹层骨架。与 pages/sale/sale.wxss 的同名块逐条同构（那一份是 B6 落地的）。 */
 .mask {
   position: fixed;
   top: 0;
   right: 0;
   bottom: 0;
   left: 0;
-  background: rgba(15, 23, 42, 0.45);
+  z-index: 1000;
   display: flex;
   align-items: flex-end;
-  z-index: 1000;
+  background: var(--color-bg-overlay);
 }
 
 .sheet {
-  width: 100%;
-  background: #FFFFFF;
-  border-radius: 24rpx 24rpx 0 0;
-  padding: 28rpx 24rpx 12rpx;
   position: relative;
   z-index: 1001;
+  box-sizing: border-box;
+  width: 100%;
+  max-height: 84vh;
+  padding: 28rpx var(--space-xl) var(--space-lg);
+  background: var(--color-bg-card);
+  border-radius: 24rpx 24rpx 0 0;
 }
 
 .sheet-title {
-  font-size: var(--fs-lg);
+  margin-bottom: var(--space-md);
+  font-size: var(--fs-title);
   font-weight: 600;
-  margin-bottom: 16rpx;
+  color: var(--color-text-primary);
 }
 
 .sheet-list {
-  height: 560rpx;
+  max-height: 560rpx;
 }
 
 .sheet-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  box-sizing: border-box;
+  min-height: var(--tap-md);
   padding: 22rpx 0;
-  border-bottom: 1rpx solid #F1F5F4;
+  border-bottom: 2rpx solid var(--color-border-default);
 }
 
 .sheet-thumb {
+  flex: none;
   width: 72rpx;
   height: 72rpx;
-  border-radius: 6rpx;
-  flex-shrink: 0;
   margin-right: var(--gap);
-  background: #f3f4f6;
+  border-radius: 12rpx;
+  background: var(--color-fill-ghost);
 }
 
 .sheet-body {
@@ -92,6 +150,6 @@
 }
 
 .item-name {
-  font-weight: 600;
   margin-bottom: 6rpx;
+  font-weight: 600;
 }

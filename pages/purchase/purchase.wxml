@@ -1,85 +1,115 @@
+<!-- 稿 Screen/11 进货入库 4:417。整屏自上而下：
+     最近进货 chips 4:693/4:694 / 商品字段 4:440 / 库存 meta 4:441 /
+     规格卡（稿 picker/格选择器·简版 7:466，本仓内联不弹 sheet，见规格 6-3）/
+     数量+进价 4:699 / 合计 4:709 / 进价回写 hint 7:350 / 备注 4:453 /
+     钉底 CTA 4:421。
+     多行入库（列头 + N 行 + 删行 + 再加一格）本批不做：applyPurchase 是单行单，
+     稿注 4:457 自己写着「实现随云函数写路径分期」。见规格 6-1 与 OPEN-Q-1。 -->
 <view class="page">
   <page-loading wx:if="{{pageLoading}}" />
   <block wx:else>
-  <view class="card">
-    <view class="field">
-      <view class="field-label">商品</view>
-      <view class="field-input picker js-purchase-picker" bindtap="openPicker">{{productName}}</view>
-    </view>
-    <view class="meta js-purchase-stock">当前库存 {{stockText}}<text wx:if="{{blankProcess}}">（待加工）</text></view>
-    <view class="spec-block" wx:if="{{hasSpecs && !blankProcess}}">
-      <view class="field" wx:if="{{colors.length}}">
-        <view class="field-label">{{specAxis1}}</view>
-        <view class="chips">
-          <view
-            class="chip {{item.on ? 'on' : ''}}"
-            wx:for="{{colorOptions}}"
-            wx:key="value"
-            data-value="{{item.value}}"
-            bindtap="pickColor"
-          >{{item.value}}</view>
-        </view>
-      </view>
-      <view class="field" wx:if="{{sizes.length}}">
-        <view class="field-label">{{specAxis2}}</view>
-        <view class="chips">
-          <view
-            class="chip {{item.on ? 'on' : ''}}"
-            wx:for="{{sizeOptions}}"
-            wx:key="value"
-            data-value="{{item.value}}"
-            bindtap="pickSize"
-          >{{item.value}} {{item.stock}}</view>
-        </view>
-      </view>
-    </view>
-    <view class="field-row">
-      <view class="field half">
-        <view class="field-label">数量</view>
-        <input class="field-input js-purchase-qty" type="digit" data-field="qty" value="{{qty}}" bindinput="onField" placeholder="0" hidden="{{showPicker}}" />
-      </view>
-      <view class="field half">
-        <view class="field-label">本次进价</view>
-        <input class="field-input js-purchase-price" type="digit" data-field="unitPrice" value="{{unitPrice}}" bindinput="onField" placeholder="0.00" hidden="{{showPicker}}" />
-      </view>
-    </view>
-    <view class="field">
-      <view class="field-label">备注</view>
-      <input class="field-input" data-field="remark" value="{{remark}}" bindinput="onField" placeholder="可选" hidden="{{showPicker}}" />
-    </view>
-    <view class="total">
-      <text>进货金额</text>
-      <text class="total-num">¥{{amountText}}</text>
-    </view>
-    <view class="muted tip">{{blankProcess ? '进货记入待加工库存。销售时再选规格；规格格和待加工库存不是一回事。' : (hasSpecs ? '本次进价会更新该规格的进价，之后销售按新进价算毛利。' : '本次进价会更新该商品的进价，之后销售按新进价算毛利。')}}</view>
-  </view>
-
-  <button class="btn-primary save-btn js-purchase-submit" bindtap="submit" hidden="{{showPicker}}">确认入库</button>
-
-  <view wx:if="{{showPicker}}" class="mask" bindtap="closePicker">
-    <view class="sheet" catchtap="closePickerKeep">
-      <view class="sheet-title">选择商品</view>
-      <input class="search js-purchase-search" placeholder="搜索商品" value="{{keyword}}" bindinput="onSearch" />
-      <scroll-view scroll-y class="sheet-list">
+    <!-- 稿 4:693 + 注 4:713：点选带出商品 + 规格 + 上次进价，只改数量即可确认 -->
+    <block wx:if="{{recent.length}}">
+      <view class="muted recent-label">最近进货（点选带出，只改数量）</view>
+      <view class="chips recent-chips">
         <view
-          class="sheet-item js-purchase-item"
-          wx:for="{{filtered}}"
-          wx:key="id"
-          data-id="{{item.id}}"
-          bindtap="onPick"
-        >
-          <image wx:if="{{item.image && !item.imageFailed}}" class="sheet-thumb" src="{{item.image}}" mode="aspectFill" lazy-load binderror="onSheetThumbError" data-index="{{index}}" />
-          <view class="sheet-body">
-            <view class="item-name">{{item.name}}</view>
-            <view class="muted">
-              <block wx:if="{{item.specTag}}">{{item.specTag}} · </block>货号 {{item.sku || '未填'}} · 库存 {{item.stock}}
-            </view>
-          </view>
-          <text class="muted">进价 ¥{{item.costText}}</text>
+          class="chip js-purchase-recent"
+          wx:for="{{recent}}"
+          wx:key="key"
+          data-key="{{item.key}}"
+          bindtap="pickRecent"
+        >{{item.label}}</view>
+      </view>
+    </block>
+
+    <view class="card">
+      <view class="field">
+        <view class="field-label">商品</view>
+        <!-- chevron 走 .picker::after（content: ''，不产生文本节点）：
+             tests/ui.test.js:2142 拿 textOf('.js-purchase-picker') 逐字比商品名，
+             这个节点里**只许**有 {{productName}} 一段文字。 -->
+        <view class="field-input picker js-purchase-picker" bindtap="openPicker">{{productName}}</view>
+      </view>
+
+      <!-- 稿 库存meta 4:441（$13:637）。tests/ui.test.js:2144 只要求这一行里出现
+           商品总库存那个数，两种句式都满足。 -->
+      <view class="muted meta js-purchase-stock">{{stockText}}</view>
+
+      <!-- 稿 picker/格选择器/简版 4:493：一枚 chip = 一个成品规格格，label 带余量。
+           待加工商品不出这张卡（后端无条件记进待加工池，见规格 6-3）。 -->
+      <view class="spec-block" wx:if="{{hasSpecs && !blankProcess}}">
+        <view class="field-label">选择规格</view>
+        <view class="chips">
+          <view
+            class="chip js-purchase-sku {{item.on ? 'on' : ''}}"
+            wx:for="{{skuOptions}}"
+            wx:key="id"
+            data-id="{{item.id}}"
+            bindtap="pickSku"
+          >{{item.label}} 余 {{item.stock}}</view>
         </view>
-        <view wx:if="{{!filtered.length}}" class="empty">没有匹配商品</view>
-      </scroll-view>
+      </view>
+
+      <!-- docs/ui-scale.md：表单并排最多两格（数量 | 单价） -->
+      <view class="field-row">
+        <view class="field half">
+          <view class="field-label">数量</view>
+          <input class="field-input js-purchase-qty" type="digit" data-field="qty" value="{{qty}}" bindinput="onField" placeholder="0" hidden="{{showPicker}}" />
+        </view>
+        <view class="field half">
+          <view class="field-label">本次进价</view>
+          <input class="field-input js-purchase-price" type="digit" data-field="unitPrice" value="{{unitPrice}}" bindinput="onField" placeholder="0.00" hidden="{{showPicker}}" />
+        </view>
+      </view>
+
+      <!-- 稿 row/合计 4:709「共 25 件 · ¥2,375.00」 -->
+      <view class="total">
+        <text class="muted">合计</text>
+        <text class="total-num">{{totalText}}</text>
+      </view>
+
+      <!-- 稿 hint/进价回写 7:350（默认 visible:false）+ 变体 13:415（$13:383）。
+           只在这次填的价与档案价不同时出。 -->
+      <view wx:if="{{costHint}}" class="muted tip js-purchase-cost-hint">{{costHint}}</view>
+
+      <!-- 稿 4:458：本次进价会更新该规格的进价，之后销售按新进价算毛利 -->
+      <view class="muted tip">{{blankProcess ? '进货记入待加工库存。销售时再选规格；规格格和待加工库存不是一回事。' : (hasSpecs ? '本次进价会更新该规格的进价，之后销售按新进价算毛利。' : '本次进价会更新该商品的进价，之后销售按新进价算毛利。')}}</view>
+
+      <view class="field last">
+        <view class="field-label">备注</view>
+        <input class="field-input" data-field="remark" value="{{remark}}" bindinput="onField" placeholder="可选" hidden="{{showPicker}}" />
+      </view>
     </view>
-  </view>
+
+    <!-- 稿 bottom-cta 4:421：hairline + 唯一实心黑块 + 34 安全区 -->
+    <view class="save-bar" hidden="{{showPicker}}">
+      <button class="btn-primary save-btn js-purchase-submit" disabled="{{submitting}}" bindtap="submit">{{submitting ? '记账中…' : '确认入库 · ¥' + amountText}}</button>
+    </view>
+
+    <view wx:if="{{showPicker}}" class="mask" bindtap="closePicker">
+      <view class="sheet" catchtap="closePickerKeep">
+        <view class="sheet-title">选择商品</view>
+        <input class="search js-purchase-search" placeholder="搜索商品" value="{{keyword}}" bindinput="onSearch" />
+        <scroll-view scroll-y class="sheet-list">
+          <view
+            class="sheet-item js-purchase-item"
+            wx:for="{{filtered}}"
+            wx:key="id"
+            data-id="{{item.id}}"
+            bindtap="onPick"
+          >
+            <image wx:if="{{item.image && !item.imageFailed}}" class="sheet-thumb" src="{{item.image}}" mode="aspectFill" lazy-load binderror="onSheetThumbError" data-index="{{index}}" />
+            <view class="sheet-body">
+              <view class="item-name">{{item.name}}</view>
+              <view class="muted">
+                <block wx:if="{{item.specTag}}">{{item.specTag}} · </block>货号 {{item.sku || '未填'}} · 库存 {{item.stock}}
+              </view>
+            </view>
+            <text class="muted">进价 ¥{{item.costText}}</text>
+          </view>
+          <view wx:if="{{!filtered.length}}" class="empty">没有匹配商品</view>
+        </scroll-view>
+      </view>
+    </view>
   </block>
 </view>

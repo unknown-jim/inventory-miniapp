@@ -1,65 +1,98 @@
+<!-- 稿 Screen/12 库存修正·换格 4:423。整屏自上而下：
+     商品字段 4:460 / 来源格选择器 4:502 / 方向箭头 4:512 / 目标格选择器 4:503 /
+     数量 stepper 4:463 / 换规格预览卡 4:786 / 守恒提示 4:466 / 备注 4:468 /
+     钉底 CTA 4:427。
+     稿注 $11:112 画了「来源可选半成品」，后端 utils/inventory.js:2023 对
+     from.isBlank 直接 throw，本批不做（规格 §6-2 / OPEN-Q-2）。
+     本屏一个金额都不出现（稿注 4:473「不产生金额」）。 -->
 <view class="page">
   <view class="card">
-    <view class="field">
+    <view class="field last">
       <view class="field-label">商品</view>
       <view class="field-input picker js-convert-picker" bindtap="openPicker">{{productName}}</view>
     </view>
-    <view class="muted tip" wx:if="{{blankProcess}}">只能改分规格现货，不能改待加工库存。要加工请直接销售。</view>
-    <view class="muted tip" wx:elif="{{hasSpecs}}">从仓里的现货改到另一格，一件还是一件。</view>
-
-    <view class="spec-block" wx:if="{{hasSpecs}}">
-      <view class="field">
-        <view class="field-label">从</view>
-        <view class="chips">
-          <view
-            class="chip js-convert-from {{item.on ? 'on' : ''}}"
-            wx:for="{{fromOptions}}"
-            wx:key="id"
-            data-id="{{item.id}}"
-            bindtap="pickFrom"
-          >{{item.specText}} {{item.stock}}</view>
-        </view>
-        <view class="muted" wx:if="{{!fromOptions.length}}">没有现货可改</view>
-      </view>
-      <view class="field" wx:if="{{colors.length}}">
-        <view class="field-label">改成{{specAxis1}}</view>
-        <view class="chips">
-          <view
-            class="chip js-convert-color {{item.on ? 'on' : ''}}"
-            wx:for="{{colorOptions}}"
-            wx:key="value"
-            data-value="{{item.value}}"
-            bindtap="pickToColor"
-          >{{item.value}}</view>
-        </view>
-      </view>
-      <view class="field" wx:if="{{sizes.length}}">
-        <view class="field-label">改成{{specAxis2}}</view>
-        <view class="chips">
-          <view
-            class="chip js-convert-size {{item.on ? 'on' : ''}}"
-            wx:for="{{sizeOptions}}"
-            wx:key="value"
-            data-value="{{item.value}}"
-            bindtap="pickToSize"
-          >{{item.value}}</view>
-        </view>
-      </view>
-    </view>
-
-    <view class="field-row">
-      <view class="field half">
-        <view class="field-label">数量</view>
-        <input class="field-input js-convert-qty" type="digit" data-field="qty" value="{{qty}}" bindinput="onField" placeholder="0" hidden="{{showPicker}}" />
-      </view>
-      <view class="field half last">
-        <view class="field-label">备注</view>
-        <input class="field-input" data-field="remark" value="{{remark}}" bindinput="onField" placeholder="可选" hidden="{{showPicker}}" />
-      </view>
-    </view>
   </view>
 
-  <button class="btn-primary save-btn js-convert-submit" bindtap="submit" hidden="{{showPicker}}">确认改规格</button>
+  <view class="muted tip" wx:if="{{blankProcess}}">只能改分规格现货，不能改待加工库存。要加工请直接销售。</view>
+
+  <block wx:if="{{hasSpecs}}">
+    <!-- 稿 picker/格选择器/简版 4:502「从哪个规格」 -->
+    <view class="card pick-card">
+      <view class="field-label">从哪个规格</view>
+      <view class="chips">
+        <view
+          class="chip js-convert-from {{item.on ? 'on' : ''}}"
+          wx:for="{{fromOptions}}"
+          wx:key="id"
+          data-id="{{item.id}}"
+          bindtap="pickFrom"
+        >{{item.label}} 余 {{item.stock}}</view>
+      </view>
+      <view class="muted" wx:if="{{!fromOptions.length}}">没有现货可改</view>
+    </view>
+
+    <!-- 稿 方向箭头 4:512 -->
+    <view class="arrow"></view>
+
+    <!-- 稿 picker/格选择器/简版 4:503「换成哪个规格」。
+         与来源相同的那一枚留位、置禁用档（稿注 $13:694：灰底 + neutral/500 字、
+         整枚 opacity 1，点按弹 toast「与来源相同，请另选目标规格」）。 -->
+    <view class="card pick-card">
+      <view class="field-label">换成哪个规格</view>
+      <view class="chips">
+        <view
+          class="chip js-convert-to {{item.on ? 'on' : ''}} {{item.same ? 'off' : ''}}"
+          wx:for="{{toOptions}}"
+          wx:key="id"
+          data-id="{{item.id}}"
+          bindtap="pickTo"
+        >{{item.label}} 余 {{item.stock}}</view>
+      </view>
+      <view class="muted note">只能换成成品规格。</view>
+    </view>
+
+    <!-- 稿 field/数量 4:463 + stepper 7:225 + hint 7:106。
+         数量可直接输入（docs/ui-scale.md:79），容器按四位数排宽。 -->
+    <view class="card qty-card">
+      <view class="qty-head">
+        <view class="field-label qty-label">数量</view>
+        <view class="muted" wx:if="{{maxHint}}">{{maxHint}}</view>
+      </view>
+      <view class="stepper">
+        <view class="step-btn js-convert-minus {{canDec ? '' : 'off'}}" bindtap="stepDown">−</view>
+        <input
+          class="step-input js-convert-qty"
+          type="digit"
+          value="{{qty}}"
+          bindinput="onQty"
+          hidden="{{showPicker}}"
+        />
+        <view class="step-btn js-convert-plus {{canInc ? '' : 'off'}}" bindtap="stepUp">＋</view>
+      </view>
+    </view>
+
+    <!-- 稿 card/换规格预览 4:786：白卡 + hairline，两行，数字随来源/目标/数量联动 -->
+    <view class="card preview" wx:if="{{previewFrom && previewTo}}">
+      <view class="preview-line js-convert-preview-from">{{previewFrom}}</view>
+      <view class="preview-div"></view>
+      <view class="preview-line js-convert-preview-to">{{previewTo}}</view>
+    </view>
+
+    <!-- 稿 守恒提示 4:466 -->
+    <view class="muted tip">只换规格，件数不变；1 件半成品 = 1 件成品。</view>
+
+    <view class="card">
+      <view class="field last">
+        <view class="field-label">备注</view>
+        <input class="field-input" data-field="remark" value="{{remark}}" bindinput="onField" placeholder="可选，如「做成成品」" hidden="{{showPicker}}" />
+      </view>
+    </view>
+  </block>
+
+  <!-- 稿 bottom-cta 4:427：hairline + 唯一实心黑块 + 34 安全区 -->
+  <view class="save-bar" hidden="{{showPicker}}">
+    <button class="btn-primary save-btn js-convert-submit" disabled="{{submitting}}" bindtap="submit">{{submitting ? '记账中…' : '确认换规格'}}</button>
+  </view>
 
   <view wx:if="{{showPicker}}" class="mask" bindtap="closePicker">
     <view class="sheet" catchtap="closePickerKeep">
@@ -73,7 +106,7 @@
           data-id="{{item.id}}"
           bindtap="onPick"
         >
-          <view>
+          <view class="sheet-body">
             <view class="item-name">{{item.name}}</view>
             <view class="muted">
               <block wx:if="{{item.specTag}}">{{item.specTag}} · </block>库存 {{item.stock}}
