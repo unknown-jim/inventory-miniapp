@@ -1,48 +1,101 @@
-.page {
-  padding-bottom: 140rpx;
-}
+/* 商品列表 · 稿 Screen/02（3:577）。两列等高图卡，卡本体是组件库的
+   card/商品/1:1（13:62）与 card/商品/无图/1:1（13:194）。
+   共用类（page、card、search、seg、seg-item、tag、tag-alert、empty、empty-title、
+   empty-icon、empty-actions、muted、btn-primary、btn-ghost）来自 app.wxss，
+   这里只写本屏几何与本屏专属的两组图案（五色瓷砖、相机角标、空态插画）。
 
-.toolbar {
+   页边距：稿的 content padding 是 16（32rpx），本仓库 .page 是 --page-pad（24rpx）。
+   要不要全站翻到 32rpx 是 B2 规格 OQ-1 挂给收尾批的裁定，本批不单独改，
+   所以列宽用 calc 自适应，不写死稿上的 165。 */
+
+/* 搜索行 + 筛选行。稿 content 3:582 是 vertical gap 8，两行之间就走这一档。 */
+.tools {
   display: flex;
-  justify-content: space-between;
+  flex-direction: column;
+  gap: var(--space-md);
+  margin-bottom: var(--space-md);
+}
+
+/* 稿 row/搜索与新增 7:44 的 gap 是 10px。本屏 10~12px 的间距统一取
+   --space-lg（24rpx = 12px），不为 2px 差新造 token —— 稿上 waterfall、
+   两列内、cta-row 三处的 gap 本来就是 12。 */
+.tool-row {
+  display: flex;
   align-items: center;
-  margin: 8rpx 8rpx 20rpx;
+  gap: var(--space-lg);
 }
 
-.toolbar .chips {
+/* 全局 .search 自带 margin-bottom: 20rpx，放进 flex 行会把右边的 ＋ 顶偏；
+   竖向间距统一交给 .tools 的 gap。 */
+.tool-row .search {
+  flex: 1;
+  min-width: 0;
   margin-bottom: 0;
 }
 
-.toolbar .chip {
+/* 全局 .seg 自带 margin-bottom: var(--space-sm)，同上，交给 .tools 的 gap。 */
+.tools .seg {
   margin-bottom: 0;
 }
 
-.link {
-  color: #0F766E;
-  font-size: var(--fs-sm);
+/* ＋ 新增商品：稿 btn/新增商品 7:45 是 44×44 白底、neutral/900 描边的圆，字 18 SemiBold。
+   这里高宽取 --tap-md（96rpx = 48px）而不是稿的 44，为的是和左边 .search 齐平
+   —— .search 的高度是 docs/ui-scale.md 热区表定的输入框档 --tap-md。48 ≥ 44 地板。
+   字号取 --fs-title（32rpx = 16px），是档位表里离稿上 18px 最近的一档。 */
+.add-btn {
+  flex: 0 0 auto;
+  width: var(--tap-md);
+  height: var(--tap-md);
+  line-height: var(--tap-md);
+  box-sizing: border-box;
+  text-align: center;
+  background: var(--color-bg-card);
+  border: 2rpx solid var(--color-border-brand);
+  border-radius: 999rpx;
+  color: var(--color-text-primary);
+  font-size: var(--fs-title);
+  font-weight: 600;
 }
 
+/* 空态插画。原样取自 inventory-miniapp-handoffs/spec-1a-assets/empty-icons.wxss
+   的「纸箱 48 · 10:36 · 商品空态」那一条，几何一个数没动。
+   几何槽（96rpx 见方、居中、下方 gap）在 app.wxss 的 .empty-icon 里，本条只给图。
+   描边色 #0F756E 是稿上的字面量：docs/design-file.md「品牌青绿只做非语义点缀，
+   空态插画描边正是其中一处」；data URI 里引用不到 CSS 变量，只能写字面量。 */
+.empty-icon-products {
+  background-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='48'%20height='48'%3E%3Cpath%20fill='%230F756E'%20transform='matrix(1%200%200%201%209.6%2020)'%20d='M29.3303%20-0.5303Q29.1144%20-0.759%2028.8%20-0.75L0%20-0.75Q-0.3144%20-0.759%20-0.5303%20-0.5303Q-0.759%20-0.3144%20-0.75%200L-0.75%2016Q-0.75%2017.3048%200.1726%2018.2274Q1.0952%2019.15%202.4%2019.15L26.4%2019.15Q27.7048%2019.15%2028.6274%2018.2274Q29.55%2017.3048%2029.55%2016L29.55%200Q29.559%20-0.3144%2029.3303%20-0.5303ZM28.05%200.75L0.75%200.75L0.75%2016Q0.75%2016.6835%201.2333%2017.1667Q1.7166%2017.65%202.4%2017.65L26.4%2017.65Q27.0834%2017.65%2027.5667%2017.1667Q28.05%2016.6834%2028.05%2016L28.05%200.75Z'%20fill-rule='evenodd'/%3E%3Cpath%20fill='%230F756E'%20transform='matrix(1%200%200%201%209.6%209.6)'%20d='M3.8068%200.9493L-0.6732%2010.0693L0.6732%2010.7307L5.148%201.6212Q5.358%201.2283%205.7381%200.9944Q6.1223%200.7579%206.5734%200.7499L22.24%200.75Q22.6777%200.7579%2023.0619%200.9944Q23.442%201.2283%2023.652%201.6212L28.1268%2010.7307L29.4732%2010.0693L24.9932%200.9493Q24.9908%200.9445%2024.9883%200.9397Q24.9859%200.9349%2024.9834%200.9301Q24.5816%200.1683%2023.8481%20-0.2831Q23.1146%20-0.7345%2022.24%20-0.75L6.5466%20-0.7499Q5.6855%20-0.7345%204.9519%20-0.2831Q4.2184%200.1683%203.8166%200.9301Q3.8141%200.9349%203.8116%200.9397Q3.8092%200.9445%203.8068%200.9493Z'%20fill-rule='evenodd'/%3E%3Cpath%20fill='%230F756E'%20transform='matrix(1%200%200%201%2019.2%2020)'%20d='M0.75%204.85L0.75%200L-0.75%200L-0.75%205.6Q-0.759%205.9144%20-0.5303%206.1303Q-0.3144%206.359%200%206.35L9.6%206.35Q9.9144%206.359%2010.1303%206.1303Q10.359%205.9144%2010.35%205.6L10.35%200L8.85%200L8.85%204.85L0.75%204.85Z'%20fill-rule='evenodd'/%3E%3C/svg%3E");
+}
+
+/* 两列等高卡。稿 UX 注释 13:166 原话：「两列等高卡，图 1:1（img 149）……
+   不要瀑布流、不要测高」；13:167：「实现：CSS 两列 grid / flex wrap，卡高固定」。
+   列间距取稿 waterfall 3:801 的 gap 12（= --space-lg）。 */
 .goods-grid {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-md);
+  gap: var(--space-lg);
 }
 
+/* 卡 padding 8（= --space-md），圆角与投影走全局 .card（r12 + 0/1/2 投影，
+   与稿 13:62 一致）。min-height 从旧别名 --tap-sm 换成同值的 --tap-md
+   （A2 规格把 --fs-xs / --fs-sm / --fs-md / --tap-sm 标为待删别名，新代码不再用）。 */
 .goods-card {
-  width: calc((100% - var(--space-md)) / 2);
+  width: calc((100% - var(--space-lg)) / 2);
   box-sizing: border-box;
-  padding: 0;
+  padding: var(--space-md);
   overflow: hidden;
-  min-height: var(--tap-sm);
+  min-height: var(--tap-md);
 }
 
+/* 图 1:1（稿 img = 卡宽 − 左右 pad，149 见方）。padding-top:100% 撑正方形，
+   不写死 rpx，卡宽随屏变它跟着变。r8 = 16rpx。 */
 .goods-thumb {
   position: relative;
   width: 100%;
   height: 0;
   padding-top: 100%;
   overflow: hidden;
-  background: #f3f4f6;
+  border-radius: 16rpx;
+  background: var(--color-fill-ghost);
 }
 
 .thumb-img {
@@ -54,44 +107,106 @@
   display: block;
 }
 
+/* 无图占位的五色瓷砖。稿「规范/无图占位底色」3:821 原话：底色 hash 输入 = 商品
+   不可变 id，稳定映射 slate/100、blue/50、amber/50、green/50、orange/50 五色循环
+   （不含品牌青绿，也不含 violet：violet 是改规格的语义色），文字色用各自 700 档。
+   顺序与 products.js 的 tileIndex 返回值一一对应，不要重排。
+
+   为什么写在这里而不是 app.wxss：稿 11:122 明写「五色瓷砖母题归商品无图占位，
+   不进空态」——它是单屏母题，提到全局等于给一个只有一处消费的图案建 10 个 token。
+   这和 B1 处理三枚空态插画的规矩一致（app.wxss 的 .empty-icon 只给几何不给图）。
+   十个值都是稿 Primitive 的字面量，右边注明取自哪一枚。
+
+   这五条必须排在 .goods-thumb 之后：两者同为单类选择器，特指度相同，靠源码顺序覆盖底色。 */
+.tile-0 { background: #F2F5FA; color: #334054; }  /* slate/100 3:65 + slate/700 3:68 */
+.tile-1 { background: #F0F5FF; color: #1C4FD9; }  /* blue/50 3:49 + blue/700 3:53 */
+.tile-2 { background: #FFFAEB; color: #B5540A; }  /* amber/50 3:29 + amber/700 3:33 */
+.tile-3 { background: #EDFCF5; color: #057857; }  /* green/50 3:24 + green/700 3:28 */
+.tile-4 { background: #FFF7ED; color: #C2400D; }  /* orange/50 3:44 + orange/700 3:48 */
+
+/* 占位首字：稿 letter 60px SemiBold，居中，「在 141 宽容器里约 40% 宽」。
+   120rpx 是字面量而不是 --fs- 变量，因为它不属于字号体系：这是占位插画的字形，
+   不是正文字号。B2 规格 OQ-2 交给本批的就是这一处「.thumb-text 要脱离 --fs-hero」。
+   颜色不在这里写，由上面的 .tile-0 到 .tile-4 继承下来。 */
 .thumb-text {
   position: absolute;
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
-  font-size: var(--fs-hero);
-  color: #9ca3af;
+  font-size: 120rpx;
+  font-weight: 600;
+  line-height: 1;
 }
 
+/* 右下相机角标：稿 camera 13:198，16×16、距右下各 8，描边 #6B7280 @50%。
+   docs/ui-scale.md 已写明它是占位插画不是控件，不适用「禁用一律不透明」那条。
+   data URI 里引用不到 CSS 变量，只能写字面量 —— 和 spec-1a-assets/empty-icons.wxss
+   顶部记的是同一条限制。 */
+.thumb-camera {
+  position: absolute;
+  right: 16rpx;
+  bottom: 16rpx;
+  width: 32rpx;
+  height: 32rpx;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 32rpx 32rpx;
+  background-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='16'%20height='16'%3E%3Cpath%20fill='%236B7280'%20fill-opacity='0.5'%20transform='matrix(1%200%200%201%202.66667%203.33333)'%20d='M0%201.3333L1.6432%201.3333L2.7786%20-0.3698Q2.8705%20-0.5098%203.0188%20-0.5878Q3.1659%20-0.6679%203.3333%20-0.6667L7.3333%20-0.6667Q7.5008%20-0.6679%207.6479%20-0.5878Q7.7961%20-0.5098%207.888%20-0.3698L9.0235%201.3333L10.6667%201.3333Q10.9461%201.3253%2011.1381%201.5286Q11.3414%201.7205%2011.3333%202L11.3333%209.3333Q11.3414%209.6128%2011.1381%209.8047Q10.9461%2010.008%2010.6667%2010L0%2010Q-0.2795%2010.008%20-0.4714%209.8047Q-0.6747%209.6128%20-0.6667%209.3333L-0.6667%202Q-0.6747%201.7205%20-0.4714%201.5286Q-0.2795%201.3253%200%201.3333ZM2%202.6667L0.6667%202.6667L0.6667%208.6667L10%208.6667L10%202.6667L8.6667%202.6667Q8.4992%202.6679%208.3521%202.5878Q8.2039%202.5098%208.112%202.3698L6.9765%200.6667L3.6901%200.6667L2.5547%202.3698Q2.4628%202.5098%202.3146%202.5878Q2.1675%202.6679%202%202.6667ZM5.3333%208.3333Q6.576%208.3333%207.4547%207.4547Q8.3333%206.576%208.3333%205.3333Q8.3333%204.0907%207.4547%203.212Q6.576%202.3333%205.3333%202.3333Q4.0907%202.3333%203.212%203.212Q2.3333%204.0907%202.3333%205.3333Q2.3333%206.576%203.212%207.4547Q4.0907%208.3333%205.3333%208.3333ZM7%205.3333Q7%206.0237%206.5118%206.5118Q6.0237%207%205.3333%207Q4.643%207%204.1548%206.5118Q3.6667%206.0237%203.6667%205.3333Q3.6667%204.643%204.1548%204.1548Q4.643%203.6667%205.3333%203.6667Q6.0237%203.6667%206.5118%204.1548Q7%204.643%207%205.3333Z'%20fill-rule='evenodd'/%3E%3C/svg%3E");
+}
+
+/* 「低库存」角标：稿 low 13:424，图内右上、距上/右各 6（= 12rpx）、r6（= 12rpx）、12 Medium。
+   配色**不在这里写**，走全局 .tag + .tag-alert（#FEF2F2 底 + #DC2626 字）——
+   与稿的 red/50 #FFF2F2 + red/600 #DB2626 每通道只差 1/255；11 枚 tag 配色的整体迁移
+   是 A1 规格划走的另一批，本屏不单独造一枚新红。 */
+.thumb-low {
+  position: absolute;
+  right: 12rpx;
+  top: 12rpx;
+  border-radius: 12rpx;
+  font-weight: 500;
+}
+
+/* 卡内文字区。稿 card 是 vertical gap 8，图与名之间也是 8，所以上 padding 与
+   行间 gap 同取 --space-md。 */
 .goods-info {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: var(--space-xs);
-  padding: var(--space-md);
+  gap: var(--space-md);
+  padding: var(--space-md) 0 0;
+  width: 100%;
   min-width: 0;
+  box-sizing: border-box;
 }
 
+/* 名称锁单行截断。稿 13:166 要「两列**等高**卡、不要瀑布流、不要测高」，
+   而 flex-wrap 下同一行两卡等高的前提就是文字行数固定；允许折行会让右卡矮一截，
+   正是稿明令不要的形态。稿上四张样张的 name 也都是单行。 */
 .item-name {
-  font-size: var(--fs-lg);
-  font-weight: 600;
+  width: 100%;
+  font-size: var(--fs-body);
+  font-weight: 500;
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.seed-btn {
-  margin-top: 24rpx;
+/* 副行 12px / text-muted（稿 meta 槽）。不复用全局 .muted：那是 --fs-label（26rpx），
+   稿这里是 12px = --fs-caption（24rpx）。同样锁单行。 */
+.item-meta {
+  width: 100%;
+  font-size: var(--fs-caption);
+  color: var(--color-text-muted);
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.fab {
-  position: fixed;
-  right: 32rpx;
-  bottom: 48rpx;
-  padding: 0 28rpx;
-  height: var(--tap-md);
-  line-height: var(--tap-md);
-  font-size: var(--fs-lg);
-  background: #0F766E;
-  color: #FFFFFF;
-  border-radius: 40rpx;
+/* 起价 16px SemiBold 实心黑（稿 price 槽）。金额档取 --fs-amount。 */
+.item-price {
+  font-size: var(--fs-amount);
   font-weight: 600;
-  box-shadow: 0 12rpx 24rpx rgba(15, 118, 110, 0.28);
+  line-height: 1.3;
 }

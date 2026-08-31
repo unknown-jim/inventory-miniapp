@@ -1,34 +1,45 @@
 <view class="page">
   <page-loading wx:if="{{pageLoading}}" />
   <block wx:else>
-  <input
-    class="search js-product-search"
-    placeholder="搜索名称 / 货号 / 条码"
-    value="{{keyword}}"
-    bindinput="onSearch"
-  />
-
-  <view class="toolbar">
-    <view class="chips">
-      <view class="chip {{onlyAlert ? '' : 'on'}}" bindtap="showAll">全部</view>
-      <view class="chip {{onlyAlert ? 'low' : ''}}" bindtap="showAlert">预警 {{alertCount}}</view>
+  <view class="tools">
+    <view class="tool-row">
+      <input
+        class="search js-product-search"
+        placeholder="搜索商品名称"
+        value="{{keyword}}"
+        bindinput="onSearch"
+      />
+      <view class="add-btn js-product-add" bindtap="goAdd">＋</view>
     </view>
-    <text class="link" bindtap="goRecords">流水</text>
+
+    <view class="seg">
+      <view class="seg-item {{filter === 'all' ? 'on' : ''}}" data-filter="all" bindtap="setFilter">全部</view>
+      <view class="seg-item {{filter === 'blank' ? 'on' : ''}}" data-filter="blank" bindtap="setFilter">有半成品</view>
+      <view class="seg-item {{filter === 'low' ? 'on' : ''}}" data-filter="low" bindtap="setFilter">低库存</view>
+    </view>
   </view>
 
   <view wx:if="{{!list.length}}" class="card empty">
+    <view class="empty-icon empty-icon-products"></view>
     <block wx:if="{{keyword}}">
       <view class="empty-title">没有匹配的商品</view>
       <view class="muted">换个名称、货号或条码再搜。</view>
     </block>
-    <block wx:elif="{{onlyAlert}}">
-      <view class="empty-title">暂时没有需要补货的商品</view>
-      <view class="muted">预警数量在编辑商品里改。点「全部」看所有商品。</view>
+    <block wx:elif="{{filter === 'low'}}">
+      <view class="empty-title">没有要补货的商品</view>
+      <view class="muted">点「全部」看所有商品。</view>
+    </block>
+    <block wx:elif="{{filter === 'blank'}}">
+      <view class="empty-title">没有带半成品的商品</view>
+      <view class="muted">点「全部」看所有商品。</view>
     </block>
     <block wx:else>
       <view class="empty-title">还没有商品</view>
-      <view class="muted">先新增商品，再做进货和销售。</view>
-      <button class="btn-primary seed-btn" bindtap="goAdd">新增商品</button>
+      <view class="muted">从种类模板挑一个建起来，或手动新增</view>
+      <view class="empty-actions">
+        <button class="btn-primary js-product-from-template" bindtap="goTemplate">从模板建档</button>
+        <button class="btn-ghost js-product-manual-add" bindtap="goAdd">手动新增</button>
+      </view>
     </block>
   </view>
 
@@ -36,18 +47,19 @@
     <view class="card goods-card js-product-card" wx:for="{{list}}" wx:key="id" data-id="{{item.id}}" bindtap="goDetail">
       <view class="goods-thumb" wx:if="{{item.image && !item.imageFailed}}">
         <image class="thumb-img" src="{{item.image}}" mode="aspectFill" lazy-load binderror="onThumbError" data-index="{{index}}" />
+        <text wx:if="{{item.lowStock}}" class="tag tag-alert thumb-low">低库存</text>
       </view>
-      <view class="goods-thumb thumb-empty" wx:else>
+      <view class="goods-thumb thumb-empty tile-{{item.tile}}" wx:else>
         <text class="thumb-text">{{item.thumbText}}</text>
+        <view class="thumb-camera"></view>
+        <text wx:if="{{item.lowStock}}" class="tag tag-alert thumb-low">低库存</text>
       </view>
       <view class="goods-info">
         <view class="item-name">{{item.name}}</view>
-        <view wx:if="{{item.sku}}" class="muted">货号 {{item.sku}}</view>
-        <text class="tag {{item.lowStock ? 'tag-alert' : 'tag-ok'}}">库存 {{item.stock}}</text>
+        <view class="item-meta">{{item.metaText}}</view>
+        <view class="item-price">¥{{item.priceText}} 起</view>
       </view>
     </view>
   </view>
-
-  <view class="fab js-product-add" bindtap="goAdd">+ 新增</view>
   </block>
 </view>
