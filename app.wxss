@@ -71,6 +71,12 @@ page {
      组件库 Row/Chip 的 13:703，Screen/04 与 Screen/16 共用同一枚，所以它归 app.wxss，
      不留在页面里。 */
   --color-neutral-300: #D4D4D4;
+  /* 11a 批新增。成员角色 tag 的底色，取自稿 tag/role 实例（Screen/14 的 4:538 / 4:543、
+     Screen/14d 的 15:228）绑的 Primitive slate/50 3:64，
+     export_variables(format: css, colorFormat: hex8) 实读 #F7FAFCFF（alpha=FF，不带透明度）。
+     字色复用 B1 已加的 --color-slate-700（slate/700 3:68 = #334054）：
+     #334054 压 #F7FAFC = 9.92:1。 */
+  --color-slate-50: #F7FAFC;
   /* 1a 批新增。全局阻断态的图标底与字形色，取自稿 Row/00「全局阻断态（4 种）」4:1099：
      维护 4:1100 与搬家中 4:1104 绑 Primitive amber/50 3:29 与 amber/700 3:33
      （Semantic 别名 fill/warning-subtle 3:96 与 text/warning 3:84）；
@@ -278,6 +284,24 @@ button::after {
 .tag-adjust {
   background: #F2F5FA;
   color: #334054;
+}
+
+/* ---- 成员角色 tag（11a 批）----
+   稿 Screen/14 的 4:538「店主」/ 4:543「店主 · 我」/ 4:549「店员」，
+   Screen/14d 的 15:228 / 15:232 同构。两个页面都要用，所以归 app.wxss。
+   店主档 slate/50 3:64 + slate/700 3:68 = 9.92:1；
+   店员档 neutral/100 3:15 + neutral/600 3:20 = 6.62:1。
+   店员档与 tag-out 3:213 逐值相同，但语义是「角色」不是「流水类型」，
+   刻意另立类名不复用 —— 复用会把两条语义焊死（docs/design-file.md 的既有教训）。
+   两段值现在一样，改一处要连带想另一处。 */
+.tag-owner {
+  background: var(--color-slate-50);
+  color: var(--color-slate-700);
+}
+
+.tag-staff {
+  background: var(--color-fill-ghost);
+  color: var(--color-neutral-600);
 }
 
 .chips {
