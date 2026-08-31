@@ -2,27 +2,31 @@ const store = require('../../utils/store')
 const util = require('../../utils/util')
 const inventory = require('../../utils/inventory')
 const productImage = require('../../utils/product-image')
-const skuCardView = require('../../utils/sku-card-view').skuCardView
 
 function axisLabel(value, fallback) {
   const name = String(value || '').trim()
   return name || fallback
 }
 
-function kindFields(kind) {
-  return {
-    productKind: kind,
-    hasSpecs: kind !== 'plain',
-    blankProcess: kind === 'blank'
-  }
+// 折叠索引第一行的副文案（稿 15:21「规格 · 颜色 2 / 尺寸 2」）。
+// 两根轴都没有取值时说「未设置」；只有一根时只列那一根。
+function specSummaryOf(specAxis1, specAxis2, colors, sizes) {
+  const parts = []
+  if ((colors || []).length) parts.push(axisLabel(specAxis1, '规格一') + ' ' + colors.length)
+  if ((sizes || []).length) parts.push(axisLabel(specAxis2, '规格二') + ' ' + sizes.length)
+  return parts.length ? parts.join(' / ') : '未设置'
 }
 
-function productKindOf(product) {
-  if (inventory.isBlankProcess(product)) return 'blank'
-  if (inventory.productHasSpecs(product)) return 'finished'
-  return 'plain'
-}
-
+// 5a 批（稿 Screen/04）起，这一页**没有「商品类型」这个选择**（UX注释 n1）。
+// 类型在后端本来就是派生的：utils/inventory.js 的
+//   productHasSpecs(product) = colors/sizes 里有没有取值
+//   isBlankProcess(product)  = product.blankProcess && productHasSpecs(product)
+// 所以页面只维护两件事：规格取值（colors / sizes）和半成品池开关（blankPool）。
+//
+// 同批起件数在这一页是**只读**的（UX注释 n9「建档初始 0。改数只走库存修正门」）。
+// 编辑态本来就改不动件数（updateProduct 最后一行 next.stock = existing.stock，
+// applyProductSkus 里已有的格取 prev.stock）；建档改成 0 之后，
+// 老代码里那一整套「切类型时把件数从这一桶搬到那一桶」的迁移逻辑全部是 no-op，随之删除。
 Page({
   data: {
     id: '',
@@ -34,80 +38,74 @@ Page({
     showImage: false,
     costPrice: '',
     salePrice: '',
-    stock: '',
     alertQty: '5',
-    stockText: '',
+    stockText: '0',
     marginText: '0.00',
     rateText: '0%',
-    productKind: 'plain',
+    focusPrice: false,
+    hasSpecs: false,
     specAxis1: '',
     specAxis2: '',
     colors: [],
     sizes: [],
-    colorInput: '',
-    sizeInput: '',
-    hasSpecs: false,
+    adding: '',
+    specInput: '',
     skuRows: [],
-    specTip: '',
-    blankProcess: false,
-    blankStock: '',
-    blankStockText: '',
+    blankPool: false,
+    blankStockText: '0',
+    sharedPrice: true,
     categories: [],
     categoryId: '',
     nameSuggest: [],
-    sharedPrice: true,
-    blankStockRows: [],
-    showBlankPriceCard: false,
-    showBlankStockCard: false,
-    showFinishedSkuCard: false
+    specOpen: false,
+    blankOpen: false,
+    skuOpen: false,
+    specSummary: '未设置',
+    blankSummary: '未开',
+    skuSummary: '0 条',
+    saving: false
   },
 
   async onLoad(query) {
+    const focus = query && query.focus ? String(query.focus) : ''
     this.setData({ showImage: productImage.canUseImage() })
     if (!(await store.ready())) return
-    if (!query.id) {
+    if (query && query.id) {
+      const product = store.getProduct(query.id)
+      if (!product) {
+        wx.showToast({ title: '商品不存在', icon: 'none' })
+        return
+      }
+      const skus = store.getSkusByProduct(product.id)
+      const blank = inventory.findBlankSku(skus, product.id)
+      const margin = inventory.calcMargin(product.costPrice, product.salePrice)
+      this.setData(this.withFoldSummary({
+        id: product.id,
+        isEdit: true,
+        name: product.name,
+        sku: product.sku,
+        barcode: product.barcode,
+        image: product.image || '',
+        costPrice: String(product.costPrice),
+        salePrice: String(product.salePrice),
+        alertQty: String(product.alertQty),
+        stockText: String(product.stock),
+        marginText: util.money(margin.profit),
+        rateText: margin.rate + '%',
+        specAxis1: product.specAxis1 || '',
+        specAxis2: product.specAxis2 || '',
+        colors: (product.colors || []).slice(),
+        sizes: (product.sizes || []).slice(),
+        blankPool: inventory.isBlankProcess(product),
+        blankStockText: blank ? String(blank.stock) : '0',
+        sharedPrice: product.sharedPrice !== false,
+        skuRows: this.rowsFromSkus(skus)
+      }))
+      wx.setNavigationBarTitle({ title: '编辑商品' })
+    } else {
       wx.setNavigationBarTitle({ title: '新增商品' })
-      return
     }
-    const product = store.getProduct(query.id)
-    if (!product) {
-      wx.showToast({ title: '商品不存在', icon: 'none' })
-      return
-    }
-    const skus = store.getSkusByProduct(product.id)
-    const margin = inventory.calcMargin(product.costPrice, product.salePrice)
-    const kind = productKindOf(product)
-    const blank = inventory.findBlankSku(skus, product.id)
-    const skuRows = this.rowsFromSkus(skus)
-    let sharedPrice = kind !== 'plain' && product.sharedPrice !== false
-    let specTip = ''
-    if (sharedPrice && !inventory.skuPricesMatch(skus)) {
-      sharedPrice = false
-      specTip = '部分规格价格不同，已按各格显示。'
-    }
-    this.setData(this.withSkuCards(Object.assign({
-      id: product.id,
-      isEdit: true,
-      name: product.name,
-      sku: product.sku,
-      barcode: product.barcode,
-      image: product.image || '',
-      costPrice: String(product.costPrice),
-      salePrice: String(product.salePrice),
-      alertQty: String(product.alertQty),
-      stockText: String(product.stock),
-      marginText: util.money(margin.profit),
-      rateText: margin.rate + '%',
-      specAxis1: product.specAxis1 || '',
-      specAxis2: product.specAxis2 || '',
-      colors: product.colors || [],
-      sizes: product.sizes || [],
-      blankStockText: blank ? String(blank.stock) : '0',
-      skuRows: skuRows,
-      sharedPrice: sharedPrice,
-      specTip: specTip
-    }, kindFields(kind))))
-    wx.setNavigationBarTitle({ title: '编辑商品' })
+    this.applyFocus(focus)
   },
 
   async onShow() {
@@ -116,6 +114,109 @@ Page({
     if (this.data.isEdit && this.data.id) {
       this.refreshStockDisplay()
     }
+  },
+
+  // 锚点入参。category = 商品列表空态「从模板建档」的落点（3a 规格 OQ-5 交接过来的）；
+  // price = 商品详情「调价」的落点（稿 focus-caption 7:429：售价框聚焦、border/focus 描边）。
+  // 别的值一律忽略，不报错 —— 入参是给别的页面用的桥，桥拼错了不该让本页打不开。
+  applyFocus(focus) {
+    if (focus === 'category') {
+      this.setData({ specOpen: true })
+      setTimeout(function () {
+        wx.pageScrollTo({ selector: '#pe-spec-card', duration: 200 })
+      }, 120)
+      return
+    }
+    if (focus === 'price') {
+      this.setData({ focusPrice: true })
+    }
+  },
+
+  onPriceBlur() {
+    if (this.data.focusPrice) this.setData({ focusPrice: false })
+  },
+
+  // 折叠索引三行的开合（稿 15:34「点行即展开对应卡片」）。三张卡各自独立，可以同时开。
+  toggleFold(e) {
+    const key = e.currentTarget.dataset.key
+    const patch = {}
+    if (key === 'spec') {
+      patch.specOpen = !this.data.specOpen
+    } else if (key === 'blank') {
+      patch.blankOpen = !this.data.blankOpen
+    } else if (key === 'sku') {
+      patch.skuOpen = !this.data.skuOpen
+    } else {
+      return
+    }
+    this.setData(patch)
+  },
+
+  // 折叠索引三行的副文案是派生值，任何改到规格 / 半成品池 / 矩阵的 setData
+  // 都要过这一层，否则行上的数字会和卡里的内容对不上。
+  withFoldSummary(patch) {
+    const colors = patch.colors != null ? patch.colors : this.data.colors
+    const sizes = patch.sizes != null ? patch.sizes : this.data.sizes
+    const axis1 = patch.specAxis1 != null ? patch.specAxis1 : this.data.specAxis1
+    const axis2 = patch.specAxis2 != null ? patch.specAxis2 : this.data.specAxis2
+    const rows = patch.skuRows != null ? patch.skuRows : this.data.skuRows
+    const blankPool = patch.blankPool != null ? patch.blankPool : this.data.blankPool
+    const hasSpecs = !!(colors.length || sizes.length)
+    patch.hasSpecs = hasSpecs
+    patch.specSummary = specSummaryOf(axis1, axis2, colors, sizes)
+    patch.blankSummary = (hasSpecs && blankPool) ? '已开' : '未开'
+    patch.skuSummary = rows.length + ' 条'
+    return patch
+  },
+
+  // 矩阵不带进价列（稿 3:684 只有 规格 / 库存 / 预警 / 价格 四列），所以行上也不留
+  // costPrice —— 保存时不带这个 key，服务端才会回落到这一格原来的进价。
+  rowsFromSkus(skus) {
+    return (skus || []).filter(function (item) {
+      return !item.isBlank
+    }).map(function (item) {
+      return {
+        key: inventory.specKey(item.color, item.size),
+        id: item.id,
+        color: item.color,
+        size: item.size,
+        specText: inventory.specText(item.color, item.size),
+        sku: item.sku,
+        salePrice: String(item.salePrice),
+        stock: String(item.stock),
+        alertQty: String(item.alertQty)
+      }
+    })
+  },
+
+  rebuildSkuRows(colors, sizes, extra) {
+    const combos = inventory.skuCombos(colors, sizes)
+    const prevMap = {}
+    ;(this.data.skuRows || []).forEach(function (row) {
+      prevMap[row.key] = row
+    })
+    const salePrice = this.data.salePrice
+    const alertQty = this.data.alertQty
+    const rows = combos.map(function (combo) {
+      const key = inventory.specKey(combo.color, combo.size)
+      if (prevMap[key]) return prevMap[key]
+      return {
+        key: key,
+        id: '',
+        color: combo.color,
+        size: combo.size,
+        specText: inventory.specText(combo.color, combo.size),
+        sku: '',
+        salePrice: salePrice,
+        stock: '0',
+        alertQty: alertQty
+      }
+    })
+    this.setData(this.withFoldSummary(Object.assign({
+      colors: colors,
+      sizes: sizes,
+      skuRows: rows
+    }, extra || {})))
   },
 
   refreshStockDisplay() {
@@ -131,19 +232,11 @@ Page({
       if (!live) return row
       return Object.assign({}, row, { stock: live.stock, id: live.id || row.id })
     })
-    this.setData(this.withSkuCards({
+    this.setData(this.withFoldSummary({
       stockText: String(product.stock),
       blankStockText: blank ? String(blank.stock) : '0',
       skuRows: skuRows
     }))
-  },
-
-  goAdjust() {
-    wx.navigateTo({ url: '/pages/adjust/adjust?id=' + this.data.id })
-  },
-
-  goConvert() {
-    wx.navigateTo({ url: '/pages/convert/convert?id=' + this.data.id })
   },
 
   categoryChips(categoryId) {
@@ -162,239 +255,25 @@ Page({
     })
   },
 
-  rowsFromSkus(skus) {
-    return (skus || []).filter(function (item) {
-      return !item.isBlank
-    }).map(function (item) {
-      return {
-        key: inventory.specKey(item.color, item.size),
-        id: item.id,
-        isNew: false,
-        color: item.color,
-        size: item.size,
-        specText: inventory.specText(item.color, item.size),
-        sku: item.sku,
-        costPrice: String(item.costPrice),
-        salePrice: String(item.salePrice),
-        stock: String(item.stock),
-        alertQty: String(item.alertQty)
-      }
-    })
-  },
-
-  emptyRow(combo) {
-    return {
-      key: inventory.specKey(combo.color, combo.size),
-      id: '',
-      isNew: true,
-      color: combo.color,
-      size: combo.size,
-      specText: inventory.specText(combo.color, combo.size),
-      sku: '',
-      costPrice: this.data.costPrice,
-      salePrice: this.data.salePrice,
-      stock: '0',
-      alertQty: this.data.alertQty
-    }
-  },
-
-  withSkuCards(patch) {
-    const kind = patch.productKind != null ? patch.productKind : this.data.productKind
-    const shared = patch.sharedPrice != null ? patch.sharedPrice : this.data.sharedPrice
-    const rows = patch.skuRows != null ? patch.skuRows : this.data.skuRows
-    return Object.assign(patch, skuCardView(kind, shared, rows))
-  },
-
-  withSharedPrices(rows) {
-    if (!this.data.sharedPrice) return rows
-    const cost = this.data.costPrice
-    const sale = this.data.salePrice
-    return (rows || []).map(function (row) {
-      return Object.assign({}, row, { costPrice: cost, salePrice: sale })
-    })
-  },
-
-  rebuildSkuRows(colors, sizes, extra) {
-    const combos = inventory.skuCombos(colors, sizes)
-    const prevMap = {}
-    ;(this.data.skuRows || []).forEach(function (row) {
-      prevMap[row.key] = row
-    })
-    let rows = combos.map(function (combo) {
-      const key = inventory.specKey(combo.color, combo.size)
-      return prevMap[key] || this.emptyRow(combo)
-    }.bind(this))
-    const shared = extra && extra.sharedPrice != null ? extra.sharedPrice : this.data.sharedPrice
-    if (shared) {
-      const cost = this.data.costPrice
-      const sale = this.data.salePrice
-      rows = rows.map(function (row) {
-        return Object.assign({}, row, { costPrice: cost, salePrice: sale })
-      })
-    }
-
-    const patch = Object.assign({
-      colors: colors,
-      sizes: sizes,
-      skuRows: rows
-    }, extra || {})
-    const kind = patch.productKind || this.data.productKind
-    if (!this.data.isEdit && kind === 'finished' && rows.length) {
-      const move = inventory.toNumber(this.data.stock)
-      const hasStock = rows.some(function (row) {
-        return inventory.toNumber(row.stock) > 0
-      })
-      if (move > 0 && !hasStock) {
-        rows[0] = Object.assign({}, rows[0], { stock: String(move) })
-        patch.skuRows = rows
-        const tip = patch.specTip != null ? patch.specTip : (this.data.specTip || '')
-        if (tip.indexOf('原库存已记到第一个规格') < 0) {
-          patch.specTip = tip
-            ? tip + ' 原库存已记到第一个规格，请按实际拆分。'
-            : '原库存已记到第一个规格，请按实际拆分。'
-        }
-      }
-    }
-
-    this.setData(this.withSkuCards(patch))
-  },
-
-  migrateBlankFinished(wantBlank) {
-    const skuRows = this.data.skuRows.slice()
-    let specTip = this.data.specTip || ''
-    let blankStock = this.data.blankStock
-    if (wantBlank) {
-      const first = skuRows[0]
-      const move = first ? inventory.toNumber(first.stock) : 0
-      if (move > 0 && skuRows.every(function (row, index) {
-        return index === 0 || inventory.toNumber(row.stock) <= 0
-      })) {
-        skuRows[0].stock = '0'
-        blankStock = String(move)
-        specTip = specTip ? specTip + ' 库存已记到待加工。' : '库存已记到待加工。'
-      }
-    } else {
-      const move = inventory.toNumber(this.data.blankStock || this.data.blankStockText)
-      if (move > 0 && skuRows.length && !skuRows.some(function (row) {
-        return inventory.toNumber(row.stock) > 0
-      })) {
-        skuRows[0].stock = String(move)
-        blankStock = '0'
-        specTip = specTip ? specTip + ' 待加工库存已记到第一个规格，请按实际拆分。' : '待加工库存已记到第一个规格，请按实际拆分。'
-      }
-    }
-    return {
-      skuRows: skuRows,
-      blankStock: blankStock,
-      specTip: specTip
-    }
-  },
-
-  setProductKind(e) {
-    this.applyProductKind(e.currentTarget.dataset.kind)
-  },
-
-  applyProductKind(kind, extra, colorsOverride, sizesOverride) {
-    extra = extra || {}
-    if (!kind) return
-    if (kind === this.data.productKind && colorsOverride == null) return
-    if (kind === 'plain') {
-      this.clearSpecs()
-      return
-    }
-    if (kind === 'finished' && this.data.isEdit && inventory.toNumber(this.data.blankStockText) > 0) {
-      wx.showToast({ title: '还有待加工库存，不能改成分规格现货', icon: 'none' })
-      return
-    }
-
-    const from = this.data.productKind
-    const colors = colorsOverride != null ? colorsOverride.slice() : this.data.colors.slice()
-    const sizes = sizesOverride != null ? sizesOverride.slice() : this.data.sizes.slice()
-    let specTip = extra.specTip != null ? extra.specTip : ''
-    if (!specTip && !colors.length && !sizes.length) {
-      specTip = '先给规格轴起名（可只用一根），再添加取值。可改、可删、可再加。'
-    }
-
-    const patch = Object.assign(kindFields(kind), extra)
-    patch.specTip = specTip
-    if (from === 'plain' && extra.sharedPrice == null) {
-      patch.sharedPrice = true
-    }
-
-    if (from === 'plain' && kind === 'blank' && !this.data.isEdit) {
-      const move = inventory.toNumber(this.data.stock)
-      patch.blankStock = String(move || 0)
-      if (move > 0) {
-        patch.specTip = specTip ? specTip + ' 初始库存会记到待加工。' : '初始库存会记到待加工。'
-      }
-    }
-
-    this.rebuildSkuRows(colors, sizes, patch)
-
-    if (from !== kind && from === 'plain' && kind === 'finished') {
-      const move = this.data.isEdit
-        ? inventory.toNumber(this.data.stockText)
-        : inventory.toNumber(this.data.stock)
-      const skuRows = this.data.skuRows.slice()
-      if (move > 0 && skuRows.length && !skuRows.some(function (row) {
-        return inventory.toNumber(row.stock) > 0
-      })) {
-        skuRows[0].stock = String(move)
-        this.setData(this.withSkuCards({
-          skuRows: skuRows,
-          specTip: this.data.specTip
-            ? this.data.specTip + ' 原库存已记到第一个规格，请按实际拆分。'
-            : '原库存已记到第一个规格，请按实际拆分。'
-        }))
-      }
-      return
-    }
-
-    if (from !== kind && (from === 'blank' || from === 'finished')) {
-      this.setData(this.withSkuCards(this.migrateBlankFinished(kind === 'blank')))
-    }
-  },
-
+  // 种类模板：带出名称待选项、规格轴与取值、以及「默认带半成品池」。
+  // 待选项是起点不是名单（docs/accounting-vs-policy.md），所以带出来之后照样能改、能删、能加。
   applyCategory(e) {
     const id = e.currentTarget.dataset.id
     const category = store.getCategory(id)
     if (!category) return
-    const kind = category.productKind || 'plain'
-    const chips = this.categoryChips(id)
-    const nameSuggest = category.names || []
     const base = {
       categoryId: id,
-      nameSuggest: nameSuggest,
-      categories: chips
+      nameSuggest: category.names || [],
+      categories: this.categoryChips(id)
     }
-
+    const kind = category.productKind || 'plain'
     if (kind === 'plain') {
-      if (this.data.productKind !== 'plain') {
-        if (this.data.isEdit && this.specStockTotal() > 0) {
-          wx.showToast({ title: '这件商品还有库存，只带出名称待选项', icon: 'none' })
-          this.setData(base)
-          return
-        }
-        if (!this.data.isEdit) {
-          this.setData(this.withSkuCards(Object.assign(kindFields('plain'), base, {
-            specTip: '',
-            specAxis1: '',
-            specAxis2: '',
-            colors: [],
-            sizes: [],
-            skuRows: [],
-            blankStock: ''
-          })))
-          return
-        }
-        this.setData(base)
-        wx.showToast({ title: '名称待选项已带出。要改成普通请先去掉规格。', icon: 'none' })
-        return
-      }
-      this.setData(base)
+      // 普通模板只带名称待选项。**不替用户把已经加好的规格删掉** ——
+      // 删规格是破坏性动作（会把各格件数合并回商品），要去掉请自己删取值，那条路会问一句。
+      this.setData(this.withFoldSummary(base))
       return
     }
-
+    // 建档时模板是起点，直接替换；编辑时是补充，合并进已有取值（沿用改版前的取舍）。
     const colors = this.data.isEdit
       ? inventory.uniqueSpecs((this.data.colors || []).concat(category.colors || []))
       : (category.colors || []).slice()
@@ -404,21 +283,16 @@ Page({
     const extra = Object.assign({}, base, {
       specAxis1: category.specAxis1 || this.data.specAxis1,
       specAxis2: category.specAxis2 || this.data.specAxis2,
-      sharedPrice: category.sharedPrice !== false,
-      specTip: ''
+      sharedPrice: category.sharedPrice !== false
     })
-
-    if (this.data.productKind !== kind) {
-      this.applyProductKind(kind, extra, colors, sizes)
-      return
-    }
+    // 模板的「默认带半成品池」只负责**带出来**，不负责替用户关掉他自己开着的池子。
+    if (kind === 'blank' && !this.data.blankPool) extra.blankPool = true
     this.rebuildSkuRows(colors, sizes, extra)
   },
 
   pickName(e) {
     const name = e.currentTarget.dataset.value
     this.setData({ name: name })
-    this.refreshMargin()
   },
 
   goCategories() {
@@ -435,25 +309,23 @@ Page({
     }
   },
 
-  setSharedPrice(e) {
-    const sharedPrice = e.currentTarget.dataset.on === '1'
-    const skuRows = sharedPrice ? this.withSharedPrices(this.data.skuRows) : this.data.skuRows
-    this.setData(this.withSkuCards({ sharedPrice: sharedPrice, skuRows: skuRows }))
-  },
-
   onField(e) {
     const field = e.currentTarget.dataset.field
+    const value = e.detail.value
     const patch = {}
-    patch[field] = e.detail.value
-    if (this.data.sharedPrice && (field === 'costPrice' || field === 'salePrice')) {
-      const cost = field === 'costPrice' ? e.detail.value : this.data.costPrice
-      const sale = field === 'salePrice' ? e.detail.value : this.data.salePrice
+    patch[field] = value
+    // 改默认售价时，把**还没被逐格改过**的行一起带上（当前值 = 改动前的默认价）。
+    // 无条件追平会把店主逐格改过的价冲掉；一行都不带的话，「先加规格、后填价」
+    // 这个顺序下每一格都是空的。
+    if (field === 'salePrice') {
+      const prev = this.data.salePrice
       patch.skuRows = (this.data.skuRows || []).map(function (row) {
-        return Object.assign({}, row, { costPrice: cost, salePrice: sale })
+        if (String(row.salePrice) !== String(prev)) return row
+        return Object.assign({}, row, { salePrice: value })
       })
     }
-    this.setData(patch)
-    this.refreshMargin()
+    this.setData(this.withFoldSummary(patch))
+    if (field === 'costPrice' || field === 'salePrice') this.refreshMargin()
   },
 
   refreshMargin() {
@@ -464,33 +336,44 @@ Page({
     })
   },
 
-  addColor() {
-    const value = String(this.data.colorInput || '').trim()
-    const label = axisLabel(this.data.specAxis1, '规格一')
-    if (!value) {
-      wx.showToast({ title: '请输入' + label, icon: 'none' })
-      return
-    }
-    if (this.data.colors.indexOf(value) >= 0) {
-      wx.showToast({ title: '已有这个' + label, icon: 'none' })
-      return
-    }
-    this.rebuildSkuRows(this.data.colors.concat([value]), this.data.sizes, { colorInput: '' })
-    this.writeBack('colors', value)
+  onSkuField(e) {
+    const index = e.currentTarget.dataset.index
+    const field = e.currentTarget.dataset.field
+    const skuRows = this.data.skuRows.slice()
+    skuRows[index] = Object.assign({}, skuRows[index])
+    skuRows[index][field] = e.detail.value
+    this.setData(this.withFoldSummary({ skuRows: skuRows }))
   },
 
-  addSize() {
-    const value = String(this.data.sizeInput || '').trim()
-    const label = axisLabel(this.data.specAxis2, '规格二')
-    if (!value) {
-      wx.showToast({ title: '请输入' + label, icon: 'none' })
+  // 点「＋ 添加规格值」，原位变成聚焦的小输入框（稿 UX注释 n6）。
+  startAdd(e) {
+    this.setData({ adding: e.currentTarget.dataset.axis, specInput: '' })
+  },
+
+  // 回车 / 失焦生成取值 chip（稿 UX注释 n6）。confirm 之后系统会紧接着再触发一次 blur，
+  // 两个事件绑的是同一个方法；setData 对 this.data 是**同步**生效的，所以第一次进来
+  // 把 adding 清空之后，第二次进来在下面这行直接 return，不会重复添加、
+  // 也不会弹一句「已有这个取值」。
+  commitSpec() {
+    const axis = this.data.adding
+    if (!axis) return
+    const value = String(this.data.specInput || '').trim()
+    this.setData({ adding: '', specInput: '' })
+    if (!value) return
+    if (axis === 'color') {
+      if (this.data.colors.indexOf(value) >= 0) {
+        wx.showToast({ title: '已有这个' + axisLabel(this.data.specAxis1, '规格一'), icon: 'none' })
+        return
+      }
+      this.rebuildSkuRows(this.data.colors.concat([value]), this.data.sizes)
+      this.writeBack('colors', value)
       return
     }
     if (this.data.sizes.indexOf(value) >= 0) {
-      wx.showToast({ title: '已有这个' + label, icon: 'none' })
+      wx.showToast({ title: '已有这个' + axisLabel(this.data.specAxis2, '规格二'), icon: 'none' })
       return
     }
-    this.rebuildSkuRows(this.data.colors, this.data.sizes.concat([value]), { sizeInput: '' })
+    this.rebuildSkuRows(this.data.colors, this.data.sizes.concat([value]))
     this.writeBack('sizes', value)
   },
 
@@ -503,7 +386,7 @@ Page({
       wx.showToast({ title: '该' + axisLabel(this.data.specAxis1, '规格一') + '还有库存，不能删除', icon: 'none' })
       return
     }
-    this.rebuildSkuRows(this.data.colors.filter(function (item) {
+    this.applySpecRemoval(this.data.colors.filter(function (item) {
       return item !== value
     }), this.data.sizes)
   },
@@ -517,53 +400,51 @@ Page({
       wx.showToast({ title: '该' + axisLabel(this.data.specAxis2, '规格二') + '还有库存，不能删除', icon: 'none' })
       return
     }
-    this.rebuildSkuRows(this.data.colors, this.data.sizes.filter(function (item) {
+    this.applySpecRemoval(this.data.colors, this.data.sizes.filter(function (item) {
       return item !== value
     }))
   },
 
-  specStockTotal() {
-    const skuTotal = this.data.skuRows.reduce(function (sum, row) {
-      return sum + inventory.toNumber(row.stock)
-    }, 0)
-    if (this.data.productKind !== 'blank') return skuTotal
-    const blank = this.data.isEdit
-      ? inventory.toNumber(this.data.blankStockText)
-      : inventory.toNumber(this.data.blankStock)
-    return skuTotal + blank
-  },
-
-  clearSpecs() {
-    const total = this.specStockTotal()
+  // 两根轴都空了 = 这件商品变回普通商品。服务端 applyProductSkus 的 !productHasSpecs
+  // 分支会把各规格格和半成品池的件数合并回商品自己身上（productStockFromSkus 把
+  // 半成品那条 sku 也算进去），并且把 blankProcess 关掉。这是不可逆的合并，先问一句。
+  applySpecRemoval(colors, sizes) {
+    if (colors.length || sizes.length) {
+      this.rebuildSkuRows(colors, sizes)
+      return
+    }
     wx.showModal({
       title: '改为普通商品',
-      content: '规格会去掉，待加工和各规格库存合并到这件商品上。',
+      content: '规格会去掉，半成品池和各规格库存合并到这件商品上。',
       success: (res) => {
         if (!res.confirm) return
-        const patch = Object.assign(kindFields('plain'), {
-          specTip: '',
+        this.rebuildSkuRows([], [], {
+          blankPool: false,
+          blankOpen: false,
           specAxis1: '',
-          specAxis2: '',
-          stock: String(total),
-          stockText: String(total)
+          specAxis2: ''
         })
-        if (!this.data.isEdit) {
-          patch.skuRows = this.data.skuRows.map(function (row) {
-            return Object.assign({}, row, { stock: '0' })
-          })
-          patch.blankStock = ''
-        }
-        this.setData(this.withSkuCards(patch))
       }
     })
   },
 
-  onSkuField(e) {
-    const index = e.currentTarget.dataset.index
-    const field = e.currentTarget.dataset.field
-    const skuRows = this.data.skuRows.slice()
-    skuRows[index][field] = e.detail.value
-    this.setData(this.withSkuCards({ skuRows: skuRows }))
+  // 半成品池开关（稿 3:461）。两道门都是后端既有约束的前置提示，不是新规矩：
+  //   · 关不掉：applyProductSkus 会抛「还有待加工库存，不能改成分规格现货」
+  //   · 开不了：createProduct 会抛「待加工请添加规格」
+  toggleBlankPool() {
+    if (this.data.blankPool) {
+      if (inventory.toNumber(this.data.blankStockText) > 0) {
+        wx.showToast({ title: '还有待加工库存，不能改成分规格现货', icon: 'none' })
+        return
+      }
+      this.setData(this.withFoldSummary({ blankPool: false }))
+      return
+    }
+    if (!this.data.hasSpecs) {
+      wx.showToast({ title: '先添加规格取值，再开半成品池', icon: 'none' })
+      return
+    }
+    this.setData(this.withFoldSummary({ blankPool: true }))
   },
 
   getImageCanvas() {
@@ -625,43 +506,43 @@ Page({
   },
 
   async save() {
+    if (this.data.saving) return
+    this.setData({ saving: true })
     try {
-      const kind = this.data.productKind
-      const hasSpecs = kind !== 'plain'
-      const blankProcess = kind === 'blank'
-      if (hasSpecs && !this.data.colors.length && !this.data.sizes.length) {
-        throw new Error('请添加规格')
-      }
-      const sharedPrice = hasSpecs && this.data.sharedPrice
-      const costPrice = this.data.costPrice
-      const salePrice = this.data.salePrice
+      const hasSpecs = !!(this.data.colors.length || this.data.sizes.length)
+      const blankProcess = hasSpecs && this.data.blankPool
       await store.saveProduct({
         id: this.data.id,
         name: this.data.name,
         sku: this.data.sku,
         barcode: this.data.barcode,
         image: this.data.image,
-        costPrice: costPrice,
-        salePrice: salePrice,
-        stock: hasSpecs
-          ? (blankProcess && !this.data.isEdit ? this.data.blankStock || this.data.stock : 0)
-          : (this.data.isEdit ? 0 : this.data.stock),
+        costPrice: this.data.costPrice,
+        salePrice: this.data.salePrice,
+        // 建档初始 0（稿 UX注释 n9「库存只读……建档初始 0。改数只走库存修正门」）。
+        // 编辑态本来就不改件数：updateProduct 最后一行是 next.stock = existing.stock。
+        stock: 0,
         alertQty: this.data.alertQty,
         specAxis1: hasSpecs ? this.data.specAxis1 : '',
         specAxis2: hasSpecs ? this.data.specAxis2 : '',
         colors: hasSpecs ? this.data.colors : [],
         sizes: hasSpecs ? this.data.sizes : [],
         blankProcess: blankProcess,
-        sharedPrice: sharedPrice,
+        // sharedPrice 在 5a 批之后没有读方了（稿上没有「同价 / 各格不同价」这个开关）。
+        // 原样透传：不推导也不清零，老数据不churn。退役它是后续批次的事。
+        sharedPrice: this.data.sharedPrice,
         skus: hasSpecs ? this.data.skuRows.map(function (row) {
           return {
             id: row.id,
             color: row.color,
             size: row.size,
             sku: row.sku,
-            costPrice: sharedPrice ? costPrice : row.costPrice,
-            salePrice: sharedPrice ? salePrice : row.salePrice,
-            stock: row.stock,
+            // **不带 costPrice。** applyProductSkus 里那一格是
+            //   row.costPrice != null ? row.costPrice : (prev ? prev.costPrice : product.costPrice)
+            // 不带这个 key，服务端就回落到这一格原来的进价（进货写进去的那个）；
+            // 带上默认进价会把它冲掉，毛利当场算错。稿的矩阵也没有进价列。
+            salePrice: row.salePrice,
+            stock: '0',
             alertQty: row.alertQty
           }
         }) : []
@@ -673,6 +554,8 @@ Page({
       }, 400)
     } catch (error) {
       util.showError(error)
+    } finally {
+      this.setData({ saving: false })
     }
   },
 
