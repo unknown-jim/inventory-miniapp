@@ -487,6 +487,39 @@ assert.ok(
   productsWxss.indexOf('thumb-camera') >= 0,
   '无图占位右下要有相机角标（稿 camera 13:198）'
 )
+
+// ---------------------------------------------------------------------------
+// 货号行（2026-09-01，稿 card/商品/1:1 的 sku 槽 19:32、UX注释 n12 = 19:34）。
+// 四条各钉一层，任何一层退回去都红：wxml 有这一行 / 它是条件渲染 / 它的位置 / 取数与色档。
+// ---------------------------------------------------------------------------
+const skuRowLines = productsWxml.split('\n').filter(function (line) {
+  return line.indexOf('class="item-sku') >= 0
+})
+assert.strictEqual(
+  skuRowLines.length, 1,
+  '商品卡的货号行应当正好一处（稿 sku 槽 19:32），实为 ' + skuRowLines.length + ' 处'
+)
+assert.ok(
+  skuRowLines[0].indexOf('wx:if="{{item.skuText}}"') >= 0
+    && skuRowLines[0].indexOf('hidden=') < 0,
+  '货号行必须是 wx:if 条件渲染、不是 hidden：.goods-info 带 gap，hidden 的节点照样占一份间距，'
+    + '没货号的卡会多出一段空隙 —— 稿 n12 要的是「整行不渲染、库存行上提」'
+)
+assert.ok(
+  productsWxml.indexOf('class="item-name"') < productsWxml.indexOf('class="item-sku')
+    && productsWxml.indexOf('class="item-sku') < productsWxml.indexOf('class="item-meta"'),
+  '货号行夹在名称行与库存行之间（稿 19:32 在 name 与 meta 之间，y=193）'
+)
+assert.ok(
+  productsPageJs.indexOf("skuText: product.sku ? '货号 ' + product.sku : ''") >= 0,
+  '卡上的货号文案在 cardViewOf 里成型，空货号给空串 —— 和 product-detail.js:73 同一句形'
+)
+assert.ok(
+  /\.item-sku\s*\{[^}]*var\(--fs-caption\)[^}]*\}/.test(productsWxss)
+    && /\.item-sku\s*\{[^}]*var\(--color-text-muted\)[^}]*\}/.test(productsWxss),
+  '.item-sku 走 12px 地板 --fs-caption + --color-text-muted（稿 sku 槽与 meta 同档，'
+    + 'text/muted = VariableID:3:79 = #171717@62%）'
+)
 assert.ok(
   productsWxss.indexOf('#0F766E') < 0,
   'products.wxss 的两处青绿（原 .link 与 .fab）本批清干净，A1 规格把它划给了逐屏批'

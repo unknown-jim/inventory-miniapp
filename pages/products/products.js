@@ -35,8 +35,17 @@ function specSlash(sku) {
 //   分规格   「N 个规格 · 库存 M」（13:184「3 个规格 · 库存 45」）
 //   只有一格 「规格名 · 库存 M」（13:172「米白/1.5m · 库存 16」）
 //   待加工   在上面基础上加「 + 半成品」（3:819「3 个规格 + 半成品 · 库存 86」）
-//   无规格   只剩「库存 M」。稿上没有这一档样张，也不许补第五层
-//            （UX 注释 10:177：卡只有 图 / 名 / 规格与库存 / 起价 四层）。
+//   无规格   只剩「库存 M」。稿上没有这一档样张。
+//
+// 货号行（2026-09-01 新增，稿 sku 槽 19:32 / 19:33，夹在 name 与 meta 之间）：
+//   文案就是「货号 」+ product.sku，和 product-detail.js 的 metaTextOf 同一句形。
+//   **sku 为空时给空串，由 wxml 的 wx:if 整行不渲染** —— 不是渲染空串、不是写「未填」。
+//   「未填」那个写法只属于销售 / 进货的选货弹层（那里一行必须有内容），列表卡不用它，
+//   tests/product-edit.test.js 有一条断言专门钉着 products.wxml 不许出现它。
+//   一个货号 = 一个商品（条码才对应到规格级），所以这里取 product.sku，不去 skus 里挑。
+//   为什么单独占一行、不并进 metaText：卡内容宽只有 149px，metaText 有规格时已经是
+//   「3 个规格 · 库存 45」占满一行，再拼货号必折行；而折行会让同排两卡内容高度不等。
+//   稿 UX 注释 n12（19:34）和 n10（10:177）记的是同一条裁定。
 //
 // product.stock 就是库存合计：分规格商品的这个字段由服务端用 productStockFromSkus
 // 折好回写（utils/inventory.js:388-392），不用在客户端再加一遍。
@@ -62,6 +71,7 @@ function cardViewOf(product, skus) {
     })
   }
   return {
+    skuText: product.sku ? '货号 ' + product.sku : '',
     metaText: head ? (head + ' · ' + stockPart) : stockPart,
     priceText: util.money(min)
   }
@@ -105,6 +115,7 @@ Page({
         // Array.from 按码位取首字：emoji 开头的商品名不会切出半个代理对
         return Object.assign({}, item, {
           lowStock: inventory.isLowStock(item, skus),
+          skuText: view.skuText,
           metaText: view.metaText,
           priceText: view.priceText,
           tile: tileIndex(item.id),

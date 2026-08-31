@@ -192,6 +192,21 @@
   text-overflow: ellipsis;
 }
 
+/* 货号行 12px / text-muted（稿 sku 槽 19:32，2026-09-01 新增）。
+   与 .item-meta 同档不同槽：稿上是两个独立文字节点、同色同字号，中间隔一份 gap 8。
+   刻意不写成 `.item-sku, .item-meta { … }` 合并选择器 —— 两者的裁定来源不同
+   （meta 是「规格与库存」，sku 是查找键），日后任一档要单独调时合并写法会连坐。
+   货号为空时整行由 wxml 的 wx:if 摘掉，所以这里没有空态分支。 */
+.item-sku {
+  width: 100%;
+  font-size: var(--fs-caption);
+  color: var(--color-text-muted);
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* 副行 12px / text-muted（稿 meta 槽）。不复用全局 .muted：那是 --fs-label（26rpx），
    稿这里是 12px = --fs-caption（24rpx）。同样锁单行。 */
 .item-meta {
