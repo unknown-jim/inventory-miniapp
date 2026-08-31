@@ -1,0 +1,66 @@
+<!-- 盘点模式。稿 Screen/02b 盘点模式 4:893、Screen/02c 盘点·键盘弹起 7:170。
+     整屏 = 固定 hint + 可滚列表 + 固定底栏，根节点高度随键盘高度收缩：
+     kbPx > 0 时整屏变矮，底栏因此浮到键盘之上、列表区被动压缩且仍可滚。 -->
+<view class="page" style="height: calc(100vh - {{kbPx}}px);">
+  <page-loading wx:if="{{pageLoading}}" />
+
+  <block wx:else>
+    <!-- 稿 hint 4:898 逐字。稿上左边还有一枚 12x12 的 info 图标，本仓没有图标体系，
+         本批不为一枚装饰单独造 svg（规格「与稿的已知偏差」第 4 条）。 -->
+    <view class="take-hint muted js-take-hint">只盘这一个商品：账面数自动带出，只改不一样的；没碰的规格不会动</view>
+
+    <scroll-view
+      class="take-list"
+      scroll-y
+      scroll-with-animation
+      scroll-into-view="{{scrollIntoId}}"
+    >
+      <view class="take-inner">
+        <view wx:if="{{rows.length}}" class="card take-card">
+          <view
+            class="take-row js-take-row {{item.changed ? 'take-row-diff' : ''}}"
+            wx:for="{{rows}}"
+            wx:key="key"
+            id="take-row-{{index}}"
+          >
+            <view wx:if="{{item.blank}}" class="blank-dot-wrap">
+              <view class="blank-dot"></view>
+            </view>
+            <text class="take-name js-take-name {{item.blank ? 'take-name-blank' : ''}}">{{item.label}}</text>
+            <text class="take-book js-take-book">{{item.bookText}}</text>
+            <input
+              class="take-qty js-take-qty"
+              type="digit"
+              value="{{item.input}}"
+              data-index="{{index}}"
+              adjust-position="{{false}}"
+              bindinput="onQtyInput"
+              bindfocus="onQtyFocus"
+            />
+            <text class="take-diff js-take-diff">{{item.diffText}}</text>
+          </view>
+        </view>
+
+        <!-- 稿上没画这一屏的空态：分规格商品至少有一格，普通商品恒有一行，
+             正常进不来。这是防御位，真进来了要说人话，不要留白屏。 -->
+        <view wx:else class="card empty">
+          <view class="empty-title">这个商品没有可盘的规格</view>
+          <view class="muted">先到商品编辑里加上规格，再回来盘。</view>
+        </view>
+      </view>
+    </scroll-view>
+
+    <!-- 稿 bottom-cta 4:897：1px 分隔线 + 退出(110x52 白底黑描边) + 差异确认调整(黑底 52)
+         + 34 安全区。键盘弹起时（稿 7:174）安全区换成 16 的下内边距。 -->
+    <view class="take-cta {{kbPx ? 'take-cta-kb' : ''}}">
+      <view class="take-cta-row">
+        <button class="take-exit js-take-exit" bindtap="exit">退出</button>
+        <button
+          class="btn-primary take-submit js-take-submit"
+          bindtap="submit"
+          disabled="{{!diffCount || submitting}}"
+        >差异 {{diffCount}} 处 · 确认调整</button>
+      </view>
+    </view>
+  </block>
+</view>

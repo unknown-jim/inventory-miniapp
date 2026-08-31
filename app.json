@@ -11,6 +11,7 @@
     "pages/sale-return/sale-return",
     "pages/convert/convert",
     "pages/adjust/adjust",
+    "pages/stock-take/stock-take",
     "pages/product-edit/product-edit",
     "pages/categories/categories",
     "pages/category-edit/category-edit",

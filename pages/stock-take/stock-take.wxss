@@ -1,0 +1,177 @@
+/* 盘点模式。共用类（.page、.card、.btn-primary、.empty、.muted）来自 app.wxss，
+   这里只写本页布局。稿 Screen/02b 4:893 与 Screen/02c 7:170。 */
+
+/* 本页是「固定 hint + 可滚列表 + 固定底栏」的整屏形态，不是文档流表单，所以把
+   共用 .page 的内边距清掉、改成撑满一屏的竖向 flex。高度写在 wxml 的行内 style
+   上（calc(100vh - kbPx px)），键盘弹起时整屏变矮 —— 底栏跟着上浮、scroll-view
+   被动压缩，这正是稿 caption 7:169 的验收点。
+   页面级 wxss 只作用于本页；pages/customers/customers.wxss 也这样覆盖过 .page。 */
+.page {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+
+/* 稿 hint-row 4:932：content 上内边距 16，与卡之间 gap 12 */
+.take-hint {
+  flex: none;
+  padding: var(--page-pad) var(--page-pad) var(--space-lg);
+}
+
+/* flex 基准取 0 再 grow，高度才是确定值 —— scroll-view 的 scroll-y 需要确定高度 */
+.take-list {
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+.take-inner {
+  padding: 0 var(--page-pad) var(--page-pad);
+}
+
+/* 稿 card/盘点行 4:899：cornerRadius 12（= .card 的 24rpx），内边距 0，行自己带 */
+.take-card {
+  padding: 0;
+  overflow: hidden;
+}
+
+/* 稿 row 4:900 等：horizontal，gap 8（16rpx），padding 左右 12（24rpx）上下 10（20rpx），
+   行间 1px 分隔线 div，底色 border/default */
+.take-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  box-sizing: border-box;
+  padding: 20rpx var(--space-lg);
+  border-bottom: 2rpx solid var(--color-border-default);
+}
+
+.take-row:last-child {
+  border-bottom: none;
+}
+
+/* 稿 4:915 的 fills 是 amber/50 —— 实际不等于账面的行整行浅底高亮（UX注释 n2）。
+   两个 token 都是 B1 批已经加进 app.wxss 的，本批不新增颜色。
+   这是**行**底色不是 chip，不受「彩色浅底 = 不可点状态标识」那条 chip 铁律管；
+   行里的输入框照样能点。 */
+.take-row-diff {
+  background: var(--color-amber-50);
+}
+
+/* 半成品行的靛蓝标记，与 pages/product-detail 的 .blank-dot 同一份写法（那一屏是
+   本页的入口，两处必须长一样）。#4338CA 与 app.wxss 的 .tag-blank 同值：状态语义
+   色的 token 化是独立一批（A1 规格已划出去），本批不提前脱队。 */
+.blank-dot-wrap {
+  width: 32rpx;
+  height: 32rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.blank-dot {
+  width: 14rpx;
+  height: 14rpx;
+  background: #4338CA;
+  border-radius: 2rpx;
+  transform: rotate(45deg);
+}
+
+/* 稿 4:901 是 13px Medium（半成品行），4:906 等是 13px Regular */
+.take-name {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-label);
+  color: var(--color-text-primary);
+  word-break: break-word;
+}
+
+.take-name-blank {
+  font-weight: 500;
+}
+
+/* 稿 4:902「账面 40」：12px，text/muted */
+.take-book {
+  flex: none;
+  font-size: var(--fs-caption);
+  color: var(--color-text-muted);
+}
+
+/* 稿 input/default 3:255：底 neutral/100、描边 border/default、radius 10（20rpx）。
+   高度取 --tap-md（96rpx = 48px），比稿的 44 高 4px —— docs/ui-scale.md 把输入框
+   写在 --tap-md 这一档，仓库全部 .field-input 也是这个高度，本页跟文档走。
+   宽 144rpx = 稿实例覆盖的 72px；右对齐让个位数对齐，四位数也放得下。 */
+.take-qty {
+  flex: none;
+  width: 144rpx;
+  height: var(--tap-md);
+  padding: 0 var(--space-md);
+  box-sizing: border-box;
+  background: var(--color-fill-ghost);
+  border: 2rpx solid var(--color-border-default);
+  border-radius: 20rpx;
+  font-size: var(--fs-body);
+  color: var(--color-text-primary);
+  text-align: right;
+}
+
+/* 稿 4:931 的差值：12px SemiBold，amber/700。**定宽**是本批对稿的一处刻意偏差：
+   稿上只有一行有差值，所以它让那一行的输入框整体左移；真实盘点里差值位数各不相同，
+   不定宽会让每个输入框随打字左右跳。定宽之后各行输入框恒对齐。 */
+.take-diff {
+  flex: none;
+  width: 72rpx;
+  text-align: right;
+  font-size: var(--fs-caption);
+  font-weight: 600;
+  color: var(--color-amber-700);
+}
+
+/* 稿 bottom-cta 4:897：1px hairline（这里做成 border-top）、与按钮行 gap 12、
+   按钮行与安全区 gap 12 + 34 安全区。 */
+.take-cta {
+  flex: none;
+  box-sizing: border-box;
+  padding: 0 var(--page-pad) calc(env(safe-area-inset-bottom) + var(--space-lg));
+  background: var(--color-bg-card);
+  border-top: 2rpx solid var(--color-border-default);
+}
+
+/* 稿 7:174（键盘态）：没有安全区那一块，下内边距 16 —— 键盘已经盖住安全区，
+   再留 34 会在按钮和键盘之间空出一条白带。 */
+.take-cta-kb {
+  padding-bottom: var(--space-xl);
+}
+
+.take-cta-row {
+  display: flex;
+  gap: var(--space-lg);
+  padding-top: var(--space-lg);
+}
+
+/* 稿 btn/退出 13:444：110x52 白底 + 黑描边，16px Medium，radius 8（16rpx）。
+   110px = 220rpx。 */
+.take-exit {
+  flex: none;
+  width: 220rpx;
+  height: var(--tap-lg);
+  line-height: var(--tap-lg);
+  margin: 0;
+  box-sizing: border-box;
+  background: var(--color-bg-card);
+  border: 2rpx solid var(--color-border-brand);
+  border-radius: 16rpx;
+  color: var(--color-text-primary);
+  font-size: var(--fs-title);
+  font-weight: 500;
+}
+
+/* 稿 btn/primary/xl 4:920：fill_container x 52，黑底白字 16px SemiBold，radius 8。
+   .btn-primary 已经是这一套（--tap-lg 104rpx = 52px、16rpx 圆角、--fs-title），
+   这里只补「占满剩下的宽」。禁用态走 app.wxss 的 .btn-primary[disabled]。 */
+.take-submit {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+}

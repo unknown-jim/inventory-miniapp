@@ -1,0 +1,6 @@
+{
+  "navigationBarTitleText": "盘点",
+  "usingComponents": {
+    "page-loading": "/components/page-loading/index"
+  }
+}

@@ -469,4 +469,26 @@ assert.ok(
     + '这个消费点在本批摘掉；app.js 那三个方法本批刻意留着，见规格 OQ-4'
 )
 
+// 02b 盘点是独立页面（稿 Screen/02b 4:893：navbar 带返回箭头、没有 tabbar），
+// 不是 pages/adjust 的一个模式 —— 稿上 sheet/库存修正 4:31 的第二行和第三行是
+// 两个并存的入口，合并会让同一个 URL 承载两张互相否定的皮。
+const takeJson = JSON.parse(read('pages/stock-take/stock-take.json'))
+assert.strictEqual(takeJson.navigationBarTitleText, '盘点', '盘点页的静态标题')
+const takeWxml = read('pages/stock-take/stock-take.wxml')
+assert.ok(takeWxml.indexOf('class="page"') >= 0, '02b 根节点要 class="page"')
+assert.ok(takeWxml.indexOf('<page-loading') >= 0, '02b 用共用加载态')
+assert.ok(takeWxml.indexOf('js-take-submit') >= 0, '02b 底栏要有「差异 N 处 · 确认调整」')
+assert.ok(takeWxml.indexOf('js-take-exit') >= 0, '02b 底栏要有「退出」（稿 4:1003 两钮并排）')
+assert.ok(takeWxml.indexOf('差异 {{diffCount}} 处 · 确认调整') >= 0,
+  '主按钮要实时显示差异处数（稿 UX注释 n2）')
+const takeJs = read('pages/stock-take/stock-take.js')
+assert.ok(takeJs.indexOf('addAdjust') >= 0, '02b 的写操作只能走 store.addAdjust')
+assert.ok(takeJs.indexOf('findBlankSku') >= 0,
+  '02b 的半成品账面数要走 findBlankSku，判据与 lowStockRows / product-detail 同源')
+// pages/adjust 不许被本批改掉：稿上两个入口并存
+const adjustWxml = read('pages/adjust/adjust.wxml')
+assert.ok(adjustWxml.indexOf('js-adjust-submit') >= 0, 'pages/adjust 仍是「一格 + 原因」那张皮')
+assert.ok(adjustWxml.indexOf('只改这一个格子的件数，不是整单盘点。') >= 0,
+  'pages/adjust 那句「不是整单盘点」要留着 —— 它正是两屏分工的说明')
+
 console.log('ui-scale tests passed')

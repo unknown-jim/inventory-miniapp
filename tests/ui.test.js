@@ -1283,20 +1283,19 @@ async function runRecordSheet(miniProgram) {
 
   await runRecordSheetGrabber(miniProgram, home)
 
-  step('面板 › 库存修正：展开二级（稿上三行，本批交付两行）')
+  step('面板 › 库存修正：展开二级（稿 4:31 三行，全在）')
   const adjHost = await openRecordSheet(home, '.js-record-entry', '库存修正')
   await tapInSheet(adjHost, '.js-rs-adjust')
   await waitSheetData(adjHost, function (d) {
     return d && d.step === 'adjust'
   }, '展开库存修正二级')
   const options = await adjHost.$$('.rs-option')
-  // 稿上 sheet/库存修正(4:42) 是三行。第三行「盘一遍这个商品」要的是 Screen/02b
-  // 那个整页盘点，代码里没有落点，本批**整行不画**（画布规范 9:36：样张与规则打架时
-  // 当轮改掉，不许挂禁用件）。Screen/02b 落地补回第三行时，这个 2 要跟着改成 3。
+  // 稿 sheet/库存修正 4:31 是三行：换格加工 4:34、数量 4:37、盘点 4:1156。
+  // B4 批把第三行的落点 pages/stock-take 建出来之后，原先「整行不画」的偏差解除。
   assert.strictEqual(
     options.length,
-    2,
-    '库存修正二级应当是两行（这是本批的已知偏差，不是漏了）：实际渲染出 ' + options.length + ' 行'
+    3,
+    '库存修正二级应当是三行（稿 4:31）：实际渲染出 ' + options.length + ' 行'
   )
 
   home = await runRecordSheetPayPicker(miniProgram, home)
@@ -2347,6 +2346,79 @@ async function runAdjust(miniProgram) {
   await goBackTo(miniProgram, '上一页（库存调整之后）')
 }
 
+// ---- 盘点（Screen/02b 盘点模式）--------------------------------------------
+//
+// 盘点和库存调整的账法完全一样（只改件数、不进销售额与毛利），差别在**形态**：
+// 一屏把这个商品的每一格账面数带出来，只改对不上的那几格，一条确认。所以这里断言
+// 的重点是「多格一起带出来」和「没碰的格一件不动」—— 后者是稿 UX注释 n1 的原话
+// 「未触碰的绝不动」，而它恰好是这一屏最容易做错、屏上又看不出来的地方。
+//
+// 用卫衣：种子里唯一的待加工商品（半成品池 + 3 色 x 2 码 = 7 格），能同时验到
+// 「半成品行排第一」和「账面数取的是 blank sku 那一格」。全轮没有别的用例碰它。
+async function runStockTake(miniProgram) {
+  step('盘点：一屏带出所有规格的账面数，只改一格，其余一件不动')
+  // 从看板起步：这一页提交成功后会自己 navigateBack，用固定起点才判得准退到了哪。
+  await goto(miniProgram, 'switchTab', '/pages/index/index', '看板（盘点之前）')
+
+  const before = await readLists(miniProgram)
+  const beforeTerms = moneyTerms(await readAggregate(miniProgram))
+  const target = findProduct(before, '卫衣')
+  const beforeSkus = skusOf(before, target.id)
+  const blank = beforeSkus.find(function (item) { return item.isBlank })
+  assert.ok(blank, '前提：卫衣是待加工商品，应该有半成品格')
+  assert.ok(blank.stock >= 2, '前提：半成品池要有至少 2 件才好盘出差异，实为 ' + blank.stock)
+
+  const take = await goto(miniProgram, 'navigateTo',
+    '/pages/stock-take/stock-take?id=' + target.id, '盘点页')
+  await waitForData(take, function (d) {
+    return d && d.productId === target.id && d.rows && d.rows.length === beforeSkus.length
+  }, '盘点页把 ' + beforeSkus.length + ' 个规格全带出来了')
+
+  const opened = await take.data()
+  // 刚打开就有差异 = 账面数带错了（稿 n1：账面数自动带出）
+  assert.strictEqual(opened.diffCount, 0, '刚打开就有差异 —— 账面数带错了')
+  assert.strictEqual(opened.rows[0].blank, true, '第一行应当是半成品（稿 card/盘点行 4:900）')
+  assert.strictEqual(opened.rows[0].bookQty, blank.stock,
+    '半成品行的账面数要取 findBlankSku 那一格：账本 ' + blank.stock
+      + '，页面 ' + opened.rows[0].bookQty)
+
+  const inputs = await take.$$('.js-take-qty')
+  assert.strictEqual(inputs.length, beforeSkus.length, '每个规格都要有一个可输入的实点框')
+  const taken = blank.stock - 2
+  await inputs[0].input(String(taken))
+  await waitForData(take, function (d) {
+    return d && d.diffCount === 1
+  }, '改了一格之后差异处数变成 1')
+
+  const beforeRecords = await readRecords(miniProgram)
+  await tapWhen(take, '.js-take-submit')
+  const record = await waitForNewRecord(miniProgram, 'adjust_out', beforeRecords, '确认调整')
+  assert.strictEqual(record.profit, 0, '盘点的毛利必须是 0，实为 ' + record.profit)
+  // 稿 n5 / n7：确认之后回上一页
+  await waitForPage(miniProgram, 'pages/index/index', '看板（盘点提交后自动退回）')
+
+  const after = await readLists(miniProgram)
+  const afterSkus = skusOf(after, target.id)
+  const afterBlank = afterSkus.find(function (item) { return item.isBlank })
+  assert.strictEqual(afterBlank.stock, taken,
+    '半成品格应当被盘成 ' + taken + '，实为 ' + afterBlank.stock)
+  beforeSkus.forEach(function (item) {
+    if (item.isBlank) return
+    const now = afterSkus.find(function (x) { return x.id === item.id })
+    assert.strictEqual(now.stock, item.stock,
+      '没碰过的规格被动了（稿 n1：未触碰的绝不动）：' + item.id
+        + ' ' + item.stock + ' -> ' + now.stock)
+  })
+
+  const afterTerms = moneyTerms(await readAggregate(miniProgram))
+  ;['salesSum', 'returnsSum', 'purchaseSum', 'profitSum'].forEach(function (key) {
+    assert.strictEqual(afterTerms[key], beforeTerms[key],
+      '盘点动了全店聚合的 ' + key + '（' + beforeTerms[key] + ' -> ' + afterTerms[key]
+        + '）—— 它只该改件数，不进销售额也不进毛利')
+  })
+  assert.strictEqual(afterTerms.saleCount, beforeTerms.saleCount, '盘点不该被算成一笔销售')
+}
+
 // ---- 换规格 ---------------------------------------------------------------
 
 // 换规格的铁律是**件数守恒**：从一格挪到另一格，这个商品的总件数一件不变，
@@ -2928,6 +3000,7 @@ async function run() {
       ['record-slip', runRecordSlipExport],
       ['return', runSaleReturn],
       ['adjust', runAdjust],
+      ['stock-take', runStockTake],
       ['convert', runConvert],
       ['product-detail', runProductDetail],
       ['product-edit', runProductEdit],
