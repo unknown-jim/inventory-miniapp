@@ -2895,8 +2895,12 @@ async function runCategories(miniProgram) {
     return d.id === first.id
   }, '种类编辑页带上了 id')
   const newName = 'UI 待选项'
-  await typeInto(one, '.js-ce-name-input', newName, '商品名待选项输入框', 'nameInput')
+  // B12 起「＋ 添加」是一枚 chip，点了原位变成输入框（稿 chips/商品名 4:615），
+  // 回车 / 失焦提交。automator 的 el.input 只触发 bindinput，不会触发 confirm 或 blur，
+  // 所以和上面 addSpec 那处（商品编辑页的规格取值）一样直接 callMethod 走提交。
   await tapWhen(one, '.js-ce-name-add')
+  await typeInto(one, '.js-ce-name-input', newName, '商品名待选项输入框', 'nameInput')
+  await one.callMethod('commitName')
   await waitForData(one, function (d) {
     return (d.names || []).indexOf(newName) >= 0
   }, '待选项加进列表')
@@ -2925,13 +2929,14 @@ async function runCategories(miniProgram) {
   await waitForData(fresh, function (d) {
     return d && d.isEdit === false
   }, '停在新增模式')
-  // 【必须先把商品类型切成「普通」】页面默认是 finished，而 inventory.createCategory
-  // 对非 plain 的种类要求至少有一个规格取值（否则抛「请添加规格」）。只填名字就保存
-  // 是存不下去的 —— 这条是 2026-08-31 第二轮实测撞出来的，别为了少一步又去掉。
-  await tapWhen(fresh, '.js-ce-kind-plain')
+  // 【只填名字必须存得下去】inventory.createCategory 对非 plain 的种类要求至少一个
+  // 规格取值（否则抛「请添加规格」）。这条是 2026-08-31 第二轮实测撞出来的，别去掉。
+  // B12 起 productKind 不再是页面上的开关（稿 Screen/16 上没有这个控件），而是从
+  // 「有没有规格取值」和「半成品池开不开」推出来的：新建页一个取值都没有，推出来就是
+  // plain，所以这里只核对推导结果，不再需要先点一下「普通」。推导错了就存不下去。
   await waitForData(fresh, function (d) {
     return d.productKind === 'plain'
-  }, '商品类型切到「普通」')
+  }, '新建的模板默认推成「普通」')
   const catName = 'UI 临时种类'
   await typeInto(fresh, '.js-ce-name', catName, '种类名称', 'name')
   await tapWhen(fresh, '.js-ce-save')

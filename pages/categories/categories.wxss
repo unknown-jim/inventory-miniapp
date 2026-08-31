@@ -1,39 +1,80 @@
-.goods-card {
-  margin-bottom: 16rpx;
-  padding: 24rpx 28rpx 20rpx;
-}
+/* 种类模板列表。稿 Screen/16b 15:64 / 16c 15:160 / 16d 15:169。
+   共用类（page 卡片 搜索框 空态 空态插画槽 空态动作行 标签）来自 app.wxss，
+   这里只写本页布局。改版前的右下角 fab 整块删掉：稿 n1 15:154 逐字
+   「FAB 全站只服务「记一笔」（流水页）」，那枚 fab 连带两处写死的品牌青绿一起清了。 */
 
-.goods-top {
+/* 稿 row/搜索与新增 15:68：横排 gap 10。
+   逐条与 pages/customers 与 pages/products 的同名三条相同（同一枚稿组件）。 */
+.tool-row {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  margin-bottom: 8rpx;
+  gap: var(--space-lg);
+  margin-bottom: var(--space-md);
 }
 
-.item-name {
-  font-size: var(--fs-lg);
-  font-weight: 600;
+/* 全局 search 自带 margin-bottom，放进 flex 行会把右边的 ＋ 顶偏；
+   竖向间距统一交给 tool-row 的 margin。 */
+.tool-row .search {
+  flex: 1;
+  min-width: 0;
+  margin-bottom: 0;
 }
 
-.seed-btn {
-  margin-top: 24rpx;
-}
-
-.fab {
-  position: fixed;
-  right: 32rpx;
-  bottom: 48rpx;
-  padding: 0 28rpx;
+/* 稿 btn 15:70：44x44 白底、neutral/900 描边的圆，字 18 Medium。
+   高宽取 --tap-md（96rpx = 48px）与左边搜索框齐平，48 >= 44 地板；
+   字号取档位表里离 18px 最近的 --fs-title。 */
+.add-btn {
+  flex: 0 0 auto;
+  width: var(--tap-md);
   height: var(--tap-md);
   line-height: var(--tap-md);
-  font-size: var(--fs-lg);
-  background: #0F766E;
-  color: #FFFFFF;
-  border-radius: 40rpx;
+  box-sizing: border-box;
+  text-align: center;
+  background: var(--color-bg-card);
+  border: 2rpx solid var(--color-border-brand);
+  border-radius: 999rpx;
+  color: var(--color-text-primary);
+  font-size: var(--fs-title);
   font-weight: 600;
-  box-shadow: 0 12rpx 24rpx rgba(15, 118, 110, 0.28);
 }
 
-.page {
-  padding-bottom: 140rpx;
+/* 稿 card/四件套 15:72：白卡 r12、竖排 gap 4、padding 12。
+   整卡可点，所以高度不低于 --tap-md。 */
+.cat-card {
+  box-sizing: border-box;
+  min-height: var(--tap-md);
+  margin-bottom: var(--space-md);
+  padding: var(--space-lg);
+}
+
+/* 稿 row/头 15:73：名字左、类型 tag 右，tag 不参与压缩。 */
+.cat-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  margin-bottom: var(--space-xs);
+}
+
+/* 稿 name 15:74：16px SemiBold。长名字换行不截断。 */
+.cat-name {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-title);
+  font-weight: 600;
+  word-break: break-all;
+}
+
+/* 稿 summary 15:77：13px text/muted（字号与颜色都由共用类 muted 给），整行不截断。 */
+.cat-sum {
+  word-break: break-all;
+}
+
+/* 空态插画「纸箱 48」（稿 icon/empty/products 10:36；16c 与 16d 用的是同一枚）。
+   原样取自 pages/products/products.wxss 的同名一条，几何一个数没动。
+   几何槽（96rpx 见方、居中、下方留 gap）在 app.wxss 的 empty-icon 里，本条只给图。
+   描边色 #0F756E 是稿上的字面量：docs/design-file.md「品牌青绿只做非语义点缀，
+   空态插画描边正是其中一处」；data URI 里引用不到 CSS 变量，只能写字面量。 */
+.empty-icon-products {
+  background-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='48'%20height='48'%3E%3Cpath%20fill='%230F756E'%20transform='matrix(1%200%200%201%209.6%2020)'%20d='M29.3303%20-0.5303Q29.1144%20-0.759%2028.8%20-0.75L0%20-0.75Q-0.3144%20-0.759%20-0.5303%20-0.5303Q-0.759%20-0.3144%20-0.75%200L-0.75%2016Q-0.75%2017.3048%200.1726%2018.2274Q1.0952%2019.15%202.4%2019.15L26.4%2019.15Q27.7048%2019.15%2028.6274%2018.2274Q29.55%2017.3048%2029.55%2016L29.55%200Q29.559%20-0.3144%2029.3303%20-0.5303ZM28.05%200.75L0.75%200.75L0.75%2016Q0.75%2016.6835%201.2333%2017.1667Q1.7166%2017.65%202.4%2017.65L26.4%2017.65Q27.0834%2017.65%2027.5667%2017.1667Q28.05%2016.6834%2028.05%2016L28.05%200.75Z'%20fill-rule='evenodd'/%3E%3Cpath%20fill='%230F756E'%20transform='matrix(1%200%200%201%209.6%209.6)'%20d='M3.8068%200.9493L-0.6732%2010.0693L0.6732%2010.7307L5.148%201.6212Q5.358%201.2283%205.7381%200.9944Q6.1223%200.7579%206.5734%200.7499L22.24%200.75Q22.6777%200.7579%2023.0619%200.9944Q23.442%201.2283%2023.652%201.6212L28.1268%2010.7307L29.4732%2010.0693L24.9932%200.9493Q24.9908%200.9445%2024.9883%200.9397Q24.9859%200.9349%2024.9834%200.9301Q24.5816%200.1683%2023.8481%20-0.2831Q23.1146%20-0.7345%2022.24%20-0.75L6.5466%20-0.7499Q5.6855%20-0.7345%204.9519%20-0.2831Q4.2184%200.1683%203.8166%200.9301Q3.8141%200.9349%203.8116%200.9397Q3.8092%200.9445%203.8068%200.9493Z'%20fill-rule='evenodd'/%3E%3Cpath%20fill='%230F756E'%20transform='matrix(1%200%200%201%2019.2%2020)'%20d='M0.75%204.85L0.75%200L-0.75%200L-0.75%205.6Q-0.759%205.9144%20-0.5303%206.1303Q-0.3144%206.359%200%206.35L9.6%206.35Q9.9144%206.359%2010.1303%206.1303Q10.359%205.9144%2010.35%205.6L10.35%200L8.85%200L8.85%204.85L0.75%204.85Z'%20fill-rule='evenodd'/%3E%3C/svg%3E");
 }
