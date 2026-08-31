@@ -39,6 +39,7 @@ Page({
   async onLoad(query) {
     if (!(await store.ready())) return
     if (!query.id) {
+      this.setData(this.withKind({}))
       wx.setNavigationBarTitle({ title: '新增种类' })
       return
     }
@@ -72,8 +73,9 @@ Page({
   // 一致。推导之后 createCategory 那句「请添加规格」的条件恒假，永远触发不了 ——
   // 「只填名字存不下去」这个老坑从根上没了。
   //
-  // 本函数只更新 data 里的镜像；真正落盘的值在 save() 里按同一条规则再算一次，
-  // 不依赖镜像有没有及时刷新。
+  // 本函数是 productKind/hasSpecs 唯一的推导入口，colors/sizes/blankPool 的每一处
+  // 写入（onLoad 新建&编辑分支、commitColor/commitSize、removeColor/removeSize、
+  // toggleBlank）都过它，save() 直接读它维护的 data 镜像，不再另算一遍。
   withKind(patch) {
     const colors = patch.colors != null ? patch.colors : this.data.colors
     const sizes = patch.sizes != null ? patch.sizes : this.data.sizes
@@ -180,13 +182,16 @@ Page({
 
   async save() {
     try {
-      // 落盘的 productKind 在这里按 withKind 同一条规则重算，不读 data 里的镜像。
-      const hasSpecs = !!(this.data.colors.length || this.data.sizes.length)
+      // 落盘的 productKind 直接读 withKind 维护的镜像，不再另算一遍——
+      // colors/sizes/blankPool 的每一个写入点都过 withKind（见上面的注释和
+      // onLoad 新建分支的 withKind({})），镜像不会失效，两份公式会漂但没人测，
+      // 合成一份才让 tests/ui.test.js 那条「新建默认推成 plain」的断言真的挡得住东西。
+      const hasSpecs = this.data.hasSpecs
       await store.saveCategory({
         id: this.data.id,
         name: this.data.name,
         names: this.data.names,
-        productKind: hasSpecs ? (this.data.blankPool ? 'blank' : 'finished') : 'plain',
+        productKind: this.data.productKind,
         sharedPrice: this.data.sharedPrice,
         specAxis1: hasSpecs ? this.data.specAxis1 : '',
         specAxis2: hasSpecs ? this.data.specAxis2 : '',
