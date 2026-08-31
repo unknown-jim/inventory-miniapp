@@ -1271,14 +1271,19 @@ async function assertSheetEmptyCentered(miniProgram, host, label) {
   // 332px 压到 291px、丢掉 12%，而「让位」那条裁定会把它当成合规放行 —— 从数学上看
   // 它确实合规，区分不了「窗口矮」和「自己变胖」。换成「让位量 == 超出上限的量」那种
   // 会计恒等式也一样放行。所以预算必须单独钉：grabber + 标题 + searchbar + 取消
-  // 合计不超过 390rpx（基线实测 388.5rpx）。
+  // 预算 400rpx，当前用掉 389rpx，剩 11rpx。
+  //
+  // **留 11rpx 而不是卡死在 389**：标题那段高度是字体度量决定的（line-height: AUTO），
+  // 换机型或基础库时行盒差 1px 是常事，卡死会变成代码没改也红 —— 而那种误红和
+  // 「真的有人加了常驻元素」长得一模一样，最顺手的「修法」是把预算调大，于是这条
+  // 裁定就被它自己的误红磨掉了。放宽不削弱它：X1 那个变异实测 474rpx，仍然红。
   const chromePx = sheetH - bodyBox.height
-  const chromeBudgetPx = screenWidth * 390 / 750
+  const chromeBudgetPx = screenWidth * 400 / 750
   assert.ok(
     chromePx <= chromeBudgetPx,
     label + '：面板除列表区之外的部分超预算 —— 实测 ' + Math.round(chromePx)
       + 'px（' + Math.round(chromePx * 750 / screenWidth) + 'rpx），预算 '
-      + Math.round(chromeBudgetPx) + 'px（390rpx）。要加常驻元素先看预算够不够，'
+      + Math.round(chromeBudgetPx) + 'px（400rpx）。要加常驻元素先看预算够不够，'
       + '不够得先减别的，不能默默吃掉列表区'
   )
   if (!squeezed) {
