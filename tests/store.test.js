@@ -421,7 +421,12 @@ require.cache[require.resolve('../utils/cloud-config')].exports = {
     const store = loadStore(h)
     await store.ready()
 
-    const page = mountPage(loadPage(RECORDS_PATH))
+    // 本节测的是分页机制本身，跟时间段筛选无关；seedRecords 的种子文档时间戳
+    // 刻意打在很久以前（见上面 seedRecords 的注释：不能落进「今天」），落在
+    // 7a 新加的默认「本月」窗口之外，所以挂载时直接把 windowKey 定成「全部」
+    // ——onShow 首次加载就带着它走，不会像先 onShow() 再 applyWindow() 那样
+    // 多打一轮「本月」空请求。
+    const page = mountPage(loadPage(RECORDS_PATH), { windowKey: 'all', windowLabel: '全部' })
     await page.onShow()
     assert.strictEqual(page.data.list.length, PAGE_SIZE, '第一页正好一整页')
     assert.strictEqual(page.data.hasMore, true, '整页倍数时第一页 hasMore 必须为真')
@@ -453,9 +458,9 @@ require.cache[require.resolve('../utils/cloud-config')].exports = {
       '不许有重复'
     )
 
-    // 汇总四项来自服务端权威 totals，不是列表现折
-    assert.strictEqual(page.data.count, seeded.length, '「全部 N」用 totals.count')
-    assert.strictEqual(page.data.receivable, util.money(store.getTotals().receivable))
+    // 「全部 N」汇总数字条和内联欠款显示都被 7a 稿裁掉了（欠款是存量，不在
+    // 本页重复；见 spec-7a §5.2），page.data 上已经没有 count / receivable
+    // 这两个字段，删掉断言，不是找替代字段。
 
     // 到底了之后再触底：一次请求都不许发
     const before = countCalls(h, 'listRecords')
@@ -473,7 +478,9 @@ require.cache[require.resolve('../utils/cloud-config')].exports = {
     const store = loadStore(h)
     await store.ready()
 
-    const page = mountPage(loadPage(RECORDS_PATH))
+    // 同上：种子文档落在默认「本月」窗口之外，挂载时直接定「全部」（切类型
+    // 不动 windowKey，后面几次 setType 仍在「全部」档里）。
+    const page = mountPage(loadPage(RECORDS_PATH), { windowKey: 'all', windowLabel: '全部' })
     await page.onShow()
     assert.strictEqual(page.data.list.length, PAGE_SIZE)
 
@@ -513,7 +520,10 @@ require.cache[require.resolve('../utils/cloud-config')].exports = {
       return seen === 1 ? firstHeld : null
     }
 
-    const page = mountPage(loadPage(RECORDS_PATH))
+    // 挂载时直接定「全部」（而不是先 onShow() 再 applyWindow('all')）：
+    // 后者会先撞一次「本月」空请求，被上面这道 gate 逮住当成「第一次」，
+    // 把这条用例真正要测的「onShow 那次在飞请求」这个第一次让掉。
+    const page = mountPage(loadPage(RECORDS_PATH), { windowKey: 'all', windowLabel: '全部' })
     const first = page.onShow()
     await tick(6)
     assert.strictEqual(page.data.list.length, 0, '第一页还按在路上')
@@ -548,7 +558,8 @@ require.cache[require.resolve('../utils/cloud-config')].exports = {
     const store = loadStore(h)
     await store.ready()
 
-    const page = mountPage(loadPage(RECORDS_PATH))
+    // 同上：种子文档落在默认「本月」窗口之外，挂载时直接定「全部」。
+    const page = mountPage(loadPage(RECORDS_PATH), { windowKey: 'all', windowLabel: '全部' })
     await page.onShow()
     const before = countCalls(h, 'listRecords')
 
@@ -578,7 +589,8 @@ require.cache[require.resolve('../utils/cloud-config')].exports = {
     const store = loadStore(h)
     await store.ready()
 
-    const page = mountPage(loadPage(RECORDS_PATH))
+    // 同上：种子文档落在默认「本月」窗口之外，挂载时直接定「全部」。
+    const page = mountPage(loadPage(RECORDS_PATH), { windowKey: 'all', windowLabel: '全部' })
     await page.onShow()
     const before = countCalls(h, 'listRecords')
 
@@ -621,7 +633,9 @@ require.cache[require.resolve('../utils/cloud-config')].exports = {
     const store = loadStore(h)
     await store.ready()
 
-    const page = mountPage(loadPage(RECORDS_PATH))
+    // 同上：种子文档落在默认「本月」窗口之外，挂载时直接定「全部」（后面
+    // 两次 onShow 走的都是同一个 page 实例，windowKey 保持「全部」不用重设）。
+    const page = mountPage(loadPage(RECORDS_PATH), { windowKey: 'all', windowLabel: '全部' })
     await page.onShow()
     await page.onReachBottom()
     await page.onReachBottom()
@@ -1194,7 +1208,8 @@ require.cache[require.resolve('../utils/cloud-config')].exports = {
     const page = mountPage(loadPage(RECORDS_PATH))
     await page.onShow()
     assert.ok(page.data.list.length > 0)
-    assert.strictEqual(page.data.count, store.getTotals().count)
+    // 「全部 N」汇总条被 7a 稿裁掉了，page.data 上已经没有 count 字段；
+    // store.getTotals().count 已经在上面 1203 行独立验过。
   }
 
   // -------------------------------------------------------------------------

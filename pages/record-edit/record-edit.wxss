@@ -1,10 +1,214 @@
+/* 流水详情。稿 Screen/07 流水详情 4:130 的 content 4:133。
+   页面外框 padding 走共用 .page；卡片吃共用 .card，不在这里重定义圆角 / 阴影。
+   与流水列表不同，本页时间用**绝对日期**（演示账对照表 9:18）。 */
+
+/* ---- 单据信息卡（稿 card/单据信息 4:195） ---- */
+
+.info-card,
+.lines-card,
+.money-card,
+.note-card,
 .form-card {
-  margin-top: 16rpx;
+  margin-bottom: var(--space-md);
 }
+
+/* 稿 row/type 4:196：tag ＋ 单号，横排。 */
+.info-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  margin-bottom: var(--space-sm);
+}
+
+/* 稿 4:198「单号 S20260825-014」12px muted。 */
+.doc-no {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-caption);
+  color: var(--color-text-muted);
+}
+
+/* 稿 kv/客户 4:199：k 定宽 56px = 112rpx、13px muted；v 14px 正文。 */
+.kv {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-md);
+  min-height: 48rpx;
+  margin-top: var(--space-sm);
+}
+
+.kv-k {
+  flex: 0 0 112rpx;
+  font-size: var(--fs-label);
+  color: var(--color-text-muted);
+}
+
+/* 实收卡里的 k 要把右边的数字推到行尾，所以那一侧的 k 改成撑开。 */
+.kv-k.grow {
+  flex: 1 1 auto;
+}
+
+.kv-v {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-body);
+  color: var(--color-text-primary);
+  word-break: break-word;
+}
+
+/* ---- 商品清单（稿 card/商品清单 4:208，只读态） ---- */
+
+.lines-card {
+  padding: 0;
+  overflow: hidden;
+}
+
+.line-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-md);
+  padding: var(--space-lg) var(--card-pad);
+  border-bottom: 2rpx solid var(--color-border-default);
+}
+
+.line-row:last-child {
+  border-bottom: none;
+}
+
+.line-col {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 稿 4:209 title 14px Medium。 */
+.line-title {
+  font-size: var(--fs-body);
+  font-weight: 500;
+  color: var(--color-text-primary);
+  word-break: break-word;
+}
+
+/* 稿 4:209 sub「白色/1.8m · ¥128.00 × 2」12px muted；有退货时后缀「· 已退 1」。 */
+.line-sub {
+  margin-top: 4rpx;
+  font-size: var(--fs-caption);
+  color: var(--color-text-muted);
+  word-break: break-word;
+}
+
+/* 稿 4:209 amount 16px Inter SemiBold。 */
+.line-amount {
+  flex: 0 0 auto;
+  font-size: var(--fs-amount);
+  font-weight: 600;
+  color: var(--color-text-primary);
+  white-space: nowrap;
+}
+
+/* ---- 实收卡（稿 card/实收 4:212 / 欠款变体 7:84） ---- */
+
+/* 稿 4:215 / 4:218 / 4:281：16px Inter SemiBold。 */
+.money-v {
+  flex: 0 0 auto;
+  font-size: var(--fs-amount);
+  font-weight: 600;
+  color: var(--color-text-primary);
+  white-space: nowrap;
+}
+
+/* 欠款已清那一档：稿 4:222「¥0.00（已清）」绑 $3:79，是 muted 不是红。 */
+.money-v.muted-v {
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+
+/* 欠款未清那一档：稿 13:284「¥84.00」**20px** Inter SemiBold + text/debt。
+   20px = --fs-amount-lg。docs/ui-scale.md 的降档表把「客户欠款红字」列在
+   「不降档，现有字号够用」那一行，所以不挂降档 class。 */
+.money-v.debt {
+  font-size: var(--fs-amount-lg);
+  color: var(--color-text-debt);
+}
+
+/* 稿 13:273「冲欠款 ¥84.00 · 退现金 ¥12.00」13px muted，整行、不是 kv。 */
+.money-note {
+  margin-top: 4rpx;
+  font-size: var(--fs-label);
+  color: var(--color-text-muted);
+}
+
+/* 稿 4:219 div：1px hairline。 */
+.money-div {
+  height: 2rpx;
+  margin: var(--space-md) 0 var(--space-sm);
+  background: var(--color-border-default);
+}
+
+/* 稿 btn/去收款 13:446：实心黑，h48 = 96rpx，r8 = 16rpx。
+   共用 .btn-primary 是 --tap-lg(104rpx) + r16rpx，高度差 8rpx；这里按稿收到 96。
+   本屏唯一的实心黑，操作区里不许再出第二个（稿 7:83「主动作实心黑唯一」）。 */
+.collect-btn {
+  margin-top: var(--space-md);
+  height: var(--tap-md);
+  line-height: var(--tap-md);
+}
+
+/* ---- 备注卡 ---- */
+
+.note-body {
+  margin-top: var(--space-xs);
+  font-size: var(--fs-body);
+  color: var(--color-text-primary);
+  word-break: break-word;
+}
+
+/* ---- 操作区（稿 4:223，vertical gap 16 = 32rpx） ---- */
+
+.actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xl);
+  margin-top: var(--space-xl);
+}
+
+/* 稿 9:25 row/修改与导出：横排 gap 12 = 24rpx，两钮等分。
+   docs/ui-scale.md：并排操作最多三等分、允许折行、不缩小字号。 */
+.action-row {
+  display: flex;
+  gap: var(--space-lg);
+}
+
+.action-row > .action {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+/* 共用 .action 已经是「白底 + 2rpx 黑描边 + r16(=8px) + min-height --tap-md(=48px)」，
+   与稿 btn/修改 13:275 逐项吻合；只有 label 字号要从 --fs-body(14) 提到
+   稿上的 16px = --fs-title。用组合类改，不去动 app.wxss 里的 .action 本体
+   （product-detail 等页也在消费它）。 */
+.actions .action {
+  font-size: var(--fs-title);
+  font-weight: 500;
+}
+
+/* 稿 4:227 删除流水：13px、text/debt 红、w fill、**h44**、textAlignHorizontal CENTER。
+   危险分级的最低一档「红字链」（稿 7:83）。它是 view 不是 button，所以热区靠
+   min-height 撑到 --tap-min(88rpx = 44px)。 */
+.danger-link {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--tap-min);
+  font-size: var(--fs-label);
+  color: var(--color-text-debt);
+}
+
+/* ---- 编辑态表单（稿没画 07 的编辑态，沿用改版前版式，只迁配色与字号） ---- */
 
 .readonly {
   line-height: var(--tap-md);
-  color: #64748B;
+  color: var(--color-text-muted);
 }
 
 .picker {
@@ -12,35 +216,35 @@
 }
 
 .customer-meta {
-  margin: -8rpx 0 24rpx;
-  color: #64748B;
-  font-size: var(--fs-sm);
+  margin: -8rpx 0 var(--space-lg);
+  color: var(--color-text-muted);
+  font-size: var(--fs-label);
 }
 
-.meta {
-  margin: -8rpx 0 24rpx;
-  color: #0F766E;
-  font-size: var(--fs-sm);
+.line-meta {
+  margin: -8rpx 0 var(--space-lg);
+  color: var(--color-text-muted);
+  font-size: var(--fs-label);
 }
 
 .order-lines {
-  margin-bottom: 8rpx;
+  margin-bottom: var(--space-xs);
 }
 
 .line-block {
-  padding: 8rpx 0 4rpx;
-  border-bottom: 1rpx solid #F1F5F4;
+  padding: var(--space-xs) 0 4rpx;
+  border-bottom: 2rpx solid var(--color-border-default);
 }
 
 .line-block:last-child {
   border-bottom: none;
 }
 
-.line-block .item-name {
-  margin-top: 8rpx;
+.line-block .line-title {
+  margin-top: var(--space-xs);
 }
 
-.line-block .meta {
+.line-block .line-meta {
   margin-top: -8rpx;
 }
 
@@ -48,42 +252,29 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 24rpx;
+  margin-bottom: var(--space-lg);
   font-weight: 600;
 }
 
+/* 单据合计。docs/ui-scale.md：「客户欠款、单据合计」2026-08-30 迁到 --fs-hero-md。
+   色从原来的橙 #C2410C 改成正文黑：稿 4:215 的应收就是 $3:23，
+   暖色留给欠款红（稿 9:83 的同一条理由）。 */
 .total-num {
-  font-size: var(--fs-xl);
-  color: #C2410C;
+  font-size: var(--fs-hero-md);
+  color: var(--color-text-primary);
 }
 
 .tip {
-  margin: 16rpx 8rpx 0;
+  margin: var(--space-md) var(--space-xs) 0;
 }
 
 .last {
   margin-bottom: 0;
 }
 
-.export-btn {
-  margin: 32rpx 0 16rpx;
-}
-
-.save-btn {
-  margin: 32rpx 0 16rpx;
-}
-
-.export-btn + .save-btn {
-  margin-top: 0;
-}
-
-.cancel-btn {
-  margin: 0 0 16rpx;
-}
-
 .link {
-  color: #0F766E;
-  font-size: var(--fs-sm);
+  color: var(--color-text-primary);
+  font-size: var(--fs-label);
 }
 
 .mask {
@@ -92,7 +283,7 @@
   right: 0;
   bottom: 0;
   left: 0;
-  background: rgba(15, 23, 42, 0.45);
+  background: var(--color-bg-overlay);
   display: flex;
   align-items: flex-end;
   z-index: 1000;
@@ -100,9 +291,9 @@
 
 .sheet {
   width: 100%;
-  background: #FFFFFF;
+  background: var(--color-bg-card);
   border-radius: 24rpx 24rpx 0 0;
-  padding: 28rpx 24rpx 12rpx;
+  padding: 28rpx var(--space-lg) var(--space-sm);
   position: relative;
   z-index: 1001;
 }
@@ -111,7 +302,7 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 16rpx;
+  margin-bottom: var(--space-md);
 }
 
 .sheet-head .sheet-title {
@@ -119,9 +310,9 @@
 }
 
 .sheet-title {
-  font-size: var(--fs-lg);
+  font-size: var(--fs-title);
   font-weight: 600;
-  margin-bottom: 16rpx;
+  margin-bottom: var(--space-md);
 }
 
 .sheet-list {
@@ -132,38 +323,33 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
+  min-height: var(--tap-md);
   padding: 22rpx 0;
-  border-bottom: 1rpx solid #F1F5F4;
-}
-
-.item-name {
-  font-weight: 600;
-  margin-bottom: 6rpx;
+  border-bottom: 2rpx solid var(--color-border-default);
 }
 
 .slip-canvas {
   position: fixed;
-  /* 挪出屏幕，避免 type=2d 原生组件盖住按钮；宽高由导出时写入，必须 ≥ dest 像素 */
+  /* 挪出屏幕，避免 type=2d 原生组件盖住按钮；宽高由导出时写入，必须大于等于 dest 像素 */
   left: -20000px;
   top: 0;
   pointer-events: none;
   opacity: 0;
 }
 
+/* 实收反馈行。四档，色按语义分：
+     done   收讫       muted
+     debt   本单欠款    text/debt 红
+     prepay 多收转预收  muted（B6 定的口径：**非错误**，稿 10:185 是 muted 不是红字）
+     block  服务端一定会拒的两种  text/debt 红 */
 .paid-note {
-  margin: 12rpx 0 4rpx;
-  font-size: var(--fs-sm);
+  margin: var(--space-sm) 0 4rpx;
+  font-size: var(--fs-label);
+  color: var(--color-text-muted);
+}
+
+.paid-note.debt,
+.paid-note.block {
+  color: var(--color-text-debt);
   font-weight: 600;
-}
-
-.paid-note.debt {
-  color: #C2410C;
-}
-
-.paid-note.over {
-  color: #DC2626;
-}
-
-.paid-note.done {
-  color: #0F766E;
 }
