@@ -350,6 +350,29 @@ orderPicker.openOrderPicker().then(function () {
     '三个 picker（选客户 / 选原销售单 / 选商品）都要套 .rs-picker-body'
   )
 
+  // 每个外壳里的 loading 与空态**自身**必须带 class="rs-empty"，不能套在别的节点里。
+  // 这条守的是 DOM 结构、不是 CSS 文本，所以不吃层叠和注释那套问题；它补的是运行时
+  // 覆盖不到的那一格：选原销售单没有搜索框，进不了「搜到零结果」，运行时用例够不着，
+  // 但它的空态照样渲染在 320px 外壳里，不居中就是一行字贴顶、下面 280px 空白 ——
+  // 这跟有没有搜索框无关。反讽的是，稿上唯一画了「空态居中」的样张恰恰就是它
+  // （11:55 sheet/选原销售单·空态，fill_container + textAlignVertical: CENTER）。
+  const bodyBlocks = sheetWxml.split('<view class="rs-picker-body">').slice(1)
+  assert.strictEqual(bodyBlocks.length, 3, '应当有三个 .rs-picker-body 外壳')
+  bodyBlocks.forEach(function (block, i) {
+    const head = block.slice(0, block.indexOf('</view>') + 7)
+    assert.ok(
+      /<view wx:if="\{\{loading\}\}" class="rs-empty"/.test(block),
+      '第 ' + (i + 1) + ' 个外壳里的 loading 节点自身要带 class="rs-empty"（不要套在别的节点里）'
+    )
+    assert.ok(
+      /<view wx:else class="rs-empty"/.test(block),
+      '第 ' + (i + 1) + ' 个外壳里的空态节点自身要带 class="rs-empty"：套一层 view 之后 '
+        + '.rs-picker-body > .rs-empty 这条子选择器就不再命中，居中会静默失效，'
+        + '而 wxss 一个字节都没改、静态颜色断言也看不出来'
+    )
+    void head
+  })
+
   // 组件不许开 virtualHost：开了页面侧就没有宿主节点，automator 从页面够不到组件里
   // 的任何东西（tests/ui.test.js 在 slip-overlay 上实测过 page.$$ / >>> / selectComponent
   // 全是 0），tests/ui.test.js 里那一整组面板用例会当场失效。面板本体 position: fixed

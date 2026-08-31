@@ -1222,7 +1222,7 @@ async function typeInSheet(host, selector, value, label, field) {
 //
 // **三个 picker 都要跑这一遍**：只查商品那一格的话，单独给选客户套一层 view 能让全套
 // 测试保持绿而那一格的居中没了 —— 实测过。
-async function assertSheetEmptyCentered(host, label) {
+async function assertSheetEmptyCentered(miniProgram, host, label) {
   // 选择器只能用单一简单选择器：'.rs-picker-body > .rs-empty' 在组件查询这条通道上
   // 取不到（实测超时 15s），与 docs/ui-test.md 记的 `>>>` 那个坑同源。
   // 用 .rs-empty 安全：全仓库只在本组件出现 6 处、全在外壳内；三个 picker 是一条
@@ -1246,6 +1246,19 @@ async function assertSheetEmptyCentered(host, label) {
     label + '：空态没有垂直居中（align-items 实为 ' + align + '）：会贴在固定高外壳顶部')
   const body = await waitInSheet(host, '.rs-picker-body', label + ' 的固定高外壳')
   const bodyBox = await body.size()
+  // **外壳的绝对高度也要钉**，不能只查相对关系。在 height: 640rpx 后面再加一行
+  // height: 200rpx（层叠覆盖）时，「高度不变」「占满外壳」「行数溢出」「能滚」四条
+  // 全都照样成立（104 == 104），静态正则也照样命中 640rpx 那几个字 —— 全套绿而
+  // 列表区只剩三分之一。320px 是稿 nSheetListHeight 和四个外壳节点白纸黑字的裁定。
+  const windowWidth = await miniProgram.evaluate(function () {
+    return wx.getSystemInfoSync().windowWidth
+  })
+  const expectedPx = windowWidth * 640 / 750
+  assert.ok(
+    Math.abs(bodyBox.height - expectedPx) <= 2,
+    label + '：外壳高度不是稿定的 640rpx —— 实测 ' + Math.round(bodyBox.height)
+      + 'px，' + windowWidth + 'px 宽屏上应为 ' + Math.round(expectedPx) + 'px'
+  )
   assert.strictEqual(String(await body.style('flex-direction')), 'column',
     label + '：外壳必须竖排 —— 变横排的话 sum / hint / 列表会并排，面板明显坏掉')
   const box = await el.size()
@@ -1434,7 +1447,7 @@ async function runRecordSheetPayPicker(miniProgram, home) {
     '选客户 picker 搜不到结果时面板高度变了：有结果 ' + Math.round(payHeightWithRows)
       + 'px → 空结果 ' + Math.round(payHeightWhenEmpty) + 'px'
   )
-  await assertSheetEmptyCentered(host, '选客户 picker')
+  await assertSheetEmptyCentered(miniProgram, host, '选客户 picker')
   // 关键词还回去，下面要按顺序点第一个客户，不能停在空列表上
   await typeInSheet(host, '.js-rs-customer-search', '', '选客户清空搜索', 'customerKeyword')
   await waitSheetData(host, function (d) {
@@ -1584,7 +1597,7 @@ async function runRecordSheetProductPicker(miniProgram, home) {
   step('picker 空结果高度不变：' + Math.round(heightWithRows) + 'px → '
     + Math.round(heightWhenEmpty) + 'px')
 
-  await assertSheetEmptyCentered(host, '商品 picker')
+  await assertSheetEmptyCentered(miniProgram, host, '商品 picker')
   // 关键词还回去，后面的用例按顺序点第一个商品，不能停在空列表上
   await typeInSheet(host, '.js-rs-product-search', '', '商品 picker 清空搜索', 'productKeyword')
   await waitSheetData(host, function (d) {
