@@ -194,6 +194,13 @@ tabList.forEach(function (item) {
 const BRAND_TEAL = [0x0F, 0x76, 0x6E]     // 旧品牌青绿，主行动改黑后全站不该再有
 const TAB_ON = [0x17, 0x17, 0x17]         // 稿 text/primary 3:23
 const TAB_OFF = [0x6F, 0x6F, 0x6F]        // 稿 text/muted 3:79（#171717 @62%）白底合成
+// 图标是从稿的矢量导出后按 alpha 蒙版整体上色的，所以**每一个非透明像素都应当是同一个 RGB**。
+// 这一条比「主色对不对」严格得多，而且必须严格：上一轮只查主色，结果 people 那两张
+// 带抗锯齿的图里 111 种残留色（#0F756E 等青绿边缘）绿着通过了——按精确颜色做替换时，
+// 边缘过渡像素一个都不会被命中。「主色对」不等于「没有旧色残留」。
+const TAB_ICON_ON = [0x17, 0x17, 0x17]    // 稿 tab/看板/on 的图标 3:23
+const TAB_ICON_OFF = [0xA3, 0xA3, 0xA3]   // 稿 tab/*/off 的图标 3:18。注意它与 TAB_OFF（标签色）
+                                          // 不同值，是稿自己就分开的：图标比标签浅一档
 
 assert.strictEqual(appJson.window.navigationBarBackgroundColor, '#FFFFFF',
   '导航栏底色要跟稿的 navbar/自定义（4:69 绑 3:13 = 白）一致，不要回退成品牌青绿')
@@ -206,7 +213,7 @@ assert.strictEqual(appJson.tabBar.color, '#6F6F6F',
 
 // 只认 8 位 RGBA、非隔行、单/多 IDAT —— 本仓库四组 tab 图标都是这个形状。
 // 形状变了就抛，不要静默跳过：静默跳过的颜色检查等于没有检查。
-function dominantColorOf(rel) {
+function colorsOf(rel) {
   const buf = fs.readFileSync(path.join(root, rel))
   assert.strictEqual(buf[24], 8, rel + ' 不是 8 位深，颜色检查失效')
   assert.strictEqual(buf[25], 6, rel + ' 不是 RGBA（colorType 6），颜色检查失效')
@@ -243,23 +250,26 @@ function dominantColorOf(rel) {
       out[y * stride + x] = v & 0xFF
     }
   }
+  // 返回**全部**非透明 RGB 及其像素数，不是只返回主色 —— 判断留给调用方。
   const tally = new Map()
   for (let i = 0; i < out.length; i += bpp) {
-    if (out[i + 3] < 128) continue
+    if (out[i + 3] === 0) continue
     const key = out[i] + ',' + out[i + 1] + ',' + out[i + 2]
     tally.set(key, (tally.get(key) || 0) + 1)
   }
-  let best = null, bestN = 0
-  tally.forEach(function (n, key) { if (n > bestN) { bestN = n; best = key } })
-  return best ? best.split(',').map(Number) : null
+  return tally
 }
 
 tabList.forEach(function (item) {
-  ;[[item.selectedIconPath, TAB_ON, '选中'], [item.iconPath, TAB_OFF, '未选中']].forEach(function (pair) {
-    const got = dominantColorOf(pair[0])
-    assert.deepStrictEqual(got, pair[1],
-      pair[0] + '（' + pair[2] + '态）主色应为 rgb(' + pair[1] + ')，实测 rgb(' + got + ')')
-    assert.notDeepStrictEqual(got, BRAND_TEAL, pair[0] + ' 还是旧的品牌青绿')
+  ;[[item.selectedIconPath, TAB_ICON_ON, '选中'], [item.iconPath, TAB_ICON_OFF, '未选中']].forEach(function (pair) {
+    const tally = colorsOf(pair[0])
+    const seen = Array.from(tally.keys())
+    const want = pair[1].join(',')
+    // 严格：**每一个非透明像素**都必须是这一个 RGB。抗锯齿由 alpha 承担，不由颜色承担。
+    assert.deepStrictEqual(seen, [want],
+      pair[0] + '（' + pair[2] + '态）应当只含 rgb(' + pair[1] + ') 一种颜色（抗锯齿走 alpha），'
+        + '实测 ' + seen.length + ' 种：' + seen.slice(0, 6).join(' | '))
+    assert.ok(seen.indexOf(BRAND_TEAL.join(',')) < 0, pair[0] + ' 还残留旧的品牌青绿')
   })
 })
 
