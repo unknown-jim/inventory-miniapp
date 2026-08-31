@@ -3359,13 +3359,14 @@ reGoto.lastIndex = 0
 while ((hit = reGoto.exec(routeSource)) !== null) gotoTargets.push(hit[1])
 assert.strictEqual(
   gotoTargets.length,
-  24,
+  26,
   // 8 处最早就有；2 处是 runRecordSheet 进看板和 runRecordSheetFabEntry 进流水页；
   // 12 处是 2026-08-31 那一批新覆盖自己的入口（含 readCustomerDebts 前后两次进客户页）；
   // 2 处是 A3 批返工时把误判栈深的 goBackTo（switchTab 进流水/客户页之后，栈深恒为 1，
   // 没有「上一页」可退）改成的 switchTab（runRecordSheetFabEntry 结尾回看板、
-  // runRecordsLoadMore 结尾回客户页）。
-  '自检：goto 的字面量调用点应当正好 24 处，实为 ' + gotoTargets.length + ' 处：'
+  // runRecordsLoadMore 结尾回客户页）；
+  // 2 处是 B4 批新增的 runStockTake：switchTab 进看板起步，navigateTo 带 id 进盘点页。
+  '自检：goto 的字面量调用点应当正好 26 处，实为 ' + gotoTargets.length + ' 处：'
     + JSON.stringify(gotoTargets)
     + ' —— 数目对不上说明要么正则失效了（钉子④是假绿的），要么调用点增减了，两种都要人看一眼'
 )
