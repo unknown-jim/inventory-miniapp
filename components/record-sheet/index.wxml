@@ -62,8 +62,9 @@
       </view>
     </block>
 
-    <!-- 二级：库存修正。稿上三条，本批交付两条；「盘一遍这个商品」阻塞于
-         Screen/02b 盘点页未实现，按画布规范不挂禁用件，整行不画。 -->
+    <!-- 二级：库存修正。稿 sheet/库存修正 4:31 是三行，顺序按节点 y 坐标 59/130/201：
+         换格加工 4:34、数量 4:37、盘点 4:1156。第三行的落点 pages/stock-take
+         在 B4 批建好了，原先「整行不画」的偏差随之解除。 -->
     <block wx:elif="{{step === 'adjust'}}">
       <view class="rs-title">库存修正</view>
 
@@ -79,6 +80,14 @@
         <view class="rs-col">
           <view class="rs-label">数量对不上（盘盈 / 盘亏 / 报损）</view>
           <view class="rs-desc">直接改某个规格的件数，不计进销毛利</view>
+        </view>
+        <view class="rs-chevron"></view>
+      </view>
+
+      <view class="rs-option js-rs-take" data-action="take" bindtap="onAdjustAction" hover-class="rs-option-press">
+        <view class="rs-col">
+          <view class="rs-label">盘一遍这个商品</view>
+          <view class="rs-desc">各规格账面数带出，只改对不上的那几个规格</view>
         </view>
         <view class="rs-chevron"></view>
       </view>
@@ -146,7 +155,9 @@
       <view wx:else class="rs-empty">没有可退的销售单</view>
     </block>
 
-    <!-- 库存修正 › 数量对不上 › 选商品：adjust 收 ?id=<productId>，不选商品进不去 -->
+    <!-- 库存修正 › 选商品：两个落点共用这一个 picker（数量对不上 -> pages/adjust，
+         盘一遍这个商品 -> pages/stock-take）。两页都收 ?id=<productId>，
+         不选商品进不去，所以面板必须先选再跳。 -->
     <block wx:elif="{{step === 'product'}}">
       <view class="rs-title">选择商品</view>
       <view class="rs-search">
@@ -159,7 +170,7 @@
       </view>
       <view wx:if="{{loading}}" class="rs-empty">正在读取…</view>
       <block wx:elif="{{products.length}}">
-        <view class="rs-hint">选一个商品，再改它的件数</view>
+        <view class="rs-hint">{{productHint}}</view>
         <scroll-view class="rs-list" scroll-y>
           <view
             class="rs-pick js-rs-product"

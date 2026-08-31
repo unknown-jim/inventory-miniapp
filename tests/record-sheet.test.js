@@ -44,23 +44,26 @@ MAIN_ROWS.forEach(function (row) {
   assert.ok(wxml.indexOf(desc) >= 0, '动作行缺少人话解释：' + label + ' → ' + desc)
 })
 
-// 设计稿 sheet/库存修正(4:42)：二级三行，本批交付两行
-assert.ok(wxml.indexOf('换规格 / 加工（总数不变）') >= 0, '二级缺少「换规格 / 加工」')
-assert.ok(wxml.indexOf('成品换规格、半成品做成成品') >= 0, '二级「换规格」缺解释')
-assert.ok(wxml.indexOf('数量对不上（盘盈 / 盘亏 / 报损）') >= 0, '二级缺少「数量对不上」')
-assert.ok(wxml.indexOf('直接改某个规格的件数，不计进销毛利') >= 0, '二级「数量对不上」缺解释')
+// 设计稿 sheet/库存修正 4:31：二级三行，顺序按节点 y 坐标 59 / 130 / 201
+const ADJUST_ROWS = [
+  ['convert', '换规格 / 加工（总数不变）', '成品换规格、半成品做成成品'],
+  ['qty', '数量对不上（盘盈 / 盘亏 / 报损）', '直接改某个规格的件数，不计进销毛利'],
+  ['take', '盘一遍这个商品', '各规格账面数带出，只改对不上的那几个规格']
+]
+// 判定要剥掉注释再做：WXML 的说明文字里也出现过这几个词。
+const wxmlBody = wxml.replace(/<!--[\s\S]*?-->/g, '')
+let adjCursor = -1
+ADJUST_ROWS.forEach(function (row) {
+  const at = wxmlBody.indexOf('data-action="' + row[0] + '"')
+  assert.ok(at >= 0, '库存修正二级缺少：' + row[1])
+  assert.ok(at > adjCursor, '库存修正二级的顺序和设计稿不一致，错在：' + row[1])
+  adjCursor = at
+  assert.ok(wxmlBody.indexOf('>' + row[1] + '</view>') >= 0, '二级行标题对不上稿：' + row[1])
+  assert.ok(wxmlBody.indexOf(row[2]) >= 0, '二级行缺少人话解释：' + row[1])
+})
 assert.ok(
   wxml.indexOf('库存修正只改件数：不计入进货、销售、毛利，也不产生欠款') >= 0,
   '二级缺少「只改件数」那句 note'
-)
-// 稿上还有第三行「盘一遍这个商品」，它要的是 Screen/02b 那个整页盘点，代码里
-// 没有落点，本批**整行不画**（画布规范 9:36：样张与规则打架时当轮改掉，不许挂
-// 禁用件）。Screen/02b 落地后，把这条断言连同偏差记录一起删掉。
-// 判定要剥掉注释再做：WXML 里那条偏差说明本身就写着这几个字。
-const wxmlBody = wxml.replace(/<!--[\s\S]*?-->/g, '')
-assert.ok(
-  wxmlBody.indexOf('盘一遍这个商品') < 0,
-  '「盘一遍这个商品」需要 Screen/02b 盘点页；页面没做之前不要放进面板'
 )
 
 // 三条关闭通道（设计稿 UX注释/骨架 n-遮罩）
@@ -164,6 +167,7 @@ assert.deepStrictEqual(
   '退货要带原销售单 id'
 )
 
+// 商品 picker 有两个落点，由 pickTarget 决定。默认那一档（数量对不上）不许漂。
 const qtyWx = makeWx()
 loadComponent({}, qtyWx).onPickProduct({ currentTarget: { dataset: { id: 'p7' } } })
 assert.deepStrictEqual(
@@ -171,6 +175,26 @@ assert.deepStrictEqual(
   [['navigateTo', '/pages/adjust/adjust?id=p7']],
   'adjust 收 ?id=<productId>，必须带商品 id'
 )
+
+const takeWx = makeWx()
+const takeInst = loadComponent({}, takeWx)
+takeInst.data.pickTarget = 'take'
+takeInst.onPickProduct({ currentTarget: { dataset: { id: 'p7' } } })
+assert.deepStrictEqual(
+  takeWx.calls,
+  [['navigateTo', '/pages/stock-take/stock-take?id=p7']],
+  '「盘一遍这个商品」要带商品 id 进盘点页（Screen/02b）'
+)
+
+// 两条路各自把 pickTarget 和 hint 设对，否则选完商品会去错页
+const routeInst = loadComponent({ ready: function () { return Promise.resolve(false) } }, makeWx())
+routeInst.onAdjustAction({ currentTarget: { dataset: { action: 'take' } } })
+assert.strictEqual(routeInst.data.pickTarget, 'take', '第三行要把 picker 的落点设成 take')
+assert.ok(routeInst.data.productHint.indexOf('规格') >= 0, '盘点档的 picker hint 要说清楚是盘所有规格')
+
+const routeInst2 = loadComponent({ ready: function () { return Promise.resolve(false) } }, makeWx())
+routeInst2.onAdjustAction({ currentTarget: { dataset: { action: 'qty' } } })
+assert.strictEqual(routeInst2.data.pickTarget, 'adjust', '第二行的 picker 落点仍是 adjust')
 
 // ---------------------------------------------------------------------------
 // 三、两个 picker 的筛选口径

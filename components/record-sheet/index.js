@@ -39,7 +39,11 @@ Component({
     debtTotalText: '0.00',
     orders: [],
     products: [],
-    productKeyword: ''
+    productKeyword: '',
+    // 商品 picker 的落点：'adjust' = 数量对不上（pages/adjust），
+    // 'take' = 盘一遍这个商品（pages/stock-take）。两条路共用同一个列表。
+    pickTarget: 'adjust',
+    productHint: ''
   },
   methods: {
     noop() {},
@@ -57,7 +61,9 @@ Component({
         debtTotalText: '0.00',
         orders: [],
         products: [],
-        productKeyword: ''
+        productKeyword: '',
+        pickTarget: 'adjust',
+        productHint: ''
       })
     },
 
@@ -104,9 +110,11 @@ Component({
 
     onAdjustAction(e) {
       const action = e.currentTarget.dataset.action
-      // convert 自带商品 picker，无参可进；adjust 必须带 productId，所以先选商品
+      // convert 自带商品 picker，无参可进；adjust 与 stock-take 都必须带 productId，
+      // 所以这两条都先走同一个商品 picker，落点由 pickTarget 决定。
       if (action === 'convert') return this._go('/pages/convert/convert')
-      if (action === 'qty') return this.openProductPicker()
+      if (action === 'qty') return this.openProductPicker('adjust')
+      if (action === 'take') return this.openProductPicker('take')
     },
 
     // ---- 收款：先选客户（只列有欠款），落点 customer-edit 的收款态 ----
@@ -209,10 +217,20 @@ Component({
       this._go('/pages/sale-return/sale-return?id=' + e.currentTarget.dataset.id)
     },
 
-    // ---- 库存修正 › 数量对不上：先选商品，落点 adjust 必须带 productId ----
+    // ---- 库存修正 › 选商品：两个落点共用这一个 picker ----
+    // pages/adjust 和 pages/stock-take 都收 ?id=<productId>，不带 id 进去都是
+    // 「请从…进入」再退回来，所以面板必须先选商品再跳。
 
-    async openProductPicker() {
-      this.setData({ step: 'product', loading: true })
+    async openProductPicker(target) {
+      const pickTarget = target === 'take' ? 'take' : 'adjust'
+      this.setData({
+        step: 'product',
+        loading: true,
+        pickTarget: pickTarget,
+        productHint: pickTarget === 'take'
+          ? '选一个商品，再一次盘它的所有规格'
+          : '选一个商品，再改它的件数'
+      })
       if (!(await store.ready())) {
         this.setData({ loading: false })
         return
@@ -239,7 +257,10 @@ Component({
     },
 
     onPickProduct(e) {
-      this._go('/pages/adjust/adjust?id=' + e.currentTarget.dataset.id)
+      const id = e.currentTarget.dataset.id
+      this._go(this.data.pickTarget === 'take'
+        ? '/pages/stock-take/stock-take?id=' + id
+        : '/pages/adjust/adjust?id=' + id)
     }
   }
 })
