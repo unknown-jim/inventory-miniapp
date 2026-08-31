@@ -33,6 +33,7 @@ App({
     selectedProductId: '',
     selectedCustomerId: '',
     pendingInventoryFilter: '',
+    pendingRecordType: '',
     cloudInit: null
   },
   onLaunch() {
@@ -69,5 +70,15 @@ App({
     const filter = this.globalData.pendingInventoryFilter
     this.globalData.pendingInventoryFilter = ''
     return filter
+  },
+  // 流水 tab 的类型筛选交接位。switchTab 不能带 query，看板「今日销售」这类
+  // 「带着筛选进 tab 页」的入口只能走这里。取一次就清掉，不留残留状态。
+  setPendingRecordType(type) {
+    this.globalData.pendingRecordType = type || ''
+  },
+  consumePendingRecordType() {
+    const type = this.globalData.pendingRecordType
+    this.globalData.pendingRecordType = ''
+    return type
   }
 })

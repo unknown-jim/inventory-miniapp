@@ -93,24 +93,10 @@ Component({
       })
     },
 
-    // 销售和进货现在还是 tabBar 页，只能用 switchTab。
-    // **下一批把 tabBar 从 5 个收到 4 个（看板/商品/流水/客户）之后，这两处
-    // 必须改成 _go() 走 navigateTo** —— 页面一旦不在 tabBar 里，switchTab 会直接
-    // fail，而这是本面板仅有的两个 switchTab。改 app.json 那批请连这里一起改。
-    _goTab(url) {
-      this.onClose()
-      wx.switchTab({
-        url: url,
-        fail: function (error) {
-          util.showError(error)
-        }
-      })
-    },
-
     onAction(e) {
       const action = e.currentTarget.dataset.action
-      if (action === 'sale') return this._goTab('/pages/sale/sale')
-      if (action === 'purchase') return this._goTab('/pages/purchase/purchase')
+      if (action === 'sale') return this._go('/pages/sale/sale')
+      if (action === 'purchase') return this._go('/pages/purchase/purchase')
       if (action === 'pay') return this.openCustomerPicker()
       if (action === 'return') return this.openOrderPicker()
       if (action === 'adjust') return this.setData({ step: 'adjust' })

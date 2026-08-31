@@ -5,6 +5,10 @@ const util = require('../../utils/util')
 // 一律给缺省 20，超过上限才钳到 100（apply.clampPageLimit）。
 const PAGE_SIZE = 20
 
+// 认得的筛选类型。'all' 不在表里：它是缺省值，不需要被外部带进来。
+// onLoad（扫码 / scene 直达带 query）和 onShow（tab 内跳转带暂存）共用这一张表。
+const VALID_TYPES = ['in', 'out', 'pay', 'return', 'convert', 'adjust']
+
 Page({
   data: {
     type: 'all',
@@ -25,18 +29,26 @@ Page({
 
   onLoad(options) {
     const type = options && options.type
-    if (type === 'in' || type === 'out' || type === 'pay' || type === 'return' || type === 'convert' || type === 'adjust') {
+    if (VALID_TYPES.indexOf(type) >= 0) {
       this.setData({ type: type })
     }
   },
 
   async onShow() {
+    // 本页是 tab 页：switchTab 不带 query，onLoad 也只在第一次进来时跑一次。
+    // 所以看板「今日销售」带过来的类型走 app 全局暂存，并且**必须在这里取**——
+    // 取在 onLoad 里的话，第二次点「今日销售」就不会生效了。
+    // typeof 兜一手：tests/store.test.js 的最小 harness 没有 getApp 全局，
+    // 真机页面上下文里一定有；兜底取 '' 等于「没有带进来的类型」。
+    const pendingType = typeof getApp === 'function' ? getApp().consumePendingRecordType() : ''
+    const typeChanged = VALID_TYPES.indexOf(pendingType) >= 0 && pendingType !== this.data.type
+    if (typeChanged) this.setData({ type: pendingType })
     if (!(await store.ready())) return
     this.refreshTotals()
     // 翻到第 5 页 → 点进详情 → 返回，列表被清回第 1 页很难受，所以默认不重来。
     // 但只要改过账就**必须**重来：删掉的那条不能还留在列表里，改过的那条不能
-    // 还显示旧金额。dataVersion() 就是这个判据。
-    if (this.data.loaded && this.dataVersion === store.dataVersion()) return
+    // 还显示旧金额。dataVersion() 就是这个判据。换了筛选类型同样必须重来。
+    if (!typeChanged && this.data.loaded && this.dataVersion === store.dataVersion()) return
     return this.reload()
   },
 

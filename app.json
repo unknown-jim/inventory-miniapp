@@ -44,16 +44,10 @@
         "selectedIconPath": "assets/tab/goods-active.png"
       },
       {
-        "pagePath": "pages/purchase/purchase",
-        "text": "进货",
-        "iconPath": "assets/tab/in.png",
-        "selectedIconPath": "assets/tab/in-active.png"
-      },
-      {
-        "pagePath": "pages/sale/sale",
-        "text": "销售",
-        "iconPath": "assets/tab/out.png",
-        "selectedIconPath": "assets/tab/out-active.png"
+        "pagePath": "pages/records/records",
+        "text": "流水",
+        "iconPath": "assets/tab/records.png",
+        "selectedIconPath": "assets/tab/records-active.png"
       },
       {
         "pagePath": "pages/customers/customers",
