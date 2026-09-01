@@ -2902,8 +2902,31 @@ console.log('G1 预收：演示账主链（欠 84 / 预收 200 并存、分支 B
     '待加工销售行的货号要取商品级 product.sku（allocateBlankLine 那条路），实为 '
       + JSON.stringify(line0(blankSold.records[0]).sku))
 
+  // 另外三处是**无规格商品**的初始值路径（consumeSaleLine:331 / applyPurchase:718 /
+  // applyAdjust:2132），上面那些用例全走分规格分支，碰不到它们。商品必须带**非空**
+  // 货号，否则测不出差别 —— 这正是这条路藏了三轮的原因：既有待加工夹具的
+  // product.sku 几乎都是空串，空串时 `x || product.sku` 和 `product.sku` 算出来
+  // 完全一样，变异改了也看不出来。**不是大家忘了写断言，是旧夹具的形状让它天然测不出。**
+  const plain = inv.createProduct(
+    { name: '矿泉水', sku: 'KQ-003', costPrice: 1, salePrice: 2, stock: 10 }, 1000, nextId()
+  )
+  const plainSold = sale([plain], [], {
+    payType: 'cash', productId: plain.id, qty: 1, unitPrice: 2
+  }, 6000, 'q1')
+  perPath.push(['无规格销售 consumeSaleLine 初始值', line0(plainSold.records[0]).sku, 'KQ-003'])
+
+  const plainBought = inv.applyPurchase([plain], [], {
+    productId: plain.id, qty: 2, unitPrice: 1
+  }, 6100, 'q2')
+  perPath.push(['无规格进货 applyPurchase 初始值', plainBought.record.lines[0].sku, 'KQ-003'])
+
+  const plainAdj = inv.applyAdjust(plainBought.products, plainBought.records, {
+    productId: plain.id, direction: 'in', reason: 'surplus', qty: 1
+  }, 6200, 'q3')
+  perPath.push(['无规格调整 applyAdjust 初始值', plainAdj.record.lines[0].sku, 'KQ-003'])
+
   perPath.forEach(function (pair) {
-    assert.strictEqual(pair[1], 'MY-001',
+    assert.strictEqual(pair[1], pair[2] || 'MY-001',
       pair[0] + ' 的货号要取商品级 product.sku，实为 ' + JSON.stringify(pair[1]))
   })
 })()
