@@ -2811,3 +2811,123 @@ assert.ok(g1SweepOver > 1500,
 
 console.log('G1 预收：演示账主链（欠 84 / 预收 200 并存、分支 B 收满 152、超收 48）'
   + '、退货三格、no-op 5000 组、取小边界扫描 ' + g1SweepOver + '/5000 越界，全部通过')
+
+// ---------------------------------------------------------------------------
+// 货号对商品、条码对规格（2026-09-01 裁定）
+// ---------------------------------------------------------------------------
+// 此前两级都有 sku + barcode，且 skuCode = sku.sku || product.sku 让规格级货号
+// 能盖掉商品级。UI 上从来没有规格级货号的录入口（规格矩阵只有 规格/库存/预警/售价），
+// 种子数据也只填商品级，所以那个字段实际恒空 —— 收敛它零数据影响。
+// 条码**保留**在规格级：一件毛衣的红色 M 码和蓝色 L 码本来就该各有条码。
+;(function () {
+  const nextId = idFactory()
+  const product = inv.createProduct(
+    { name: '毛衣', sku: 'MY-001', barcode: '690000000001', colors: ['红'], sizes: ['M'] },
+    1000, nextId()
+  )
+  const sku = inv.createSku(
+    { productId: product.id, color: '红', size: 'M', sku: '不该被接受的规格级货号',
+      barcode: '690000000002', costPrice: 10, salePrice: 20, stock: 5 },
+    1000, nextId()
+  )
+  assert.ok(!('sku' in sku),
+    '规格上不该再有 sku 字段：货号对商品、条码对规格。实为 ' + JSON.stringify(sku.sku))
+  assert.strictEqual(sku.barcode, '690000000002',
+    '条码要留在规格级 —— 同一商品的不同规格各有条码')
+
+  // 流水行上的货号快照一律取商品级。**写入点全仓六处，六处都要覆盖** ——
+  // allocateBlankLine / consumeSaleLine / applyPurchase 两个分支 / applyConvert /
+  // applyAdjust。它们是彼此独立的代码，验一条不代表别条也对。
+  //
+  // 这一组前后返工过两次，都栽在同一个病灶的不同形态：第一版只走 applySaleOrder，
+  // 变异打不中；第二版清单只列了三处，另外三处变异存活 —— 其中 applyAdjust 还被
+  // 当时的注释写成「已覆盖」。**「我验过了」和「我把该验的都列全了」是两件事。**
+  //
+  // 另需说准：真正承重的是上面那条 !('sku' in sku)。把这里的写法改回旧的
+  // `sku.sku || product.sku` 变异是**存活**的 —— createSku 已不产出 sku，|| 直接
+  // 落回 product.sku。下面这几条只在「读纯规格级字段」时才红。
+  const perPath = []
+  const out = sale([product], [], {
+    payType: 'cash', productId: product.id, skuId: sku.id, qty: 1, unitPrice: 20
+  }, 2000, 'o1', [sku])
+  perPath.push(['销售 consumeSaleLine', line0(out.records[0]).sku])
+
+  const bought = inv.applyPurchase([product], [], {
+    productId: product.id, skuId: sku.id, color: '红', size: 'M', qty: 2, unitPrice: 10
+  }, 3000, 'r1', [sku])
+  perPath.push(['进货 applyPurchase', bought.record.lines[0].sku])
+
+  const adjusted = inv.applyAdjust(bought.products, bought.records, {
+    productId: product.id, skuId: sku.id, direction: 'in', reason: 'surplus', qty: 1
+  }, 4000, 'r2', bought.skus)
+  perPath.push(['库存修正 applyAdjust', adjusted.record.lines[0].sku])
+
+  const sku2 = inv.createSku(
+    { productId: product.id, color: '蓝', size: 'M', barcode: '690000000003',
+      costPrice: 10, salePrice: 20, stock: 0 }, 1000, nextId()
+  )
+  const convWorking = adjusted.skus.concat([sku2])
+  const converted = inv.applyConvert(adjusted.products, adjusted.records, {
+    productId: product.id, fromSkuId: sku.id, toSkuId: sku2.id, qty: 1
+  }, 5000, 'r3', convWorking)
+  perPath.push(['换规格 applyConvert', converted.record.lines[0].sku])
+
+  // 进货有两个分支，只走分规格那条会漏掉待加工那条（:756）—— 逐点变异实测确认过。
+  const blankProd = inv.createProduct(
+    { name: '毛坯布', sku: 'MP-002', costPrice: 5, salePrice: 9, stock: 0,
+      specAxis1: '色', colors: ['本白'], blankProcess: true }, 1000, nextId()
+  )
+  const blankSku = inv.createSku(
+    { productId: blankProd.id, isBlank: true, costPrice: 5, salePrice: 9, stock: 0 },
+    1000, nextId()
+  )
+  const blankBought = inv.applyPurchase([blankProd], [], {
+    productId: blankProd.id, qty: 3, unitPrice: 5
+  }, 3500, 'rb1', [blankSku])
+  assert.strictEqual(blankBought.record.lines[0].sku, 'MP-002',
+    '待加工进货行的货号要取商品级 product.sku，实为 '
+      + JSON.stringify(blankBought.record.lines[0].sku))
+
+  // **卖**待加工商品才走 allocateBlankLine —— 进货那条走的是别的分支。
+  // 这一处前后漏了三轮：清单里列着它，但没有任何用例真的走到，逐点变异一直存活。
+  // 卖法照仓库既有写法：带 skuId 卖成品格，件数从半成品池扣。
+  const finishedSku = inv.createSku(
+    { productId: blankProd.id, color: '本白', size: '', costPrice: 5, salePrice: 9, stock: 0 },
+    1000, nextId()
+  )
+  const blankSold = sale(blankBought.products, blankBought.records, {
+    payType: 'cash', productId: blankProd.id, skuId: finishedSku.id, qty: 1, unitPrice: 9
+  }, 4500, 'rb2', blankBought.skus.concat([finishedSku]))
+  assert.strictEqual(line0(blankSold.records[0]).sku, 'MP-002',
+    '待加工销售行的货号要取商品级 product.sku（allocateBlankLine 那条路），实为 '
+      + JSON.stringify(line0(blankSold.records[0]).sku))
+
+  // 另外三处是**无规格商品**的初始值路径（consumeSaleLine:331 / applyPurchase:718 /
+  // applyAdjust:2132），上面那些用例全走分规格分支，碰不到它们。商品必须带**非空**
+  // 货号，否则测不出差别 —— 这正是这条路藏了三轮的原因：既有待加工夹具的
+  // product.sku 几乎都是空串，空串时 `x || product.sku` 和 `product.sku` 算出来
+  // 完全一样，变异改了也看不出来。**不是大家忘了写断言，是旧夹具的形状让它天然测不出。**
+  const plain = inv.createProduct(
+    { name: '矿泉水', sku: 'KQ-003', costPrice: 1, salePrice: 2, stock: 10 }, 1000, nextId()
+  )
+  const plainSold = sale([plain], [], {
+    payType: 'cash', productId: plain.id, qty: 1, unitPrice: 2
+  }, 6000, 'q1')
+  perPath.push(['无规格销售 consumeSaleLine 初始值', line0(plainSold.records[0]).sku, 'KQ-003'])
+
+  const plainBought = inv.applyPurchase([plain], [], {
+    productId: plain.id, qty: 2, unitPrice: 1
+  }, 6100, 'q2')
+  perPath.push(['无规格进货 applyPurchase 初始值', plainBought.record.lines[0].sku, 'KQ-003'])
+
+  const plainAdj = inv.applyAdjust(plainBought.products, plainBought.records, {
+    productId: plain.id, direction: 'in', reason: 'surplus', qty: 1
+  }, 6200, 'q3')
+  perPath.push(['无规格调整 applyAdjust 初始值', plainAdj.record.lines[0].sku, 'KQ-003'])
+
+  perPath.forEach(function (pair) {
+    assert.strictEqual(pair[1], pair[2] || 'MY-001',
+      pair[0] + ' 的货号要取商品级 product.sku，实为 ' + JSON.stringify(pair[1]))
+  })
+})()
+

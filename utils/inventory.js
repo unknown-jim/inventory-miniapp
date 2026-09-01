@@ -280,7 +280,7 @@ function allocateBlankLine(product, skuList, color, size, qty, now) {
     skuId: ready.id,
     color: ready.color,
     size: ready.size,
-    skuCode: ready.sku || product.sku
+    skuCode: product.sku
   }
 }
 
@@ -358,7 +358,7 @@ function consumeSaleLine(products, skus, payload, now) {
     skuList[skuIndex] = sku
     product.stock = productStockFromSkus(skuList, product.id)
     costPrice = sku.costPrice
-    skuCode = sku.sku || product.sku
+    skuCode = product.sku
     skuId = sku.id
     color = sku.color
     size = sku.size
@@ -466,7 +466,8 @@ function createSku(input, now, id) {
     productId: productId,
     color: color,
     size: size,
-    sku: String(input.sku || '').trim(),
+    // **规格级没有货号**：一个货号对应一个商品，条码才对应到规格
+    // （2026-09-01 裁定）。所以这里只留 barcode，货号一律读 product.sku。
     barcode: String(input.barcode || '').trim(),
     costPrice: costPrice,
     salePrice: salePrice,
@@ -487,7 +488,6 @@ function updateSku(existing, input, now) {
     isBlank: existing.isBlank,
     color: existing.isBlank ? '' : (input.color != null ? input.color : existing.color),
     size: existing.isBlank ? '' : (input.size != null ? input.size : existing.size),
-    sku: input.sku != null ? input.sku : existing.sku,
     barcode: input.barcode != null ? input.barcode : existing.barcode,
     costPrice: input.costPrice != null ? input.costPrice : existing.costPrice,
     salePrice: input.salePrice != null ? input.salePrice : existing.salePrice,
@@ -548,7 +548,6 @@ function applyProductSkus(product, allSkus, skuInputs, now, nextId) {
       productId: product.id,
       color: combo.color,
       size: combo.size,
-      sku: row && row.sku != null ? row.sku : (prev ? prev.sku : ''),
       barcode: row && row.barcode != null ? row.barcode : (prev ? prev.barcode : ''),
       costPrice: row && row.costPrice != null ? row.costPrice : (prev ? prev.costPrice : product.costPrice),
       salePrice: row && row.salePrice != null ? row.salePrice : (prev ? prev.salePrice : product.salePrice),
@@ -753,7 +752,7 @@ function applyPurchase(products, records, payload, now, id, skus) {
     product.costPrice = unitPrice
     product.updatedAt = now
     line.skuId = sku.id
-    line.sku = sku.sku || product.sku
+    line.sku = product.sku
     line.costPrice = unitPrice
   } else if (productHasSpecs(product)) {
     if (!payload.skuId) {
@@ -775,7 +774,7 @@ function applyPurchase(products, records, payload, now, id, skus) {
     line.skuId = sku.id
     line.color = sku.color
     line.size = sku.size
-    line.sku = sku.sku || product.sku
+    line.sku = product.sku
     line.costPrice = unitPrice
   } else {
     product.stock = round2(product.stock + qty)
@@ -2076,7 +2075,7 @@ function applyConvert(products, records, payload, now, id, skus) {
       lineId: id,
       productId: product.id,
       productName: product.name,
-      sku: to.sku || product.sku,
+      sku: product.sku,
       skuId: to.id,
       color: to.color,
       size: to.size,
@@ -2165,7 +2164,7 @@ function applyAdjust(products, records, payload, now, id, skus) {
       throw new Error('分规格现货没有待加工格')
     }
     line.skuId = sku.id
-    line.sku = sku.sku || product.sku
+    line.sku = product.sku
     if (!sku.isBlank) {
       line.color = sku.color
       line.size = sku.size
@@ -3279,8 +3278,7 @@ function filterProducts(products, keyword, skus) {
       return true
     }
     return skusOfProduct(skus, item.id).some(function (sku) {
-      return (sku.sku && sku.sku.toLowerCase().indexOf(query) >= 0)
-        || (sku.barcode && sku.barcode.toLowerCase().indexOf(query) >= 0)
+      return (sku.barcode && sku.barcode.toLowerCase().indexOf(query) >= 0)
         || (sku.color && sku.color.toLowerCase().indexOf(query) >= 0)
         || (sku.size && sku.size.toLowerCase().indexOf(query) >= 0)
     })
