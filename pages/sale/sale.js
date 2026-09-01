@@ -92,6 +92,7 @@ Page({
     filteredCustomers: [],
     slip: null,
     exporting: false,
+    exportStyle: 'summary',
     slipCanvasWidth: 1760,
     slipCanvasHeight: 4000,
     pageLoading: true
@@ -983,7 +984,8 @@ Page({
         showPaid: false,
         showCart: false,
         showSlip: true,
-        slip: slipView
+        slip: slipView,
+        exportStyle: slipActions.initialExportStyle(slipView.customerId)
       }, this.stockPatch(product, sku, [])))
       this.applySettle(this.linePatch([]))
       this.prepareSlipImage(slipView)
@@ -1006,5 +1008,9 @@ Page({
 
   closeSlip() {
     slipActions.closeSlip(this)
+  },
+
+  onSlipStyleChange(e) {
+    slipActions.changeExportStyle(this, e.detail.style)
   }
 })

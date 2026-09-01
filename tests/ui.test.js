@@ -1744,11 +1744,33 @@ async function runSalePickerAndSlip(miniProgram) {
   await waitGone(sale, '.js-paid-none')
 
   await tapWhen(sale, '.js-sale-submit')
-  await waitSlipOpen(sale, '送货单')
+  const slipHostEl = await waitSlipOpen(sale, '送货单')
   const slip = (await sale.data()).slip
   assertSlip(slip, '送货单')
   assert.strictEqual(slip.paidText, '0.00', '送货单实收不对: ' + slip.paidText)
   await assertSlipRendered(sale, slip, '送货单')
+
+  // 本批新增：导出样式二选一（chip「汇总」/「明细」），紧挨导出图片按钮上方。
+  // 这单挑的客户是本轮测试临时建出来的，customerId 随机（uid()），不可能带着
+  // 别的运行留下的记忆，所以「刚打开没记忆时默认汇总」这条断言是稳的。
+  const summaryChip = await waitInSlip(slipHostEl, '.js-slip-style-summary', '送货单的导出样式「汇总」chip')
+  const detailChip = await waitInSlip(slipHostEl, '.js-slip-style-detail', '送货单的导出样式「明细」chip')
+  assert.ok(summaryChip, '找不到导出样式「汇总」chip')
+  assert.ok(detailChip, '找不到导出样式「明细」chip')
+  assert.strictEqual((await sale.data()).exportStyle, 'summary', '没有记忆时导出样式应默认「汇总」')
+
+  await detailChip.tap()
+  await waitFor(sale, async function () {
+    const data = await sale.data()
+    return data && data.exportStyle === 'detail'
+  }, '点「明细」chip 后页面 data.exportStyle 变成 detail')
+
+  await summaryChip.tap()
+  await waitFor(sale, async function () {
+    const data = await sale.data()
+    return data && data.exportStyle === 'summary'
+  }, '点回「汇总」chip 后页面 data.exportStyle 变成 summary')
+
   await closeSlip(sale, '送货单')
 }
 

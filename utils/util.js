@@ -95,6 +95,9 @@ function withSlipView(order, receivable, products, shopName) {
     hasPrepayUsed: prepayUsed > 0,
     remark: order.remark || '',
     hasCustomer: !!order.customerName,
+    // 导出样式按客户记忆要用这个当 key（customerName 不稳：重名、改名后记忆会串）。
+    // 只加这一个字段，不改其它任何字段的取值。
+    customerId: order.customerId || '',
     customerName: order.customerName || '',
     customerPhone: order.customerPhone || '',
     customerAddress: order.customerAddress || '',

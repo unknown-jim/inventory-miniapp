@@ -91,6 +91,7 @@ Page({
     showSlip: false,
     slip: null,
     exporting: false,
+    exportStyle: 'summary',
     slipCanvasWidth: 1760,
     slipCanvasHeight: 4000
   },
@@ -579,7 +580,8 @@ Page({
       this.setData({
         showSlip: true,
         showCustomerPicker: false,
-        slip: slipView
+        slip: slipView,
+        exportStyle: slipActions.initialExportStyle(slipView.customerId)
       })
       slipActions.prepareSlipImage(this, slipView)
     } catch (error) {
@@ -593,6 +595,10 @@ Page({
 
   closeSlip() {
     slipActions.closeSlip(this)
+  },
+
+  onSlipStyleChange(e) {
+    slipActions.changeExportStyle(this, e.detail.style)
   },
 
   async save() {

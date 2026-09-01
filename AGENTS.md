@@ -46,7 +46,7 @@
 - 上线前欠款走期初往来，不拿销售去凑；不改库存、不计入销售和毛利。
 - 能不能换某一根轴、先改再卖还是当场改：现场规矩，不要写成软件限制。
 - 给操作便利（种类模板带出待选项、多规格可同价），不要给行业裁判。详见 [docs/accounting-vs-policy.md](docs/accounting-vs-policy.md)。
-- 操作界面不要写小于 `--fs-xs` 的字号、不要写小于 `--tap-sm` 的可点高度。新页面用 `app.wxss` 共用布局类，根节点 `class="page"`。送货单除外。详见 [docs/ui-scale.md](docs/ui-scale.md)。
+- 操作界面不要写小于 `--fs-xs` 的字号、不要写小于 `--tap-sm` 的可点高度。新页面用 `app.wxss` 共用布局类，根节点 `class="page"`。送货单的**单据版式**除外（弹层里给店主点的操作控件不算单据版式，照常套这套变量）。详见 [docs/ui-scale.md](docs/ui-scale.md)。
 
 ### 设计稿
 

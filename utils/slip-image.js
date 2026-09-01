@@ -1132,10 +1132,12 @@ function canvasToFile(canvas, destWidth, destHeight) {
   })
 }
 
-function exportToTempFile(page, slip) {
+// 第三个参数向后兼容：不传（或传别的值）时行为与改动前完全一致——layoutSlip 本身
+// 只认字面 'detail'，其余一律按 'summary'，这里原样透传，不在这一层另加分支。
+function exportToTempFile(page, slip, exportStyle) {
   const probe = createOffscreen(16, 16)
   const measure = makeMeasure(probe && probe.getContext ? probe.getContext('2d') : null)
-  const layout = layoutSlip(slip, measure)
+  const layout = layoutSlip(slip, measure, { exportStyle: exportStyle })
   const scales = exportScales(layout.width, layout.height)
 
   function attempt(dpr) {

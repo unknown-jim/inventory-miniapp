@@ -66,6 +66,14 @@
         <text class="slip-debt-num {{slip.hasDebt ? 'on' : ''}}">¥{{slip.receivableText}}</text>
       </view>
     </view>
+    <view class="export-style">
+      <text class="export-style-label">导出样式</text>
+      <view class="export-style-chips">
+        <view class="chip {{exportStyle === 'summary' ? 'on' : ''}} js-slip-style-summary" data-style="summary" bindtap="onStyleTap">汇总</view>
+        <view class="chip {{exportStyle === 'detail' ? 'on' : ''}} js-slip-style-detail" data-style="detail" bindtap="onStyleTap">明细</view>
+      </view>
+      <text class="export-style-hint">汇总 = 规格并成表格，单子更短；明细 = 一个规格一行</text>
+    </view>
     <view class="slip-actions">
       <button class="btn-ghost slip-btn js-slip-export" bindtap="onExport" disabled="{{exporting}}" hidden="{{showPicker || showCustomerPicker}}">导出图片</button>
       <button class="btn-primary slip-btn js-slip-close" bindtap="onClose">完成</button>
