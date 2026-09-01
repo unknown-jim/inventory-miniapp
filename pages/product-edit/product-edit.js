@@ -181,7 +181,6 @@ Page({
         color: item.color,
         size: item.size,
         specText: inventory.specText(item.color, item.size),
-        sku: item.sku,
         salePrice: String(item.salePrice),
         stock: String(item.stock),
         alertQty: String(item.alertQty)
@@ -536,7 +535,6 @@ Page({
             id: row.id,
             color: row.color,
             size: row.size,
-            sku: row.sku,
             // **不带 costPrice。** applyProductSkus 里那一格是
             //   row.costPrice != null ? row.costPrice : (prev ? prev.costPrice : product.costPrice)
             // 不带这个 key，服务端就回落到这一格原来的进价（进货写进去的那个）；

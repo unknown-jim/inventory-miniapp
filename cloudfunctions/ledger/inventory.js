@@ -488,7 +488,6 @@ function updateSku(existing, input, now) {
     isBlank: existing.isBlank,
     color: existing.isBlank ? '' : (input.color != null ? input.color : existing.color),
     size: existing.isBlank ? '' : (input.size != null ? input.size : existing.size),
-    sku: input.sku != null ? input.sku : existing.sku,
     barcode: input.barcode != null ? input.barcode : existing.barcode,
     costPrice: input.costPrice != null ? input.costPrice : existing.costPrice,
     salePrice: input.salePrice != null ? input.salePrice : existing.salePrice,
