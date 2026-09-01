@@ -52,7 +52,7 @@ https://ardot.tencent.com/file/718738891083099
 3. **改组件公共子节点前先列实例**：组件的 body 是所有实例的默认值，替换它会丢掉各实例自己的覆盖（confirm-danger 换 body 后，「移出成员」「放弃改动」两个弹窗的 body 一度落回删除流水的默认文案）。
 4. **实例后代路径用字面量** `"实例id;子id"`；用 binding 拼接（`v+";child"`）会生成双分号，报 not found。
 5. **Move 之后布局尺寸会被重解析，两个轴都会。** 竖排里 `fill_container` 的子节点 Move 进横排后，width 会解析成固定值，撑爆容器裁掉兄弟节点；反过来把固定宽的卡 Move 进宽 Row，width **和 height** 会双双变成 FILL（实测三张 343×335/199/236 的卡一度被拉成 812 高）。Move 之后把两个轴的 `layoutSizing` 都显式设回去，再复读一次实际宽高。
-6. **别名变量（VARIABLE_ALIAS）在 fill 简写路径不解析**（如 fill/brand-accent），会回落默认色并报 warning；要绑 Primitive 本体或写完整 `fills` 数组。写完整数组时，变量要放在 **`boundVariables.color`** 里，不是写成 `color: "$3:84"` 字符串——后者仍走简写路径，一样不解析。曾经有一轮因为只试了「绑 Primitive」这一条就把它记成工具限制，其实第二条路是通的。
+6. **别名变量（VARIABLE_ALIAS）在 fill 简写路径不解析**（如 fill/brand-accent），会回落默认色并报 warning；要绑 Primitive 本体或写完整 `fills` 数组。写完整数组时，变量要放在 **`boundVariables.color`** 里，不是写成 `color: "$3:84"` 字符串——后者仍走简写路径，一样不解析。曾经有一轮因为只试了「绑 Primitive」这一条就把它记成工具限制，其实第二条路是通的。2026-09-02 再次复现：`fills: ["$3:84"]`（`text/warning`，也是 VARIABLE_ALIAS）静默失败，写完整 paint 数组 + `boundVariables.color` 才落进去。
 7. `capture_layout` 开 `problemsOnly` 时，大 Row 报 oversized container 是画布常态（Row 本身是 fill_container）；要盯的是 `OUTSIDE_PARENT` 和 `MissingContent`。
 8. **变量绑定通道不是无副作用通道**：给组件子节点 `U(content: "$:FixText:xxx")` 干净，但绑定会继承进所有实例，把实例原有的 characters 字面量覆盖冲掉（实测一次冲掉 stat/block 8 实例 24 个文字槽加两处流水行金额）。绑之前先列实例、核对哪些实例带 characters 覆盖；被冲的实例按改前取证的原值逐个绑回各自的变量。同理要警惕：改组件默认样张前先想清楚实例都覆盖了什么。
 9. **往组件里插 svg 子框，子框会被放到远处坐标**：`I(组件, {type: "frame", svg: ...})` 建出的子框 x/y 实测落在其他画布位置（如 1619,18948），组件和全部实例因此渲染空白。插入后立刻把子框 x/y 归零；判定「新节点截图空白」先读 `absoluteBoundingBox` 再定性，不要想当然归咎渲染缓存。
@@ -69,9 +69,17 @@ https://ardot.tencent.com/file/718738891083099
     **`fetch_file_info` 的两个字段都判不出能不能写。** `permission` 在只读状态下照样返回 `readwrite`；`fileUrl` 里的 `&m=dev` 也不行——2026-08-31 实测，编辑器切回设计模式、写入已经成功之后，`fileUrl` 里的 `&m=dev` **仍然在**（`cocraft://localhost/file/718738891083099?node_id=3%3A159&m=dev`）。它跟着当前选中节点更新 `node_id`，说明连接是活的，但 `m=dev` 这一段是打开文件时定死的，不反映当前模式。中间那一轮据此判定「还锁着」是误判。
     **唯一可靠的判据是试写一次**：发一条最小的 `U()`，看返回里有没有 `potentialIssues`——有 `read-only mode` 就是锁着，没有 `potentialIssues` 且 `updated` 回显新值就是通了，再 `batch_read` 复读坐实。真锁着时没有绕过路径，只能请人把编辑器切回设计模式；但**判断锁没锁要靠试写，不要靠读 URL**。
 
+    **试写的值必须和现值不同，否则探测会卡在「看不出结论」上**（2026-09-02 实测）。那次探测发的是 `U("3:731", {gap: 16})`，而该节点 gap 本来就是 16——`updated` 回显 `{gap: 16}`，在「真写进去了」和「被拒后回显旧值」两种情况下**一模一样**，执行者据此判定探测无效、卡住重来。
+    严格说这只废掉了 `updated` 这条**次要**佐证：`potentialIssues` 是主判据，它出不出那句 `read-only mode` 跟你写什么值无关，值相同时照样有效。但上一段的判据写成了「没有 `potentialIssues` **且** `updated` 回显新值」这个合取式，值相同时后半个条件无从判定，人就会以为整条判据失效。
+    所以两件事一起记：判据以 `potentialIssues` 为准，`updated` 只是佐证；而探测时**挑一个当前值已知、且故意写成别的值**的属性，验完再改回去，佐证和主判据就都能用上——「最小试写」的最小是指**操作条数**，不是指改动量。
+
 17. **`I()` 建不出 INSTANCE，而且照样回 `success: true`。** 想插一个组件实例时 `I(parent, {type: "INSTANCE", mainComponent: ...})` 会失败，`potentialIssues` 里点名 `Unsupported node type: INSTANCE`，但 `success` 仍为真、`operations` 是空数组（一手实测：发过一条最小 `I()` 坐实）。要建实例得用 `C(本体, 父)` 复制。这是坑 16 的同一个病灶在另一条操作上的表现：**成功与否只看 `potentialIssues`**。
 
 18. **`visible: false` 的子节点不参与自动布局回流。**（**二手：来自 2026-09-01 改稿会话的报告，本仓未独立复现**；描述的是排错方向，最坏是白查一次，不像坑 15/16 那种照做会写坏稿。） 它的 `x/y` 停在被隐藏之前的位置，于是 `capture_layout` 会把它报成「超出父容器 17px」之类。看到 overflow **先查 `visible` 再查几何**——按提示去缩字号、改行高全是南辕北辙。处理是手工把隐藏节点的 y 挪回可见区。
+
+19. **`batch_edit` 的操作行不能写 `const`。** `const a = I(...)` 会被整行判为 unparseable 并**整条跳过**，绑定名也不存在了，后面引用它的操作跟着连锁失败。只能写裸绑定 `a = I(...)`。和坑 16/17 同一个病灶：`success` 仍是 true，唯一信号还是 `potentialIssues`。
+
+20. **`I()` 不接受第三个 index 参数，新节点静默追加到父容器末尾。** 要控制插入位置，得 `I()` 建完再 `M(node, parent, index)` 补一刀——`M` 的 index 是生效的。同容器内 Move 不破坏 `fill_container`（2026-09-02 实测 12 次 Move 后复读全部仍是 fill_container），所以这一步不必担心坑 5；坑 5 说的是**跨容器**且主轴方向变化的 Move。
 
 ## 过程文档不进仓库
 
