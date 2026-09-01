@@ -365,5 +365,236 @@ GOOD_WXML.forEach(function (pair) {
   )
 })
 
+// ---------------------------------------------------------------------------
+// 【内联 SVG 的颜色】wxss 里有一批图标是 `background-image: url("data:image/svg+xml,...")`，
+// 颜色以 URL 编码写在里面（`stroke='%23A3A3A3'`）。这个位置有个讨厌的性质：
+// 主题色 grep 搜 `#A3A3A3` 搜不到它（是 `%23` 不是 `#`），tab 图标那套逐像素颜色
+// 断言也够不着它（那是 PNG，这是 CSS 文本）。于是 2026-08-31 那 13 个批次一路改主题色，
+// 把这里的 `#0F756E` 和一处低于对比度地板的 `#A3A3A3` 完整地留了下来，
+// 直到 2026-09-02 手工扫 wxss 才发现——**藏了 13 轮，没有任何一条断言路过它**。
+//
+// 【这条断言被审计打穿过三轮，每一轮的教训都不一样，别退回去】
+//   一轮：只匹配「%23 + 6 位 hex」→ 5 条通道（rgb() / 具名色 / 三位简写 / 裸 # /
+//         补一个 stroke-opacity 静默掉档）。教训：查取值，别查某种写法。
+//   二轮：改成解析取值 → 又 8 条（换引号、style='stroke:…'、内嵌 <style>、;utf8、
+//         ;charset=、;base64、style='opacity:…'、双引号 stroke-opacity）。
+//         其中 `;base64` 一类最狠——**它让整条 URI 从计数里消失**，「扫不到就报红」
+//         那条兜不住：现存的还在，隐身的那条不进计数。教训：**别按写法拉黑，
+//         拉黑永远有下一个变体**；改卡形状白名单。
+//   三轮：又 2 条。`%22` / `%27` 百分号编码的属性引号——这是 encodeURIComponent()
+//         的标准产物、业界内联 SVG 最常见的写法，形状白名单放行、URI 计数还会涨，
+//         颜色却完全看不见；以及 `URL(` 大写绕过外层正则，直接跳过白名单本身。
+//         教训：**归一化，而不是再加一条分支**——所以现在整段 decodeURIComponent
+//         之后再匹配，`%22`/`%27`/`%3C`/`%20` 一次性全归位，以后的编码变体自动覆盖。
+//
+// 判据是 WCAG 1.4.11：非文字的 UI 部件边界，白底上要 ≥ 3:1。
+// role 有两种，**不要混**：
+//   ui           —— 部件边界/图标，必须过地板，且**不许再叠 opacity**（叠了就是静默掉档）
+//   illustration —— 装饰性插画，按裁定豁免地板，可以叠 opacity，但**落点被 allowedIn 钉死**
+// 把豁免件写成「达标」是审计抓到的真问题：`6B7280` 原先注着 4.83:1，可它实际带
+// `fill-opacity='0.5'`，合成约 #B5B9BF ≈ 1.97:1——那个 4.83 是渲染不出来的数字，
+// 却又是自检赖以「通过」的数字。豁免就写豁免，不要拿一个好看的数字给它背书。
+// allowedIn 也是审计提的：否则把坏色登记成 illustration 就能用在真部件上，逃生舱无人看守。
+//
+// 【它盖不到什么，别高估】把边界写清楚，是因为二轮的注释写了句「别的写法一律报红」，
+// 当场被 8 条通道证伪。**断言的注释声称的能力超过断言实际的能力，跟把稿的现状写成
+// 稿的意图是同一个错误**，只是换了个位置——那正是本分支第一条 commit 要修的毛病。
+//   ✓ 呈现属性 fill= / stroke=（单双引号、%22/%27 编码引号、大小写、= 旁空格）
+//   ✓ 内联 style="fill:...;stroke:..." 声明
+//   ✓ opacity / fill-opacity / stroke-opacity（= 与 : 两种写法，编码引号同样归一）
+//   ✓ 形状白名单：url( 大小写不限，值以 data: 开头就必须是 data:image/svg+xml, 明文
+//   ✓ 内嵌 <style> 块直接拒（解码后才可靠地认得出它）
+//   ✗ **不查 CSS 字符串引号是否配对**。把 url("...") 外层换成 ' 而内层属性仍用 '，
+//     URI 会在第一个内部引号处提前截断。不堆这一条是因为那本就是非法 CSS：整条
+//     background-image 会被丢弃、图标根本不渲染，不是可用的绕过路径。真实的引号
+//     风格互换（外 ' + 内层属性全用 "）**是真通道**，已由 quote-aware 的 urlRe 拦住——
+//     别把那段 urlRe 当多余复杂度删掉。
+//   ✗ 不管元素外部的 CSS opacity（`.rs-search { opacity: .4 }` 这种整体降透明）。
+//   ✗ 不解析 <style> 块内容（直接拒，不是能解析）。
+//   ✗ 只看 wxss 里的 data URI；wxml 内联 style、js 拼出来的图标都不在范围内。
+const SVG_COLOR_ALLOW = {
+  '0F756E': { role: 'illustration', allowedIn: /^\.empty-icon-/,
+    why: '品牌青绿。裁定允许它做非语义点缀，落点仅限空态插画描边（.empty-icon-*）' },
+  '171717': { role: 'ui', why: 'neutral/900，主文字色' },
+  '8B8B8B': { role: 'ui', surface: 'F5F5F5',
+    why: 'text/faint（#171717 @50% 合成）。rs-chevron 与 rs-search 同用，两者都坐在 '
+      + '--color-neutral-100 (#F5F5F5) 上，所以按 #F5F5F5 算而不是白底（3.13:1，不是 3.41:1）' },
+  '6B7280': { role: 'illustration', allowedIn: /^\.thumb-camera\b/,
+    why: '商品卡无图占位的相机角标，带 fill-opacity 0.5，合成约 #B5B9BF ≈ 1.97:1。'
+      + '按 docs/ui-scale.md 的裁定它是占位插画、不是控件，故走豁免——不是「达标」' },
+  '6F6F6F': { role: 'ui',
+    why: 'text/muted（#171717 @62% 合成）。目前只有 PNG 侧的 tab 未选中图标用它，'
+      + 'wxss 内联 SVG 尚无落点；预留登记，免得下次用到时又得重新论证一遍' }
+}
+// A3A3A3（neutral/400）**故意不在清单里**：白底 2.52:1，低于 3:1。
+// 稿上 2026-09-02 已把它从搜索图标与 tab off 图标上撤掉。
+
+function relLum(hex) {
+  const ch = [0, 2, 4].map(function (i) {
+    const c = parseInt(hex.slice(i, i + 2), 16) / 255
+    return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4)
+  })
+  return 0.2126 * ch[0] + 0.7152 * ch[1] + 0.0722 * ch[2]
+}
+function contrast(hex, surface) {
+  const a = relLum(hex) + 0.05
+  const b = relLum(surface || 'FFFFFF') + 0.05
+  return a > b ? a / b : b / a
+}
+
+// 自检：登记为 ui 的每个颜色都得真的过地板（在它自己声明的底色上）。
+// illustration 明确跳过地板，但必须写明理由**并钉死落点**，不许空着混过去。
+Object.keys(SVG_COLOR_ALLOW).forEach(function (hex) {
+  const e = SVG_COLOR_ALLOW[hex]
+  assert.ok(e.role === 'ui' || e.role === 'illustration', '#' + hex + ' 的 role 必须是 ui 或 illustration')
+  assert.ok(e.why && e.why.length > 10, '#' + hex + ' 必须写明凭什么被登记')
+  if (e.role === 'illustration') {
+    assert.ok(e.allowedIn instanceof RegExp,
+      '#' + hex + ' 登记为 illustration（豁免 3:1 地板）就必须用 allowedIn 钉死落点，'
+        + '否则这是个无人看守的逃生舱：把任意坏色标成 illustration 就能用在真部件上')
+    return
+  }
+  const c = contrast(hex, e.surface)
+  assert.ok(c >= 3,
+    '允许清单自相矛盾：#' + hex + ' 在 #' + (e.surface || 'FFFFFF') + ' 上只有 '
+      + c.toFixed(2) + ':1，低于 3:1 地板，不该登记为 ui')
+})
+
+// 注释先剥掉再找边界（用等长空格替换，行号与下标全部不变）。
+// 反过来「先找边界再剥注释」是坏的：lastIndexOf('}' | ';') 会落进注释内部，
+// 剩下的注释尾巴没有配对的 /*，剥不掉就被拼进选择器——对 ui 色只是文案难看，
+// 对 illustration 色是**误报**（选择器不以 . 开头，allowedIn 直接判红）。
+function blankComments(src) {
+  return src.replace(/\/\*[\s\S]*?\*\//g, function (m) {
+    return m.replace(/[^\n]/g, ' ')
+  })
+}
+// 取所在规则的选择器。prev 也要考虑上一个 '{'，否则 @media 包裹时会把
+// `@media (...) { .rs-search` 整串当成选择器。
+function selectorAt(clean, i) {
+  const open = clean.lastIndexOf('{', i)
+  if (open < 0) return '(顶层)'
+  const prev = Math.max(
+    clean.lastIndexOf('}', open),
+    clean.lastIndexOf(';', open),
+    open > 0 ? clean.lastIndexOf('{', open - 1) : -1,
+    -1
+  )
+  return clean.slice(prev + 1, open).trim().replace(/\s+/g, ' ')
+}
+// 逗号分组要**逐段**匹配：`.empty-icon-products, .rs-search { }` 只要豁免选择器
+// 排在前面，整串前缀匹配就会放行，等于把豁免色带到真部件上。
+function everySegment(sel, re) {
+  return sel.split(',').every(function (seg) { return re.test(seg.trim()) })
+}
+
+const svgBad = []
+let svgUriSeen = 0
+let svgColorSeen = 0
+wxssFiles.forEach(function (file) {
+  const src = fs.readFileSync(file, 'utf8')
+  const clean = blankComments(src)
+  // url( 大小写不限（CSS 函数名 ASCII 大小写不敏感）；引号内外三种形态分开收，
+  // 带引号时值里可以有 ')'。
+  const urlRe = /url\(\s*(?:"([^"]*)"|'([^']*)'|([^)\s]*))\s*\)/gi
+  let u
+  while ((u = urlRe.exec(clean)) !== null) {
+    const raw = u[1] !== undefined ? u[1] : (u[2] !== undefined ? u[2] : u[3])
+    if (!/^data:/i.test(raw)) continue          // 本地/远程资源不归这条管
+    const where = path.relative(root, file) + ':' + clean.slice(0, u.index).split('\n').length
+    const sel = selectorAt(clean, u.index)
+    if (!/^data:image\/svg\+xml,/.test(raw)) {
+      svgBad.push(where + '（' + sel + '）的 data URI 形状不在白名单里：「'
+        + raw.slice(0, 40) + '…」\n    只接受 `data:image/svg+xml,` 开头的明文形式。'
+        + 'base64 / ;utf8 / ;charset= 都能正常渲染，却会让这条 URI 里的颜色'
+        + '从文本扫描里彻底消失——连「扫不到就报红」都兜不住，因为现存的还在、'
+        + '隐身的那条不进计数。')
+      continue
+    }
+    svgUriSeen += 1
+    // **整段解码后再匹配**，而不是逐个补 %22 / %27 分支。encodeURIComponent()
+    // 会把属性引号写成 %22，那是最常见的内联写法，逐条拉黑永远追不完。
+    let uri
+    try {
+      uri = decodeURIComponent(raw)
+    } catch (err) {
+      svgBad.push(where + '（' + sel + '）的 data URI 无法 decodeURIComponent（'
+        + err.message + '）——百分号编码写坏了，图标多半也渲染不出来')
+      continue
+    }
+    if (/<\s*style/i.test(uri)) {
+      svgBad.push(where + '（' + sel + '）的 SVG 里内嵌了 <style> 块——'
+        + '本检查只解析呈现属性与 style="" 内联声明，内嵌样式表会绕过去。'
+        + '请改用 fill= / stroke= 属性。')
+      continue
+    }
+    const paints = []
+    let m
+    const attrRe = /\b(fill|stroke)\s*=\s*(?:"([^"]*)"|'([^']*)')/gi
+    while ((m = attrRe.exec(uri)) !== null) {
+      paints.push([m[1], m[2] !== undefined ? m[2] : m[3]])
+    }
+    const styleRe = /\bstyle\s*=\s*(?:"([^"]*)"|'([^']*)')/gi
+    while ((m = styleRe.exec(uri)) !== null) {
+      const decl = m[1] !== undefined ? m[1] : m[2]
+      const dRe = /\b(fill|stroke)\s*:\s*([^;]+)/gi
+      let d
+      while ((d = dRe.exec(decl)) !== null) paints.push([d[1], d[2].trim()])
+    }
+    const roles = []
+    paints.forEach(function (pv) {
+      const val = pv[1]
+      if (val === 'none') return
+      svgColorSeen += 1
+      // 解码之后 %23 已经还原成 #，所以这里认的是 #RRGGBB。
+      const hit = /^#([0-9A-Fa-f]{6})$/.exec(val)
+      if (!hit) {
+        svgBad.push(where + '（' + sel + '）的 ' + pv[0] + ' 写成了 [' + val
+          + ']——解码后只接受 none 或 #RRGGBB 六位。'
+          + '（rgb() / 具名色 / 三位简写都能正常渲染，但会绕过这条检查，所以一律不收）')
+        return
+      }
+      const hex = hit[1].toUpperCase()
+      const e = SVG_COLOR_ALLOW[hex]
+      if (!e) {
+        svgBad.push(where + '（' + sel + '）用了未登记的 #' + hex
+          + '（白底 ' + contrast(hex).toFixed(2) + ':1）')
+        return
+      }
+      if (e.role === 'illustration' && !everySegment(sel, e.allowedIn)) {
+        svgBad.push(where + ' 把豁免色 #' + hex + ' 用在了「' + sel + '」上——'
+          + '它按 illustration 登记、不受 3:1 地板约束，落点因此被 ' + e.allowedIn
+          + ' 钉死（逗号分组要每一段都匹配）。这里若是真部件，请改用登记为 ui 的颜色。')
+        return
+      }
+      roles.push({ hex: hex, role: e.role })
+    })
+    // opacity 会把已登记的颜色静默拉到地板下面，所以 ui 件一律不许叠。
+    // `=` 与 `:` 都算（属性写法与 style 内联写法）；引号已在解码时归一。
+    const op = /(?:fill-|stroke-)?opacity\s*[=:]\s*["']?([0-9.]+)/i.exec(uri)
+    if (op) {
+      const uiOnes = roles.filter(function (r) { return r.role === 'ui' })
+      if (uiOnes.length) {
+        svgBad.push(where + '（' + sel + '）给 ui 件叠了 opacity=' + op[1] + '（涉及 '
+          + uiOnes.map(function (r) { return '#' + r.hex }).join(' / ')
+          + '）——登记的对比度是不带 opacity 的值，叠上去就静默掉到地板下了。'
+          + '若这枚确实是装饰件，请在 SVG_COLOR_ALLOW 里按 illustration 登记并钉死落点')
+      }
+    }
+  }
+})
+assert.strictEqual(
+  svgBad.length,
+  0,
+  '内联 SVG 的颜色有问题：\n  ' + svgBad.join('\n  ')
+)
+// 扫不到东西就是假绿。注意这条**只兜得住「现存的被改瞎」，兜不住「新增一条隐身 URI」**
+// ——后者由上面的形状白名单负责。两条各管一头，别指望其中一条包打。
+assert.ok(
+  svgUriSeen >= 8 && svgColorSeen >= 10,
+  '内联 SVG 几乎没扫到（URI ' + svgUriSeen + ' 个、颜色 ' + svgColorSeen
+    + ' 处）——写法变了的话这条断言是假绿的'
+)
+
 console.log('wxss/wxml static checks passed（' + wxssFiles.length + ' 个 wxss，'
   + wxmlFiles.length + ' 个 wxml）')
