@@ -373,30 +373,19 @@ GOOD_WXML.forEach(function (pair) {
 // 把这里的 `#0F756E` 和一处低于对比度地板的 `#A3A3A3` 完整地留了下来，
 // 直到 2026-09-02 手工扫 wxss 才发现——**藏了 13 轮，没有任何一条断言路过它**。
 //
-// 【这条断言被审计打穿过两轮，改法也因此变了两次】
-// 初版只匹配「%23 + 6 位 hex」，被打出 5 条绿色通道（rgb() / 具名色 / 三位简写 /
-// 裸 # / 补一个 stroke-opacity 静默掉档）。改成解析取值本身之后，又被打出 8 条：
-// 换引号、`style='stroke:…'`、内嵌 <style>、`;utf8`、`;charset=`、`;base64`、
-// `style='opacity:…'`、双引号版 stroke-opacity。其中 `;base64` 一类最狠——**它让整条
-// URI 从计数里消失**，于是「扫不到就报红」那条兜不住：现存 13 条还在，新增的隐身
-// URI 不会让计数掉下去，等于可以整枚图标随便上色而全绿。
-//
-// 教训是**别按写法拉黑，拉黑永远有下一个变体**。所以现在先卡形状白名单：任何
-// `url()` 里以 `data:` 开头的值，必须是 `data:image/svg+xml,` 明文形式，否则直接红。
-// 这一条同时关掉 base64 / ;utf8 / ;charset= 以及以后所有 MIME 参数变体。
-//
-// 【它盖不到什么，别高估】把边界写清楚，是因为上一版注释写了句「别的写法一律报红」，
-// 当场被审计用 8 条通道证伪。**断言的注释声称的能力超过断言实际的能力，跟把稿的现状
-// 写成稿的意图是同一个错误**，只是换了个位置。实际范围：
-//   ✓ 呼应属性 fill= / stroke=（单双引号、大小写、= 旁空格都收）
-//   ✓ 内联 style="fill:...;stroke:..." 声明
-//   ✓ opacity / fill-opacity / stroke-opacity（= 与 : 两种写法）
-//   ✓ 形状白名单（base64 / ;utf8 / ;charset= / 大写 scheme 一律拒）
-//   ✓ 内嵌 <style> 块直接拒（解析成本高、收益低）
-//   ✗ **不查 CSS 字符串引号是否配对**。把 url("...") 的外层换成 ’ 而内层属性仍用 ’，
-//     URI 会在第一个内部引号处提前截断、扫不到后面的颜色。不堆这一条是因为那本就是
-//     非法 CSS：整条 background-image 会被丢弃、图标根本不渲染，不是可用的绕过路径。
-//     真实的引号风格互换（外 ’ + 内属性全用 "）是拦得住的，已变异验证。
+// 【这条断言被审计打穿过三轮，每一轮的教训都不一样，别退回去】
+//   一轮：只匹配「%23 + 6 位 hex」→ 5 条通道（rgb() / 具名色 / 三位简写 / 裸 # /
+//         补一个 stroke-opacity 静默掉档）。教训：查取值，别查某种写法。
+//   二轮：改成解析取值 → 又 8 条（换引号、style='stroke:…'、内嵌 <style>、;utf8、
+//         ;charset=、;base64、style='opacity:…'、双引号 stroke-opacity）。
+//         其中 `;base64` 一类最狠——**它让整条 URI 从计数里消失**，「扫不到就报红」
+//         那条兜不住：现存的还在，隐身的那条不进计数。教训：**别按写法拉黑，
+//         拉黑永远有下一个变体**；改卡形状白名单。
+//   三轮：又 2 条。`%22` / `%27` 百分号编码的属性引号——这是 encodeURIComponent()
+//         的标准产物、业界内联 SVG 最常见的写法，形状白名单放行、URI 计数还会涨，
+//         颜色却完全看不见；以及 `URL(` 大写绕过外层正则，直接跳过白名单本身。
+//         教训：**归一化，而不是再加一条分支**——所以现在整段 decodeURIComponent
+//         之后再匹配，`%22`/`%27`/`%3C`/`%20` 一次性全归位，以后的编码变体自动覆盖。
 //
 // 判据是 WCAG 1.4.11：非文字的 UI 部件边界，白底上要 ≥ 3:1。
 // role 有两种，**不要混**：
@@ -406,6 +395,23 @@ GOOD_WXML.forEach(function (pair) {
 // `fill-opacity='0.5'`，合成约 #B5B9BF ≈ 1.97:1——那个 4.83 是渲染不出来的数字，
 // 却又是自检赖以「通过」的数字。豁免就写豁免，不要拿一个好看的数字给它背书。
 // allowedIn 也是审计提的：否则把坏色登记成 illustration 就能用在真部件上，逃生舱无人看守。
+//
+// 【它盖不到什么，别高估】把边界写清楚，是因为二轮的注释写了句「别的写法一律报红」，
+// 当场被 8 条通道证伪。**断言的注释声称的能力超过断言实际的能力，跟把稿的现状写成
+// 稿的意图是同一个错误**，只是换了个位置——那正是本分支第一条 commit 要修的毛病。
+//   ✓ 呈现属性 fill= / stroke=（单双引号、%22/%27 编码引号、大小写、= 旁空格）
+//   ✓ 内联 style="fill:...;stroke:..." 声明
+//   ✓ opacity / fill-opacity / stroke-opacity（= 与 : 两种写法，编码引号同样归一）
+//   ✓ 形状白名单：url( 大小写不限，值以 data: 开头就必须是 data:image/svg+xml, 明文
+//   ✓ 内嵌 <style> 块直接拒（解码后才可靠地认得出它）
+//   ✗ **不查 CSS 字符串引号是否配对**。把 url("...") 外层换成 ' 而内层属性仍用 '，
+//     URI 会在第一个内部引号处提前截断。不堆这一条是因为那本就是非法 CSS：整条
+//     background-image 会被丢弃、图标根本不渲染，不是可用的绕过路径。真实的引号
+//     风格互换（外 ' + 内层属性全用 "）**是真通道**，已由 quote-aware 的 urlRe 拦住——
+//     别把那段 urlRe 当多余复杂度删掉。
+//   ✗ 不管元素外部的 CSS opacity（`.rs-search { opacity: .4 }` 这种整体降透明）。
+//   ✗ 不解析 <style> 块内容（直接拒，不是能解析）。
+//   ✗ 只看 wxss 里的 data URI；wxml 内联 style、js 拼出来的图标都不在范围内。
 const SVG_COLOR_ALLOW = {
   '0F756E': { role: 'illustration', allowedIn: /^\.empty-icon-/,
     why: '品牌青绿。裁定允许它做非语义点缀，落点仅限空态插画描边（.empty-icon-*）' },
@@ -454,12 +460,32 @@ Object.keys(SVG_COLOR_ALLOW).forEach(function (hex) {
       + c.toFixed(2) + ':1，低于 3:1 地板，不该登记为 ui')
 })
 
-// 取所在规则的选择器，用于 allowedIn 判定与报错定位。
-function selectorAt(src, i) {
-  const open = src.lastIndexOf('{', i)
+// 注释先剥掉再找边界（用等长空格替换，行号与下标全部不变）。
+// 反过来「先找边界再剥注释」是坏的：lastIndexOf('}' | ';') 会落进注释内部，
+// 剩下的注释尾巴没有配对的 /*，剥不掉就被拼进选择器——对 ui 色只是文案难看，
+// 对 illustration 色是**误报**（选择器不以 . 开头，allowedIn 直接判红）。
+function blankComments(src) {
+  return src.replace(/\/\*[\s\S]*?\*\//g, function (m) {
+    return m.replace(/[^\n]/g, ' ')
+  })
+}
+// 取所在规则的选择器。prev 也要考虑上一个 '{'，否则 @media 包裹时会把
+// `@media (...) { .rs-search` 整串当成选择器。
+function selectorAt(clean, i) {
+  const open = clean.lastIndexOf('{', i)
   if (open < 0) return '(顶层)'
-  const prev = Math.max(src.lastIndexOf('}', open), src.lastIndexOf(';', open), -1)
-  return src.slice(prev + 1, open).replace(/\/\*[\s\S]*?\*\//g, '').trim().replace(/\s+/g, ' ')
+  const prev = Math.max(
+    clean.lastIndexOf('}', open),
+    clean.lastIndexOf(';', open),
+    open > 0 ? clean.lastIndexOf('{', open - 1) : -1,
+    -1
+  )
+  return clean.slice(prev + 1, open).trim().replace(/\s+/g, ' ')
+}
+// 逗号分组要**逐段**匹配：`.empty-icon-products, .rs-search { }` 只要豁免选择器
+// 排在前面，整串前缀匹配就会放行，等于把豁免色带到真部件上。
+function everySegment(sel, re) {
+  return sel.split(',').every(function (seg) { return re.test(seg.trim()) })
 }
 
 const svgBad = []
@@ -467,14 +493,16 @@ let svgUriSeen = 0
 let svgColorSeen = 0
 wxssFiles.forEach(function (file) {
   const src = fs.readFileSync(file, 'utf8')
-  // 引号内外都可能，且带引号时值里可以有 ')'，所以三种形态分开收。
-  const urlRe = /url\(\s*(?:"([^"]*)"|'([^']*)'|([^)\s]*))\s*\)/g
+  const clean = blankComments(src)
+  // url( 大小写不限（CSS 函数名 ASCII 大小写不敏感）；引号内外三种形态分开收，
+  // 带引号时值里可以有 ')'。
+  const urlRe = /url\(\s*(?:"([^"]*)"|'([^']*)'|([^)\s]*))\s*\)/gi
   let u
-  while ((u = urlRe.exec(src)) !== null) {
+  while ((u = urlRe.exec(clean)) !== null) {
     const raw = u[1] !== undefined ? u[1] : (u[2] !== undefined ? u[2] : u[3])
     if (!/^data:/i.test(raw)) continue          // 本地/远程资源不归这条管
-    const where = path.relative(root, file) + ':' + src.slice(0, u.index).split('\n').length
-    const sel = selectorAt(src, u.index)
+    const where = path.relative(root, file) + ':' + clean.slice(0, u.index).split('\n').length
+    const sel = selectorAt(clean, u.index)
     if (!/^data:image\/svg\+xml,/.test(raw)) {
       svgBad.push(where + '（' + sel + '）的 data URI 形状不在白名单里：「'
         + raw.slice(0, 40) + '…」\n    只接受 `data:image/svg+xml,` 开头的明文形式。'
@@ -484,8 +512,17 @@ wxssFiles.forEach(function (file) {
       continue
     }
     svgUriSeen += 1
-    const uri = raw.replace(/%20/g, ' ')
-    if (/(?:<|%3C)style/i.test(uri)) {
+    // **整段解码后再匹配**，而不是逐个补 %22 / %27 分支。encodeURIComponent()
+    // 会把属性引号写成 %22，那是最常见的内联写法，逐条拉黑永远追不完。
+    let uri
+    try {
+      uri = decodeURIComponent(raw)
+    } catch (err) {
+      svgBad.push(where + '（' + sel + '）的 data URI 无法 decodeURIComponent（'
+        + err.message + '）——百分号编码写坏了，图标多半也渲染不出来')
+      continue
+    }
+    if (/<\s*style/i.test(uri)) {
       svgBad.push(where + '（' + sel + '）的 SVG 里内嵌了 <style> 块——'
         + '本检查只解析呈现属性与 style="" 内联声明，内嵌样式表会绕过去。'
         + '请改用 fill= / stroke= 属性。')
@@ -509,11 +546,12 @@ wxssFiles.forEach(function (file) {
       const val = pv[1]
       if (val === 'none') return
       svgColorSeen += 1
-      const hit = /^%23([0-9A-Fa-f]{6})$/.exec(val)
+      // 解码之后 %23 已经还原成 #，所以这里认的是 #RRGGBB。
+      const hit = /^#([0-9A-Fa-f]{6})$/.exec(val)
       if (!hit) {
         svgBad.push(where + '（' + sel + '）的 ' + pv[0] + ' 写成了 [' + val
-          + ']——只接受 none 或 %23 + 6 位 hex。'
-          + '（rgb() / 具名色 / 三位简写 / 裸 # 都能正常渲染，但会绕过这条检查，所以一律不收）')
+          + ']——解码后只接受 none 或 #RRGGBB 六位。'
+          + '（rgb() / 具名色 / 三位简写都能正常渲染，但会绕过这条检查，所以一律不收）')
         return
       }
       const hex = hit[1].toUpperCase()
@@ -523,16 +561,16 @@ wxssFiles.forEach(function (file) {
           + '（白底 ' + contrast(hex).toFixed(2) + ':1）')
         return
       }
-      if (e.role === 'illustration' && !e.allowedIn.test(sel)) {
+      if (e.role === 'illustration' && !everySegment(sel, e.allowedIn)) {
         svgBad.push(where + ' 把豁免色 #' + hex + ' 用在了「' + sel + '」上——'
           + '它按 illustration 登记、不受 3:1 地板约束，落点因此被 ' + e.allowedIn
-          + ' 钉死。这里若是真部件，请改用登记为 ui 的颜色。')
+          + ' 钉死（逗号分组要每一段都匹配）。这里若是真部件，请改用登记为 ui 的颜色。')
         return
       }
       roles.push({ hex: hex, role: e.role })
     })
     // opacity 会把已登记的颜色静默拉到地板下面，所以 ui 件一律不许叠。
-    // `=` 与 `:` 都算（属性写法与 style 内联写法），引号可有可无。
+    // `=` 与 `:` 都算（属性写法与 style 内联写法）；引号已在解码时归一。
     const op = /(?:fill-|stroke-)?opacity\s*[=:]\s*["']?([0-9.]+)/i.exec(uri)
     if (op) {
       const uiOnes = roles.filter(function (r) { return r.role === 'ui' })
