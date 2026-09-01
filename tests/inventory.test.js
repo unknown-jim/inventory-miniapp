@@ -2811,3 +2811,44 @@ assert.ok(g1SweepOver > 1500,
 
 console.log('G1 预收：演示账主链（欠 84 / 预收 200 并存、分支 B 收满 152、超收 48）'
   + '、退货三格、no-op 5000 组、取小边界扫描 ' + g1SweepOver + '/5000 越界，全部通过')
+
+// ---------------------------------------------------------------------------
+// 货号对商品、条码对规格（2026-09-01 裁定）
+// ---------------------------------------------------------------------------
+// 此前两级都有 sku + barcode，且 skuCode = sku.sku || product.sku 让规格级货号
+// 能盖掉商品级。UI 上从来没有规格级货号的录入口（规格矩阵只有 规格/库存/预警/售价），
+// 种子数据也只填商品级，所以那个字段实际恒空 —— 收敛它零数据影响。
+// 条码**保留**在规格级：一件毛衣的红色 M 码和蓝色 L 码本来就该各有条码。
+;(function () {
+  const nextId = idFactory()
+  const product = inv.createProduct(
+    { name: '毛衣', sku: 'MY-001', barcode: '690000000001', colors: ['红'], sizes: ['M'] },
+    1000, nextId()
+  )
+  const sku = inv.createSku(
+    { productId: product.id, color: '红', size: 'M', sku: '不该被接受的规格级货号',
+      barcode: '690000000002', costPrice: 10, salePrice: 20, stock: 5 },
+    1000, nextId()
+  )
+  assert.ok(!('sku' in sku),
+    '规格上不该再有 sku 字段：货号对商品、条码对规格。实为 ' + JSON.stringify(sku.sku))
+  assert.strictEqual(sku.barcode, '690000000002',
+    '条码要留在规格级 —— 同一商品的不同规格各有条码')
+
+  // 流水行上的货号快照一律取商品级，不再被规格级顶掉。**两条路径都要覆盖**：
+  // 销售单走 applySaleOrder 的 consumed.skuCode，进货和库存修正走 applyPurchase /
+  // applyAdjust 里的 line.sku ——它们是三段独立的代码，只验一条会漏掉另一条。
+  // （第一版断言只走了销售单，把 line.sku 改成取规格级字段照样绿，因为根本没打到。）
+  const out = sale([product], [], {
+    payType: 'cash', productId: product.id, skuId: sku.id, qty: 1, unitPrice: 20
+  }, 2000, 'o1', [sku])
+  assert.strictEqual(line0(out.records[0]).sku, 'MY-001',
+    '销售行的货号要取商品级 product.sku，实为 ' + JSON.stringify(line0(out.records[0]).sku))
+
+  const bought = inv.applyPurchase([product], [], {
+    productId: product.id, skuId: sku.id, color: '红', size: 'M', qty: 2, unitPrice: 10
+  }, 3000, 'r1', [sku])
+  assert.strictEqual(bought.record.lines[0].sku, 'MY-001',
+    '进货行的货号要取商品级 product.sku，实为 ' + JSON.stringify(bought.record.lines[0].sku))
+})()
+
