@@ -65,6 +65,10 @@ https://ardot.tencent.com/file/718738891083099
     **`fetch_file_info` 的两个字段都判不出能不能写。** `permission` 在只读状态下照样返回 `readwrite`；`fileUrl` 里的 `&m=dev` 也不行——2026-08-31 实测，编辑器切回设计模式、写入已经成功之后，`fileUrl` 里的 `&m=dev` **仍然在**（`cocraft://localhost/file/718738891083099?node_id=3%3A159&m=dev`）。它跟着当前选中节点更新 `node_id`，说明连接是活的，但 `m=dev` 这一段是打开文件时定死的，不反映当前模式。中间那一轮据此判定「还锁着」是误判。
     **唯一可靠的判据是试写一次**：发一条最小的 `U()`，看返回里有没有 `potentialIssues`——有 `read-only mode` 就是锁着，没有 `potentialIssues` 且 `updated` 回显新值就是通了，再 `batch_read` 复读坐实。真锁着时没有绕过路径，只能请人把编辑器切回设计模式；但**判断锁没锁要靠试写，不要靠读 URL**。
 
+17. **`I()` 建不出 INSTANCE，而且照样回 `success: true`。** 想插一个组件实例时 `I(parent, {type: "INSTANCE", mainComponent: ...})` 会失败，`potentialIssues` 里是 `Insert failed: Unsupported node type: INSTANCE`，但 `success` 仍为真、`operations` 为空数组、整块也不回滚。要建实例得用 `C(本体, 父)` 复制。这是坑 16 的同一个病灶在另一条操作上的表现：**成功与否只看 `potentialIssues`**。
+
+18. **`visible: false` 的子节点不参与自动布局回流。** 它的 `x/y` 停在被隐藏之前的位置，于是 `capture_layout` 会把它报成「超出父容器 17px」之类。看到 overflow **先查 `visible` 再查几何**——按提示去缩字号、改行高全是南辕北辙。处理是手工把隐藏节点的 y 挪回可见区。
+
 ## 过程文档不进仓库
 
 审计报告、交接回报、改稿清单等一次性材料放 `~/work/inventory-miniapp-handoffs/`，规则见 [git-workflow.md](git-workflow.md)。本文档只收长期有效的结构与工具约定。
