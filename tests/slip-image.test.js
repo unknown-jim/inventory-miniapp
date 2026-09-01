@@ -161,6 +161,15 @@ assert.ok(drawn.indexOf('fillText') >= 0)
 assert.ok(drawn.indexOf('strokeRect') >= 0)
 assert.ok(drawn.indexOf('stroke') >= 0)
 
+// detail ≡ 默认态的钉子：sampleSlip 只有 1 行，节内行数不满足矩阵条件 2，'summary' 态本就
+// 退回平铺，所以两态必须逐字相同。这条钉的是「detail 不会走出一条自己的路」。
+//
+// 它**不能**顺带证明「默认态 ≡ 改动前」：上面那批老断言是 indexOf 之类的内容检查，钉不住
+// 逐字节。那条性质靠的是评审期把 baseline 的 utils/slip-image.js 单独加载成对照模块、
+// 比 JSON.stringify(layout)（三轮审计各自独立验过一次，老形态夹具全部逐字节相等）。
+// 仓库里留不住 baseline 模块，所以这条只能是评审期证据，不是常驻钉子。
+assert.deepStrictEqual(layout, slipImage.layoutSlip(slip, null, { exportStyle: 'detail' }))
+
 const walkin = slipImage.layoutSlip(sampleSlip({
   hasCustomer: false,
   customerName: '',
@@ -511,6 +520,264 @@ assert.ok(loDpr[1] < 1)
 
 const small = slipImage.exportScales(1000, 1000, 3)
 assert.deepStrictEqual(small, [3, 1])
+
+// ---------------------------------------------------------------------------
+// 批 1：送货单导出「汇总/明细」两态。上面所有断言一条都没改——按 1.3 的矩阵化判定，
+// 前面用到的夹具（sampleSlip 1 行、many 三个不同商品各 1 行、mixedLines 两个不同商品
+// 各 1 行）每节都只有 1 行，条件 2「该节行数 ≥ 2」先就不满足，一律退回平铺，所以默认
+// exportStyle: 'summary' 不会改变它们任何一条结果。
+// ---------------------------------------------------------------------------
+
+function specLine(overrides) {
+  return Object.assign({
+    id: 'l',
+    productName: '短袖 T恤',
+    sku: 'TS-005',
+    qtyText: '1',
+    priceText: '59.00',
+    amountText: '59.00'
+  }, overrides || {})
+}
+
+// 按 颜色 × 尺码 铺满一个货号的矩阵夹具；skip(color, size) 返回 true 的组合不生成（缺货）。
+function gridLines(colors, sizes, skip, unitPrice) {
+  const price = unitPrice == null ? 59 : unitPrice
+  const lines = []
+  let n = 1
+  colors.forEach(function (color) {
+    sizes.forEach(function (size) {
+      if (skip && skip(color, size)) return
+      const qty = n++
+      lines.push(specLine({
+        id: color + '-' + size,
+        specParts: [{ name: '颜色', value: color }, { name: '尺码', value: size }],
+        qtyText: String(qty),
+        priceText: price.toFixed(2),
+        amountText: (qty * price).toFixed(2)
+      }))
+    })
+  })
+  return lines
+}
+
+function matrixFixtureSlip(lines, overrides) {
+  // hasCustomer: false + operatorText 显式给值：避免「经手人」缺省兜底的 '—' 混进
+  // 「矩阵缺格画 —」的断言里，两个 '—' 来源不一样，不能靠字符串搜索混着判。
+  return sampleSlip(Object.assign({ lines: lines, hasCustomer: false, remark: '', operatorText: '小李' }, overrides || {}))
+}
+
+function textCmds(layout) {
+  return layout.commands.filter(function (item) {
+    return item.type === 'text'
+  })
+}
+
+function hasText(layout, text) {
+  return textCmds(layout).some(function (item) {
+    return item.text === text
+  })
+}
+
+function labelValueText(layout, label) {
+  const texts = textCmds(layout)
+  const index = texts.findIndex(function (item) {
+    return item.text === label
+  })
+  return index >= 0 ? texts[index + 1].text : undefined
+}
+
+// 1) 分节函数：A、B、A 三行 -> 两节，第一节 2 行（顺序不变，不连续的同货号行仍归一节）
+const sliced = slipImage.sliceLineSections([
+  specLine({ id: 'a1', productName: 'A商品', sku: 'A1' }),
+  specLine({ id: 'b1', productName: 'B商品', sku: 'B1' }),
+  specLine({ id: 'a2', productName: 'A商品', sku: 'A1' })
+])
+assert.strictEqual(sliced.length, 2)
+assert.strictEqual(sliced[0].lines.length, 2)
+assert.strictEqual(sliced[0].lines[0].id, 'a1')
+assert.strictEqual(sliced[0].lines[1].id, 'a2')
+assert.strictEqual(sliced[1].lines.length, 1)
+assert.strictEqual(sliced[1].lines[0].id, 'b1')
+
+// 2) 矩阵路径：3 色 × 3 码卖 8 格（缺 1 格）。R=3、N=8，2+3=5<8，有压缩收益，矩阵成立。
+const matrixLines = gridLines(['黑色', '白色', '蓝色'], ['S', 'M', 'L'], function (color, size) {
+  return color === '蓝色' && size === 'L'
+})
+const matrixSlip = matrixFixtureSlip(matrixLines)
+const matrixLayout = slipImage.layoutSlip(matrixSlip)
+assert.ok(hasText(matrixLayout, '颜色')) // 行轴名
+;['S', 'M', 'L'].forEach(function (size) {
+  assert.ok(hasText(matrixLayout, size)) // 列轴各取值
+})
+assert.ok(hasText(matrixLayout, '小计'))
+assert.ok(hasText(matrixLayout, '—')) // 缺的那格（蓝色 × L）画 —，不留空白
+
+// 3) 同一份数据 exportStyle: 'detail' -> 没有「小计」、没有「—」、行数回到 8。
+// exportStyle 不是 'summary' 时分节/矩阵判定整段都不跑（见 layoutSlip），直接复用未改动
+// 过的 tableColumns/fitColumns/layoutTable——用两个结构特征证明这一点，而不是「碰巧长得
+// 像」：轴仍分列（颜色、尺码不合并）、全表只有一份表头（「货号」只出现一次，证明没有像
+// 矩阵路径那样按节反复画表头）。
+const detailLayout = slipImage.layoutSlip(matrixSlip, null, { exportStyle: 'detail' })
+assert.ok(!hasText(detailLayout, '小计'))
+assert.ok(!hasText(detailLayout, '—'))
+const detailSkuCells = textCmds(detailLayout).filter(function (item) {
+  return item.text === 'TS-005'
+})
+assert.strictEqual(detailSkuCells.length, matrixLines.length)
+assert.ok(hasText(detailLayout, '颜色'))
+assert.ok(hasText(detailLayout, '尺码'))
+const detailHeadCount = textCmds(detailLayout).filter(function (item) {
+  return item.text === '货号'
+}).length
+assert.strictEqual(detailHeadCount, 1)
+
+// 4) 两种形态总件数、总金额相等——底部汇总区不看表格形态，只看 slip.lines 现算。
+assert.strictEqual(labelValueText(matrixLayout, '总数'), labelValueText(detailLayout, '总数'))
+assert.strictEqual(labelValueText(matrixLayout, '应收'), labelValueText(detailLayout, '应收'))
+assert.strictEqual(labelValueText(matrixLayout, '实收'), labelValueText(detailLayout, '实收'))
+
+// 5) 逐条覆盖 1.3 的 6 个否决条件，每条只差这一条，断言退回平铺（无「小计」、无「—」）。
+function assertFlatFallback(lines, label) {
+  const layout = slipImage.layoutSlip(matrixFixtureSlip(lines))
+  assert.ok(!hasText(layout, '小计'), label + '：不该有矩阵小计')
+  assert.ok(!hasText(layout, '—'), label + '：不该有矩阵缺格占位')
+}
+
+// 只有 1 行（条件 2）
+assertFlatFallback([
+  specLine({ specParts: [{ name: '颜色', value: '黑色' }, { name: '尺码', value: 'M' }] })
+], '只有1行')
+
+// 单价不一致（条件 4）
+assertFlatFallback([
+  specLine({ id: 'p1', specParts: [{ name: '颜色', value: '黑色' }, { name: '尺码', value: 'S' }] }),
+  specLine({ id: 'p2', specParts: [{ name: '颜色', value: '黑色' }, { name: '尺码', value: 'M' }], priceText: '65.00', amountText: '65.00' })
+], '单价不一致')
+
+// 轴数为 1（条件 3）
+assertFlatFallback([
+  specLine({ id: 'q1', specParts: [{ name: '颜色', value: '黑色' }] }),
+  specLine({ id: 'q2', specParts: [{ name: '颜色', value: '白色' }] })
+], '轴数为1')
+
+// 轴数为 3（条件 3）
+assertFlatFallback([
+  specLine({ id: 'r1', specParts: [{ name: '颜色', value: '黑色' }, { name: '尺码', value: 'M' }, { name: '季节', value: '夏' }] }),
+  specLine({ id: 'r2', specParts: [{ name: '颜色', value: '白色' }, { name: '尺码', value: 'M' }, { name: '季节', value: '夏' }] })
+], '轴数为3')
+
+// 节内轴名不一致（条件 3）
+assertFlatFallback([
+  specLine({ id: 's1', specParts: [{ name: '颜色', value: '黑色' }, { name: '尺码', value: 'M' }] }),
+  specLine({ id: 's2', specParts: [{ name: '颜色', value: '白色' }, { name: '克数', value: '50g' }] })
+], '节内轴名不一致')
+
+// 列轴 7 个取值，超 MATRIX_COL_LIMIT=6（条件 5）
+assertFlatFallback(['S', 'M', 'L', 'XL', 'XXL', 'XXXL', '4XL'].map(function (size, index) {
+  return specLine({
+    id: 'sz' + index,
+    specParts: [{ name: '颜色', value: '黑色' }, { name: '尺码', value: size }],
+    qtyText: String(index + 1),
+    amountText: ((index + 1) * 59).toFixed(2)
+  })
+}), '列轴7个取值')
+
+// 无压缩收益：2 色 × 2 码卖 3 格，R=2、N=3，2+2=4 不小于 3（条件 6）
+assertFlatFallback([
+  specLine({ id: 't1', specParts: [{ name: '颜色', value: '黑色' }, { name: '尺码', value: 'S' }] }),
+  specLine({ id: 't2', specParts: [{ name: '颜色', value: '黑色' }, { name: '尺码', value: 'M' }] }),
+  specLine({ id: 't3', specParts: [{ name: '颜色', value: '白色' }, { name: '尺码', value: 'S' }] })
+], '无压缩收益')
+
+// 6) 混排：A 货号满足矩阵，B 货号单价不一致退回平铺，两者出现在同一张单里互不干扰。
+const mixedMatrixLines = gridLines(['黑色', '白色'], ['S', 'M', 'L']) // 2 色 × 3 码全卖，R=2、N=6，矩阵成立
+const mixedFlatLines = [
+  specLine({ id: 'bb1', productName: '绿茶', sku: 'GT-1', specParts: [{ name: '口味', value: '原味' }, { name: '克数', value: '50g' }], qtyText: '2', priceText: '20.00', amountText: '40.00' }),
+  specLine({ id: 'bb2', productName: '绿茶', sku: 'GT-1', specParts: [{ name: '口味', value: '原味' }, { name: '克数', value: '100g' }], qtyText: '1', priceText: '25.00', amountText: '25.00' })
+]
+const mixedLayoutBatch1 = slipImage.layoutSlip(matrixFixtureSlip(mixedMatrixLines.concat(mixedFlatLines)))
+assert.ok(hasText(mixedLayoutBatch1, '小计')) // A 节矩阵化
+const teaNameCells = textCmds(mixedLayoutBatch1).filter(function (item) {
+  return item.text === '绿茶'
+})
+assert.strictEqual(teaNameCells.length, mixedFlatLines.length) // B 节仍逐行列出品名，没被矩阵合并
+
+// 7) 货号为空的节：节头只画品名，不出现「未填」（与 blankSku 那条老断言同款要求）
+const blankSkuMatrixLines = gridLines(['黑色', '白色'], ['S', 'M', 'L']).map(function (line) {
+  return Object.assign({}, line, { sku: '未填' })
+})
+const blankSkuMatrixLayout = slipImage.layoutSlip(matrixFixtureSlip(blankSkuMatrixLines))
+const blankSkuMatrixText = textsOf(blankSkuMatrixLayout)
+assert.ok(blankSkuMatrixText.indexOf('未填') < 0)
+assert.ok(blankSkuMatrixText.indexOf('短袖 T恤') >= 0)
+
+// 8) R1（2026-09-02）新增条件 7：矩阵化不得让画布比平铺更宽。用列轴取值的字数控制矩阵节
+// 会把画布撑多宽——原来这里只有一条「6 列 × 4 字」的越界钉子（3 色 × 6 码，每个取值 4 个
+// 中文字，曾经会把「小计」整列画到画布外）；R1 之后这个组合不再矩阵化、直接退回平铺，
+// 越界也就无从谈起，所以拆成三条：
+//   8a) 6 列 × 3 字：撑不过平铺基准（1700），矩阵化仍然成立——越界钉子的原有价值留在
+//       这条组合上：断言矩阵路径没有任何绘制指令画到画布右边界外。
+//   8b) 6 列 × 4 字：会把画布撑宽（方案 R1 实测到 2009），条件 7 生效，退回平铺。
+//   8c) 6 列 × 13 字：病态用例，撑得更宽（方案 R1 实测到 4733），同样退回平铺。
+// 断言越界必须真的抓住越界，不能写成恒真：align:'right' 的指令 x 本身就是右边界，
+// align:'center' 要把文字宽度折算成右边界，align:'left'（含 rect/stroke/line）按左边+宽度算。
+function nCharSizes(n, charCount) {
+  const digits = ['一', '二', '三', '四', '五', '六', '七', '八', '九', '十']
+  const list = []
+  for (let i = 0; i < n; i++) list.push(digits[i] + '码'.repeat(charCount - 1))
+  return list
+}
+function rightEdgeOf(cmd, measure) {
+  if (cmd.type === 'text') {
+    const w = measure(cmd.text, cmd.font)
+    if (cmd.align === 'right') return cmd.x
+    if (cmd.align === 'center') return cmd.x + w / 2
+    return cmd.x + w
+  }
+  if (cmd.type === 'rect' || cmd.type === 'stroke') return cmd.x + cmd.w
+  if (cmd.type === 'line') return Math.max(cmd.x1, cmd.x2)
+  return 0
+}
+
+// 8a) 6 列 × 3 字：矩阵化仍成立，画布不撑宽。
+const col3Lines = gridLines(['黑色', '白色', '蓝色'], nCharSizes(6, 3))
+const col3Layout = slipImage.layoutSlip(matrixFixtureSlip(col3Lines))
+assert.ok(hasText(col3Layout, '小计'), '6列×3字应仍矩阵化')
+assert.strictEqual(col3Layout.width, 1700, '6列×3字不该撑宽画布')
+const col3Offenders = col3Layout.commands.filter(function (cmd) {
+  return rightEdgeOf(cmd, slipImage.estimateWidth) > col3Layout.width + 0.5
+})
+assert.deepStrictEqual(col3Offenders, [], '矩阵节有指令画到画布右边界外: ' + JSON.stringify(col3Offenders))
+
+// 8b) 6 列 × 4 字：条件 7 生效，退回平铺——没有「小计」，画布回落到平铺基准 1700。
+const col4Lines = gridLines(['黑色', '白色', '蓝色'], nCharSizes(6, 4))
+const col4Layout = slipImage.layoutSlip(matrixFixtureSlip(col4Lines))
+assert.ok(!hasText(col4Layout, '小计'), '6列×4字撑宽画布，应退回平铺')
+assert.strictEqual(col4Layout.width, 1700, '退回平铺后画布应回落到平铺基准')
+
+// 8c) 病态用例：6 列 × 13 字，撑宽程度更严重，同样退回平铺。
+const col13Lines = gridLines(['黑色', '白色', '蓝色'], nCharSizes(6, 13))
+const col13Layout = slipImage.layoutSlip(matrixFixtureSlip(col13Lines))
+assert.ok(!hasText(col13Layout, '小计'), '6列×13字应退回平铺')
+assert.strictEqual(col13Layout.width, 1700, '6列×13字退回平铺后画布应回落到平铺基准')
+
+// 9) 本质不变量（R1 明确要求）：汇总态画布永远不比明细态更宽。挑几组已经构造好的矩阵/混排
+// 夹具一起过一遍——这条比逐个阈值断言都硬，不管矩阵内部算法怎么变，只要哪天矩阵化又把
+// 画布撑宽，这条会先红，不用等具体阈值断言凑巧覆盖到那个组合。
+;[
+  matrixSlip,
+  matrixFixtureSlip(col3Lines),
+  matrixFixtureSlip(col4Lines),
+  matrixFixtureSlip(col13Lines),
+  matrixFixtureSlip(mixedMatrixLines.concat(mixedFlatLines))
+].forEach(function (fixtureSlip, index) {
+  const summaryWidth = slipImage.layoutSlip(fixtureSlip).width
+  const detailWidth = slipImage.layoutSlip(fixtureSlip, null, { exportStyle: 'detail' }).width
+  assert.ok(
+    summaryWidth <= detailWidth,
+    '不变量钉子第' + index + '组: summary(' + summaryWidth + ') > detail(' + detailWidth + ')'
+  )
+})
 
 // ---------------------------------------------------------------------------
 // 送货单弹层组件的**可测性**钉子（和 tests/record-sheet.test.js 末尾那条同形）。

@@ -15,6 +15,13 @@ const NAME_MIN_CHARS = 3
 // 比合并后的 216 宽出一大截，字号反而比四轴还小，所以三轴起就合并。
 const SPEC_AXIS_LIMIT = 2
 
+// 汇总态矩阵表的列轴（第二轴）去重取值数上限。理由同上一条注释：列一多画布被撑宽，
+// 整张单的字号反而更小，只是这次是横向撑宽而不是纵向多列。
+// R1（2026-09-02）之后这条只是提前退出的快速否决——列数不多但列值字数长照样能撑宽画布，
+// 真正兜底是 layoutSlip 里「矩阵节画布下限 <= 平铺基准」的条件 7。这条注释记的推理仍然
+// 成立（列数本身也是撑宽的一个来源），所以保留，不删。
+const MATRIX_COL_LIMIT = 6
+
 // 列宽按量出来的字宽定，但真机字体和估算值有出入，留一点余量，免得货号顶出格线。
 const MEASURE_SLACK = 1.04
 
@@ -456,6 +463,289 @@ function layoutTable(cmds, slip, cols, y, measure) {
   return y + 24
 }
 
+// ---------------------------------------------------------------------------
+// 汇总态：按货号分节，能矩阵化的节画成「行=规格一取值、列=规格二取值、格内件数」的交叉表，
+// 不能矩阵化的节退回平铺。exportStyle 不是 'summary' 时（即 'detail' 或不传/传别的值里的
+// 'detail' 分支，见 layoutSlip）整张单一条分节逻辑都不会跑，直接走 layoutTable 老路径——
+// 这是老单据渲染逐字不变的保证，不要在这条钉子上打补丁。
+// ---------------------------------------------------------------------------
+
+// 分组 key 用 productName + skuText：同一商品 productName 必然相同，sku 用 skuText 统一
+// 空串和「未填」，避免同一商品因为两种写法被拆成两节。
+// 按 key 首次出现的顺序排节、节内保持原始行顺序——单据顺序是店主录入的顺序，不重排。
+function sliceLineSections(lines) {
+  const list = lines || []
+  const index = {}
+  const sections = []
+  list.forEach(function (line) {
+    const sku = skuText(line)
+    const key = String((line && line.productName) || '') + ' ' + sku
+    if (!index[key]) {
+      index[key] = { productName: (line && line.productName) || '', sku: sku, lines: [] }
+      sections.push(index[key])
+    }
+    index[key].lines.push(line)
+  })
+  return sections
+}
+
+// 判定条件 3：该行 specParts 里「有名字、有值」的轴恰好 2 个，返回轴名序列；
+// 不满足（轴数不是 2、或存在无名轴）一律返回 null，调用方据此退回平铺。
+function lineAxisPair(line) {
+  const parts = (line && line.specParts) || []
+  const valued = parts.filter(function (part) {
+    return part && part.value
+  })
+  if (valued.length !== 2) return null
+  if (!valued[0].name || !valued[1].name) return null
+  return [valued[0].name, valued[1].name]
+}
+
+// 节内所有行的轴名序列必须完全一致（名字和顺序都要对上），否则不成表。
+function sectionAxisPair(section) {
+  let pair = null
+  for (let i = 0; i < section.lines.length; i++) {
+    const current = lineAxisPair(section.lines[i])
+    if (!current) return null
+    if (!pair) {
+      pair = current
+    } else if (current[0] !== pair[0] || current[1] !== pair[1]) {
+      return null
+    }
+  }
+  return pair
+}
+
+// 判定条件 4：节内单价必须逐字相同，单价要提到节头，不同价就提不上去。
+function sectionPriceText(section) {
+  const first = section.lines[0] && section.lines[0].priceText
+  const same = section.lines.every(function (line) {
+    return line.priceText === first
+  })
+  return same ? first : null
+}
+
+function uniqueValuesInOrder(values) {
+  const seen = []
+  values.forEach(function (value) {
+    if (seen.indexOf(value) < 0) seen.push(value)
+  })
+  return seen
+}
+
+// 汇总一节金额：明细行 amountText 相加，口径同 utils/util.js 的 money()（四舍五入到分），
+// 但这里不 require 那个模块——slip-image.js 一直是零依赖的纯渲染层，不为这一处开先例。
+function amountSumText(lines) {
+  const total = (lines || []).reduce(function (sum, line) {
+    const n = Number(line.amountText)
+    return sum + (isFinite(n) ? n : 0)
+  }, 0)
+  return (Math.round((total + Number.EPSILON) * 100) / 100).toFixed(2)
+}
+
+// 逐条核对矩阵化条件 2~6（条件 1 是 exportStyle==='summary'，由调用方在决定要不要调这个
+// 函数时把关；条件 7——矩阵化不得让画布比平铺更宽，见方案 R1——需要 basePageWidth，
+// 这里还没算出来，由调用方 layoutSlip 在算完 basePageWidth 之后再对这里的结果补一刀）。
+// 任一条不满足就返回 null，调用方据此退回平铺。
+function buildMatrixSection(section) {
+  if (section.lines.length < 2) return null // 条件 2：节行数 ≥ 2
+  const axes = sectionAxisPair(section) // 条件 3
+  if (!axes) return null
+  const priceText = sectionPriceText(section) // 条件 4
+  if (priceText == null) return null
+  const rowAxis = axes[0]
+  const colAxis = axes[1]
+  const rowValues = uniqueValuesInOrder(section.lines.map(function (line) {
+    return specCellValue(line, rowAxis)
+  }))
+  const colValues = uniqueValuesInOrder(section.lines.map(function (line) {
+    return specCellValue(line, colAxis)
+  }))
+  if (colValues.length > MATRIX_COL_LIMIT) return null // 条件 5
+  if (!(2 + rowValues.length < section.lines.length)) return null // 条件 6：有压缩收益
+  const grid = {}
+  section.lines.forEach(function (line) {
+    const r = specCellValue(line, rowAxis)
+    const c = specCellValue(line, colAxis)
+    if (!grid[r]) grid[r] = {}
+    grid[r][c] = line
+  })
+  return {
+    rowAxis: rowAxis,
+    colAxis: colAxis,
+    rowValues: rowValues,
+    colValues: colValues,
+    priceText: priceText,
+    grid: grid
+  }
+}
+
+// 矩阵节的列定义：第一列（key 特意叫 'name'）＝行轴取值，中间各列＝列轴取值格内件数，
+// 最后一列＝小计。key 'name' 是刻意对齐 fitColumns/canWrapColumn 已有的判断（吸收富余
+// 宽度、允许折行），不必另写一套列宽算法。
+function matrixColumnDefs(section, matrix) {
+  const defs = [{
+    key: 'name',
+    title: matrix.rowAxis,
+    align: 'left',
+    font: FONT.name,
+    values: matrix.rowValues.slice()
+  }]
+  matrix.colValues.forEach(function (colValue) {
+    defs.push({
+      key: 'col:' + colValue,
+      title: colValue,
+      align: 'center',
+      font: FONT.num,
+      values: matrix.rowValues.map(function (rowValue) {
+        const line = matrix.grid[rowValue] && matrix.grid[rowValue][colValue]
+        // 没卖过的格子画 —（U+2014），不留空白——留白会被当成漏印。
+        return line ? line.qtyText : '—'
+      })
+    })
+  })
+  defs.push({
+    key: 'subtotal',
+    title: '小计',
+    align: 'center',
+    font: FONT.num,
+    values: matrix.rowValues.map(function (rowValue) {
+      const rowLines = section.lines.filter(function (line) {
+        return specCellValue(line, matrix.rowAxis) === rowValue
+      })
+      return qtyTotalText(rowLines)
+    })
+  })
+  return defs
+}
+
+// 表头和每列的每个值都量一遍取最宽，跟 tableColumns 同一套算法，量出来的宽度才可信。
+function measureColsWidth(defs, measure) {
+  defs.forEach(function (col) {
+    let need = measure(col.title, FONT.head)
+    col.values.forEach(function (value) {
+      need = Math.max(need, measure(value == null ? '' : String(value), col.font))
+    })
+    col.width = Math.ceil(need * MEASURE_SLACK) + CELL_PAD_X * 2
+  })
+  return { defs: defs, natural: defs.reduce(function (sum, col) {
+    return sum + col.width
+  }, 0) }
+}
+
+// 矩阵节自己的列下限——形状照抄 pageWidthFor，但量的是这一节的矩阵列（行轴+各列取值+小计），
+// 不是平铺全表的列。老路径靠 pageWidthFor(raw) 保证 fitColumns 一定塞得下，矩阵节的列压根
+// 没进那个式子，所以矩阵节必须单独算一次下限，调用方（layoutSlip）拿它和 pageWidthFor 取 max。
+function matrixPageWidthFor(section, matrix, measure) {
+  const raw = measureColsWidth(matrixColumnDefs(section, matrix), measure)
+  const floor = raw.defs.reduce(function (sum, col) {
+    return sum + (canWrapColumn(col) ? floorWidth(col, measure) : col.width)
+  }, 0)
+  return floor + PAD * 2
+}
+
+// 矩阵节画四种行：节头（货号+品名 / 单价）、列表头（行轴名 / 各列取值 / 小计）、
+// 数据行（行轴取值 / 各列件数 / 该行小计）、节尾（小计 N 件 / ¥金额合计）。
+// 列的边框只画在列表头到数据行这一段，节头和节尾是跨列的整行文字，不该被竖线切开。
+function layoutMatrixSection(cmds, section, matrix, pageWidth, y, measure) {
+  const contentWidth = pageWidth - PAD * 2
+  const tableRight = PAD + contentWidth
+  const raw = measureColsWidth(matrixColumnDefs(section, matrix), measure)
+  const cols = fitColumns(raw, pageWidth, measure)
+  const defs = cols.defs
+  const headH = 98
+
+  const tableTop = y
+  const sectionHeadY = y
+  y += headH
+  const listHeadY = y
+  y += headH
+
+  const rows = matrix.rowValues.map(function (rowValue, index) {
+    const cells = {}
+    defs.forEach(function (col) {
+      const raw2 = col.values[index]
+      cells[col.key] = canWrapColumn(col)
+        ? wrapCell(raw2, col, measure)
+        : [raw2 == null ? '' : String(raw2)]
+    })
+    const lineCount = defs.reduce(function (max, col) {
+      return Math.max(max, (cells[col.key] || []).length)
+    }, 1)
+    return {
+      cells: cells,
+      height: Math.max(103, CELL_PAD_Y * 2 + lineCount * LINE_H)
+    }
+  })
+  rows.forEach(function (row) {
+    row.y = y
+    y += row.height
+  })
+
+  const footY = y
+  y += headH
+
+  const tableH = y - tableTop
+
+  pushRect(cmds, PAD, sectionHeadY, contentWidth, headH, COLORS.header)
+  pushRect(cmds, PAD, listHeadY, contentWidth, headH, COLORS.total)
+  pushRect(cmds, PAD, footY, contentWidth, headH, COLORS.total)
+  pushStroke(cmds, PAD, tableTop, contentWidth, tableH, 2)
+  pushLine(cmds, PAD, sectionHeadY + headH, tableRight, sectionHeadY + headH, 1)
+  pushLine(cmds, PAD, listHeadY + headH, tableRight, listHeadY + headH, 1)
+  rows.forEach(function (row) {
+    pushLine(cmds, PAD, row.y + row.height, tableRight, row.y + row.height, 1)
+  })
+  defs.slice(1).forEach(function (col) {
+    pushLine(cmds, col.x, listHeadY, col.x, footY, 1)
+  })
+
+  const headerLabel = (section.sku ? section.sku + ' ' : '') + section.productName
+  pushText(cmds, headerLabel, PAD + CELL_PAD_X, textTop(sectionHeadY, headH, FONT.head), FONT.head, COLORS.value, 'left')
+  pushText(cmds, '¥' + matrix.priceText, tableRight - CELL_PAD_X, textTop(sectionHeadY, headH, FONT.head), FONT.head, COLORS.value, 'right')
+
+  defs.forEach(function (col) {
+    pushText(cmds, col.title, cellX(col), textTop(listHeadY, headH, FONT.head), FONT.head, COLORS.value, col.align)
+  })
+
+  rows.forEach(function (row) {
+    defs.forEach(function (col) {
+      const texts = row.cells[col.key] || []
+      const blockH = texts.length * LINE_H
+      let ty = row.y + (row.height - blockH) / 2
+      texts.forEach(function (line) {
+        pushText(cmds, line, cellX(col), ty, col.font, COLORS.value, col.align)
+        ty += LINE_H
+      })
+    })
+  })
+
+  const sectionQtyText = qtyTotalText(section.lines)
+  const sectionAmountText = amountSumText(section.lines)
+  pushText(cmds, '小计 ' + sectionQtyText + ' 件', PAD + CELL_PAD_X, textTop(footY, headH, FONT.head), FONT.head, COLORS.value, 'left')
+  pushText(cmds, '¥' + sectionAmountText, tableRight - CELL_PAD_X, textTop(footY, headH, FONT.head), FONT.head, COLORS.value, 'right')
+
+  return y + 24
+}
+
+// 全表按节渲染：矩阵节走 layoutMatrixSection，平铺节直接复用 layoutTable（每节自己算
+// 列布局，列结构与「现有一致」——货号/品名/轴.../数量/单价/金额，不用另写一套），
+// 各节共享同一个表格总宽 pageWidth/contentWidth，纵向堆叠。
+function layoutSectionedTable(cmds, sections, matrices, pageWidth, y, measure) {
+  let cursor = y
+  sections.forEach(function (section, index) {
+    const matrix = matrices[index]
+    if (matrix) {
+      cursor = layoutMatrixSection(cmds, section, matrix, pageWidth, cursor, measure)
+    } else {
+      const raw = tableColumns({ lines: section.lines }, measure)
+      const cols = fitColumns(raw, pageWidth, measure)
+      cursor = layoutTable(cmds, { lines: section.lines }, cols, cursor, measure)
+    }
+  })
+  return cursor
+}
+
 // 合计搬出表格：金额列原本被合计的 ¥1582.00 撑着，明细行最长才 495.00。搬出来这列窄一截，
 // 画布跟着窄，字号就能再大一点；合计本身也不再受列宽约束，可以用最大的字。
 function summaryRows(slip) {
@@ -551,9 +841,54 @@ function layoutSlip(slip, measure, options) {
   // 预览弹层仍是手机竖向卡片；导出用横向表格，规格按本单出现的轴名分列。
   const measureFn = measure || estimateWidth
   const ratio = options && options.minHeightRatio != null ? options.minHeightRatio : MIN_HEIGHT_RATIO
+  // 导出样式是用户导出那一刻的选择，不是单据数据，所以放在 options 而不是 slip 上。
+  // 只认字面 'detail'，别的值（含不传）一律按 'summary'。
+  const exportStyle = options && options.exportStyle === 'detail' ? 'detail' : 'summary'
   const raw = tableColumns(slip, measureFn)
-  const pageWidth = pageWidthFor(raw, measureFn)
-  const cols = fitColumns(raw, pageWidth, measureFn)
+
+  // exportStyle !== 'summary' 时（即 'detail'）连分节都不算，sections/matrices 留 null、
+  // hasMatrix 恒为 false——这是「detail 与不传 options 的老路径逐字相同」的保证：两者字面上
+  // 跑的是同一段代码，包括下面 pageWidth 的算法。
+  let sections = null
+  let matrices = null
+  let hasMatrix = false
+  if (exportStyle === 'summary') {
+    sections = sliceLineSections(slip.lines)
+    matrices = sections.map(buildMatrixSection)
+  }
+
+  // 基准画布：不管有没有矩阵节都先按平铺算一遍。这一步必须排在「矩阵节是否成立」判定之前——
+  // R1 新增的条件 7 要拿它当上限，先有基准才能问「矩阵化会不会撑得比它更宽」，否则「画布宽度
+  // 取决于哪些节矩阵化、矩阵化又取决于画布宽度」会绕成循环依赖（方案 R1 明确点出这一条）。
+  const basePageWidth = pageWidthFor(raw, measureFn)
+
+  // 条件 7（方案 R1，2026-09-02）：矩阵化不得让画布比平铺更宽。逐节判断——这节矩阵化后的
+  // 列宽下限一旦超过 basePageWidth，就地退回平铺（matrices[index] 置 null），不牵连其它节，
+  // 混排照旧成立。前 6 条件都满足也不例外：这个功能的出发点是「单子太长」，不是「字太大」，
+  // 拿字号换行数是走反了。MATRIX_COL_LIMIT（条件 5）留着当快速否决，但真正兜底是这一条。
+  if (matrices) {
+    matrices = matrices.map(function (matrix, index) {
+      if (!matrix) return null
+      if (matrixPageWidthFor(sections[index], matrix, measureFn) > basePageWidth) return null
+      return matrix
+    })
+    hasMatrix = matrices.some(function (matrix) {
+      return !!matrix
+    })
+  }
+
+  // R1 之后 pageWidth 恒等于 basePageWidth（条件 7 保证了留下来的每个矩阵节的列宽下限都
+  // <= 它）。这里仍然走 Math.max 而不是直接赋值 basePageWidth，是留一道兜底：万一条件 7
+  // 本身判断有误，静默丢列的代价比画布多撑一点更高，宁可画布跟着变宽也不要截断内容——
+  // 正常路径下这段是 no-op，不改变任何结果。
+  let pageWidth = basePageWidth
+  if (hasMatrix) {
+    pageWidth = matrices.reduce(function (width, matrix, index) {
+      if (!matrix) return width
+      return Math.max(width, matrixPageWidthFor(sections[index], matrix, measureFn))
+    }, pageWidth)
+  }
+
   const cmds = []
   let y = PAD
   const shopName = String(slip.shopName || '').trim()
@@ -567,7 +902,15 @@ function layoutSlip(slip, measure, options) {
   y += 36
 
   y = layoutMeta(cmds, slip, pageWidth, y, measureFn)
-  y = layoutTable(cmds, slip, cols, y, measureFn)
+
+  if (hasMatrix) {
+    y = layoutSectionedTable(cmds, sections, matrices, pageWidth, y, measureFn)
+  } else {
+    // 全表没有任何矩阵节：老单据、明细态、或矩阵条件一条都没满足的汇总态，都走这条
+    // 没改过一个字的老路径——tableColumns/fitColumns/layoutTable 的调用方式和改动前相同。
+    const cols = fitColumns(raw, pageWidth, measureFn)
+    y = layoutTable(cmds, slip, cols, y, measureFn)
+  }
 
   // 签收和欠款先画在临时数组里量高，好把差的高度补成中间留白，把签收区压到底部。
   const footCmds = []
@@ -938,6 +1281,7 @@ module.exports = {
   MAX_CANVAS_PX: MAX_CANVAS_PX,
   CANVAS_2D_SAFE_PX: CANVAS_2D_SAFE_PX,
   specAxisNames: specAxisNames,
+  sliceLineSections: sliceLineSections,
   wrapText: wrapText,
   layoutSlip: layoutSlip,
   drawSlip: drawSlip,
