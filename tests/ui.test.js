@@ -1774,6 +1774,143 @@ async function runSalePickerAndSlip(miniProgram) {
   await closeSlip(sale, '送货单')
 }
 
+// 销售页规格多选 + 批量填数（批 2/2026-09-02）。种子里的「短袖 T恤」两轴都有 >= 2 个
+// 取值（黑色/白色 × M/L），是这批要测的形态：颜色单选、尺码可多选。
+//
+// 【为什么放在 runSaleReturn 之后】本用例最后会真的提交一单，让它成为账本里最新的
+// 「out」流水。runSaleReturn 用 latestOfType(records, 'out') 认定「最新销售单就是
+// runSalePickerAndSlip 那张一分未收的」，插在两者中间会把这条前提改错；放在
+// runSaleReturn 之后就不会撞见任何依赖「最新销售单是谁」的后续用例（全文只有
+// runSaleReturn 这一处用 latestOfType）。
+//
+// 【为什么要走到真提交，不只测加入清单】H1 点名的风险路径是「填了一行没点加入清单、
+// 直接点确认销售」——currentLine/mergeLine 改名之后最容易在 submit() 里留下悬空调用，
+// 而 npm test 抓不到这类运行期 ReferenceError。所以本用例分两段：先走一次正常的
+// 「选两格 → 全部填 → 改一格 → 加入清单」核对清单行数与合计，再填第二批**不点加入
+// 清单**直接点确认销售，逼 submit() 自己走 currentLines() / mergeLines() 那条路。
+async function runSaleMultiSelect(miniProgram) {
+  step('销售：规格二多选批量填数——选两格/全部填/改一格/加入清单，再补一批不点加入清单直接确认销售（H1）')
+  await backToTabRoot(miniProgram)
+  const sale = await goto(miniProgram, 'navigateTo', '/pages/sale/sale', '销售页')
+  await waitPageReady(sale)
+  await waitFor(sale, '.js-product-picker', '出现 .js-product-picker')
+
+  await tap(sale, '.js-product-picker')
+  await typeInto(sale, '.search', '短袖', '商品搜索', 'keyword')
+  await waitFor(sale, '.js-product-item', '出现 .js-product-item')
+  const products = await sale.$$('.js-product-item')
+  assert.strictEqual(products.length, 1, '搜索「短袖」应当只命中一件商品，实为 ' + products.length)
+  await products[0].tap()
+  await waitGone(sale, '.js-product-item')
+  await waitForData(sale, function (d) {
+    return String(d.productName || '').indexOf('短袖') >= 0
+  }, '商品切到短袖 T恤')
+
+  // 规格一先选颜色——n5 3:767 的级联：没选颜色，规格二禁用（pickSize / pickAllSizes
+  // 里的守卫会直接吃掉点击，不选颜色的话下面两次点规格二都不会有任何效果）。
+  await waitFor(sale, '.js-color-chip', '出现规格一 chips')
+  await tapNth(sale, '.js-color-chip', 0, '规格一第一枚 chip（颜色）')
+  await waitForData(sale, function (d) { return !!d.selectedColor }, '颜色选中')
+
+  // 规格二选两格：第一次点还是既有单选形态（|Z| 0→1），第二次点才切多选（T4，|Z| 1→2）。
+  // 两次都用同一个 .js-size-chip 钩子——单选/多选两套模板里都挂了它，不必关心此刻在哪个形态。
+  await waitFor(sale, '.js-size-chip', '出现规格二 chips')
+  await tapNth(sale, '.js-size-chip', 0, '规格二第一格')
+  await waitForData(sale, function (d) {
+    return d.selectedSizes.length === 1 && d.multiMode === false
+  }, '选中第一格，仍是单选形态')
+  await tapNth(sale, '.js-size-chip', 1, '规格二第二格')
+  await waitForData(sale, function (d) {
+    return d.multiMode === true && d.selectedSizes.length === 2
+  }, '选中第二格后切到多选形态')
+
+  const afterPick = await sale.data()
+  assert.strictEqual(afterPick.cellRows.length, 2, '多选形态应当渲染两行逐格输入')
+  const sizeValues = afterPick.selectedSizes.slice()
+
+  // 「全部填 1」：两格都要落进 cellQtys（T8）。数量刻意压得很小——种子里
+  // 黑色/L 只有 2 件现货，本用例后面还要再补一批直接提交，两批加起来不能超过它。
+  await typeInto(sale, '.js-batch-qty', '1', '全部填', 'batchQty')
+  await waitForData(sale, function (d) {
+    return sizeValues.every(function (s) { return String(d.cellQtys[s]) === '1' })
+  }, '全部填之后两格的草稿都变成 1')
+
+  // 改第一格（M）为 3（T9：只改这一格，「全部填」框里的值留着当提示，不联动）。
+  const cellInputsBefore = await sale.$$('.js-cell-qty')
+  assert.strictEqual(cellInputsBefore.length, 2, '逐格应当渲染两个输入框，实为 ' + cellInputsBefore.length)
+  await cellInputsBefore[0].input('3')
+  await waitForData(sale, function (d) {
+    return d.cellRows.length === 2 && d.cellRows[0].qtyText === '3' && d.cellRows[1].qtyText === '1'
+  }, '第一格改成 3，第二格仍是全部填时的 1')
+  assert.strictEqual((await sale.data()).batchQty, '1', 'T9：「全部填」框里的值应当留着，不因逐格改动被清空')
+
+  // 加入清单：裁定 C 的 N = 有正数量的格数 = 2，按钮标签与合计行都要跟着。
+  const beforeAdd = await sale.data()
+  assert.strictEqual(beforeAdd.batchLineCount, 2, '本批 2 格都有正数量，batchLineCount 应为 2')
+  assert.strictEqual(beforeAdd.addBtnLabel, '加入清单（2 行）')
+  const beforeCartLen = beforeAdd.cart.length
+  await tapWhen(sale, '.js-add-cart')
+  await waitForData(sale, function (d) {
+    return d.cart.length === beforeCartLen + 2
+  }, '加入清单之后清单多了两行')
+
+  const afterAdd = await sale.data()
+  // T11：选中集合与单价保留，逐格草稿与「全部填」清空。
+  assert.strictEqual(Object.keys(afterAdd.cellQtys || {}).length, 0, 'T11：加入清单之后逐格草稿应当清空')
+  assert.strictEqual(afterAdd.batchQty, '', 'T11：加入清单之后「全部填」应当清空')
+  assert.deepStrictEqual(afterAdd.selectedSizes.slice().sort(), sizeValues.slice().sort(),
+    'T11：加入清单之后选中集合应当保留')
+  const firstBatchLines = afterAdd.cart.slice(beforeCartLen)
+  const skuIdBySize = {}
+  const qtyBySkuId = {}
+  firstBatchLines.forEach(function (item) {
+    skuIdBySize[item.size] = item.skuId
+    qtyBySkuId[item.skuId] = item.qty
+  })
+  assert.strictEqual(qtyBySkuId[skuIdBySize[sizeValues[0]]], 3, '第一格应当以 3 件入清单')
+  assert.strictEqual(qtyBySkuId[skuIdBySize[sizeValues[1]]], 1, '第二格应当以 1 件入清单')
+
+  // H1：再填一批但**不点加入清单**，直接选客户、走完实收 sheet、点「确认销售」——
+  // currentLines() / mergeLines() 在 submit() 里要是悬空，这一步会直接炸掉。
+  await typeInto(sale, '.js-batch-qty', '1', '全部填（第二批，不加入清单）', 'batchQty')
+  await waitForData(sale, function (d) {
+    return sizeValues.every(function (s) { return String(d.cellQtys[s]) === '1' })
+  }, '第二批全部填 1 落进两格')
+
+  await tapWhen(sale, '.js-customer-picker')
+  await waitFor(sale, '.js-customer-item', '出现 .js-customer-item')
+  const customers = await sale.$$('.js-customer-item')
+  assert.ok(customers.length > 0, '客户点选列表为空')
+  await customers[0].tap()
+  await waitGone(sale, '.js-customer-item')
+
+  await tapWhen(sale, '.js-paid-row')
+  await waitFor(sale, '.js-paid-full', '出现 .js-paid-full')
+  await tapWhen(sale, '.js-paid-full')
+  await waitFor(sale, '.js-paid-confirm', '出现 .js-paid-confirm')
+  await tapWhen(sale, '.js-paid-confirm')
+  await waitGone(sale, '.js-paid-full')
+
+  const beforeRecords = await readRecords(miniProgram)
+  await tapWhen(sale, '.js-sale-submit')
+  const record = await waitForNewRecord(miniProgram, 'out', beforeRecords,
+    'H1：不点加入清单、直接确认销售（多选批量的第二批要在这里被 submit() 并进去）')
+  assert.strictEqual(record.lines.length, 2,
+    'H1 路径提交的这一单应当是两行（两格各一行），实为 ' + record.lines.length)
+  const recordQtyBySkuId = {}
+  record.lines.forEach(function (line) { recordQtyBySkuId[line.skuId] = line.qty })
+  // 第二批（未点加入清单）1 件 + 第一批已经加入清单的那 3 / 1 件，同格累加（H7：
+  // 同批两行落同一格由 mergeLines 的循环天然累加）。第二格两批合计正好吃满黑色/L
+  // 全部 2 件现货，是刻意压到边界的（见上面选数量时的注释）。
+  assert.strictEqual(recordQtyBySkuId[skuIdBySize[sizeValues[0]]], 3 + 1,
+    '第一格应当把两批累加成 4 件')
+  assert.strictEqual(recordQtyBySkuId[skuIdBySize[sizeValues[1]]], 1 + 1,
+    '第二格应当把两批累加成 2 件')
+
+  await waitSlipOpen(sale, '多选批量销售的送货单')
+  await closeSlip(sale, '多选批量销售的送货单')
+}
+
 async function runRecordSlipExport(miniProgram) {
   step('流水：打开销售记录，默认只读，再次打开送货单')
   const records = await goto(miniProgram, 'switchTab', '/pages/records/records', '流水页')
@@ -3352,6 +3489,10 @@ async function run() {
       ['sale', runSalePickerAndSlip],
       ['record-slip', runRecordSlipExport],
       ['return', runSaleReturn],
+      // 必须在 return 之后：本用例末尾会真提交一单，成为账本里最新的 out 流水；
+      // runSaleReturn 靠 latestOfType 认定「最新销售单」是谁，插到它前面会把那条
+      // 前提改错。详见函数定义处的注释。
+      ['sale-multi', runSaleMultiSelect],
       ['adjust', runAdjust],
       ['stock-take', runStockTake],
       ['convert', runConvert],
@@ -3712,14 +3853,15 @@ reGoto.lastIndex = 0
 while ((hit = reGoto.exec(routeSource)) !== null) gotoTargets.push(hit[1])
 assert.strictEqual(
   gotoTargets.length,
-  26,
+  27,
   // 8 处最早就有；2 处是 runRecordSheet 进看板和 runRecordSheetFabEntry 进流水页；
   // 12 处是 2026-08-31 那一批新覆盖自己的入口（含 readCustomerDebts 前后两次进客户页）；
   // 2 处是 A3 批返工时把误判栈深的 goBackTo（switchTab 进流水/客户页之后，栈深恒为 1，
   // 没有「上一页」可退）改成的 switchTab（runRecordSheetFabEntry 结尾回看板、
   // runRecordsLoadMore 结尾回客户页）；
-  // 2 处是 B4 批新增的 runStockTake：switchTab 进看板起步，navigateTo 带 id 进盘点页。
-  '自检：goto 的字面量调用点应当正好 26 处，实为 ' + gotoTargets.length + ' 处：'
+  // 2 处是 B4 批新增的 runStockTake：switchTab 进看板起步，navigateTo 带 id 进盘点页；
+  // 1 处是批 2/2026-09-02 新增的 runSaleMultiSelect：navigateTo 进销售页测规格多选。
+  '自检：goto 的字面量调用点应当正好 27 处，实为 ' + gotoTargets.length + ' 处：'
     + JSON.stringify(gotoTargets)
     + ' —— 数目对不上说明要么正则失效了（钉子④是假绿的），要么调用点增减了，两种都要人看一眼'
 )

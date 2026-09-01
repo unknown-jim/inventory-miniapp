@@ -22,7 +22,9 @@ Page({
     colors: [],
     sizes: [],
     selectedColor: '',
-    selectedSize: '',
+    // 规格二支持多选（批 2/2026-09-02）。|Z| <= 1 时卡渲染成既有单选形态（主屏那套，
+    // 一个字不改），selectedSizes 里最多一个元素；|Z| >= 2 时切多选形态，见 multiMode。
+    selectedSizes: [],
     skuId: '',
     specAxis1: '规格一',
     specAxis2: '规格二',
@@ -35,6 +37,17 @@ Page({
     qty: '',
     unitPrice: '',
     lineAmountText: '0.00',
+    // 以下四个字段只在多选形态（multiMode）下被 wxml 消费：batchQty 是「全部填」框的
+    // 字面值（一次性动作，不跨批记忆）；cellQtys 是 格(size) -> 数量 的草稿；
+    // multiMode 派生自 selectedSizes.length >= 2；batchLineCount / addBtnLabel /
+    // cellRows 由 linePatch 统一算，裁定 C：N = 有正数量的格数，不是选中格数。
+    batchQty: '',
+    cellQtys: {},
+    multiMode: false,
+    allSizesOn: false,
+    batchLineCount: 0,
+    addBtnLabel: '加入清单',
+    cellRows: [],
 
     customerId: '',
     customerName: WALKIN_NAME,
@@ -426,15 +439,33 @@ Page({
     }
   },
 
+  // 单选形态下"当前唯一选中的格"；|Z| = 0 或 >= 2 时没有这个概念，返回空串。
+  singleSelectedSize() {
+    return this.data.selectedSizes.length === 1 ? this.data.selectedSizes[0] : ''
+  },
+
+  // selectedSizes 和 multiMode 是同一件事的两种形状：multiMode 就是 selectedSizes.length
+  // >= 2 的派生量，不是独立状态。2026-09-02 的回归就是漏处：pickSize/pickAllSizes 的
+  // 写入点只改了 selectedSizes、忘了同步 multiMode，UI 测试卡在切多选形态那一步——
+  // 页面 data 里 selectedSizes 已经是 2 个了，multiMode 却还停在旧值，wxml 永远切不到
+  // 多选模板。所以收敛到这一个函数：任何要改 selectedSizes 的地方都只准调它拿 patch，
+  // 不许自己手写 { selectedSizes: ..., multiMode: ... }——写集合却漏派生量这件事，
+  // 结构上就做不到。tests/sale-spec-view.test.js 末尾有条静态钉子扫全部 setData({...})，
+  // 逮到「selectedSizes 单独出现在 patch 里、没有 multiMode 也没有走这个函数」就红。
+  sizeSelectionPatch(nextSizes) {
+    return { selectedSizes: nextSizes, multiMode: nextSizes.length >= 2 }
+  },
+
   currentSku(product) {
     const current = product || store.getProduct(this.data.productId)
     if (!current || !inventory.productHasSpecs(current)) return null
     const colors = current.colors || []
     const sizes = current.sizes || []
-    if ((colors.length && !this.data.selectedColor) || (sizes.length && !this.data.selectedSize)) {
+    const size = this.singleSelectedSize()
+    if ((colors.length && !this.data.selectedColor) || (sizes.length && !size)) {
       return null
     }
-    return inventory.findSkuBySpec(this.data.skus, current.id, this.data.selectedColor, this.data.selectedSize)
+    return inventory.findSkuBySpec(this.data.skus, current.id, this.data.selectedColor, size)
   },
 
   stockLeft(product, sku, cart) {
@@ -456,23 +487,45 @@ Page({
     return String(inventory.round2(current.stock - this.cartQtyOf(current.id, '', cart)))
   },
 
-  specOptions(product, selectedColor, selectedSize, cart) {
+  specOptions(product, selectedColor, selectedSizes, cart) {
     return saleSpecView.saleSpecOptions(
       product,
       this.data.skus,
       selectedColor,
-      selectedSize,
+      selectedSizes,
       this.cartItems(cart)
     )
   },
 
   stockPatch(product, sku, cart) {
     if (!product) {
-      return { stockText: this.data.stockText }
+      return { stockText: this.data.stockText, cellRows: [] }
     }
+    const sizes = product.sizes || []
+    const selectedSizes = this.data.selectedSizes || []
+    const specPatch = this.specOptions(product, this.data.selectedColor, selectedSizes, cart)
     return Object.assign({
-      stockText: this.stockLeft(product, sku, cart)
-    }, this.specOptions(product, this.data.selectedColor, this.data.selectedSize, cart))
+      stockText: this.stockLeft(product, sku, cart),
+      // 「全选」chip 的三态：全选 / 未全选（部分选中与一个都没选同为未选中，无第三态）。
+      allSizesOn: sizes.length > 0 && sizes.every(function (s) {
+        return selectedSizes.indexOf(s) >= 0
+      }),
+      // 逐格行的"形状"（选中了哪几格）只由 selectedSizes + sizeOptions 决定，跟
+      // "有没有正数量的行"无关——这里跟 stockText / colorOptions / sizeOptions 一样
+      // 是每次拼 spec 状态都会重算的东西，没有任何早退能绕过它。2026-09-02 的回归
+      // 就是把这段逻辑塞进了 linePatch 的 "if (!lines.length) return" 后面——选中
+      // 两格但还没填数量时 lines 是空的，cellRows 也就永远生不出来，用户连输入框
+      // 都看不到，无从填出第一个正数量（鸡生蛋）。红字/琥珀才是要等真的有正数量的
+      // 行、真的跑过 assertSaleItems 才有意义的东西，两者不是一回事。
+      cellRows: this.data.multiMode ? this.buildCellRows(specPatch.sizeOptions, '') : []
+    }, specPatch)
+  },
+
+  // 选中集合 / 逐格草稿变化之后统一刷新：chips 的 on 态与「全选」三态、逐格现货 hint、
+  // 金额、琥珀/红字、按钮态。pickSize / pickAllSizes / 多选态 pickColor 共用这一条。
+  recomputeAfterSpecChange(product) {
+    this.setData(this.stockPatch(product, this.currentSku(product), this.data.cart))
+    this.applySettle(this.linePatch(this.data.cart))
   },
 
   cartDue(cart) {
@@ -481,29 +534,105 @@ Page({
     }, 0))
   },
 
-  // 本行能不能加入清单。稿 n16 7:33：「清单累计（已入 + 本行）超过该格现货且半成品池
-  // 也不够时，加入清单禁用并拦截，不只在数量为空时禁用」。判据直接用后端那份
-  // assertSaleItems，不在页面里另写一套库存算式。
+  // 逐格标红：整批失败时才逐格增量定位，只标第一个抛错的格（多格同时超格时卡级红字
+  // 只出一句，UX 注释 9 / 状态机 §1.3：后面的格库存已被吃掉，状态无意义）。
+  // overNote 已经从外层那次整批 assertSaleItems 的报错里取好了，这里只找"哪一格"。
+  locateOverCell(cart, lines) {
+    for (let i = 0; i < lines.length; i++) {
+      try {
+        inventory.assertSaleItems(
+          this.data.products,
+          this.data.skus,
+          this.cartItems(cart.concat(lines.slice(0, i + 1)))
+        )
+      } catch (error) {
+        return lines[i].size
+      }
+    }
+    return ''
+  },
+
+  // 多选态逐格行的渲染数组：从 sizeOptions（现货 hint，裁定 B 用 ready 不用 stock）+
+  // cellQtys（草稿值）+ overKey（唯一标红格）拼出来，顺序就是 sizeOptions 的顺序
+  // （= product.sizes 顺序，即"行序"）。
+  buildCellRows(sizeOptions, overKey) {
+    const cellQtys = this.data.cellQtys || {}
+    return (sizeOptions || []).filter(function (opt) {
+      return opt.on
+    }).map(function (opt) {
+      const raw = cellQtys[opt.value]
+      return {
+        value: opt.value,
+        qtyText: raw == null ? '' : String(raw),
+        hint: '现货 ' + opt.ready,
+        over: !!overKey && opt.value === overKey
+      }
+    })
+  },
+
+  // 本批能不能加入清单。稿 n16 7:33：「清单累计（已入 + 本批）超过现货且半成品池也不够
+  // 时，加入清单禁用并拦截」。判据直接用后端那份 assertSaleItems，不在页面里另写一套
+  // 库存算式。H6：批后只跑一次 assertSaleItems（省重复全量克隆，不是防中间态误判——
+  // 顺序贪心下整批通过蕴含每个前缀通过）。
   linePatch(cart) {
     const list = cart || this.data.cart
-    const qty = inventory.toNumber(this.data.qty)
-    const price = inventory.toNumber(this.data.unitPrice)
+    const product = this.data.productId ? store.getProduct(this.data.productId) : null
+    const result = this.currentLines()
+    const lines = result.lines
+
+    // H2：金额无条件从当前输入算，位置在任何早退之前——多选态是"本批 N 格 · 合计"，
+    // 同样不许因为校验没过就清零或不渲染（稿 ③ 22:169 的 ¥1792.00 就是这条的证据）。
+    const amount = inventory.round2(lines.reduce(function (sum, line) {
+      return sum + inventory.toNumber(line.qty) * inventory.toNumber(line.unitPrice)
+    }, 0))
+    // 裁定 C：N = 有正数量的格数（= lines.length），不是选中格数。
     const patch = {
-      lineAmountText: util.money(qty * price),
+      lineAmountText: util.money(amount),
+      batchLineCount: lines.length,
+      addBtnLabel: lines.length ? ('加入清单（' + lines.length + ' 行）') : '加入清单',
       blankNote: '',
       overNote: '',
+      // cellRows 不在这里管：它的"形状"由 stockPatch 无条件算好（见那边的注释），
+      // 这个方法只在下面 multiMode 且真的有 lines 时，拿 overKey 重新贴一次标红。
       canAdd: false
     }
-    const product = this.data.productId ? store.getProduct(this.data.productId) : null
-    if (!product || qty <= 0) return patch
-    const line = this.currentLine()
-    if (!line) return patch
-    if (line.error) {
-      patch.overNote = line.error
+
+    if (!product) return patch
+    if (result.error) {
+      patch.overNote = result.error
       return patch
     }
+    if (!lines.length) return patch
+
+    const reserved = this.cartItems(list)
+
+    if (this.data.multiMode) {
+      // 多选态：琥珀行按 P0-P3 独立算，跟 assertSaleItems 成败无关——P3 时两者并存
+      // （琥珀是整批口径，红字是该格口径，稿 S4 / UX 注释 8）。
+      if (inventory.isBlankProcess(product)) {
+        const short = saleSpecView.blankShortOf(product, this.data.skus, lines, reserved)
+        if (short > 0) {
+          const pool = inventory.blankAvailability(product, this.data.skus, '', '', reserved).blank
+          patch.blankNote = short <= pool
+            ? ('现货不足，本批将从半成品扣 ' + short + ' 件')
+            : ('现货不足，半成品只够补 ' + pool + ' 件，本批还差 ' + inventory.round2(short - pool) + ' 件')
+        }
+      }
+      let overKey = ''
+      try {
+        inventory.assertSaleItems(this.data.products, this.data.skus, this.cartItems(list.concat(lines)))
+        patch.canAdd = true
+      } catch (error) {
+        patch.overNote = String((error && error.message) || '库存不够，不能加入清单')
+        overKey = this.locateOverCell(list, lines)
+      }
+      patch.cellRows = this.buildCellRows(this.data.sizeOptions, overKey)
+      return patch
+    }
+
+    // 单选形态：既有逻辑一个字不改（H3 的 isBlankProcess 守卫也原样留着）。
     try {
-      inventory.assertSaleItems(this.data.products, this.data.skus, this.cartItems(list.concat([line])))
+      inventory.assertSaleItems(this.data.products, this.data.skus, this.cartItems(list.concat(lines)))
     } catch (error) {
       patch.overNote = String((error && error.message) || '库存不够，不能加入清单')
       return patch
@@ -513,7 +642,8 @@ Page({
     if (inventory.isBlankProcess(product)) {
       const sku = this.currentSku(product)
       if (sku) {
-        const avail = inventory.blankAvailability(product, this.data.skus, sku.color, sku.size, this.cartItems(list))
+        const avail = inventory.blankAvailability(product, this.data.skus, sku.color, sku.size, reserved)
+        const qty = lines[0] ? inventory.toNumber(lines[0].qty) : 0
         const short = inventory.round2(qty - inventory.toNumber(avail.ready))
         if (short > 0) patch.blankNote = '现货不足，将从半成品扣 ' + short + ' 件'
       }
@@ -521,25 +651,28 @@ Page({
     return patch
   },
 
-  applyProductState(product, selectedColor, selectedSize, cart) {
+  // selectedSizes 是选中集合（数组）。sizes.length === 1 时自动选中该值（既有单值轴的
+  // 便利行为，一个字不改），|Z| 由此算出的 multiMode 跟着走。
+  applyProductState(product, selectedColor, selectedSizes, cart) {
     const hasSpecs = inventory.productHasSpecs(product)
     const colors = product.colors || []
     const sizes = product.sizes || []
     let color = selectedColor
-    let size = selectedSize
+    let sizesSel = (selectedSizes || []).slice()
     if (hasSpecs) {
       if (colors.length === 1) color = colors[0]
-      if (sizes.length === 1) size = sizes[0]
+      if (sizes.length === 1) sizesSel = [sizes[0]]
     } else {
       color = ''
-      size = ''
+      sizesSel = []
     }
-    const sku = hasSpecs ? inventory.findSkuBySpec(this.data.skus, product.id, color, size) : null
+    const singleSize = sizesSel.length === 1 ? sizesSel[0] : ''
+    const sku = hasSpecs ? inventory.findSkuBySpec(this.data.skus, product.id, color, singleSize) : null
     const keepPrice = this.data.productId === product.id && this.data.unitPrice && this.data.skuId === (sku ? sku.id : '')
     const unitPrice = keepPrice
       ? this.data.unitPrice
       : String(sku ? sku.salePrice : product.salePrice)
-    const base = Object.assign({
+    this.setData({
       productId: product.id,
       productName: product.name,
       hasSpecs: hasSpecs,
@@ -549,12 +682,11 @@ Page({
       colors: colors,
       sizes: sizes,
       selectedColor: color,
-      selectedSize: size,
       skuId: sku ? sku.id : '',
-      unitPrice: unitPrice,
-      stockText: this.stockLeft(product, sku, cart)
-    }, this.specOptions(product, color, size, cart))
-    this.setData(base)
+      unitPrice: unitPrice
+    })
+    this.setData(this.sizeSelectionPatch(sizesSel))
+    this.setData(this.stockPatch(product, sku, cart))
     this.applySettle(this.linePatch(cart))
   },
 
@@ -562,10 +694,15 @@ Page({
     const product = store.getProduct(id)
     if (!product) return
     const same = this.data.productId === id
+    if (!same) {
+      // T1：换商品——多选相关的逐格草稿、全部填框全部清空（选中集合本身交给
+      // applyProductState 的 selectedSizes=[] 分支去清）。
+      this.setData({ cellQtys: {}, batchQty: '' })
+    }
     this.applyProductState(
       product,
       same ? this.data.selectedColor : '',
-      same ? this.data.selectedSize : '',
+      same ? this.data.selectedSizes : [],
       this.data.cart
     )
   },
@@ -573,13 +710,110 @@ Page({
   pickColor(e) {
     const product = store.getProduct(this.data.productId)
     if (!product) return
-    this.applyProductState(product, e.currentTarget.dataset.value, this.data.selectedSize, this.data.cart)
+    const value = e.currentTarget.dataset.value
+    if (this.data.selectedSizes.length >= 2) {
+      // T3：多选态换规格一——选中集合与单价保留，逐格数量与「全部填」清空
+      // （换颜色后每格现货会变，留着旧数量会被当成已核过库存；与 T11 同形，样张 S5）。
+      this.setData({ selectedColor: value, cellQtys: {}, batchQty: '' })
+      this.recomputeAfterSpecChange(product)
+      return
+    }
+    // 单选形态：既有逻辑一个字不改。
+    this.applyProductState(product, value, this.data.selectedSizes, this.data.cart)
   },
 
+  // 规格二 chips 的 toggle 入口。T4/T5：|Z| 跨过 1↔2 边界时数量要搬运，
+  // 停留在同一形态时只增删该格——统一交给 applySizeSelection。
   pickSize(e) {
     const product = store.getProduct(this.data.productId)
     if (!product) return
-    this.applyProductState(product, this.data.selectedColor, e.currentTarget.dataset.value, this.data.cart)
+    const needColor = !!(product.colors && product.colors.length)
+    // n5 3:767 的级联：规格一未选时规格二禁用。
+    if (needColor && !this.data.selectedColor) return
+    const value = e.currentTarget.dataset.value
+    const prev = this.data.selectedSizes.slice()
+    const wasOn = prev.indexOf(value) >= 0
+    const next = wasOn
+      ? prev.filter(function (v) { return v !== value })
+      : prev.concat([value])
+    this.applySizeSelection(product, prev, next)
+  },
+
+  // T6/T7：「全选」——当前已全选时再点 = 全不选（回落单选空态，= T1 后同形）；
+  // 否则选中当前未选中的格，已选中的格保留原值（复用 applySizeSelection 的 T4 迁移）。
+  pickAllSizes() {
+    const product = store.getProduct(this.data.productId)
+    if (!product) return
+    const needColor = !!(product.colors && product.colors.length)
+    if (needColor && !this.data.selectedColor) return
+    const sizes = product.sizes || []
+    if (sizes.length <= 1) return // |S| = 1 时「全选」chip 不出现，双保险
+    const prev = this.data.selectedSizes.slice()
+    const allSelected = sizes.every(function (s) {
+      return prev.indexOf(s) >= 0
+    })
+    if (allSelected) {
+      this.setData(Object.assign(this.sizeSelectionPatch([]), { cellQtys: {}, batchQty: '', qty: '' }))
+      this.recomputeAfterSpecChange(product)
+      return
+    }
+    this.applySizeSelection(product, prev, sizes.slice())
+  },
+
+  // T4：|Z| 1→2，原数量框的值搬进第一枚已选格，新格留空。
+  // T5：|Z| 2→1，那一格的值搬回数量框；丢弃的格数量直接弃掉（选中集合是唯一真相，
+  // 不留看不见的数）。停留在同一形态时只增删该格，「全部填」不受影响（T9）。
+  applySizeSelection(product, prevSizes, nextSizes) {
+    let cellQtys = Object.assign({}, this.data.cellQtys)
+    prevSizes.forEach(function (size) {
+      if (nextSizes.indexOf(size) < 0) delete cellQtys[size]
+    })
+    const wasMulti = prevSizes.length >= 2
+    const isMulti = nextSizes.length >= 2
+    let qty = this.data.qty
+    let batchQty = this.data.batchQty
+    if (!wasMulti && isMulti) {
+      const firstSize = prevSizes[0]
+      if (firstSize) cellQtys[firstSize] = qty
+      qty = ''
+    } else if (wasMulti && !isMulti) {
+      const remain = nextSizes[0]
+      qty = (remain && cellQtys[remain] != null) ? cellQtys[remain] : ''
+      cellQtys = {}
+      batchQty = ''
+    }
+    // 新选中的格（不管是不是 firstSize 那一枚）要有一个空串的条目，不是压根没有
+    // key——留空是指值，不是这一格的存在与否；不然 T6 全选一次多加两三格时，除了
+    // firstSize 那一个，其余全是没 key 的格。
+    if (isMulti) {
+      nextSizes.forEach(function (size) {
+        if (cellQtys[size] == null) cellQtys[size] = ''
+      })
+    }
+    this.setData(Object.assign(this.sizeSelectionPatch(nextSizes), { cellQtys: cellQtys, qty: qty, batchQty: batchQty }))
+    this.recomputeAfterSpecChange(product)
+  },
+
+  // T8：「全部填 N」覆盖当前所有已选中格（含已经逐格改过的）；之后新选中的格不自动
+  // 带这个值，留空（一次性动作，不是绑定）。
+  onBatchQty(e) {
+    const value = e.detail.value
+    const cellQtys = Object.assign({}, this.data.cellQtys)
+    this.data.selectedSizes.forEach(function (size) {
+      cellQtys[size] = value
+    })
+    this.setData({ batchQty: value, cellQtys: cellQtys })
+    this.applySettle(this.linePatch(this.data.cart))
+  },
+
+  // T9：只改这一格，「全部填」框里的值留着当提示，不联动、不清空。
+  onCellQty(e) {
+    const size = e.currentTarget.dataset.value
+    const value = e.detail.value
+    const cellQtys = Object.assign({}, this.data.cellQtys)
+    cellQtys[size] = value
+    this.setData({ cellQtys: cellQtys })
+    this.applySettle(this.linePatch(this.data.cart))
   },
 
   onField(e) {
@@ -729,61 +963,103 @@ Page({
     return (who || '我') + (note ? (' · ' + note) : '')
   },
 
-  currentLine() {
+  // H1：这是 mergeLines 的第三个调用点在 submit() 里，改名/改签名时那边要同步改，
+  // 否则「填了一行没点加入清单、直接点确认销售」这条路径会把老方法调用悬空。
+  // 单选形态分支一个字不改（qty <= 0 早退在先，spec 未选的 error 只在 qty > 0 时才判）；
+  // 多选形态遍历 selectedSizes（按 product.sizes 顺序，即"行序"），
+  // 数量取 cellQtys，数量 <= 0 的格不产生行。
+  currentLines() {
     const product = store.getProduct(this.data.productId)
-    if (!product) return null
-    const qty = inventory.round2(this.data.qty)
+    if (!product) return { lines: [], error: '' }
     const unitPrice = inventory.round2(this.data.unitPrice)
-    if (qty <= 0) return null
-    if (unitPrice < 0) return null
-    if (inventory.productHasSpecs(product)) {
-      const colors = product.colors || []
-      const sizes = product.sizes || []
-      if ((colors.length && !this.data.selectedColor) || (sizes.length && !this.data.selectedSize)) {
-        return { error: inventory.specSelectHint(product) }
-      }
-      const sku = this.currentSku(product)
-      if (!sku) return { error: '规格不存在' }
-      return this.toCartItem(product, sku, qty, unitPrice)
+    if (unitPrice < 0) return { lines: [], error: '' }
+
+    if (!inventory.productHasSpecs(product)) {
+      const qty = inventory.round2(this.data.qty)
+      if (qty <= 0) return { lines: [], error: '' }
+      return { lines: [this.toCartItem(product, null, qty, unitPrice)], error: '' }
     }
-    return this.toCartItem(product, null, qty, unitPrice)
+
+    const colors = product.colors || []
+    const sizes = product.sizes || []
+
+    if (this.data.multiMode) {
+      if (colors.length && !this.data.selectedColor) {
+        return { lines: [], error: inventory.specSelectHint(product) }
+      }
+      const lines = []
+      for (let i = 0; i < sizes.length; i++) {
+        const size = sizes[i]
+        if (this.data.selectedSizes.indexOf(size) < 0) continue
+        const qty = inventory.round2(this.data.cellQtys[size])
+        if (qty <= 0) continue
+        const sku = inventory.findSkuBySpec(this.data.skus, product.id, this.data.selectedColor, size)
+        if (sku) lines.push(this.toCartItem(product, sku, qty, unitPrice))
+      }
+      return { lines: lines, error: '' }
+    }
+
+    // 单选形态：既有逻辑一个字不改。
+    const qty = inventory.round2(this.data.qty)
+    if (qty <= 0) return { lines: [], error: '' }
+    if ((colors.length && !this.data.selectedColor) || (sizes.length && !this.singleSelectedSize())) {
+      return { lines: [], error: inventory.specSelectHint(product) }
+    }
+    const sku = this.currentSku(product)
+    if (!sku) return { lines: [], error: '规格不存在' }
+    return { lines: [this.toCartItem(product, sku, qty, unitPrice)], error: '' }
   },
 
   addCart() {
     try {
-      const line = this.currentLine()
-      if (line && line.error) {
-        wx.showToast({ title: line.error, icon: 'none' })
+      const result = this.currentLines()
+      if (result.error) {
+        wx.showToast({ title: result.error, icon: 'none' })
         return
       }
-      if (!line) {
+      if (!result.lines.length) {
         wx.showToast({ title: '请选择商品并填写数量', icon: 'none' })
         return
       }
-      const cart = this.mergeLine(line, this.data.cart)
-      const product = store.getProduct(line.productId)
-      const sku = line.skuId ? store.getSku(line.skuId) : null
-      // 稿 n-加入 13:560：加入后数量清空、钮禁用，商品与规格保留。
-      this.setData(Object.assign({ cart: cart, qty: '' }, this.stockPatch(product, sku, cart)))
+      const wasMulti = this.data.multiMode
+      const lineCount = result.lines.length
+      const cart = this.mergeLines(result.lines, this.data.cart)
+      const product = store.getProduct(this.data.productId)
+      const sku = this.currentSku(product)
+      // 稿 n-加入 13:560 / T11：加入后按钮禁用，商品与规格选中集合保留；
+      // 单选态清 qty，多选态清逐格草稿与「全部填」（单价两边都保留）。
+      const clearPatch = wasMulti ? { cellQtys: {}, batchQty: '' } : { qty: '' }
+      this.setData(Object.assign({ cart: cart }, clearPatch, this.stockPatch(product, sku, cart)))
       this.applySettle(this.linePatch(cart))
-      wx.showToast({ title: '已加入清单', icon: 'success' })
+      wx.showToast({
+        title: wasMulti ? ('已加入 ' + lineCount + ' 行') : '已加入清单',
+        icon: 'success'
+      })
     } catch (error) {
       util.showError(error)
     }
   },
 
-  mergeLine(line, cart) {
-    const product = store.getProduct(line.productId)
-    const sku = line.skuId ? store.getSku(line.skuId) : null
+  // H7：同批两行落同一格，由这个循环天然累加（findIndex 命中已有行就加总，否则新建），
+  // 不必专门写夹具测试。H6：批后只在最后跑一次 assertSaleItems——省去逐行重复的全量
+  // 克隆，不是为了防中间态误判（顺序贪心下整批通过蕴含每个前缀通过）。
+  // 抛错时函数体内只改 list（局部变量），不写回 this.data.cart，调用方也不会把半成品
+  // 结果赋回 cart，天然满足"抛错不许污染 cart"。
+  mergeLines(lines, cart) {
     const list = (cart || []).slice()
-    const index = list.findIndex(function (item) {
-      return item.key === line.key
-    })
-    const nextQty = inventory.round2((index >= 0 ? list[index].qty : 0) + line.qty)
-    if (index >= 0) {
-      list[index] = this.toCartItem(product, sku, nextQty, line.unitPrice)
-    } else {
-      list.push(line)
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]
+      const product = store.getProduct(line.productId)
+      const sku = line.skuId ? store.getSku(line.skuId) : null
+      const index = list.findIndex(function (item) {
+        return item.key === line.key
+      })
+      const nextQty = inventory.round2((index >= 0 ? list[index].qty : 0) + line.qty)
+      if (index >= 0) {
+        list[index] = this.toCartItem(product, sku, nextQty, line.unitPrice)
+      } else {
+        list.push(line)
+      }
     }
     inventory.assertSaleItems(this.data.products, this.data.skus, this.cartItems(list))
     return list
@@ -860,17 +1136,18 @@ Page({
   // -------------------------------------------------------------------------
   async submit() {
     try {
-      const cart = this.data.cart.slice()
-      const line = this.currentLine()
-      if (line && line.error) {
-        wx.showToast({ title: line.error, icon: 'none' })
+      // H1：submit() 是 mergeLines / currentLines 的第三个调用点——沿用 addCart 那份
+      // 「先取 currentLines()，有内容就 mergeLines 并回」的逻辑，否则「填了一行没点
+      // 加入清单、直接点确认销售」这条路径会漏掉这一行（npm test 抓不到这个悬空调用，
+      // 只有 UI 测试能抓）。
+      let cart = this.data.cart.slice()
+      const result = this.currentLines()
+      if (result.error) {
+        wx.showToast({ title: result.error, icon: 'none' })
         return
       }
-      if (line) {
-        cart.splice(0, cart.length)
-        this.mergeLine(line, this.data.cart).forEach(function (item) {
-          cart.push(item)
-        })
+      if (result.lines.length) {
+        cart = this.mergeLines(result.lines, this.data.cart)
       }
       // 应收按最终清单重算：还没「加入清单」的那一行在这里已经并进来了，
       // 没动过实收时不能拿旧的清单金额去当实收，否则会凭空记一笔欠款。
@@ -960,7 +1237,11 @@ Page({
         this.setData(Object.assign({
           skus: skus,
           cart: [],
+          // T11 同形：selectedSizes/单价保留，逐格草稿与「全部填」清空（qty 只在
+          // 单选态有意义，两边都清不影响对方）。
           qty: '',
+          cellQtys: {},
+          batchQty: '',
           remark: '',
           infoHint: INFO_HINT,
           paidTouched: false,
@@ -977,7 +1258,10 @@ Page({
       this.setData(Object.assign({
         skus: skus,
         cart: [],
+        // T11 同形：selectedSizes/单价保留，逐格草稿与「全部填」清空。
         qty: '',
+        cellQtys: {},
+        batchQty: '',
         remark: '',
         infoHint: INFO_HINT,
         paidTouched: false,

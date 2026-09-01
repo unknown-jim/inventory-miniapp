@@ -158,6 +158,70 @@
   color: var(--color-amber-700);
 }
 
+/* ---------- 多选形态（裁定 A，批 2/2026-09-02）：规格二选中 >= 2 格时的卡内追加件。
+   稿 22:244 S1 基准卡；全部填/单价复用 .field-row + .half，不重定义。 ---------- */
+
+/* chip 铁律第四档：规格一未选时规格二 chips 与「全选」禁用——neutral/100 底本来就是
+   chip 未选中态的底色（复用 .chip 的 fill-ghost），这里只需要把字色压到 neutral/500、
+   opacity 保持 1（docs/ui-scale.md 2026-08-30 裁定：禁用一律不透明）。点击层面的
+   「不可点」由 pickSize / pickAllSizes 里的守卫兜底，这里只管视觉。 */
+.chip.disabled {
+  color: var(--color-neutral-500);
+}
+
+.batch-row {
+  margin-top: var(--space-md);
+}
+
+/* 稿 row/逐格 22:102：一行最多两格，超过折行，不缩字号（ui-scale「表单并排最多两格」）。
+   用 grid 而不是 .field-row（flex 不换行）来实现折行。 */
+.cell-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-lg) var(--gap);
+  margin-top: var(--space-md);
+}
+
+.cell-cell {
+  min-width: 0;
+}
+
+/* 稿 hint 22:107 等：现货 N（裁定 B，不是可出 N）。超格时随输入框一起变红。 */
+.cell-hint {
+  margin-top: var(--space-sm);
+  font-size: var(--fs-caption);
+  color: var(--color-text-muted);
+}
+
+.cell-hint.danger {
+  color: var(--color-red-600);
+}
+
+/* 稿 22:179：逐格标红只描边输入框，不整块铺红底（与 app.wxss 的「彩色浅底 = 状态标识，
+   不能用在可点部件上」区分开——这里输入框仍然可点可改）。 */
+.qty-box.danger {
+  border-color: var(--color-red-600);
+}
+
+/* 稿 row/合计 22:113：本批 N 格 · 合计 + 金额，两端对齐 */
+.batch-total {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-top: var(--space-md);
+}
+
+.batch-total-label {
+  font-size: var(--fs-label);
+  color: var(--color-text-muted);
+}
+
+.batch-total-amount {
+  font-size: var(--fs-title);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
 /* ---------- 稿 field-row 数量+售价 7:1：数量框里右侧带「件 · 可出 N」 ----------
    用 .page 作用域的组合选择器增补顶距，不重定义共用类 .field-row
    （tests/ui-scale.test.js 与本仓硬约束都禁页面重定义它）。 */
