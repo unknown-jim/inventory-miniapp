@@ -140,7 +140,7 @@
   box-sizing: border-box;
   background-color: var(--color-neutral-100);
   border-radius: var(--space-md);
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23A3A3A3' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='7.3' cy='7.3' r='4.7'/%3E%3Cpath d='M11.1 11.1 14 14'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%238B8B8B' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='7.3' cy='7.3' r='4.7'/%3E%3Cpath d='M11.1 11.1 14 14'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: var(--space-lg) center;
   background-size: 32rpx 32rpx;

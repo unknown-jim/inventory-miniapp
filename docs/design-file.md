@@ -39,6 +39,9 @@ https://ardot.tencent.com/file/718738891083099
 - 小字灰一律绑 text/muted（62% 黑）；红色的三种语义（欠款金额 / 危险动作 / 库存预警）见 STRING 变量 color/red-semantics。
 - **禁用不要用 `fill/action-disabled` + `text/disabled`**（= `neutral/200` + `neutral/400`，合成只有 2.02:1）。各档配方与「禁用一律不透明、≥3:1」这条裁定见 [ui-scale.md](ui-scale.md#chip-的颜色铁律)。2026-08-30 收敛后这两个 token 在稿上已零引用。
 - 品牌青绿只做非语义场合的小剂量点缀（毛利 stat 数字、空态插画描边、border/focus 聚焦）；主行动一律黑，tabBar 不上品牌色——这两条是历轮评审的刻意决策，不要回退。
+- **图标描边与它同态的标签同色。** tab on 图标 = `selectedColor` = neutral/900，off 图标 = `tabBar.color` = text/muted。2026-09-02 前 off 图标被漏在 `neutral/400` 上（2.52:1），比正下方自家标签浅一档；判据是 on 态两者分毫不差，可见规则本就是「图标 == 标签」。当时还把这个差异写进 `pack-refs` 的断言注释、说成「稿自己就分开的」——**两个值不一样时先问是意图还是遗漏，别急着把差异写成依据**。
+- **非文字的 UI 部件边界，白底上 ≥ 3:1**（WCAG 1.4.11）。`neutral/400`（#A3A3A3）只有 2.52:1，不要再用于图标、边框、未勾选态。2026-09-02 已把搜索框放大镜、tab off 图标、7 个未勾复选框边框、`ph/备注` 从它上面移走；稿上现在只剩「微信胶囊·勿占用」占位与作废件还绑着它，那两处是有意留灰。为此给 `text/muted` 补了 `STROKE` scope（原先只有 `TEXT_FILL`，而 `text/faint` 早已是 `TEXT_FILL` + `STROKE`）。
+- **wxss 里 `data:image/svg+xml` 内联图标的颜色是个盲区**：写成 `%23A3A3A3`，主题色 grep 搜 `#A3A3A3` 搜不到，PNG 的逐像素断言也够不着。2026-08-31 那 13 个批次因此完整漏过它。现由 `tests/wxss-wxml.test.js` 的允许清单守着，新色必须登记并写明凭什么。
 
 ## MCP 改稿的坑（2026-08-28 实战记录；8–10 为 2026-08-29 补，11–15 为 2026-08-30 补，16 为 2026-08-31 补）
 

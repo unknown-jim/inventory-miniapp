@@ -192,15 +192,27 @@ tabList.forEach(function (item) {
 // 13 个批次逐个把它标成「原生外壳，实现侧不动」跳过——直到真机上看见「顶部
 // 还是绿的、tab 图标还是绿的」才发现。没有断言守着，它就会再漏一次。
 const BRAND_TEAL = [0x0F, 0x76, 0x6E]     // 旧品牌青绿，主行动改黑后全站不该再有
-const TAB_ON = [0x17, 0x17, 0x17]         // 稿 text/primary 3:23
-const TAB_OFF = [0x6F, 0x6F, 0x6F]        // 稿 text/muted 3:79（#171717 @62%）白底合成
 // 图标是从稿的矢量导出后按 alpha 蒙版整体上色的，所以**每一个非透明像素都应当是同一个 RGB**。
 // 这一条比「主色对不对」严格得多，而且必须严格：上一轮只查主色，结果 people 那两张
 // 带抗锯齿的图里 111 种残留色（#0F756E 等青绿边缘）绿着通过了——按精确颜色做替换时，
 // 边缘过渡像素一个都不会被命中。「主色对」不等于「没有旧色残留」。
-const TAB_ICON_ON = [0x17, 0x17, 0x17]    // 稿 tab/看板/on 的图标 3:23
-const TAB_ICON_OFF = [0xA3, 0xA3, 0xA3]   // 稿 tab/*/off 的图标 3:18。注意它与 TAB_OFF（标签色）
-                                          // 不同值，是稿自己就分开的：图标比标签浅一档
+// 稿的裁定：**图标与它同态的标签同色**。所以这里不写第二遍字面量，直接从 app.json 解出来——
+// 写两遍就会各自漂移：以后有人改了 tabBar.color 并顺手改掉那一条断言，图标这条不会红。
+//
+// 这里原来断言 #A3A3A3，还注着「是稿自己就分开的：图标比标签浅一档」——那是把稿的现状当成了
+// 稿的意图。真相是稿的 off 标签早已迁到 text/muted，off 图标被漏在 neutral/400 上没跟着走，
+// 于是真机上未选中的图标比它正下方的自家标签浅一档。判据正是 on 态：on 图标 #171717 与
+// selectedColor #171717 分毫不差，可见规则本就是「图标 == 标签」，off 态只是漏了。
+// 2026-09-02 已把稿上四个 off 图标改绑 text/muted（并给该变量补 STROKE scope）后同步此处。
+// 教训：看见两个值不一样时，先问「稿是这么想的，还是稿漏了」，别急着把差异写成依据。
+function rgbOfHex(hex, what) {
+  assert.ok(/^#[0-9A-Fa-f]{6}$/.test(hex),
+    what + ' 必须是 6 位十六进制（实为 ' + JSON.stringify(hex) + '）——'
+      + 'tab 图标的期望色由它推导，写法变了这里就该红，不要静默放过')
+  return [1, 3, 5].map(function (i) { return parseInt(hex.slice(i, i + 2), 16) })
+}
+const TAB_ICON_ON = rgbOfHex(appJson.tabBar.selectedColor, 'tabBar.selectedColor')
+const TAB_ICON_OFF = rgbOfHex(appJson.tabBar.color, 'tabBar.color')
 
 assert.strictEqual(appJson.window.navigationBarBackgroundColor, '#FFFFFF',
   '导航栏底色要跟稿的 navbar/自定义（4:69 绑 3:13 = 白）一致，不要回退成品牌青绿')
