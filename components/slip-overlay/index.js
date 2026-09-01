@@ -41,6 +41,10 @@ Component({
     showCustomerPicker: {
       type: Boolean,
       value: false
+    },
+    exportStyle: {
+      type: String,
+      value: 'summary'
     }
   },
   methods: {
@@ -50,6 +54,9 @@ Component({
     onExport: function () {
       this.triggerEvent('export')
     },
-    onKeep: function () {}
+    onKeep: function () {},
+    onStyleTap: function (e) {
+      this.triggerEvent('stylechange', { style: e.currentTarget.dataset.style })
+    }
   }
 })

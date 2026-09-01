@@ -28,6 +28,7 @@ const MEMORY_ACCOUNTS_KEY = 'inv_accounts'
 const MEMORY_AGGREGATE_KEY = 'inv_aggregate'
 const MIGRATED_KEY = 'inv_local_migrated'
 const SNAPSHOT_DONE_KEY = 'inv_local_snapshot_done'
+const SLIP_EXPORT_STYLE_PREFIX = 'inv_slip_export_style_'
 
 // 首页「最近流水」要几条。20 是 RECORD_PAGE_DEFAULT；limit 非法时服务端给缺省
 // 20、超过上限才钳到 100（apply.clampPageLimit）。
@@ -103,6 +104,27 @@ function getShopName() {
 function setShopMeta(shopId, shopName) {
   wx.setStorageSync(SHOP_ID_KEY, shopId || '')
   if (shopName != null) wx.setStorageSync(SHOP_NAME_KEY, shopName || '')
+}
+
+// 送货单导出样式（汇总/明细）是纯本地的 UI 偏好，按客户记，不走 ledger 云函数那条路
+// （tests/no-client-cloud-db.test.js 挡的是业务集合，这个 key 从不碰它们）。
+// key 里带 shopId 和 customerId 两段：多店隔离是硬约束，同名客户在不同店不能互相串。
+function slipExportStyleKey(customerId) {
+  return SLIP_EXPORT_STYLE_PREFIX + getShopId() + '_' + customerId
+}
+
+// 散客（customerId 为空）不读记忆，恒为 'summary'；非法值（不是这两个字符串之一）
+// 也按 'summary' 兜底。
+function getSlipExportStyle(customerId) {
+  if (!customerId) return 'summary'
+  const value = wx.getStorageSync(slipExportStyleKey(customerId))
+  return value === 'detail' ? 'detail' : 'summary'
+}
+
+// 散客不写记忆；写入前同样把非法值夹回 'summary'。
+function setSlipExportStyle(customerId, style) {
+  if (!customerId) return
+  wx.setStorageSync(slipExportStyleKey(customerId), style === 'detail' ? 'detail' : 'summary')
 }
 
 function snapshotLocalIfNeeded() {
@@ -1349,6 +1371,8 @@ module.exports = {
   dataVersion: dataVersion,
   getShopId: getShopId,
   getShopName: getShopName,
+  getSlipExportStyle: getSlipExportStyle,
+  setSlipExportStyle: setSlipExportStyle,
   getProducts: getProducts,
   getRecentRecords: getRecentRecords,
   getCustomers: getCustomers,

@@ -129,6 +129,29 @@
   color: #C2410C;
 }
 
+/* 稿 export-style 22:5：label（12px muted）→ 两枚 chip 横排 → hint（12px muted）。
+   这是店主点的操作控件，不属于单据版式，所以照常用操作界面那套变量（--fs-caption 一档）。
+   docs/ui-scale.md「不要做」那条豁免管的是单据版式（本文件里模仿纸单排布的那些部分）
+   和画布导出字号，操作控件是它写明的例外——判据是版式性质，不是长在哪个文件里。
+   chip 本体直接复用 app.wxss 的 .chip / .chip.on，这里只补容器排布。 */
+.export-style {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  margin-top: 20rpx;
+}
+
+.export-style-label,
+.export-style-hint {
+  color: var(--color-text-muted);
+  font-size: var(--fs-caption);
+}
+
+.export-style-chips {
+  display: flex;
+  gap: var(--space-md);
+}
+
 .slip-btn {
   margin-top: 0;
 }

@@ -270,8 +270,10 @@
     exporting="{{exporting}}"
     show-picker="{{showPicker}}"
     show-customer-picker="{{showCustomerPicker}}"
+    export-style="{{exportStyle}}"
     bind:close="closeSlip"
     bind:export="exportSlip"
+    bind:stylechange="onSlipStyleChange"
   />
   </block>
   <canvas type="2d" id="slipCanvas" class="slip-canvas" style="width: {{slipCanvasWidth}}px; height: {{slipCanvasHeight}}px;"></canvas>
