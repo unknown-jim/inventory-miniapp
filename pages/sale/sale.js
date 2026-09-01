@@ -412,7 +412,10 @@ Page({
       size: sku ? sku.size : '',
       name: product.name,
       specText: spec,
-      sku: sku && sku.sku ? sku.sku : product.sku,
+      // 货号对商品、条码对规格（2026-09-01 裁定）：一律取商品级。
+      // 此前是 `sku && sku.sku ? sku.sku : product.sku` —— 与 utils/inventory.js 里
+      // 那五处同形，只是写成三元、藏在页面文件里，三轮清点都只扫 utils 没看见它。
+      sku: product.sku,
       qty: count,
       unitPrice: price,
       costPrice: sku ? sku.costPrice : product.costPrice,

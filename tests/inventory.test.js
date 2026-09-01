@@ -2877,16 +2877,30 @@ console.log('G1 预收：演示账主链（欠 84 / 预收 200 并存、分支 B
     { name: '毛坯布', sku: 'MP-002', costPrice: 5, salePrice: 9, stock: 0,
       specAxis1: '色', colors: ['本白'], blankProcess: true }, 1000, nextId()
   )
-  const blankSkus = inv.rebuildSkus
-    ? inv.rebuildSkus(blankProd, [], {})
-    : [inv.createSku({ productId: blankProd.id, isBlank: true, costPrice: 5,
-        salePrice: 9, stock: 0 }, 1000, nextId())]
+  const blankSku = inv.createSku(
+    { productId: blankProd.id, isBlank: true, costPrice: 5, salePrice: 9, stock: 0 },
+    1000, nextId()
+  )
   const blankBought = inv.applyPurchase([blankProd], [], {
     productId: blankProd.id, qty: 3, unitPrice: 5
-  }, 3500, 'rb1', blankSkus)
+  }, 3500, 'rb1', [blankSku])
   assert.strictEqual(blankBought.record.lines[0].sku, 'MP-002',
     '待加工进货行的货号要取商品级 product.sku，实为 '
       + JSON.stringify(blankBought.record.lines[0].sku))
+
+  // **卖**待加工商品才走 allocateBlankLine —— 进货那条走的是别的分支。
+  // 这一处前后漏了三轮：清单里列着它，但没有任何用例真的走到，逐点变异一直存活。
+  // 卖法照仓库既有写法：带 skuId 卖成品格，件数从半成品池扣。
+  const finishedSku = inv.createSku(
+    { productId: blankProd.id, color: '本白', size: '', costPrice: 5, salePrice: 9, stock: 0 },
+    1000, nextId()
+  )
+  const blankSold = sale(blankBought.products, blankBought.records, {
+    payType: 'cash', productId: blankProd.id, skuId: finishedSku.id, qty: 1, unitPrice: 9
+  }, 4500, 'rb2', blankBought.skus.concat([finishedSku]))
+  assert.strictEqual(line0(blankSold.records[0]).sku, 'MP-002',
+    '待加工销售行的货号要取商品级 product.sku（allocateBlankLine 那条路），实为 '
+      + JSON.stringify(line0(blankSold.records[0]).sku))
 
   perPath.forEach(function (pair) {
     assert.strictEqual(pair[1], 'MY-001',
