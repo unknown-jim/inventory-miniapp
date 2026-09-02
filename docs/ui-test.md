@@ -34,7 +34,8 @@ npm run test:all > "$TMPDIR/ui.txt" 2>&1; echo "EXIT=$?"
 
 | 现象 | 处理 |
 |---|---|
-| 端口被占 / `Connection closed` 出现在随机步骤 | 上一轮的残留。`Get-Process 微信开发者工具` 手动关掉；`Get-CimInstance Win32_Process -Filter "Name='node.exe'"` 里挂 `ui.test.js` 的 `Stop-Process`。**别按镜像名杀 `WeChatAppEx`**，那是微信本体也在用的 |
+| 端口被占 / `Connection closed` 出现在随机步骤 | 上一轮的残留。`Get-Process 微信开发者工具` 手动关掉；`Get-CimInstance Win32_Process -Filter "Name='node.exe'"` 里挂 `ui.test.js` 的 `Stop-Process`。**别按镜像名杀 `WeChatAppEx`**——它是微信本体也在用的，而且**新版微信本体的进程名是 `Weixin.exe` 不是 `WeChat.exe`**，别拿「`WeChat.exe` 不在 → 那些是残留」当依据去杀（2026-09-02 差一步就把用户正在用的微信杀了） |
+| `cli auto 以退出码 4294967295 结束` / 刚跑几步就 `Connection closed`，**而进程列表是干净的** | 9420 端口处在 TCP `TIME_WAIT`（Windows 默认约 120 秒），杀进程对它无效。判据是 `netstat -ano \| grep -E ":9420 .*(TIME_WAIT\|LISTENING)"`，或 `Get-NetTCPConnection -LocalPort 9420` 看到 `State=TimeWait PID=0`。**连着跑两轮必撞**，跑之前等它消失即可。2026-09-02 在这上面白烧了三轮完整测试，其间还因为中途插进来的一次 baseline 恰好赶上干净窗口、跑绿了，差点把「环境是好的」反过来当成「代码有问题」的依据 |
 | 「服务端口」没开 | 工具 → 设置 → 安全设置 → 服务端口 |
 | 报「等『页面加载完成 pages/xxx』超时」 | 多半不是没加载完，是那个页面**根本没有 `pageLoading` 字段**，或者上一步走错了页。名单在 `tests/automator-contract.test.js` |
 | `pageMap 缓存返回了陈旧页面对象` 那行日志 | 正常，脚本会自己删缓存重取，不用管 |
@@ -142,6 +143,8 @@ cp /d/work/inventory-miniapp/project.private.config.json ./
 ```
 
 依赖**不要**再从主检出 `cp -r node_modules`（这里以前是这么写的）：主检出的 `node_modules` 现在是个空目录，复制过去只得到一个空壳，连非 UI 的 `npm test` 都会红在 `tests/automator-contract.test.js`（`Cannot find module 'miniprogram-automator/package.json'`）。有 `package-lock.json`，`npm install` 两秒装完 77 个包。
+
+**更不要用 junction / 符号链接把它指向主检出。** 看着是省了磁盘和那两秒，代价是 `git worktree remove` 会顺着链接递归删下去，**把主检出的 `node_modules` 整个清空**——2026-09-02 实测从 50 个包变成 0，之后主检出和所有工作树的 `npm test` 一起红在 `automator-contract`，症状和上面那段「空壳」一模一样，看着完全像环境自己坏了，得重跑 `npm install` 才能恢复。真要用链接，`git worktree remove` **之前**先把链接摘掉：`rmdir` 只删链接不碰目标，`rm -rf` 会穿透。
 
 两样东西都在 `.gitignore` 里，所以 `git worktree add` 出来的目录里没有它们。缺依赖会当场报模块找不到，好认；少了 `project.private.config.json` 不报错，反而更难查——它钉着 `libVersion: 3.16.2`，以及 `useApiHook` / `useIsolateContext` / `compileHotReLoad` 等一串开发者工具设置。缺了它，工具会按「全新项目」的默认值打开这棵树，UI 测试就以**互不相同**的初始化/超时症状随机挂掉。典型标志是日志里那句：
 
