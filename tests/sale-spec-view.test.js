@@ -305,7 +305,27 @@ assert.ok(
 // 第二轮才找出来」上栽过，见记忆 sku-vs-barcode-levels。
 //
 // 复用上面那个剥注释器：注释里提到 cellQtys[...] 不算违规。
-const bareCellQtyAccess = saleJsNoCommentsForMultiModePin.match(/cellQtys\s*\[\s*(?!cellKey\s*\()/g) || []
+// 两条正则先各自过一道**阳性对照**：拿它去 match 一个已知违规的字面串，
+// 必须至少命中 1 次。不加这道的话，正则被改坏（或者 cellQtys 改了名）之后
+// 两条断言会**静默变成恒真**——实测：把正则写成 cellQtysZZZ 并真留一处裸用，
+// `npm test` EXIT=0、零个 AssertionError。（2026-09-03 审计提的；这正是本仓反复栓的
+// 那个形态：钉子还在，守的东西没了。）
+const SALE_SITE_RE = /cellQtys\s*\[\s*(?!cellKey\s*\()/g
+const UI_SITE_RE = /cellQtys\s*\[\s*(?!'v:'|"v:")/g
+assert.ok(
+  ('cellQtys[size]'.match(SALE_SITE_RE) || []).length >= 1,
+  '阳性对照：sale.js 那条站点正则应当能认出 `cellQtys[size]` 这种裸用。'
+    + '认不出就说明正则被改坏了，下面那条 === 0 是恒真的假绿'
+)
+assert.ok(
+  ('cellQtys[size]'.match(UI_SITE_RE) || []).length >= 1,
+  '阳性对照：ui.test.js 那条站点正则应当能认出 `cellQtys[size]` 这种裸用'
+)
+assert.strictEqual(
+  ('cellQtys[cellKey(size)]'.match(SALE_SITE_RE) || []).length, 0,
+  '阳性对照：合规写法不得被误判为裸用'
+)
+const bareCellQtyAccess = saleJsNoCommentsForMultiModePin.match(SALE_SITE_RE) || []
 
 // 同一条站点完整性也要盖到 tests/ui.test.js——**站点清单的边界不等于实现文件的边界**。
 // 2026-09-03 实例：前缀那一批枚举站点时，另一条线的 PR 还没合入，
@@ -313,7 +333,10 @@ const bareCellQtyAccess = saleJsNoCommentsForMultiModePin.match(/cellQtys\s*\[\s
 // `'undefined' !== '2'`）——而且只有完整 UI 轮能抳到，`npm test` 看不见。
 // 所以这条钉子放在纯 Node 套件里，让下一次漏写在 `npm test` 就红。
 const uiTestSrc = fs.readFileSync(path.join(__dirname, 'ui.test.js'), 'utf8')
-const bareCellQtyInUi = uiTestSrc.match(/cellQtys\s*\[\s*(?!'v:'|"v:")/g) || []
+// 口径不对称，是故意的：上面扫 sale.js 走剥注释器（注释里提到不算违规），
+// 这里扫 ui.test.js **原文**。将来谁在 ui.test.js 的注释里写一句 `cellQtys[size]` 会误红，
+// 方向是安全的（宁可误红），但别误以为两边同口径。
+const bareCellQtyInUi = uiTestSrc.match(UI_SITE_RE) || []
 assert.strictEqual(
   bareCellQtyInUi.length, 0,
   'tests/ui.test.js 里所有 cellQtys[...] 的下标都必须带 \'v:\' 前缀（与 sale.js 的 cellKey 同形），'
