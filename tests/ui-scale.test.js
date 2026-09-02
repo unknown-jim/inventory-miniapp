@@ -52,8 +52,9 @@ assert.ok(appWxss.indexOf('.page.ui-xl') < 0, 'app.wxss should not define ui-xl'
 // `var(--fs-caption)`，全仓 57 处都这么写。两个数字不同是故意的。
 //
 // 2026-09-03：原本这个阀值是从 `app.wxss` 的 `--fs-xs` 里读出来的，还硬断言
-// 它必须存在。而 `--fs-xs` 已经是待删别名（`var()` 消费为 **0**，docs/ui-scale.md
-// 把它标为已废止那一档）——谁哪天把它从 `app.wxss` 删了，这条守卫会
+// 它必须存在。而 `--fs-xs` 已经是待删别名（`var()` 消费为 **0**，docs/ui-scale.md:34
+// 把它定性为「保留为别名过渡，新代码不要再用」——注意被判「已废止」的是
+// 「正文 36rpx / 可点高度 96rpx」那一档，不是这个别名本身）——谁哪天把它从 `app.wxss` 删了，这条守卫会
 // 当场红在「找不到 --fs-xs」上，而不是红在它真正要守的东西上。
 // 现在直接写死阀值，不再依赖那个别名存不存在。
 const MIN_LITERAL_FONT_RPX = 32
