@@ -1439,7 +1439,9 @@ PROTO_NAMES.forEach(function (name) {
 //     所以**不会跨单泄漏**。这一支的实际危害就是全局污染本身，
 //     能抳住它的只有下面那条 `dirty` 断言。
 //   · **两处都改回 `{}`**：第二张单的内层 `{}` 从 `Object.prototype` 继承到
-//     上一张的格子数组，这才是跨单泄漏，由数字序列那条抳住。
+//     上一张的格子数组，这才是跨单泄漏。**但在完整套件里轮不到它来抳**：
+//     上游那条列轴 `doesNotThrow` 会先响、进程当场退出。数字序列这条是**纵深防御**：
+//     列轴那条哪天被放宽了它顶上（实测：删掉列轴那条后，它单独能红）。
 // 两条都不能删。
 ;(function assertNoCrossSlipLeak() {
   // 用 __proto__ 而不是 constructor：只有它写到 Object.prototype，才会被下一张单继承。
@@ -1465,17 +1467,32 @@ PROTO_NAMES.forEach(function (name) {
 
   // 基准：同一份第二张单在**没有跑过第一张**时的数字序列。
   // 这里不能重新跑一遍（环境已经被污染了），所以直接拿这份夹具自己的件数算。
-  const expected = []
-  secondLines.forEach(function (l) { expected.push(l.qtyText) })
-  assert.ok(expected.length > 0, '前提：第二张单夹具要有行')
-  expected.forEach(function (q) {
-    assert.ok(
-      second.indexOf(q) >= 0,
-      '第二张单应当印出自己的件数 ' + q + '，实际印的是 '
-        + JSON.stringify(second) + '——数字对不上就是上一张单的格子通过 '
-        + 'Object.prototype 泄漏过来了'
-    )
+  // 按**序列逐位**比，不是「值出现过就算」——后者在泄漏后的数值恰好覆盖
+  // 得住期望集时会假绿（复审指出：上一版里 `'6'` 其实是被行小计满足的、
+  // 并非格子里的数，只是恰好还有别的值缺失才红）。
+  // 期望序列要按真实版式构造：**行小计是夹在格子中间的**
+  // （一行的几个格 → 该行小计 → 下一行…）。直接 slice 前 N 个会对不上——
+  // 我第一版就是那么写的，当场红在 ["1","2","3","6"] vs ["1","2","3","4"]。
+  const byRow = {}
+  const rowOrder = []
+  secondLines.forEach(function (l) {
+    const rv = l.specParts[0].value
+    if (!byRow[rv]) { byRow[rv] = []; rowOrder.push(rv) }
+    byRow[rv].push(l.qtyText)
   })
+  const expected = []
+  rowOrder.forEach(function (rv) {
+    byRow[rv].forEach(function (q) { expected.push(q) })
+    expected.push(String(byRow[rv].reduce(function (a, b) { return a + Number(b) }, 0)))
+  })
+  assert.ok(expected.length > 0, '前提：第二张单夹具要有行')
+  const head = second.slice(0, expected.length)
+  assert.deepStrictEqual(
+    head, expected,
+    '第二张单的矩阵数字序列（格子 + 行小计）应当是 ' + JSON.stringify(expected)
+      + '，实测 ' + JSON.stringify(head)
+      + '——对不上就是上一张单的格子通过 Object.prototype 泄漏过来了'
+  )
 
   // 直接钉全局污染：同时查 Object 本体和 Object.prototype——
   // constructor 那一支污染前者，__proto__ 那一支污染后者，只查一个会漏。
