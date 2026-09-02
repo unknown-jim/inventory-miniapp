@@ -25,6 +25,7 @@
 //   14 本机账本分片上传一整节（planShards 原子组切法 / 分片 vs 一次性逐项相等 /
 //      混代语料上传载荷不被归并回填污染 / 中途失败本机原件不删 / 小账本和孤儿
 //      退货退回一次性上传 / planShards 单元含 firstChars）
+//   15 送货单导出样式按客户记忆（多店隔离 / 散客 no-op / 非法值兜底 / 写读往返）
 // 外加原有的：settleResponse 绝不抛、ready() 的语义。
 const assert = require('assert')
 const core = require('../cloudfunctions/ledger/ledger-core')
@@ -2078,6 +2079,73 @@ require.cache[require.resolve('../utils/cloud-config')].exports = {
       assert.strictEqual(staff.forStaff(caught).matched, true,
         '拆好的话术必须有对应的店员话术规则：' + text)
     }
+  }
+
+  {
+    // 17) 送货单导出样式的按客户记忆（getSlipExportStyle / setSlipExportStyle）。
+    //
+    //     PR #126 的主线功能，合进来时**整条链路一条断言都没有**：把 key 里的
+    //     getShopId() 去掉（两家店互串）、把写入删掉（记不住）、把读取写死成
+    //     'summary'（读不出来），三种改法 npm test 全绿。这一节钉住 store 这一端。
+    //     链路的另外两端（slip-actions 的写回与回读、util.withSlipView 递出的
+    //     customerId）钉在 tests/slip-actions.test.js 的第 5 节。
+    //
+    //     它是纯本地 UI 偏好，不走 ledger 云函数（key 前缀 inv_slip_export_style_，
+    //     从不碰业务集合），所以不需要 openShop / ready()——一个能读写的 wx 存储
+    //     和一个 shopId 就够。
+    const h = newHarness({ ids: idFactory('ss') })
+    h.storage['inv_shop_id'] = 'shop-A'
+    const store = loadStore(h)
+
+    // a) 正常写入能读回，改回去也能读回
+    store.setSlipExportStyle('cust-1', 'detail')
+    assert.strictEqual(store.getSlipExportStyle('cust-1'), 'detail',
+      '写进去的导出样式必须读得回来')
+    store.setSlipExportStyle('cust-1', 'summary')
+    assert.strictEqual(store.getSlipExportStyle('cust-1'), 'summary',
+      '改回汇总也必须读得回来')
+
+    // b) 多店隔离：同一个 customerId、不同 shopId，写入互不可见。
+    //    docs/cloud-ledger.md 的硬要求。key 里少了 shopId 那一段，两家店里
+    //    同 id 的客户就会互相串样式，而屏上什么异常都看不出来。
+    store.setSlipExportStyle('cust-1', 'detail')
+    h.storage['inv_shop_id'] = 'shop-B'
+    assert.strictEqual(store.getSlipExportStyle('cust-1'), 'summary',
+      '换一家店之后，同一个 customerId 不许读到上一家店记下的样式'
+      + '（key 里少了 shopId 就会串店）')
+    store.setSlipExportStyle('cust-1', 'summary')
+    h.storage['inv_shop_id'] = 'shop-A'
+    assert.strictEqual(store.getSlipExportStyle('cust-1'), 'detail',
+      'B 店把这个客户写成 summary，不许改掉 A 店记下的 detail')
+
+    // c) 散客（customerId 为空）读写都是 no-op：不读记忆恒为 summary，
+    //    也不许在存储里留下 key —— 否则所有散客共用一条记忆，互相覆盖。
+    h.storage = { inv_shop_id: 'shop-A' }
+    store.setSlipExportStyle('', 'detail')
+    assert.deepStrictEqual(Object.keys(h.storage), ['inv_shop_id'],
+      '散客不许在存储里留下任何导出样式的 key')
+    assert.strictEqual(store.getSlipExportStyle(''), 'summary',
+      '散客不读记忆，恒为 summary')
+
+    // d) 存进去的非法值读出来要夹回 'summary'。
+    //    key 的拼法不在这里抄一遍——让 setSlipExportStyle 自己造出来再改它的值，
+    //    这样 key 换形状时本用例跟着走，不会变成核对字符串常量。
+    h.storage = { inv_shop_id: 'shop-A' }
+    store.setSlipExportStyle('cust-1', 'detail')
+    const styleKeys = Object.keys(h.storage).filter(function (key) {
+      return key !== 'inv_shop_id'
+    })
+    assert.strictEqual(styleKeys.length, 1, '前提：一次写入只落一个 key')
+    const badValues = ['DETAIL', 'detail ', '', 0, null, { style: 'detail' }]
+    for (let i = 0; i < badValues.length; i++) {
+      h.storage[styleKeys[0]] = badValues[i]
+      assert.strictEqual(store.getSlipExportStyle('cust-1'), 'summary',
+        '存储里的非法值必须夹回 summary，实为：' + JSON.stringify(badValues[i]))
+    }
+    // 夹回不是「一律 summary」：合法的 detail 还得读得出来
+    h.storage[styleKeys[0]] = 'detail'
+    assert.strictEqual(store.getSlipExportStyle('cust-1'), 'detail',
+      '兜底不能把合法的 detail 也夹掉')
   }
 
   console.log('store.test.js ok')
