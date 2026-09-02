@@ -279,12 +279,19 @@ pages.forEach(function (page) {
 // 不要看漏新增的操作控件类，方向跟「反过来做成白名单」正相反（那样会让新控件默认漏检）。
 const SLIP_LAYOUT_SELECTOR = /^\.slip(-[\w-]*)?$/
 
+// 前缀只是「版式性质」这条真判据的近似，而 .slip- 前缀里混着操作控件：.slip-btn 是底部
+// 那两个按钮、.slip-actions 是它们的容器，按 docs/ui-scale.md 的判据它们不是单据版式，
+// 却会被前缀捎带豁免。点名排除，别让近似判据放过真该受检的东西。
+// 今天这两条规则里都没有 font-size，所以排除它们不会新增报错——加在这里是为了以后有人
+// 往里写字号时能被拦住。
+const SLIP_OPERATION_CLASSES = ['.slip-btn', '.slip-actions']
+
 function isSlipLayoutSelector(selectorText) {
   return selectorText.split(',').every(function (single) {
     const classNames = single.match(/\.[\w-]+/g)
     if (!classNames || !classNames.length) return false
     return classNames.every(function (cls) {
-      return SLIP_LAYOUT_SELECTOR.test(cls)
+      return SLIP_LAYOUT_SELECTOR.test(cls) && SLIP_OPERATION_CLASSES.indexOf(cls) < 0
     })
   })
 }
@@ -294,7 +301,14 @@ function isSlipLayoutSelector(selectorText) {
 // 选择器概念，也就没有可豁免的东西，本来就不该整文件跳过。
 function stripSlipLayoutRules(src) {
   return src.replace(/([^{}]+)\{[^{}]*\}/g, function (whole, selectorPart) {
-    return isSlipLayoutSelector(selectorPart.trim()) ? '' : whole
+    // selectorPart 是「上一个 } 到这条规则的 {」之间的全部文本，所以会捎带上一条规则后面的
+    // 注释。两个方向都会出错：注释被连坐挖掉（于是注释里写的禁用词扫不到），而注释里只要
+    // 出现任何带点号的 token（现有文件里就有 docs/ui-scale.md、.chip）又会让这条规则失去
+    // 豁免。先把注释剥掉再判选择器，判完再把注释放回去。
+    const comments = selectorPart.match(/\/\*[\s\S]*?\*\//g)
+    const selectorOnly = selectorPart.replace(/\/\*[\s\S]*?\*\//g, '').trim()
+    if (!isSlipLayoutSelector(selectorOnly)) return whole
+    return comments ? comments.join('\n') + '\n' : ''
   })
 }
 

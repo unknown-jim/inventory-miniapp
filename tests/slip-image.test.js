@@ -901,9 +901,11 @@ assert.ok(hasText(dupLayout, '9'), '黑色行小计应为 2+3+4=9')
 assert.ok(hasText(dupLayout, '7'), '白色行小计应为 1+6=7')
 assert.ok(hasText(dupLayout, '小计 16 件'), '节尾小计应为全部行之和 2+3+4+1+6=16')
 
-// 15) 分节 key 不再用空格拼接：品名本身含空格时，两个不同的 (品名,货号) 组合可能拼出
-//     同一个字符串（'短袖 T'+'TS' 与 '短袖'+'T TS' 都拼成 '短袖 T TS'），必须分成两节，
-//     不能因为拼接巧合被并成一节。
+// 15) 分节 key 的分隔符一直是 U+0000，本次只是把源码里那个裸字节规范成 ' ' 转义
+//     （运行时等价，但从此可见、可 grep——裸字节曾让 grep 把整个 slip-image.js 当二进制）。
+//     这条钉子防的是有人把它退回空格：品名本身含空格时，两个不同的 (品名,货号) 组合会拼出
+//     同一个字符串（'短袖 T'+'TS' 与 '短袖'+'T TS' 都拼成 '短袖 T TS'），那时才会被并成一节。
+//     写清楚这一点是因为「防退化」和「修 bug」不是一回事，别让后来人以为这里修过一个真 bug。
 const collisionLines = [
   specLine({ id: 'coll-a', productName: '短袖 T', sku: 'TS' }),
   specLine({ id: 'coll-b', productName: '短袖', sku: 'T TS' })
