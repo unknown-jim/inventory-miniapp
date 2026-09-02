@@ -202,7 +202,7 @@
       <view class="field half">
         <view class="field-label">本次售价</view>
         <view class="qty-box">
-          <input class="qty-input price-input" type="digit" data-field="unitPrice" value="{{unitPrice}}" bindinput="onField" placeholder="0.00" hidden="{{showPicker || showCustomerPicker || showSlip || showPaid || showCart}}" />
+          <input class="qty-input price-input js-single-price" type="digit" data-field="unitPrice" value="{{unitPrice}}" bindinput="onField" placeholder="0.00" hidden="{{showPicker || showCustomerPicker || showSlip || showPaid || showCart}}" />
         </view>
       </view>
     </view>

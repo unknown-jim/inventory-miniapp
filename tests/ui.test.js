@@ -1885,6 +1885,13 @@ async function runSaleMultiSelect(miniProgram) {
     '空态数量框里的 2 应当搬进行序第一格，不许静默丢掉')
   assert.strictEqual(afterAll.qty, '', '搬走之后数量框要清空')
 
+  // 给「全部填」写一个值，好让下面 (d) 的 batchQty 断言有个非空的进入状态。
+  // 不写的话它自始至终没被赋过值，「全不选时清空」在两种实现下取值相同、是空转
+  //（2026-09-03 审计的阻塞 2）。
+  await typeInto(sale, '.js-batch-qty', '3', '多选形态全部填', 'batchQty')
+  assert.strictEqual((await sale.data()).batchQty, '3', '「全部填」应当先落进 data，'
+    + '否则下面那条「全不选时清空」测的是一个从来没被设过的字段')
+
   // (d) 已全选时再点一次 = 全不选（22:233 / 22:234），逐格数量随之丢弃；
   // 顺带把状态还原回下面既有用例的起点（选中集合空、回落单选形态）。
   await tapWhen(sale, '.js-size-all')
@@ -1893,12 +1900,24 @@ async function runSaleMultiSelect(miniProgram) {
   }, '已全选时再点一次 = 全不选，回落单选形态')
   const afterNone = await sale.data()
   assert.strictEqual(Object.keys(afterNone.cellQtys || {}).length, 0, '全不选时逐格数量一并丢弃')
-  assert.strictEqual(afterNone.batchQty, '', '全不选时「全部填」清空')
-  assert.strictEqual(afterNone.qty, '', '全不选时数量框清空')
+  assert.strictEqual(afterNone.batchQty, '', '全不选时「全部填」清空——'
+    + '进入值是上面刚写进去的 3，所以这条能分出「真清了」和「没动」')
+  // 这里原本还有一条 `afterNone.qty === ''`。删掉了：进多选形态之后 UI 上没有
+  // 数量框（qty 只在单选形态渲染），而 (c) 段的搬运已经把它清成了 ''，所以这条
+  // 路径上构造不出非空的进入值 —— 两种实现取值相同，是恒真的空转。
+  // 「全不选也清 qty」这个行为本身仍由 sale.js:783 保证，只是这条路径证明不了它，
+  // 与其留一条给人虚假安全感的断言，不如写明为什么没有（本仓「断言不要吹过头」）。
 
   // 规格二选两格：第一次点还是既有单选形态（|Z| 0→1），第二次点才切多选（T4，|Z| 1→2）。
   // 两次都用同一个 .js-size-chip 钩子——单选/多选两套模板里都挂了它，不必关心此刻在哪个形态。
   await waitFor(sale, '.js-size-chip', '出现规格二 chips')
+  // 把「本次售价」显式压成一个已知的、不等于目标 SKU 售价的值，再去点格子。
+  // 2026-09-03 审计打回的正是这里：上面 (c)(d) 两段跑完之后 unitPrice 停在 69
+  //（applySizeSelection 的 0→N 会追平到行序第一格，而全不选那支不重置它），
+  // 恰好等于下面那条断言的期望值 —— 于是「实现什么都不做」也能过，这条为
+  // 「按错价记账」专门加的闸就死了。进入值自己造，不从上游继承。
+  await typeInto(sale, '.js-single-price', '1', '单选形态本次售价', 'unitPrice')
+  const priceBeforeSize = (await sale.data()).unitPrice
   await tapNth(sale, '.js-size-chip', 0, '规格二第一格')
   await waitForData(sale, function (d) {
     return d.selectedSizes.length === 1 && d.multiMode === false
@@ -1922,6 +1941,13 @@ async function runSaleMultiSelect(miniProgram) {
   assert.notStrictEqual(firstSku.salePrice, teeProduct.salePrice,
     '夹具前提：第一格的 SKU 售价必须跟商品档价（' + teeProduct.salePrice + '）不同，'
       + '否则「单价跟着规格走」这条断言是恒真的假绿')
+  // 第二道前提，钉的是**实际进入值**而不是档价：上一条只保证「档价 ≠ 格价」，
+  // 而档价未必就是进入值 —— 只要上游有谁把 unitPrice 先改成了 69，下面那条
+  // 断言就恒真，而上一条钉子照样绿。2026-09-03 的假绿就是这么来的：钉子还在，
+  // 守的东西没了。要判「追平」发生过，进入值必须先不等于期望值。
+  assert.notStrictEqual(priceBeforeSize, String(firstSku.salePrice),
+    '进入值（' + priceBeforeSize + '）不许等于期望值（' + firstSku.salePrice + '）——'
+      + '相等的话「单价追平到该格 SKU 售价」这条断言恒真，实现什么都不做也能过')
   assert.strictEqual(afterFirstSize.unitPrice, String(firstSku.salePrice),
     '单选形态点规格二之后，单价应当追平到该格 SKU 售价 ' + firstSku.salePrice
       + '，实为 ' + afterFirstSize.unitPrice + '——单价没跟上就会按错价记账')
