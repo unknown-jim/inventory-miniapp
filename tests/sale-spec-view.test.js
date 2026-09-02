@@ -287,9 +287,106 @@ assert.ok(
 // 之间的假设上多走一步都可能出岔子。这条钉子只保证补齐逻辑还在：
 const applySizeSelectionBody = pageMethod(saleJs, 'applySizeSelection')
 assert.ok(
-  applySizeSelectionBody.indexOf('cellQtys[size] == null') >= 0
-    && applySizeSelectionBody.indexOf("cellQtys[size] = ''") >= 0,
+  applySizeSelectionBody.indexOf('cellQtys[cellKey(size)] == null') >= 0
+    && applySizeSelectionBody.indexOf("cellQtys[cellKey(size)] = ''") >= 0,
   'applySizeSelection 应当把 nextSizes 里还没有 key 的格补成空串——少了这一步，'
     + '新选中的格在 cellQtys 里会完全没有条目，跟 selectedSizes 的假设对不齐'
 )
+// cellQtys 的下标必须一律走 cellKey()——站点完整性钉子（2026-09-03）。
+//
+// 规格取值是店主自由输入的（docs/blank-process.md），直接拿它当对象 key 会撞上
+// Object.prototype 上的名字：叫 constructor / toString / valueOf 的取值读出来是函数，
+// 数量框里显示 "function Object() { [native code] }"；叫 __proto__ 的那一格连数量都
+// 存不进去（赋字符串给 __proto__ 被静默忽略）。cellKey 加固定前缀把两者隔开。
+//
+// 这条钉子防的不是那个 bug 本身，而是**站点完整性**：cellQtys 有 8 个读写点，下一个人
+// 加第 9 个时忘了加前缀，不会崩、不会报错，只会静默读到 undefined——表现和它要修的
+// 症状几乎一样（那一格的数量悄悄丢了）。本仓在「一个字段改多点位、漏掉一处、审计
+// 第二轮才找出来」上栽过，见记忆 sku-vs-barcode-levels。
+//
+// 复用上面那个剥注释器：注释里提到 cellQtys[...] 不算违规。
+// 两条正则先各自过一道**阳性对照**：拿它去 match 一个已知违规的字面串，
+// 必须至少命中 1 次。不加这道的话，正则被改坏（或者 cellQtys 改了名）之后
+// 两条断言会**静默变成恒真**——实测：把正则写成 cellQtysZZZ 并真留一处裸用，
+// `npm test` EXIT=0、零个 AssertionError。（2026-09-03 审计提的；这正是本仓反复栓的
+// 那个形态：钉子还在，守的东西没了。）
+const SALE_SITE_RE = /cellQtys\s*\[\s*(?!cellKey\s*\()/g
+const UI_SITE_RE = /cellQtys\s*\[\s*(?!'v:'|"v:")/g
+assert.ok(
+  ('cellQtys[size]'.match(SALE_SITE_RE) || []).length >= 1,
+  '阳性对照：sale.js 那条站点正则应当能认出 `cellQtys[size]` 这种裸用。'
+    + '认不出就说明正则被改坏了，下面那条 === 0 是恒真的假绿'
+)
+assert.ok(
+  ('cellQtys[size]'.match(UI_SITE_RE) || []).length >= 1,
+  '阳性对照：ui.test.js 那条站点正则应当能认出 `cellQtys[size]` 这种裸用'
+)
+assert.strictEqual(
+  ('cellQtys[cellKey(size)]'.match(SALE_SITE_RE) || []).length, 0,
+  '阳性对照：合规写法不得被误判为裸用'
+)
+const bareCellQtyAccess = saleJsNoCommentsForMultiModePin.match(SALE_SITE_RE) || []
+
+// 同一条站点完整性也要盖到 tests/ui.test.js——**站点清单的边界不等于实现文件的边界**。
+// 2026-09-03 实例：前缀那一批枚举站点时，另一条线的 PR 还没合入，
+// 它带进来的 UI 断言直接读 `cellQtys[<size>]`。两边各自都绿，合到一起才红（
+// `'undefined' !== '2'`）——而且只有完整 UI 轮能抳到，`npm test` 看不见。
+// 所以这条钉子放在纯 Node 套件里，让下一次漏写在 `npm test` 就红。
+const uiTestSrc = fs.readFileSync(path.join(__dirname, 'ui.test.js'), 'utf8')
+// 口径不对称，是故意的：上面扫 sale.js 走剥注释器（注释里提到不算违规），
+// 这里扫 ui.test.js **原文**。将来谁在 ui.test.js 的注释里写一句 `cellQtys[size]` 会误红，
+// 方向是安全的（宁可误红），但别误以为两边同口径。
+const bareCellQtyInUi = uiTestSrc.match(UI_SITE_RE) || []
+assert.strictEqual(
+  bareCellQtyInUi.length, 0,
+  'tests/ui.test.js 里所有 cellQtys[...] 的下标都必须带 \'v:\' 前缀（与 sale.js 的 cellKey 同形），'
+    + '实测有 ' + bareCellQtyInUi.length + ' 处裸用。裸用会读到 undefined，'
+    + '而那是静默的——只有完整 UI 轮会红。'
+)
+
+assert.strictEqual(
+  bareCellQtyAccess.length, 0,
+  'pages/sale/sale.js 里所有 cellQtys[...] 的下标都必须走 cellKey()，实测有 '
+    + bareCellQtyAccess.length + ' 处裸用。规格取值是用户自由输入的，'
+    + '不加前缀会撞上 Object.prototype 的属性名'
+)
+
+// 配套的第二半：钉住 cellKey 的实现形态，再证明这个形态确实解决问题。
+//
+// sale.js 是小程序 Page 文件、不能 require，所以上面那条钉子只能保证「下标都走了
+// cellKey」，保证不了 cellKey 自己有没有效。这里先把它的函数体钉成「固定前缀 + 入参」，
+// 再拿同形的实现跑一遍 Object.prototype 的**全部**属性名——两条合起来才是闭环：
+// 下标都走它（钉子一）+ 它的实现是加前缀（钉子二）+ 加前缀对所有原型名有效（下面这段）。
+// 下面这条**刻意**钉死字面形态（'v:' + size），而不是只钉「有个前缀」这个语义。
+// 换成 'q:' + size 或模板串同样正确，钉子照样会红——这是有意的，不是钉子写窄了：
+// key 形态一变，再下面那段「加前缀对 Object.prototype 全部属性名有效」的前提就要
+// 重新验一遍，宁可误红也不放过。
+//
+// 所以看到它红，请先想清楚新形态是否仍然成立、并同步改下面那段验证，**不要顺手
+// 把这条断言放宽**。放宽它等于把「key 形态可以随便改」这个假设偷偷塞进仓库。
+assert.ok(
+  saleJsNoCommentsForMultiModePin.indexOf("return 'v:' + size") >= 0,
+  "cellKey 的实现应当是「固定前缀 'v:' + 入参」。改了前缀形态就要同步改下面那段验证，"
+    + '否则验证的是一个已经不存在的实现'
+)
+
+const cellKeySameShape = function (size) { return 'v:' + size }
+Object.getOwnPropertyNames(Object.prototype).forEach(function (protoName) {
+  const box = {}
+  box[cellKeySameShape(protoName)] = '5'
+  assert.strictEqual(
+    box[cellKeySameShape(protoName)], '5',
+    '规格取值叫 ' + protoName + ' 时，加前缀后应当能正常存取——这正是店主可以自由'
+      + '输入的取值名，不加前缀时 __proto__ 存不进去、constructor 读出来是函数'
+  )
+})
+// 反过来证明上面那段不是空转：不加前缀时，同一组名字里确实有存不住的
+const bareBox = {}
+bareBox['__proto__'] = '5'
+assert.notStrictEqual(
+  bareBox['__proto__'], '5',
+  '这条断言若红，说明当前 JS 引擎下裸用 __proto__ 当 key 已经不出问题了，'
+    + '上面那整段防护的前提消失，应当重新评估是否还需要 cellKey'
+)
+
 console.log('sale-spec-view tests passed')
