@@ -1821,6 +1821,13 @@ async function runSaleMultiSelect(miniProgram) {
       '规格一还没选，第 ' + i + ' 枚规格二 chip 应当带 disabled 类（点了本来就没反应），'
         + '实为 class="' + cls + '"')
   }
+  // 22:240 的「与「全选」一律禁用」那半条：禁用的前提是它在。稿 23:55
+  //「card/单选·级联·规格一未选（全禁用）」把这一态画死了。
+  const allChipNoColor = await sale.$('.js-size-all')
+  assert.ok(allChipNoColor,
+    '规格一还没选时「全选」chip 就应当已经渲染出来——22:240 说它此刻是禁用态，而禁用的前提是它在')
+  assert.ok(String(await allChipNoColor.attribute('class') || '').indexOf('disabled') >= 0,
+    '规格一还没选，「全选」chip 应当带 disabled 类')
 
   // 规格一先选颜色——n5 3:767 的级联：没选颜色，规格二禁用（pickSize / pickAllSizes
   // 里的守卫会直接吃掉点击，不选颜色的话下面两次点规格二都不会有任何效果）。
@@ -1845,6 +1852,49 @@ async function runSaleMultiSelect(miniProgram) {
   assert.ok(teeProduct, '页面 data.products 里应当找得到当前商品')
   assert.strictEqual(afterColor.unitPrice, String(teeProduct.salePrice),
     '只选了规格一时单价应当是商品档价 ' + teeProduct.salePrice + '，实为 ' + afterColor.unitPrice)
+
+  // 【「全选」必须在单选形态就够得到】这一段是 2026-09-02 那个缺口的反面。
+  // 缺口本身：「全选」chip 只渲染在 multiMode 那一支里，而进多选形态要求已选中 >= 2 格
+  //（pickSize 走 applySizeSelection 的门槛），于是「从空态一次选满」这个它唯一存在的
+  // 理由永远够不到——批发送货单一个货号跨 6 色 × 3 码，本可点一次全选代替点三次 chip。
+  // 它能溜过去是因为本文件此前**零次**出现 .js-size-all；下面四段就是补这个零覆盖。
+  // 稿：23:53「card/单选·级联（全选可见）」+ 22:275 caption 的 (a)(b) 两行。
+
+  // (b) 选完规格一、规格二一格都没点：仍是单选形态，而 chip 在、且不再禁用。
+  assert.strictEqual((await sale.data()).multiMode, false, '此刻应当还在单选形态')
+  const allChip = await sale.$('.js-size-all')
+  assert.ok(allChip,
+    '单选形态里「全选」chip 必须可见——只画进多选形态的话，「从空态一次选满」这个入口'
+      + '就够不到（2026-09-02 的缺口）')
+  assert.ok(String(await allChip.attribute('class') || '').indexOf('disabled') < 0,
+    '规格一已选，「全选」chip 不应再带 disabled 类')
+
+  // (c) 空态一键全选：直接跨过 |Z| 0→N 进多选形态，数量框里已经填好的值不许静默丢掉——
+  // 按 22:231「一个都没选就点「全选」时，那个值搬进行序第一格」。这条转移在放开入口
+  // 之前不可达（applySizeSelection 取 prevSizes[0]，prev 为空时 firstSize 是 undefined），
+  // 是跟这枚 chip 一起才活过来的死代码。
+  await typeInto(sale, '.js-qty', '2', '单选形态数量框', 'qty')
+  await tapWhen(sale, '.js-size-all')
+  await waitForData(sale, function (d) {
+    return d.multiMode === true && d.selectedSizes.length === 2
+  }, '空态点「全选」直接进多选形态')
+  const afterAll = await sale.data()
+  assert.strictEqual(afterAll.allSizesOn, true, '全选之后 allSizesOn 应为 true')
+  assert.strictEqual(afterAll.cellRows.length, 2, '全选之后应当渲染两行逐格输入')
+  assert.strictEqual(String(afterAll.cellQtys[afterAll.selectedSizes[0]]), '2',
+    '空态数量框里的 2 应当搬进行序第一格，不许静默丢掉')
+  assert.strictEqual(afterAll.qty, '', '搬走之后数量框要清空')
+
+  // (d) 已全选时再点一次 = 全不选（22:233 / 22:234），逐格数量随之丢弃；
+  // 顺带把状态还原回下面既有用例的起点（选中集合空、回落单选形态）。
+  await tapWhen(sale, '.js-size-all')
+  await waitForData(sale, function (d) {
+    return d.selectedSizes.length === 0 && d.multiMode === false
+  }, '已全选时再点一次 = 全不选，回落单选形态')
+  const afterNone = await sale.data()
+  assert.strictEqual(Object.keys(afterNone.cellQtys || {}).length, 0, '全不选时逐格数量一并丢弃')
+  assert.strictEqual(afterNone.batchQty, '', '全不选时「全部填」清空')
+  assert.strictEqual(afterNone.qty, '', '全不选时数量框清空')
 
   // 规格二选两格：第一次点还是既有单选形态（|Z| 0→1），第二次点才切多选（T4，|Z| 1→2）。
   // 两次都用同一个 .js-size-chip 钩子——单选/多选两套模板里都挂了它，不必关心此刻在哪个形态。

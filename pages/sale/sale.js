@@ -799,7 +799,8 @@ Page({
     return null
   },
 
-  // T4：|Z| 1→2，原数量框的值搬进第一枚已选格，新格留空。
+  // T4：|Z| 1→2，原数量框的值搬进第一枚已选格，新格留空；|Z| 0→N（空态点「全选」）
+  // 没有「原选中格」，那个值搬进行序第一格（22:231）。
   // T5：|Z| 2→1，那一格的值搬回数量框；丢弃的格数量直接弃掉（选中集合是唯一真相，
   // 不留看不见的数）。停留在同一形态时只增删该格，「全部填」不受影响（T9）。
   applySizeSelection(product, prevSizes, nextSizes) {
@@ -812,7 +813,11 @@ Page({
     let qty = this.data.qty
     let batchQty = this.data.batchQty
     if (!wasMulti && isMulti) {
-      const firstSize = prevSizes[0]
+      // |Z| 0→N（空态点「全选」，2026-09-02 放开单选形态那枚 chip 之后才可达）：
+      // prevSizes 为空，没有「原选中格」，数量框里的值按行序搬进第一格——与 T4 是同一条
+      // 规则的自然延伸，别静默丢掉。nextSizes 来自 product.sizes.slice()，所以
+      // nextSizes[0] 就是行序第一格，与 firstSelectedSku / cellRows 的行序同源。
+      const firstSize = prevSizes[0] || nextSizes[0]
       if (firstSize) cellQtys[firstSize] = qty
       qty = ''
     } else if (wasMulti && !isMulti) {

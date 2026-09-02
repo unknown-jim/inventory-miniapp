@@ -54,7 +54,9 @@
        两条轴仍然分两行（n5 3:767「双规格级联：先选规格一取值、再选规格二取值」）。
        裁定 A（批 2/2026-09-02）：规格二选中 >= 2 格时整卡切到多选形态（稿 22:244 S1），
        卡内顺序 = 规格一 -> 规格二(可多选)+全选 -> 全部填/单价 -> 逐格 -> 琥珀 -> 合计 ->
-       红字 -> 按钮，一路画在同一张卡里；<= 1 格时是这张卡原来的样子，一个字不改。 -->
+       红字 -> 按钮，一路画在同一张卡里；<= 1 格时回落这张卡原来的样子，唯一的差别是
+       规格二行末尾也有那枚「全选」chip（稿 23:53，2026-09-02 补）——形态切换管的是
+       规格二行**以下**的东西，不是规格二行本身。 -->
   <view class="card spec-card" wx:if="{{hasSpecs}}">
     <block wx:if="{{multiMode}}">
       <view class="field" wx:if="{{colors.length}}">
@@ -69,11 +71,12 @@
           >{{item.value}}</view>
         </view>
       </view>
-      <!-- 这一支里 (colors.length && !selectedColor) 恒为 false，所以不写禁用态：进多选
-           形态的唯一通路是 pickSize / pickAllSizes，两者开头都被「规格一未选就 return」
-           的守卫拦着，没选规格一根本走不到 |Z| >= 2。UX 注释 22:240 那条「规格一未选时
-           规格二 chips 与全选一律禁用」要落在下面**单选形态**那一支上（真会遇到这个
-           状态的是它），写在这里只会是恒假的死代码。 -->
+      <!-- 这一支里 (colors.length && !selectedColor) 恒为 false，所以规格二 chips 与
+           「全选」都不写禁用态：进多选形态的唯一通路是 pickSize / pickAllSizes，两者
+           开头都被「规格一未选就 return」的守卫拦着，没选规格一根本走不到 |Z| >= 2。
+           UX 注释 22:240 那条「规格一未选时规格二 chips 与全选一律禁用」说的是**级联档
+           的单选形态**，所以它同时覆盖的这两类 chip 都落在下面 wx:else 那一支上（真会
+           遇到这个状态的是它，稿 23:55 就是那一态的样张）；写在这里只会是恒假的死代码。 -->
       <view class="field">
         <view class="field-label">选择{{specAxis2}}（可多选）</view>
         <view class="chips">
@@ -154,8 +157,10 @@
            neutral/100 底 + neutral/500 字，不透明）」。行为侧的守卫在 pickSize 开头，
            视觉侧就是这里的 .disabled ——两者必须落在同一支上，否则 chip 长得跟能点的
            一模一样、点了却没反应（baseline 是允许「先点尺码后点颜色」的，稿改了这条
-           规则，那就得让「不能点」看起来也不能点）。单选形态没有「全选」chip，那半条
-           不适用。 -->
+           规则，那就得让「不能点」看起来也不能点）。
+           「全选」chip 在这一支里也要出：进多选形态要选中 2 格，而「从空态一次选满」
+           正是它存在的理由——只画进多选形态，这个入口就永远够不到（2026-09-02 修）。
+           它的禁用判据与同行 size chip 逐字相同，22:240 那半条正是对它说的。 -->
       <view class="field last" wx:if="{{sizes.length}}">
         <view class="field-label">{{specAxis2}}</view>
         <view class="chips">
@@ -166,6 +171,14 @@
             data-value="{{item.value}}"
             bindtap="pickSize"
           >{{item.value}} {{item.stock}}</view>
+          <!-- 稿 23:53「card/单选·级联（全选可见）」：全选放在这一行最后一枚，与
+               22:276 / 22:244 一致。allSizesOn 在单选形态恒为 false（|Z| <= 1 而
+               |S| >= 2），所以这里永远画未选中态——符合 22:234，不是漏画选中态。 -->
+          <view
+            wx:if="{{sizes.length > 1}}"
+            class="chip js-size-all {{allSizesOn ? 'on' : ''}} {{(colors.length && !selectedColor) ? 'disabled' : ''}}"
+            bindtap="pickAllSizes"
+          >全选</view>
         </view>
       </view>
       <!-- 稿 13:139;3:429：仅现货不足、真的要从半成品扣时才出现（n9 4:19 / n16 7:33） -->
