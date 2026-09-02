@@ -308,6 +308,16 @@ const wxStorage = installWxStub()
       '散客不写记忆，下次开单仍是汇总')
     assert.strictEqual(slipActions.initialExportStyle(reopened.customerId), 'detail',
       '散客那次切换不许污染有名有姓的客户的记忆')
+    // 上一条单独站不住：cust-9 记的就是 'detail'，而散客那次写的也是 'detail'。
+    // 写串到 cust-9 头上时，读回来还是 'detail'——**写进去的值与期望值同一个**，
+    // 那条断言原理上就看不见它自己文案里点名的那个方向。
+    // 能看见的方向在 cust-8：它记的是 'summary'，泄漏过去会变成 'detail'。
+    // （2026-09-03 审计拉出来的。反讽的是：本文件这一批正是来消灭假绿断言的，
+    // 却在这里新开了一条。判据始终是那句：**存不存在一个状态，
+    // 能让正确实现和错误实现给出不同结果？**）
+    assert.strictEqual(slipActions.initialExportStyle(other.customerId), 'summary',
+      '散客那次切换也不许污染「记着 summary」的客户'
+        + '（这一条才看得见「写串了 key」）')
   }
 
   console.log('slip-actions.test.js ok')
