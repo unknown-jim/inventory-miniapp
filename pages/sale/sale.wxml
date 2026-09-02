@@ -69,11 +69,16 @@
           >{{item.value}}</view>
         </view>
       </view>
+      <!-- 这一支里 (colors.length && !selectedColor) 恒为 false，所以不写禁用态：进多选
+           形态的唯一通路是 pickSize / pickAllSizes，两者开头都被「规格一未选就 return」
+           的守卫拦着，没选规格一根本走不到 |Z| >= 2。UX 注释 22:240 那条「规格一未选时
+           规格二 chips 与全选一律禁用」要落在下面**单选形态**那一支上（真会遇到这个
+           状态的是它），写在这里只会是恒假的死代码。 -->
       <view class="field">
         <view class="field-label">选择{{specAxis2}}（可多选）</view>
         <view class="chips">
           <view
-            class="chip js-size-chip {{item.on ? 'on' : ''}} {{(colors.length && !selectedColor) ? 'disabled' : ''}}"
+            class="chip js-size-chip {{item.on ? 'on' : ''}}"
             wx:for="{{sizeOptions}}"
             wx:key="value"
             data-value="{{item.value}}"
@@ -81,7 +86,7 @@
           >{{item.value}}</view>
           <view
             wx:if="{{sizes.length > 1}}"
-            class="chip js-size-all {{allSizesOn ? 'on' : ''}} {{(colors.length && !selectedColor) ? 'disabled' : ''}}"
+            class="chip js-size-all {{allSizesOn ? 'on' : ''}}"
             bindtap="pickAllSizes"
           >全选</view>
         </view>
@@ -145,11 +150,17 @@
           >{{item.value}}</view>
         </view>
       </view>
+      <!-- UX 注释 22:240：「规格一未选时，规格二 chips 与「全选」一律禁用（实底档：
+           neutral/100 底 + neutral/500 字，不透明）」。行为侧的守卫在 pickSize 开头，
+           视觉侧就是这里的 .disabled ——两者必须落在同一支上，否则 chip 长得跟能点的
+           一模一样、点了却没反应（baseline 是允许「先点尺码后点颜色」的，稿改了这条
+           规则，那就得让「不能点」看起来也不能点）。单选形态没有「全选」chip，那半条
+           不适用。 -->
       <view class="field last" wx:if="{{sizes.length}}">
         <view class="field-label">{{specAxis2}}</view>
         <view class="chips">
           <view
-            class="chip js-size-chip {{item.on ? 'on' : ''}} {{item.low ? 'low' : ''}}"
+            class="chip js-size-chip {{item.on ? 'on' : ''}} {{item.low ? 'low' : ''}} {{(colors.length && !selectedColor) ? 'disabled' : ''}}"
             wx:for="{{sizeOptions}}"
             wx:key="value"
             data-value="{{item.value}}"

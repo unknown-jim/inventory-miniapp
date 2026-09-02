@@ -582,9 +582,17 @@ Page({
 
     // H2：金额无条件从当前输入算，位置在任何早退之前——多选态是"本批 N 格 · 合计"，
     // 同样不许因为校验没过就清零或不渲染（稿 ③ 22:169 的 ¥1792.00 就是这条的证据）。
-    const amount = inventory.round2(lines.reduce(function (sum, line) {
-      return sum + inventory.toNumber(line.qty) * inventory.toNumber(line.unitPrice)
-    }, 0))
+    //
+    // 单选形态必须直接读 data.qty × data.unitPrice，**不能**从 lines 求和：currentLines()
+    // 在「有规格但还没选全」时返回 { lines: [], error: 请选规格 }，空数组求和恒为 0，
+    // 屏上的本行金额会从 50.00 掉回 0.00 —— 位置在早退之前是对的，来源错了。
+    // baseline 840408b 这里逐字是 util.money(qty * price)，H2 举的正是这一格
+    //（2026-09-02 返工：上一轮把两种形态合并成一次 reduce，就是这么破的）。
+    const amount = this.data.multiMode
+      ? inventory.round2(lines.reduce(function (sum, line) {
+        return sum + inventory.toNumber(line.qty) * inventory.toNumber(line.unitPrice)
+      }, 0))
+      : inventory.toNumber(this.data.qty) * inventory.toNumber(this.data.unitPrice)
     // 裁定 C：N = 有正数量的格数（= lines.length），不是选中格数。
     const patch = {
       lineAmountText: util.money(amount),
@@ -602,7 +610,14 @@ Page({
       patch.overNote = result.error
       return patch
     }
-    if (!lines.length) return patch
+    if (!lines.length) {
+      // 逐格红框要跟着清：填爆 → 再把所有格清空之后 lines 为空，从这里早退。overNote /
+      // canAdd 在 patch 的初值里已经清好了，cellRows 却不在初值里（它由 stockPatch 管
+      // 形状），上一次标红的那一格会把红描边留在屏上（稿 S5 22:343：两格都是常态描边
+      // $3:85）。这里只重贴一次 overKey='' 的同一份行，不改行的形状。
+      if (this.data.multiMode) patch.cellRows = this.buildCellRows(this.data.sizeOptions, '')
+      return patch
+    }
 
     const reserved = this.cartItems(list)
 
@@ -736,6 +751,18 @@ Page({
     const next = wasOn
       ? prev.filter(function (v) { return v !== value })
       : prev.concat([value])
+    // 单选形态（这一下点完前后都 <= 1 格）：走回既有那条路，一个字不改——跟 pickColor
+    // 上面那个分支同形。**必须是 applyProductState**：只有它会把 skuId / unitPrice
+    // 追平到新选中的那枚 SKU（`String(sku ? sku.salePrice : product.salePrice)`）。
+    // 走 applySizeSelection 只 setData 了 stockPatch + linePatch，单价会停在上一格的
+    // 值 —— 逐格售价是真功能（pages/product-edit/product-edit.wxml:207 每格一个售价
+    // 输入框，product-edit.js:319 专门保留店主逐格改过的价），停住就是按错价记账；
+    // 附带 skuId 停在 ''，下次 onShow 回填时 keepPrice 判假，单价还会自己跳。
+    // |Z| 跨 1↔2 边界（T4/T5）与已在多选态时才交给 applySizeSelection。
+    if (prev.length <= 1 && next.length <= 1) {
+      this.applyProductState(product, this.data.selectedColor, next, this.data.cart)
+      return
+    }
     this.applySizeSelection(product, prev, next)
   },
 
@@ -758,6 +785,18 @@ Page({
       return
     }
     this.applySizeSelection(product, prev, sizes.slice())
+  },
+
+  // 「第一枚选中格」按行序（product.sizes 顺序）取，不是点击顺序——逐格行与
+  // currentLines 的行序都按 product.sizes 走，单价默认值跟着同一个序才不会两说。
+  firstSelectedSku(product, sizes) {
+    const all = (product && product.sizes) || []
+    for (let i = 0; i < all.length; i++) {
+      if ((sizes || []).indexOf(all[i]) >= 0) {
+        return inventory.findSkuBySpec(this.data.skus, product.id, this.data.selectedColor, all[i]) || null
+      }
+    }
+    return null
   },
 
   // T4：|Z| 1→2，原数量框的值搬进第一枚已选格，新格留空。
@@ -790,7 +829,27 @@ Page({
         if (cellQtys[size] == null) cellQtys[size] = ''
       })
     }
-    this.setData(Object.assign(this.sizeSelectionPatch(nextSizes), { cellQtys: cellQtys, qty: qty, batchQty: batchQty }))
+    // 单价 / skuId 追平。判据照抄 applyProductState 的 keepPrice：参照 SKU 没变就留着
+    // 店主已经改过的价，换了参照 SKU 才追平到新的 salePrice（product 恒等于当前商品，
+    // 所以那条 productId 比较在这里是恒真的，省掉）。
+    //   · 进/留在多选态：参照 SKU = 第一枚选中格（返工裁定：多选态单价的默认值取该格
+    //     SKU 售价，不是商品档价，与单选形态取值逻辑一致；用户仍可改，仍是整批一个价）。
+    //     写进 data 的 skuId 记空串——多选态没有「当前唯一 SKU」（currentSku 在 |Z| != 1
+    //     时就返回 null），applyProductState 在 |Z| >= 2 时算出来的 sku 也是空；两边对齐
+    //     了，onShow 回填时 keepPrice 才判真，不会把整批价打回商品档价。
+    //   · 回落单选态（T5，|Z| 2→1）：参照 SKU = 剩下那一格，skuId 记它的 id ——跟
+    //     pickSize 单选分支走 applyProductState 的结果同形，onShow 也不会再自己跳价。
+    const refSku = isMulti
+      ? this.firstSelectedSku(product, nextSizes)
+      : this.firstSelectedSku(product, nextSizes.slice(0, 1))
+    const keepPrice = !!this.data.unitPrice && this.data.skuId === (refSku ? refSku.id : '')
+    this.setData(Object.assign(this.sizeSelectionPatch(nextSizes), {
+      cellQtys: cellQtys,
+      qty: qty,
+      batchQty: batchQty,
+      skuId: (isMulti || !refSku) ? '' : refSku.id,
+      unitPrice: keepPrice ? this.data.unitPrice : String(refSku ? refSku.salePrice : product.salePrice)
+    }))
     this.recomputeAfterSpecChange(product)
   },
 

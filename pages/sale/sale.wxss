@@ -161,10 +161,13 @@
 /* ---------- 多选形态（裁定 A，批 2/2026-09-02）：规格二选中 >= 2 格时的卡内追加件。
    稿 22:244 S1 基准卡；全部填/单价复用 .field-row + .half，不重定义。 ---------- */
 
-/* chip 铁律第四档：规格一未选时规格二 chips 与「全选」禁用——neutral/100 底本来就是
-   chip 未选中态的底色（复用 .chip 的 fill-ghost），这里只需要把字色压到 neutral/500、
-   opacity 保持 1（docs/ui-scale.md 2026-08-30 裁定：禁用一律不透明）。点击层面的
-   「不可点」由 pickSize / pickAllSizes 里的守卫兜底，这里只管视觉。 */
+/* chip 铁律第四档：规格一未选时规格二 chips 禁用——neutral/100 底本来就是 chip 未选中
+   态的底色（复用 .chip 的 fill-ghost），这里只需要把字色压到 neutral/500、opacity 保持
+   1（docs/ui-scale.md 2026-08-30 裁定：禁用一律不透明）。点击层面的「不可点」由 pickSize
+   / pickAllSizes 里的守卫兜底，这里只管视觉。
+   用它的是**单选形态**那一支的规格二 chips（wxml 里 block wx:else 那半边）：多选形态
+   要求 |Z| >= 2，而进多选的唯一通路已经被「规格一未选就 return」的守卫拦下，那边永远
+   遇不到这个状态。规则本身放在这一节里是因为它是这批加的，不是因为多选形态在用。 */
 .chip.disabled {
   color: var(--color-neutral-500);
 }

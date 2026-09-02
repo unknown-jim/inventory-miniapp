@@ -1806,11 +1806,45 @@ async function runSaleMultiSelect(miniProgram) {
     return String(d.productName || '').indexOf('短袖') >= 0
   }, '商品切到短袖 T恤')
 
+  // 【禁用要看得见】UX 注释 22:240：「规格一未选时，规格二 chips 与「全选」一律禁用
+  //（实底档：neutral/100 底 + neutral/500 字，不透明）」。行为侧的守卫在 pickSize /
+  // pickAllSizes 开头（没选规格一就直接 return），视觉侧就是 chip 上的 .disabled——
+  // 两者必须落在同一支模板上，否则 chip 长得跟能点的一模一样、点下去毫无反应。
+  // 2026-09-02 那版把视觉禁用只写进了多选形态那一支，而进多选的唯一通路恰好被同一个
+  // 守卫拦着，那个条件恒为 false，是纯死代码；真会遇到这个状态的单选形态反倒没有。
+  await waitFor(sale, '.js-size-chip', '出现规格二 chips')
+  const chipsNoColor = await sale.$$('.js-size-chip')
+  assert.ok(chipsNoColor.length > 0, '规格二 chips 一个都没渲染出来')
+  for (let i = 0; i < chipsNoColor.length; i++) {
+    const cls = String(await chipsNoColor[i].attribute('class') || '')
+    assert.ok(cls.indexOf('disabled') >= 0,
+      '规格一还没选，第 ' + i + ' 枚规格二 chip 应当带 disabled 类（点了本来就没反应），'
+        + '实为 class="' + cls + '"')
+  }
+
   // 规格一先选颜色——n5 3:767 的级联：没选颜色，规格二禁用（pickSize / pickAllSizes
   // 里的守卫会直接吃掉点击，不选颜色的话下面两次点规格二都不会有任何效果）。
   await waitFor(sale, '.js-color-chip', '出现规格一 chips')
   await tapNth(sale, '.js-color-chip', 0, '规格一第一枚 chip（颜色）')
   await waitForData(sale, function (d) { return !!d.selectedColor }, '颜色选中')
+
+  // 选完规格一，禁用态要跟着消失——只断言「没选时是灰的」而不断言「选完就亮」，
+  // 一个永远返回 disabled 的写法照样能骗过上面那半条。
+  const chipsWithColor = await sale.$$('.js-size-chip')
+  for (let i = 0; i < chipsWithColor.length; i++) {
+    const cls = String(await chipsWithColor[i].attribute('class') || '')
+    assert.ok(cls.indexOf('disabled') < 0,
+      '规格一已选，第 ' + i + ' 枚规格二 chip 不应再带 disabled 类，实为 class="' + cls + '"')
+  }
+
+  // 只选了规格一、规格二还没选：单价应当是商品档价（还没有「当前 SKU」这个东西）。
+  const afterColor = await sale.data()
+  const teeProduct = (afterColor.products || []).find(function (item) {
+    return item.id === afterColor.productId
+  })
+  assert.ok(teeProduct, '页面 data.products 里应当找得到当前商品')
+  assert.strictEqual(afterColor.unitPrice, String(teeProduct.salePrice),
+    '只选了规格一时单价应当是商品档价 ' + teeProduct.salePrice + '，实为 ' + afterColor.unitPrice)
 
   // 规格二选两格：第一次点还是既有单选形态（|Z| 0→1），第二次点才切多选（T4，|Z| 1→2）。
   // 两次都用同一个 .js-size-chip 钩子——单选/多选两套模板里都挂了它，不必关心此刻在哪个形态。
@@ -1819,12 +1853,46 @@ async function runSaleMultiSelect(miniProgram) {
   await waitForData(sale, function (d) {
     return d.selectedSizes.length === 1 && d.multiMode === false
   }, '选中第一格，仍是单选形态')
+
+  // 【单价必须跟着选中的格走】逐格售价是真功能（product-edit 每格一个售价输入框），
+  // 单选形态点规格二要把 skuId / unitPrice 一起追平到那一枚 SKU —— 停在上一格或停在
+  // 商品档价，就是按错价记账。2026-09-02 的回归正是这一条：pickSize 不再走
+  // applyProductState，单价一动不动。
+  const afterFirstSize = await sale.data()
+  const firstSku = (afterFirstSize.skus || []).find(function (item) {
+    return item.productId === afterFirstSize.productId
+      && item.color === afterFirstSize.selectedColor
+      && item.size === afterFirstSize.selectedSizes[0]
+  })
+  assert.ok(firstSku, '页面 data.skus 里应当找得到「' + afterFirstSize.selectedColor + ' · '
+    + afterFirstSize.selectedSizes[0] + '」这一格的 SKU')
+  // 前提钉子：这一格的 SKU 售价必须跟商品档价不同，否则下面那条断言分不出「真的追平
+  // 到 SKU」和「什么都没做、停在档价」——种子从前四格全是 59 = 档价，就是这个盲区
+  // 放走了上面那次回归。种子里黑色两格现在是 69 / 65（utils/inventory.js buildSeed）。
+  assert.notStrictEqual(firstSku.salePrice, teeProduct.salePrice,
+    '夹具前提：第一格的 SKU 售价必须跟商品档价（' + teeProduct.salePrice + '）不同，'
+      + '否则「单价跟着规格走」这条断言是恒真的假绿')
+  assert.strictEqual(afterFirstSize.unitPrice, String(firstSku.salePrice),
+    '单选形态点规格二之后，单价应当追平到该格 SKU 售价 ' + firstSku.salePrice
+      + '，实为 ' + afterFirstSize.unitPrice + '——单价没跟上就会按错价记账')
+  assert.strictEqual(afterFirstSize.skuId, firstSku.id,
+    'skuId 也要跟上：它是 applyProductState 里 keepPrice 的判据，停在旧值的话'
+      + '下次 onShow 回填会判假，单价会自己跳')
+
   await tapNth(sale, '.js-size-chip', 1, '规格二第二格')
   await waitForData(sale, function (d) {
     return d.multiMode === true && d.selectedSizes.length === 2
   }, '选中第二格后切到多选形态')
 
   const afterPick = await sale.data()
+  // 多选态单价的默认值取「第一枚选中格」的 SKU 售价，不是商品档价（批 2 返工裁定，
+  // 与单选形态取值逻辑一致）。这里第一枚选中格就是上面那一格，价没变。
+  assert.strictEqual(afterPick.unitPrice, String(firstSku.salePrice),
+    '进多选态后单价应当停在第一枚选中格的 SKU 售价 ' + firstSku.salePrice
+      + '，实为 ' + afterPick.unitPrice)
+  assert.strictEqual(afterPick.skuId, '',
+    '多选态没有「当前唯一 SKU」（currentSku 在 |Z| != 1 时返回 null），skuId 应当记空串——'
+      + '留着旧值会让 onShow 回填时 keepPrice 判假、把整批价打回商品档价')
   assert.strictEqual(afterPick.cellRows.length, 2, '多选形态应当渲染两行逐格输入')
   const sizeValues = afterPick.selectedSizes.slice()
 

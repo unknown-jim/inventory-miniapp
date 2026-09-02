@@ -171,6 +171,28 @@ assert.ok(submitBody.indexOf('this.mergeLines(') >= 0, 'submit 应当调用 merg
 assert.ok(!/this\.currentLine(?!s)\(/.test(submitBody), 'submit 不应再调用已改名的 currentLine()')
 assert.ok(!/this\.mergeLine(?!s)\(/.test(submitBody), 'submit 不应再调用已改名的 mergeLine()')
 
+// H2 钉子：本行金额无条件从「当前输入」算，位置在任何早退之前，单选形态直接读
+// data.qty × data.unitPrice。2026-09-02 那版把两种形态合并成一次「对 currentLines()
+// 的 lines 求和」——位置确实还在早退之前，但来源错了：currentLines 在「有规格但还没
+// 选全」时返回 { lines: [], error }，空数组求和恒为 0，屏上的本行金额从 50.00 掉回
+// 0.00（H2 举的正是这一格）。npm test 里没有能实例化销售页的地方，抓不到运行期的值，
+// 只能钉住写法：金额语句要排在第一条 `return patch` 前面，且单选那支要出现 data.qty。
+const linePatchBody = pageMethod(saleJs, 'linePatch')
+const amountAt = linePatchBody.indexOf('lineAmountText:')
+const firstReturnAt = linePatchBody.indexOf('return patch')
+assert.ok(amountAt >= 0, 'linePatch 里找不到 lineAmountText 的赋值')
+assert.ok(
+  firstReturnAt < 0 || amountAt < firstReturnAt,
+  'H2：lineAmountText 必须在 linePatch 的任何早退之前算好，否则没选全规格 / 校验没过时'
+    + '屏上的金额会清零'
+)
+assert.ok(
+  linePatchBody.indexOf('inventory.toNumber(this.data.qty)') >= 0,
+  'H2：单选形态的本行金额必须直接读 data.qty × data.unitPrice（baseline 840408b 逐字'
+    + '就是 util.money(qty * price)），不能从 currentLines() 的 lines 求和——lines 在'
+    + '「有规格但还没选全」时是空数组，求和恒为 0'
+)
+
 // selectedSizes / multiMode 单一写入点钉子。2026-09-02 的真实回归：pickSize 的
 // applySizeSelection 只把新集合写进 selectedSizes，忘了同步 multiMode（它是
 // selectedSizes.length >= 2 的纯派生量，不是独立状态）——UI 上表现为点第二枚规格二
