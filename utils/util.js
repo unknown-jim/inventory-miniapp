@@ -76,6 +76,11 @@ function withSlipView(order, receivable, products, shopName) {
       const parts = inventory.specParts(item, productsMap[item.productId])
       return {
         id: item.lineId,
+        // 送货单汇总态按商品身份分节要用这个（slip-image.js 的 sliceLineSections）：品名没有
+        // 唯一性校验（createProduct 只校验非空）、货号可空，两个同名且都没填货号的商品用
+        // 「品名 + 货号」当 key 会被并成一节。只加这一个字段，不改其它任何字段的取值。
+        // 老流水没有 item.productId 时是空串，分节那头据此退回旧 key。
+        productId: item.productId || '',
         productName: item.productName,
         specParts: parts,
         specText: inventory.specLabelText(parts),
