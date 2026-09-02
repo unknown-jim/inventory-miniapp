@@ -3337,9 +3337,15 @@ function buildSeed(now, nextId) {
     specAxis1: '颜色',
     specAxis2: '尺码'
   }, now - 5 * 3600000, nextId())
+  // 黑色两格的售价**故意**跟商品档价 59 不同，而且两格之间也不同（69 / 65）。
+  // 逐格售价本来就是真功能（product-edit 每格一个售价输入框，applyProductSkus 上面
+  // 那行 `row.salePrice != null ? ... : product.salePrice` 就是为它留的口子），但种子
+  // 从前四格全填 59 = 档价，于是「单价有没有跟着选中的格走」这件事在夹具上根本分不出
+  // 来 —— 2026-09-02「点规格二不刷新单价、按档价记账」的回归就是这么溜过 tests/ui.test.js
+  // 的。tests/ui.test.js 的 runSaleMultiSelect 里有一条前提断言钉着这个差值，别改回去。
   const teeApplied = applyProductSkus(tee, [], [
-    { color: '黑色', size: 'M', stock: 6, costPrice: 28, salePrice: 59, alertQty: 4 },
-    { color: '黑色', size: 'L', stock: 2, costPrice: 28, salePrice: 59, alertQty: 4 },
+    { color: '黑色', size: 'M', stock: 6, costPrice: 28, salePrice: 69, alertQty: 4 },
+    { color: '黑色', size: 'L', stock: 2, costPrice: 28, salePrice: 65, alertQty: 4 },
     { color: '白色', size: 'M', stock: 8, costPrice: 28, salePrice: 59, alertQty: 4 },
     { color: '白色', size: 'L', stock: 5, costPrice: 28, salePrice: 59, alertQty: 4 }
   ], now - 5 * 3600000, nextId)

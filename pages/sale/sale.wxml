@@ -51,60 +51,155 @@
   </view>
 
   <!-- 稿 picker/格选择器 3:716：白卡 r12，label「选择规格」+ chips 折行 + 琥珀说明。
-       两条轴仍然分两行（n5 3:767「双规格级联：先选规格一取值、再选规格二取值」）。 -->
+       两条轴仍然分两行（n5 3:767「双规格级联：先选规格一取值、再选规格二取值」）。
+       裁定 A（批 2/2026-09-02）：规格二选中 >= 2 格时整卡切到多选形态（稿 22:244 S1），
+       卡内顺序 = 规格一 -> 规格二(可多选)+全选 -> 全部填/单价 -> 逐格 -> 琥珀 -> 合计 ->
+       红字 -> 按钮，一路画在同一张卡里；<= 1 格时是这张卡原来的样子，一个字不改。 -->
   <view class="card spec-card" wx:if="{{hasSpecs}}">
-    <view class="spec-label">选择规格</view>
-    <view class="field" wx:if="{{colors.length}}">
-      <view class="field-label">{{specAxis1}}</view>
-      <view class="chips">
-        <view
-          class="chip {{item.on ? 'on' : ''}}"
-          wx:for="{{colorOptions}}"
-          wx:key="value"
-          data-value="{{item.value}}"
-          bindtap="pickColor"
-        >{{item.value}}</view>
+    <block wx:if="{{multiMode}}">
+      <view class="field" wx:if="{{colors.length}}">
+        <view class="field-label">选择{{specAxis1}}</view>
+        <view class="chips">
+          <view
+            class="chip js-color-chip {{item.on ? 'on' : ''}}"
+            wx:for="{{colorOptions}}"
+            wx:key="value"
+            data-value="{{item.value}}"
+            bindtap="pickColor"
+          >{{item.value}}</view>
+        </view>
       </view>
-    </view>
-    <view class="field last" wx:if="{{sizes.length}}">
-      <view class="field-label">{{specAxis2}}</view>
-      <view class="chips">
-        <view
-          class="chip {{item.on ? 'on' : ''}} {{item.low ? 'low' : ''}}"
-          wx:for="{{sizeOptions}}"
-          wx:key="value"
-          data-value="{{item.value}}"
-          bindtap="pickSize"
-        >{{item.value}} {{item.stock}}</view>
+      <!-- 这一支里 (colors.length && !selectedColor) 恒为 false，所以不写禁用态：进多选
+           形态的唯一通路是 pickSize / pickAllSizes，两者开头都被「规格一未选就 return」
+           的守卫拦着，没选规格一根本走不到 |Z| >= 2。UX 注释 22:240 那条「规格一未选时
+           规格二 chips 与全选一律禁用」要落在下面**单选形态**那一支上（真会遇到这个
+           状态的是它），写在这里只会是恒假的死代码。 -->
+      <view class="field">
+        <view class="field-label">选择{{specAxis2}}（可多选）</view>
+        <view class="chips">
+          <view
+            class="chip js-size-chip {{item.on ? 'on' : ''}}"
+            wx:for="{{sizeOptions}}"
+            wx:key="value"
+            data-value="{{item.value}}"
+            bindtap="pickSize"
+          >{{item.value}}</view>
+          <view
+            wx:if="{{sizes.length > 1}}"
+            class="chip js-size-all {{allSizesOn ? 'on' : ''}}"
+            bindtap="pickAllSizes"
+          >全选</view>
+        </view>
       </view>
-    </view>
-    <!-- 稿 13:139;3:429：仅现货不足、真的要从半成品扣时才出现（n9 4:19 / n16 7:33） -->
-    <view wx:if="{{blankNote}}" class="blank-note js-blank-note">{{blankNote}}</view>
+
+      <!-- 稿 row/批量填数 22:95：全部填 + 单价并入同一行，单价在多选态下是输入框
+           （与主屏 7:9 同形，不是只读文本）。 -->
+      <view class="field-row batch-row">
+        <view class="field half">
+          <view class="field-label">全部填</view>
+          <view class="qty-box">
+            <input class="qty-input js-batch-qty" type="digit" value="{{batchQty}}" bindinput="onBatchQty" placeholder="0" hidden="{{showPicker || showCustomerPicker || showSlip || showPaid || showCart}}" />
+          </view>
+        </view>
+        <view class="field half">
+          <view class="field-label">单价</view>
+          <view class="qty-box">
+            <input class="qty-input price-input js-batch-price" type="digit" data-field="unitPrice" value="{{unitPrice}}" bindinput="onField" placeholder="0.00" hidden="{{showPicker || showCustomerPicker || showSlip || showPaid || showCart}}" />
+          </view>
+        </view>
+      </view>
+
+      <!-- 稿 row/逐格 22:102：一行最多两格，超过两格折行，不缩字号
+           （docs/ui-scale.md「表单并排最多两格」）。hint 用「现货 N」不用「可出 N」
+           （裁定 B）；判红只在整批 assertSaleItems 失败时才逐格增量定位到第一格。 -->
+      <view class="cell-grid">
+        <view class="cell-cell" wx:for="{{cellRows}}" wx:key="value">
+          <view class="field-label">{{item.value}}</view>
+          <view class="qty-box {{item.over ? 'danger' : ''}}">
+            <input class="qty-input js-cell-qty" type="digit" value="{{item.qtyText}}" data-value="{{item.value}}" bindinput="onCellQty" placeholder="0" hidden="{{showPicker || showCustomerPicker || showSlip || showPaid || showCart}}" />
+          </view>
+          <text class="cell-hint {{item.over ? 'danger' : ''}}">{{item.hint}}</text>
+        </view>
+      </view>
+
+      <!-- 琥珀行：整批一行汇总，不逐格出（13:139;3:429，n9 4:19 的多选口径） -->
+      <view wx:if="{{blankNote}}" class="blank-note js-blank-note">{{blankNote}}</view>
+
+      <!-- 合计行。裁定 C：N = 有正数量的格数（不是选中格数），N = 0 时整行不出 -->
+      <view wx:if="{{batchLineCount > 0}}" class="batch-total">
+        <text class="batch-total-label">本批 {{batchLineCount}} 格 · 合计</text>
+        <text class="batch-total-amount">¥{{lineAmountText}}</text>
+      </view>
+
+      <!-- 卡级红字：只出一句（后端抛的第一条），逐字取 error.message，不许另编 -->
+      <view wx:if="{{overNote}}" class="over-note js-over-note">{{overNote}}</view>
+
+      <button class="add-btn js-add-cart" bindtap="addCart" disabled="{{!canAdd}}" hidden="{{showPicker || showCustomerPicker || showSlip || showPaid || showCart}}">{{addBtnLabel}}</button>
+    </block>
+    <block wx:else>
+      <view class="spec-label">选择规格</view>
+      <view class="field" wx:if="{{colors.length}}">
+        <view class="field-label">{{specAxis1}}</view>
+        <view class="chips">
+          <view
+            class="chip js-color-chip {{item.on ? 'on' : ''}}"
+            wx:for="{{colorOptions}}"
+            wx:key="value"
+            data-value="{{item.value}}"
+            bindtap="pickColor"
+          >{{item.value}}</view>
+        </view>
+      </view>
+      <!-- UX 注释 22:240：「规格一未选时，规格二 chips 与「全选」一律禁用（实底档：
+           neutral/100 底 + neutral/500 字，不透明）」。行为侧的守卫在 pickSize 开头，
+           视觉侧就是这里的 .disabled ——两者必须落在同一支上，否则 chip 长得跟能点的
+           一模一样、点了却没反应（baseline 是允许「先点尺码后点颜色」的，稿改了这条
+           规则，那就得让「不能点」看起来也不能点）。单选形态没有「全选」chip，那半条
+           不适用。 -->
+      <view class="field last" wx:if="{{sizes.length}}">
+        <view class="field-label">{{specAxis2}}</view>
+        <view class="chips">
+          <view
+            class="chip js-size-chip {{item.on ? 'on' : ''}} {{item.low ? 'low' : ''}} {{(colors.length && !selectedColor) ? 'disabled' : ''}}"
+            wx:for="{{sizeOptions}}"
+            wx:key="value"
+            data-value="{{item.value}}"
+            bindtap="pickSize"
+          >{{item.value}} {{item.stock}}</view>
+        </view>
+      </view>
+      <!-- 稿 13:139;3:429：仅现货不足、真的要从半成品扣时才出现（n9 4:19 / n16 7:33） -->
+      <view wx:if="{{blankNote}}" class="blank-note js-blank-note">{{blankNote}}</view>
+    </block>
   </view>
 
-  <!-- 稿 field-row/数量+售价 7:1：数量框内右侧带「件 · 可出 N」（unit 7:6） -->
-  <view class="field-row">
-    <view class="field half">
-      <view class="field-label">数量</view>
-      <view class="qty-box">
-        <input class="qty-input js-qty" type="digit" data-field="qty" value="{{qty}}" bindinput="onField" placeholder="0" hidden="{{showPicker || showCustomerPicker || showSlip || showPaid || showCart}}" />
-        <text class="qty-unit">件 · 可出 {{stockText}}</text>
+  <!-- 单选形态：既有数量+售价/本行金额/红字/加入清单，一个字不改。
+       多选形态把这些内容画进了上面的 spec-card，这里整段不出。 -->
+  <block wx:if="{{!multiMode}}">
+    <!-- 稿 field-row/数量+售价 7:1：数量框内右侧带「件 · 可出 N」（unit 7:6） -->
+    <view class="field-row">
+      <view class="field half">
+        <view class="field-label">数量</view>
+        <view class="qty-box">
+          <input class="qty-input js-qty" type="digit" data-field="qty" value="{{qty}}" bindinput="onField" placeholder="0" hidden="{{showPicker || showCustomerPicker || showSlip || showPaid || showCart}}" />
+          <text class="qty-unit">件 · 可出 {{stockText}}</text>
+        </view>
+      </view>
+      <view class="field half">
+        <view class="field-label">本次售价</view>
+        <view class="qty-box">
+          <input class="qty-input price-input" type="digit" data-field="unitPrice" value="{{unitPrice}}" bindinput="onField" placeholder="0.00" hidden="{{showPicker || showCustomerPicker || showSlip || showPaid || showCart}}" />
+        </view>
       </view>
     </view>
-    <view class="field half">
-      <view class="field-label">本次售价</view>
-      <view class="qty-box">
-        <input class="qty-input price-input" type="digit" data-field="unitPrice" value="{{unitPrice}}" bindinput="onField" placeholder="0.00" hidden="{{showPicker || showCustomerPicker || showSlip || showPaid || showCart}}" />
-      </view>
-    </view>
-  </view>
-  <view class="line-amount">本行 ¥{{lineAmountText}}</view>
+    <view class="line-amount">本行 ¥{{lineAmountText}}</view>
 
-  <!-- 稿 13:614：清单累计超出现货且半成品不够时的红字拦截（n16 7:33） -->
-  <view wx:if="{{overNote}}" class="over-note js-over-note">{{overNote}}</view>
+    <!-- 稿 13:614：清单累计超出现货且半成品不够时的红字拦截（n16 7:33） -->
+    <view wx:if="{{overNote}}" class="over-note js-over-note">{{overNote}}</view>
 
-  <!-- 稿 btn/加入清单 4:65 / 拦截样张 13:615：禁用走 app.wxss 的 .btn-primary[disabled] 实底档 -->
-  <button class="add-btn js-add-cart" bindtap="addCart" disabled="{{!canAdd}}" hidden="{{showPicker || showCustomerPicker || showSlip || showPaid || showCart}}">加入清单</button>
+    <!-- 稿 btn/加入清单 4:65 / 拦截样张 13:615：禁用走 app.wxss 的 .btn-primary[disabled] 实底档 -->
+    <button class="add-btn js-add-cart" bindtap="addCart" disabled="{{!canAdd}}" hidden="{{showPicker || showCustomerPicker || showSlip || showPaid || showCart}}">加入清单</button>
+  </block>
 
   <!-- 稿 row/销售清单·折叠 7:11：点开走弹层，不在首屏内联撑开（n15 7:32） -->
   <view wx:if="{{cart.length}}" class="fold-row cart-row js-cart-row" bindtap="openCart">
