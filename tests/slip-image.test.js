@@ -1388,34 +1388,107 @@ PROTO_NAMES.forEach(function (name) {
 // 后果是跨单据泄漏：下一张送货单新建的 `{}` 会从原型上继承到上一张的行，
 // 客户可能在自己的单子上看到别人的货。静默、持续整个 app 会话。
 //
-// 这条钉的是**实际危害**（第二张单会不会继承第一张），不是实现细节。
-// 历史：只钉了列轴那一支时，变异「只把外层 grid 改回 {}」是**绿**的——
-// 说明外层那处改动当时没有任何断言覆盖。
+// ---- 单行节头不得变高 ------------------------------------------------
+// 节头折行那一改曾经把高度写成 `Math.max(headH, CELL_PAD_Y*2 + n*LINE_H)`，
+// n=1 时是 `max(98, 111)` = 111——**每一张既有矩阵单的节头都无条件长高 13px**，
+// 而旁边的注释声称「单行时与改动前逐字相同」。审计逐条指令对比拉出来的：
+// 49 条里 31 条不同、contentHeight 1218→1231。
+//
+// 当时这个回归**没有任何断言拦**——改对了行为不补守卫，下次还会回来。
+;(function assertSingleLineHeadUnchanged() {
+  const lines = gridLines(['\u9ed1\u8272', '\u767d\u8272'], ['S', 'M', 'L'])
+  const layout = slipImage.layoutSlip(matrixFixtureSlip(lines))
+  const heads = []
+  JSON.stringify(layout).replace(/"type":"rect"[^}]*"h":(\d+(?:\.\d+)?)/g, function (_, h) {
+    heads.push(Number(h))
+    return ''
+  })
+  assert.ok(
+    heads.indexOf(98) >= 0,
+    '单行节头的底色条高度必须仍是 98（与折行改动前逐字相同）。'
+      + '写成 Math.max(headH, CELL_PAD_Y*2 + n*LINE_H) 的话 n=1 也会得到 111，'
+      + '每一张既有矩阵单都会无声息长高 13px。实测到的矩形高度：'
+      + JSON.stringify(heads.slice(0, 12))
+  )
+  assert.ok(
+    heads.indexOf(111) < 0,
+    '单行节头不得出现 111 这个高度（= CELL_PAD_Y*2 + 1*LINE_H）——'
+      + '出现它就说明又退回了 Math.max 那个写法。实测：'
+      + JSON.stringify(heads.slice(0, 12))
+  )
+})()
+
+// 这一段重写过（2026-09-03）——上一版的「第二张单不得继承第一张」那条是**空转**的，
+// 而注释还把真正在干活的那条（全局污染）贬为「实现细节」。成因：
+// 夹具用的行轴名是 `constructor`，`grid['constructor']` 拿到的是 **`Object` 这个函数对象**，
+// 于是写到 `Object.S`；而第二张单新建的 `{}` 是从 **`Object.prototype`** 找属性，
+// 根本找不到 `Object.S`——所以那条断言在任何实现下都恒绿，**结构性不可能红**。
+//
+// 真正会跨单据泄漏的是 `__proto__` 当行轴：它写到 `Object.prototype`，而那正是
+// 下一张单的 `{}` 会继承的地方。实测（修复前）：
+//   干净的第二张单：  ["100","101","102","303","103","104","105","312"]
+//   被污染的第二张：  ["208","212","216","303","208","212","216","312"]
+// 格子印的是**上一张单的数**，而行小计还是本单的——格之和 ≠ 小计。
+//
+// 教训：断言文案声称自己在盯「实际危害」，不等于它真的盯得住。
+// 判据仍然是那句：**存不存在一个状态，能让正确实现和错误实现给出不同结果？**
+//
+// 下面两条断言**各守一种变异**，不是一条主一条副（实测出来的，不是推的）：
+//   · **只把外层改回 `{}`**：`grid['__proto__']` 读到 `Object.prototype`，写成
+//     `Object.prototype.S`——但第二张单的**内层仍是 null 原型**，找不到它，
+//     所以**不会跨单泄漏**。这一支的实际危害就是全局污染本身，
+//     能抳住它的只有下面那条 `dirty` 断言。
+//   · **两处都改回 `{}`**：第二张单的内层 `{}` 从 `Object.prototype` 继承到
+//     上一张的格子数组，这才是跨单泄漏，由数字序列那条抳住。
+// 两条都不能删。
 ;(function assertNoCrossSlipLeak() {
-  const rowName = 'constructor'
+  // 用 __proto__ 而不是 constructor：只有它写到 Object.prototype，才会被下一张单继承。
+  const rowName = '__proto__'
+  // 两张单的**列取值必须重叠**（都是 S/M/L），否则继承来的格子 key 对不上、泄漏不可观测。
+  const cols = ['S', 'M', 'L']
   const first = slipImage.layoutSlip(
-    matrixFixtureSlip(gridLines([rowName, '\u767d\u8272'], ['S', 'M', 'L']))
+    matrixFixtureSlip(gridLines([rowName, '\u767d\u8272'], cols))
   )
   assert.ok(first, '第一张单应当能正常排版')
 
-  // 第二张单：完全不同的商品与规格，不应当出现第一张的任何痕迹。
-  const second = slipImage.layoutSlip(
-    matrixFixtureSlip(gridLines(['\u7ea2\u8272', '\u7eff\u8272'], ['XL', 'XXL']))
-  )
-  assert.ok(
-    !hasText(second, rowName),
-    '上一张送货单的行不得泄漏到下一张：'
-      + 'grid 用 {} 时，行轴取值叫「' + rowName + '」会把行写到全局 Object 上，'
-      + '下一张单新建的 {} 会从原型继承到它'
-  )
+  // 第二张：不同的行轴取值，相同的列轴取值。把它画出来的数字序列拿出来比。
+  function digitsOf(layout) {
+    const out = []
+    JSON.stringify(layout).replace(/"text":"([^"]*)"/g, function (_, t) {
+      if (/^[0-9]+$/.test(t)) out.push(t)
+      return ''
+    })
+    return out
+  }
+  const secondLines = gridLines(['\u7ea2\u8272', '\u7eff\u8272'], cols)
+  const second = digitsOf(slipImage.layoutSlip(matrixFixtureSlip(secondLines)))
 
-  // 同时直接钉全局污染本身，把失败信号拉到最近。
-  const polluted = Object.getOwnPropertyNames(Object).filter(function (k) {
-    return ['S', 'M', 'L', 'XL', 'XXL'].indexOf(k) >= 0
+  // 基准：同一份第二张单在**没有跑过第一张**时的数字序列。
+  // 这里不能重新跑一遍（环境已经被污染了），所以直接拿这份夹具自己的件数算。
+  const expected = []
+  secondLines.forEach(function (l) { expected.push(l.qtyText) })
+  assert.ok(expected.length > 0, '前提：第二张单夹具要有行')
+  expected.forEach(function (q) {
+    assert.ok(
+      second.indexOf(q) >= 0,
+      '第二张单应当印出自己的件数 ' + q + '，实际印的是 '
+        + JSON.stringify(second) + '——数字对不上就是上一张单的格子通过 '
+        + 'Object.prototype 泄漏过来了'
+    )
+  })
+
+  // 直接钉全局污染：同时查 Object 本体和 Object.prototype——
+  // constructor 那一支污染前者，__proto__ 那一支污染后者，只查一个会漏。
+  const dirty = []
+  ;[Object, Object.prototype].forEach(function (target, i) {
+    Object.getOwnPropertyNames(target).forEach(function (k) {
+      if (cols.indexOf(k) >= 0) dirty.push((i === 0 ? 'Object.' : 'Object.prototype.') + k)
+    })
   })
   assert.deepStrictEqual(
-    polluted, [],
-    '排版不得在全局 Object 上写属性（实测多出：' + polluted.join(', ') + '）'
+    dirty, [],
+    '排版不得在全局 Object / Object.prototype 上写属性（实测多出：'
+      + dirty.join(', ') + '）'
   )
 })()
 

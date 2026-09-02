@@ -591,8 +591,15 @@ function buildMatrixSection(section) {
   // / `toString` / `valueOf` / `hasOwnProperty` / `__proto__` 时，`{}` 会从原型上读到
   // 一个真值，`if (!grid[r][c])` 判假、不初始化成数组，下一行 `.push` 直接抛
   // `grid[r][c].push is not a function`——**整张送货单导不出来**。
-  // 实测触发条件是**列轴**取值撞上原型名；行轴撞上无害（`grid[r]` 拿到函数后，
-  // `grid[r][c]` 仍是 undefined，照常初始化）。两处都换掉，别只换一处。
+  // **列轴**撞上时抛异常；**行轴撞上不抛异常，但不是无害**（上一版这里
+  // 写的是「行轴撞上无害」，错的）：`grid[r]` 拿到的是原型上那个对象本体，
+  // 于是 `grid[r][c] = []` 写到全局 `Object`（`constructor`）或 `Object.prototype`
+  // （`__proto__`）身上。实测后果有两层：
+  //   · **同一张单当场就印错**——两行共用同一批格子数组，本该 1/2/3（小计 6）
+  //     和 4/5/6（小计 15），实际两行都印 5/7/9
+  //   · `__proto__` 那一支还会泄到**下一张单**（新建的 `{}` 从 `Object.prototype`
+  //     继承到上一张的格子），客户可能在自己的单子上看到别人的货
+  // 两处都换掉，别只换一处。
   const grid = Object.create(null)
   section.lines.forEach(function (line) {
     const r = specCellValue(line, rowAxis)
@@ -707,7 +714,17 @@ function layoutMatrixSection(cmds, section, matrix, pageWidth, y, measure) {
   const headerLines = wrapText(headerLabel, headAvail, function (part) {
     return measure(part, headerFont)
   })
-  const sectionHeadH = Math.max(headH, CELL_PAD_Y * 2 + headerLines.length * LINE_H)
+  // 只有折了行才变高。**不能写成 `Math.max(headH, CELL_PAD_Y*2 + n*LINE_H)`**：
+  // n=1 时那个式子是 23*2+65=111，而 headH=98，`Math.max` 恒取 111——于是
+  // **每一张既有矩阵送货单的节头都无条件长高 13px**，短品名一张也不例外。
+  // （2026-09-03 审计拉出来的：上一版就是那么写的，而旁边的注释声称
+  // 「单行时与改动前逐字相同」——逐条指令对比实测 49 条里 31 条不同，
+  // contentHeight 1218→1231。**声明不动却实际动了产品行为**，跟把稿的现状
+  // 当成稿的意图是同一个错误。本次改回“只有折行才变高”，而不是去改稿——
+  // 节头变高不是本 PR 要解决的问题，不该搭车。
+  const sectionHeadH = headerLines.length > 1
+    ? CELL_PAD_Y * 2 + headerLines.length * LINE_H
+    : headH
 
   const tableTop = y
   const sectionHeadY = y
