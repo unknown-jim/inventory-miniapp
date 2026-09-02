@@ -1917,7 +1917,10 @@ async function runSaleMultiSelect(miniProgram) {
   const afterAll = await sale.data()
   assert.strictEqual(afterAll.allSizesOn, true, '全选之后 allSizesOn 应为 true')
   assert.strictEqual(afterAll.cellRows.length, 2, '全选之后应当渲染两行逐格输入')
-  assert.strictEqual(String(afterAll.cellQtys[afterAll.selectedSizes[0]]), '2',
+  // cellQtys 的 key 带固定前缀 'v:'（隔开店主输入与 Object.prototype 的属性名），
+  // 读的时候要跟着加。这三处是 2026-09-03 合入时才暴露的第 10 处站点：
+  // 前缀那一批枚举站点时，这几条断言还没合进来。
+  assert.strictEqual(String(afterAll.cellQtys['v:' + afterAll.selectedSizes[0]]), '2',
     '空态数量框里的 2 应当搬进行序第一格，不许静默丢掉')
   assert.strictEqual(afterAll.qty, '', '搬走之后数量框要清空')
 
@@ -2037,7 +2040,7 @@ async function runSaleMultiSelect(miniProgram) {
   // 黑色/L 只有 2 件现货，本用例后面还要再补一批直接提交，两批加起来不能超过它。
   await typeInto(sale, '.js-batch-qty', '1', '全部填', 'batchQty')
   await waitForData(sale, function (d) {
-    return sizeValues.every(function (s) { return String(d.cellQtys[s]) === '1' })
+    return sizeValues.every(function (s) { return String(d.cellQtys['v:' + s]) === '1' })
   }, '全部填之后两格的草稿都变成 1')
 
   // 改第一格（M）为 3（T9：只改这一格，「全部填」框里的值留着当提示，不联动）。
@@ -2079,7 +2082,7 @@ async function runSaleMultiSelect(miniProgram) {
   // currentLines() / mergeLines() 在 submit() 里要是悬空，这一步会直接炸掉。
   await typeInto(sale, '.js-batch-qty', '1', '全部填（第二批，不加入清单）', 'batchQty')
   await waitForData(sale, function (d) {
-    return sizeValues.every(function (s) { return String(d.cellQtys[s]) === '1' })
+    return sizeValues.every(function (s) { return String(d.cellQtys['v:' + s]) === '1' })
   }, '第二批全部填 1 落进两格')
 
   await tapWhen(sale, '.js-customer-picker')

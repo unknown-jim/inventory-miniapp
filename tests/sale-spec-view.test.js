@@ -306,6 +306,21 @@ assert.ok(
 //
 // 复用上面那个剥注释器：注释里提到 cellQtys[...] 不算违规。
 const bareCellQtyAccess = saleJsNoCommentsForMultiModePin.match(/cellQtys\s*\[\s*(?!cellKey\s*\()/g) || []
+
+// 同一条站点完整性也要盖到 tests/ui.test.js——**站点清单的边界不等于实现文件的边界**。
+// 2026-09-03 实例：前缀那一批枚举站点时，另一条线的 PR 还没合入，
+// 它带进来的 UI 断言直接读 `cellQtys[<size>]`。两边各自都绿，合到一起才红（
+// `'undefined' !== '2'`）——而且只有完整 UI 轮能抳到，`npm test` 看不见。
+// 所以这条钉子放在纯 Node 套件里，让下一次漏写在 `npm test` 就红。
+const uiTestSrc = fs.readFileSync(path.join(__dirname, 'ui.test.js'), 'utf8')
+const bareCellQtyInUi = uiTestSrc.match(/cellQtys\s*\[\s*(?!'v:'|"v:")/g) || []
+assert.strictEqual(
+  bareCellQtyInUi.length, 0,
+  'tests/ui.test.js 里所有 cellQtys[...] 的下标都必须带 \'v:\' 前缀（与 sale.js 的 cellKey 同形），'
+    + '实测有 ' + bareCellQtyInUi.length + ' 处裸用。裸用会读到 undefined，'
+    + '而那是静默的——只有完整 UI 轮会红。'
+)
+
 assert.strictEqual(
   bareCellQtyAccess.length, 0,
   'pages/sale/sale.js 里所有 cellQtys[...] 的下标都必须走 cellKey()，实测有 '
