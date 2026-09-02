@@ -53,6 +53,13 @@ https://ardot.tencent.com/file/718738891083099
 4. **实例后代路径用字面量** `"实例id;子id"`；用 binding 拼接（`v+";child"`）会生成双分号，报 not found。
 5. **Move 之后布局尺寸会被重解析，两个轴都会。** 竖排里 `fill_container` 的子节点 Move 进横排后，width 会解析成固定值，撑爆容器裁掉兄弟节点；反过来把固定宽的卡 Move 进宽 Row，width **和 height** 会双双变成 FILL（实测三张 343×335/199/236 的卡一度被拉成 812 高）。Move 之后把两个轴的 `layoutSizing` 都显式设回去，再复读一次实际宽高。
 6. **别名变量（VARIABLE_ALIAS）在 fill 简写路径不解析**（如 fill/brand-accent），会回落默认色并报 warning；要绑 Primitive 本体或写完整 `fills` 数组。写完整数组时，变量要放在 **`boundVariables.color`** 里，不是写成 `color: "$3:84"` 字符串——后者仍走简写路径，一样不解析。曾经有一轮因为只试了「绑 Primitive」这一条就把它记成工具限制，其实第二条路是通的。2026-09-02 再次复现：`fills: ["$3:84"]`（`text/warning`，也是 VARIABLE_ALIAS）静默失败，写完整 paint 数组 + `boundVariables.color` 才落进去。
+    **但「放在 `boundVariables.color` 里」这句话本身会被误读成写字符串，那是错的**（2026-09-03 实测）：`boundVariables: {color: "$3:13"}` 直接被拒，`potentialIssues` 明说 `Expected object at [0].boundVariables.color, but received 'string'`。要写成 alias 对象：
+
+    ```
+    fills: [{ type: "SOLID", color: {...}, boundVariables: { color: { id: "VariableID:3:13", type: "VARIABLE_ALIAS" } } }]
+    ```
+
+    这一条是本坑里唯一**会当场报错**的写法（不像简写路径那样静默回落），所以撞上了反而好办——照上面改就行。
 7. `capture_layout` 开 `problemsOnly` 时，大 Row 报 oversized container 是画布常态（Row 本身是 fill_container）；要盯的是 `OUTSIDE_PARENT` 和 `MissingContent`。
 8. **变量绑定通道不是无副作用通道**：给组件子节点 `U(content: "$:FixText:xxx")` 干净，但绑定会继承进所有实例，把实例原有的 characters 字面量覆盖冲掉（实测一次冲掉 stat/block 8 实例 24 个文字槽加两处流水行金额）。绑之前先列实例、核对哪些实例带 characters 覆盖；被冲的实例按改前取证的原值逐个绑回各自的变量。同理要警惕：改组件默认样张前先想清楚实例都覆盖了什么。
 9. **往组件里插 svg 子框，子框会被放到远处坐标**：`I(组件, {type: "frame", svg: ...})` 建出的子框 x/y 实测落在其他画布位置（如 1619,18948），组件和全部实例因此渲染空白。插入后立刻把子框 x/y 归零；判定「新节点截图空白」先读 `absoluteBoundingBox` 再定性，不要想当然归咎渲染缓存。

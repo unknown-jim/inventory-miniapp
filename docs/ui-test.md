@@ -36,6 +36,7 @@ npm run test:all > "$TMPDIR/ui.txt" 2>&1; echo "EXIT=$?"
 |---|---|
 | 端口被占 / `Connection closed` 出现在随机步骤 | 上一轮的残留。`Get-Process 微信开发者工具` 手动关掉；`Get-CimInstance Win32_Process -Filter "Name='node.exe'"` 里挂 `ui.test.js` 的 `Stop-Process`。**别按镜像名杀 `WeChatAppEx`**——它是微信本体也在用的，而且**新版微信本体的进程名是 `Weixin.exe` 不是 `WeChat.exe`**，别拿「`WeChat.exe` 不在 → 那些是残留」当依据去杀（2026-09-02 差一步就把用户正在用的微信杀了） |
 | `cli auto 以退出码 4294967295 结束` / 刚跑几步就 `Connection closed`，**而进程列表是干净的** | 9420 端口处在 TCP `TIME_WAIT`（Windows 默认约 120 秒），杀进程对它无效。判据是 `netstat -ano \| grep -E ":9420 .*(TIME_WAIT\|LISTENING)"`，或 `Get-NetTCPConnection -LocalPort 9420` 看到 `State=TimeWait PID=0`。**连着跑两轮必撞**，跑之前等它消失即可。2026-09-02 在这上面白烧了三轮完整测试，其间还因为中途插进来的一次 baseline 恰好赶上干净窗口、跑绿了，差点把「环境是好的」反过来当成「代码有问题」的依据 |
+| `Cannot destructure property 'rawPath' … is null`，挂在**「填充示例数据」**这一步 | 开发者工具**开着、但指向另一个项目**（多工作树并行时最常见）。端口是空闲的、进程也不算残留，所以上一行那套判据查不出来。处置就是把那个实例关掉重跑——注意关的是「微信开发者工具」，别碰 `WeChatAppEx` / `Weixin.exe`。**多会话共用一台工具时先按 `~/work/inventory-miniapp-handoffs/ui-test-lock-protocol.md` 排队，不要直接关别人正在用的窗口** |
 | 「服务端口」没开 | 工具 → 设置 → 安全设置 → 服务端口 |
 | 报「等『页面加载完成 pages/xxx』超时」 | 多半不是没加载完，是那个页面**根本没有 `pageLoading` 字段**，或者上一步走错了页。名单在 `tests/automator-contract.test.js` |
 | `pageMap 缓存返回了陈旧页面对象` 那行日志 | 正常，脚本会自己删缓存重取，不用管 |
