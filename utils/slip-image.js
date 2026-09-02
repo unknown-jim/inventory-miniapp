@@ -464,14 +464,27 @@ function layoutTable(cmds, slip, cols, y, measure) {
 }
 
 // ---------------------------------------------------------------------------
-// 汇总态：按货号分节，能矩阵化的节画成「行=规格一取值、列=规格二取值、格内件数」的交叉表，
-// 不能矩阵化的节退回平铺。exportStyle 不是 'summary' 时（即 'detail' 或不传/传别的值里的
-// 'detail' 分支，见 layoutSlip）整张单一条分节逻辑都不会跑，直接走 layoutTable 老路径——
-// 这是老单据渲染逐字不变的保证，不要在这条钉子上打补丁。
+// 汇总态：按商品分节，能矩阵化的节画成「行=规格一取值、列=规格二取值、格内件数」的交叉表，
+// 不能矩阵化的节退回平铺。
+//
+// 分节只在 exportStyle 解析成 'summary' 时跑。解析规则见 layoutSlip：**只有字面 'detail'**
+// 走明细态，其余一切取值——包括不传 options、传 undefined、传别的字符串——都解析成
+// 'summary'，照样分节、照样矩阵化。实测 `不传 === summary` 为 true、`不传 === detail`
+// 为 false。所以「不传 = 老路径、一条分节逻辑都不会跑」是错的，别照着这个前提改代码。
+// 常驻断言只钉住两件事（tests/slip-image.test.js）：不传 ≡ 显式 'summary'、且 ≠ 'detail'。
+// 「detail 与改动前逐字节相同」没有常驻断言，只在评审期比过 baseline 模块，别当保证读。
 // ---------------------------------------------------------------------------
 
-// 分组 key 用 productName + skuText：同一商品 productName 必然相同，sku 用 skuText 统一
+// 分组 key 优先取 productId —— 商品身份，由 utils/util.js 的 withSlipView 从
+// inventory.recordLines 的 item.productId 带下来。
+// 为什么不能只用「品名 + 货号」：品名没有唯一性校验（utils/inventory.js 的 createProduct
+// 只校验非空），货号可空，所以两个**不同商品**同名且都没填货号时会被并进同一节——节头只
+// 印一个品名、小计跨商品求和，叠加矩阵格就会印出错数。
+// pages/sale/sale.js 的 mergeLines 挡不住这条：它按 product.id + specKey(color,size) 合并，
+// 只在**单个商品内**去重，跨商品的同名碰撞它看不见。
+// productId 缺失（老流水、页面自己拼的预览数据）才退回「品名 + 货号」，sku 用 skuText 统一
 // 空串和「未填」，避免同一商品因为两种写法被拆成两节。
+// 两种 key 各带前缀，id / name 两个 keyspace 才不会互相撞上。
 // 分隔符用 \u0000，不用空格：品名本身可以含空格（夹具就有「短袖 T恤」），空格拼接会让
 // '短袖 T'+'TS' 和 '短袖'+'T TS' 撞成同一个 key（都拼成 '短袖 T TS'）。\u0000 不会出现在
 // 品名或货号里，拼接后不可能碰撞。
@@ -482,7 +495,10 @@ function sliceLineSections(lines) {
   const sections = []
   list.forEach(function (line) {
     const sku = skuText(line)
-    const key = String((line && line.productName) || '') + '\u0000' + sku
+    const productId = String((line && line.productId) || '')
+    const key = productId
+      ? 'id\u0000' + productId
+      : 'name\u0000' + String((line && line.productName) || '') + '\u0000' + sku
     if (!index[key]) {
       index[key] = { productName: (line && line.productName) || '', sku: sku, lines: [] }
       sections.push(index[key])
@@ -571,11 +587,25 @@ function buildMatrixSection(section) {
   // grid 存的是行数组、不是单行，格内累加显示，不让后写的行覆盖先写的——行小计本来就是按
   // section.lines 全量算的，格子如果只挑最后一行，会出现「格之和 ≠ 小计」这种在单据上
   // 代价很高的错，还会让行数只增 N 不增 R，反而更容易凑到条件 6 的压缩收益。
-  const grid = {}
+  // Object.create(null) 而不是 {}：规格取值是店主自由输入的字符串，正好叫 `constructor`
+  // / `toString` / `valueOf` / `hasOwnProperty` / `__proto__` 时，`{}` 会从原型上读到
+  // 一个真值，`if (!grid[r][c])` 判假、不初始化成数组，下一行 `.push` 直接抛
+  // `grid[r][c].push is not a function`——**整张送货单导不出来**。
+  // **列轴**撞上时抛异常；**行轴撞上不抛异常，但不是无害**（上一版这里
+  // 写的是「行轴撞上无害」，错的）：`grid[r]` 拿到的是原型上那个对象本体，
+  // 于是 `grid[r][c] = []` 写到全局 `Object`（`constructor`）或 `Object.prototype`
+  // （`__proto__`）身上。实测后果有两层：
+  //   · **`__proto__` 那一支：同一张单当场就印错**——两行共用同一批格子数组，本该 1/2/3（小计 6）
+  //     和 4/5/6（小计 15），实际两行都印 5/7/9
+  //     （`constructor` 那一支实测**不**印错，它只污染全局 `Object`）
+  //   · `__proto__` 那一支还会泄到**下一张单**（新建的 `{}` 从 `Object.prototype`
+  //     继承到上一张的格子），客户可能在自己的单子上看到别人的货
+  // 两处都换掉，别只换一处。
+  const grid = Object.create(null)
   section.lines.forEach(function (line) {
     const r = specCellValue(line, rowAxis)
     const c = specCellValue(line, colAxis)
-    if (!grid[r]) grid[r] = {}
+    if (!grid[r]) grid[r] = Object.create(null)
     if (!grid[r][c]) grid[r][c] = []
     grid[r][c].push(line)
   })
@@ -666,9 +696,40 @@ function layoutMatrixSection(cmds, section, matrix, pageWidth, y, measure) {
   const defs = cols.defs
   const headH = 98
 
+  // 节头是「货号+品名」和「¥单价」共用的一行，两段都不进列布局，所以边界得自己划：
+  // 品名可用宽 = 内容宽 − 左右内边距 − 单价文本宽 − 安全间距。
+  // 不算这一刀的话（改动前就是直接 pushText 单行硬画）：单价 ¥59.00、画布 1700 时实测
+  // **28 个汉字起**节头右边界压过单价左边界、**33 个汉字起**整段画到画布外。阈值随单价
+  // 位数走——单价越长可用宽越窄，越早出事，所以这里按实际单价文本宽现算，不写死字数。
+  // 同一份数据在明细态不出事：那边品名走 wrapCell，受列宽约束。
+  // 先 fitFont 降字号，还塞不下再折行，行数计进节头高度。
+  const priceLabel = '¥' + matrix.priceText
+  // 纯观感留白：品名和单价之间别贴到一起。断言只钉「不越过单价左边界」，钉不住这个间距
+  // （去掉它测试仍然绿，实测过）——它是余量，不是正确性边界，别当钉子读。
+  const headGap = CELL_PAD_X * 2
+  // 下限 48 是给 fitFont 的最小字号（36px）留的余量：单个汉字最宽就是字号，48 > 36，
+  // 折出来的每一行至少还塞得下一个字，不会出现「一个字都放不下反而溢出」。
+  const headAvail = Math.max(48, contentWidth - CELL_PAD_X * 2 - measure(priceLabel, FONT.head) - headGap)
+  const headerLabel = (section.sku ? section.sku + ' ' : '') + section.productName
+  const headerFont = fitFont(headerLabel, FONT.head, headAvail, measure)
+  const headerLines = wrapText(headerLabel, headAvail, function (part) {
+    return measure(part, headerFont)
+  })
+  // 只有折了行才变高。**不能写成 `Math.max(headH, CELL_PAD_Y*2 + n*LINE_H)`**：
+  // n=1 时那个式子是 23*2+65=111，而 headH=98，`Math.max` 恒取 111——于是
+  // **每一张既有矩阵送货单的节头都无条件长高 13px**，短品名一张也不例外。
+  // （2026-09-03 审计拉出来的。上一版就是那么写的，而旁边的注释声称
+  // 「单行时与改动前逐字相同」——逐条指令对比实测 49 条里 31 条不同，
+  // contentHeight 1218→1231。**声明不动却实际动了产品行为**，跟把稿的现状
+  // 当成稿的意图是同一个错误。本次改回“只有折行才变高”，而不是去改稿——
+  // 节头变高不是本 PR 要解决的问题，不该搭车。）
+  const sectionHeadH = headerLines.length > 1
+    ? CELL_PAD_Y * 2 + headerLines.length * LINE_H
+    : headH
+
   const tableTop = y
   const sectionHeadY = y
-  y += headH
+  y += sectionHeadH
   const listHeadY = y
   y += headH
 
@@ -698,11 +759,11 @@ function layoutMatrixSection(cmds, section, matrix, pageWidth, y, measure) {
 
   const tableH = y - tableTop
 
-  pushRect(cmds, PAD, sectionHeadY, contentWidth, headH, COLORS.header)
+  pushRect(cmds, PAD, sectionHeadY, contentWidth, sectionHeadH, COLORS.header)
   pushRect(cmds, PAD, listHeadY, contentWidth, headH, COLORS.total)
   pushRect(cmds, PAD, footY, contentWidth, headH, COLORS.total)
   pushStroke(cmds, PAD, tableTop, contentWidth, tableH, 2)
-  pushLine(cmds, PAD, sectionHeadY + headH, tableRight, sectionHeadY + headH, 1)
+  pushLine(cmds, PAD, sectionHeadY + sectionHeadH, tableRight, sectionHeadY + sectionHeadH, 1)
   pushLine(cmds, PAD, listHeadY + headH, tableRight, listHeadY + headH, 1)
   rows.forEach(function (row) {
     pushLine(cmds, PAD, row.y + row.height, tableRight, row.y + row.height, 1)
@@ -711,9 +772,15 @@ function layoutMatrixSection(cmds, section, matrix, pageWidth, y, measure) {
     pushLine(cmds, col.x, listHeadY, col.x, footY, 1)
   })
 
-  const headerLabel = (section.sku ? section.sku + ' ' : '') + section.productName
-  pushText(cmds, headerLabel, PAD + CELL_PAD_X, textTop(sectionHeadY, headH, FONT.head), FONT.head, COLORS.value, 'left')
-  pushText(cmds, '¥' + matrix.priceText, tableRight - CELL_PAD_X, textTop(sectionHeadY, headH, FONT.head), FONT.head, COLORS.value, 'right')
+  // 单行时沿用 textTop 的垂直居中（和改动前逐字相同）；折行了才按整块文字居中。
+  let headTextY = headerLines.length > 1
+    ? sectionHeadY + (sectionHeadH - headerLines.length * LINE_H) / 2
+    : textTop(sectionHeadY, sectionHeadH, headerFont)
+  headerLines.forEach(function (part) {
+    pushText(cmds, part, PAD + CELL_PAD_X, headTextY, headerFont, COLORS.value, 'left')
+    headTextY += LINE_H
+  })
+  pushText(cmds, priceLabel, tableRight - CELL_PAD_X, textTop(sectionHeadY, sectionHeadH, FONT.head), FONT.head, COLORS.value, 'right')
 
   defs.forEach(function (col) {
     pushText(cmds, col.title, cellX(col), textTop(listHeadY, headH, FONT.head), FONT.head, COLORS.value, col.align)
@@ -904,9 +971,10 @@ function layoutSlip(slip, measure, options) {
   const exportStyle = options && options.exportStyle === 'detail' ? 'detail' : 'summary'
   const raw = tableColumns(slip, measureFn)
 
-  // exportStyle !== 'summary' 时（即 'detail'）连分节都不算，sections/matrices 留 null、
-  // hasMatrix 恒为 false——这是「detail 与不传 options 的老路径逐字相同」的保证：两者字面上
-  // 跑的是同一段代码，包括下面 pageWidth 的算法。
+  // exportStyle === 'detail' 时连分节都不算，sections/matrices 留 null、hasMatrix 恒为
+  // false，整张单走 tableColumns / fitColumns / layoutTable 这条不分节的路径。
+  // 注意：**不传 options 解析成 'summary'**，会分节、会矩阵化，和 'detail' 不是一回事；
+  // 上一版注释把这两者说成同一条老路径，不对。
   let sections = null
   let matrices = null
   let hasMatrix = false
@@ -1210,8 +1278,9 @@ function canvasToFile(canvas, destWidth, destHeight) {
   })
 }
 
-// 第三个参数向后兼容：不传（或传别的值）时行为与改动前完全一致——layoutSlip 本身
-// 只认字面 'detail'，其余一律按 'summary'，这里原样透传，不在这一层另加分支。
+// 第三个参数原样透传给 layoutSlip，这一层不加分支。取值语义以 layoutSlip 为准：
+// 只有字面 'detail' 走明细态，不传或传别的值一律按 'summary' 渲染——也就是**会**分节、
+// **会**矩阵化，不是「与改动前完全一致」的老路径。
 function exportToTempFile(page, slip, exportStyle) {
   const probe = createOffscreen(16, 16)
   const measure = makeMeasure(probe && probe.getContext ? probe.getContext('2d') : null)
