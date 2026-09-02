@@ -472,6 +472,9 @@ function layoutTable(cmds, slip, cols, y, measure) {
 
 // 分组 key 用 productName + skuText：同一商品 productName 必然相同，sku 用 skuText 统一
 // 空串和「未填」，避免同一商品因为两种写法被拆成两节。
+// 分隔符用 \u0000，不用空格：品名本身可以含空格（夹具就有「短袖 T恤」），空格拼接会让
+// '短袖 T'+'TS' 和 '短袖'+'T TS' 撞成同一个 key（都拼成 '短袖 T TS'）。\u0000 不会出现在
+// 品名或货号里，拼接后不可能碰撞。
 // 按 key 首次出现的顺序排节、节内保持原始行顺序——单据顺序是店主录入的顺序，不重排。
 function sliceLineSections(lines) {
   const list = lines || []
@@ -479,7 +482,7 @@ function sliceLineSections(lines) {
   const sections = []
   list.forEach(function (line) {
     const sku = skuText(line)
-    const key = String((line && line.productName) || '') + ' ' + sku
+    const key = String((line && line.productName) || '') + '\u0000' + sku
     if (!index[key]) {
       index[key] = { productName: (line && line.productName) || '', sku: sku, lines: [] }
       sections.push(index[key])
@@ -563,12 +566,18 @@ function buildMatrixSection(section) {
   }))
   if (colValues.length > MATRIX_COL_LIMIT) return null // 条件 5
   if (!(2 + rowValues.length < section.lines.length)) return null // 条件 6：有压缩收益
+  // 同一 (行,列) 组合理论上可能出现多行（实际链路里 pages/sale/sale.js 的 mergeLine 已经
+  // 按 productId+规格在购物车阶段合并过，这里能碰到的概率很低，但存下来防的就是这条）。
+  // grid 存的是行数组、不是单行，格内累加显示，不让后写的行覆盖先写的——行小计本来就是按
+  // section.lines 全量算的，格子如果只挑最后一行，会出现「格之和 ≠ 小计」这种在单据上
+  // 代价很高的错，还会让行数只增 N 不增 R，反而更容易凑到条件 6 的压缩收益。
   const grid = {}
   section.lines.forEach(function (line) {
     const r = specCellValue(line, rowAxis)
     const c = specCellValue(line, colAxis)
     if (!grid[r]) grid[r] = {}
-    grid[r][c] = line
+    if (!grid[r][c]) grid[r][c] = []
+    grid[r][c].push(line)
   })
   return {
     rowAxis: rowAxis,
@@ -598,9 +607,11 @@ function matrixColumnDefs(section, matrix) {
       align: 'center',
       font: FONT.num,
       values: matrix.rowValues.map(function (rowValue) {
-        const line = matrix.grid[rowValue] && matrix.grid[rowValue][colValue]
+        const cellLines = matrix.grid[rowValue] && matrix.grid[rowValue][colValue]
         // 没卖过的格子画 —（U+2014），不留空白——留白会被当成漏印。
-        return line ? line.qtyText : '—'
+        // 同一格多行：件数相加显示，不挑某一行——qtyTotalText 跟节尾小计、行小计用的是
+        // 同一套求和口径，格之和才对得上小计。
+        return cellLines && cellLines.length ? qtyTotalText(cellLines) : '—'
       })
     })
   })
@@ -728,21 +739,68 @@ function layoutMatrixSection(cmds, section, matrix, pageWidth, y, measure) {
   return y + 24
 }
 
-// 全表按节渲染：矩阵节走 layoutMatrixSection，平铺节直接复用 layoutTable（每节自己算
-// 列布局，列结构与「现有一致」——货号/品名/轴.../数量/单价/金额，不用另写一套），
-// 各节共享同一个表格总宽 pageWidth/contentWidth，纵向堆叠。
-function layoutSectionedTable(cmds, sections, matrices, pageWidth, y, measure) {
+// 平铺节的列结构/宽度/x 坐标一律照抄整表那一份（sharedCols，由调用方用整表的
+// tableColumns+fitColumns 算好），不再各节自己重算——整表轴数超过 SPEC_AXIS_LIMIT 时会把
+// 规格并成一列，单独拆出来的某一节可能自己没那么多轴、算出来的列反而更宽，而 pageWidth
+// 是按整表口径定的，两边一混，宽的那份会被裁掉一截，画到画布外静默丢失（R2 审计实测：
+// 服装节矩阵化+钢材节平铺，整表 4 轴合并成一列 spec:*，钢材节自己只有 2 轴不合并，两种
+// 口径差 216px，8 条指令最右画到了 1820，画布却只有 1736）。
+// 这里只换 values——按传入的这组行重新取值，取值口径（哪一列取哪个字段/哪个规格轴）跟
+// tableColumns 内部完全一致，只是不重新决定「轴要不要合并成一列」，那个决定权在整表。
+function flatSectionColumns(sharedCols, groupLines, axes) {
+  const defs = sharedCols.defs.map(function (col) {
+    let values
+    if (col.key === 'sku') {
+      values = columnValues(groupLines, 'sku')
+    } else if (col.key === 'name') {
+      values = columnValues(groupLines, 'productName')
+    } else if (col.key === 'spec:*') {
+      values = mergedSpecValues(groupLines, axes)
+    } else if (col.key.indexOf('spec:') === 0) {
+      values = columnValues(groupLines, 'spec', col.key.slice(5))
+    } else if (col.key === 'qty') {
+      values = columnValues(groupLines, 'qtyText')
+    } else if (col.key === 'price') {
+      values = columnValues(groupLines, 'priceText')
+    } else if (col.key === 'amount') {
+      values = columnValues(groupLines, 'amountText')
+    } else {
+      values = groupLines.map(function () {
+        return ''
+      })
+    }
+    return Object.assign({}, col, { values: values })
+  })
+  return { defs: defs, contentWidth: sharedCols.contentWidth }
+}
+
+// 全表按节渲染：矩阵节走 layoutMatrixSection（矩阵列结构跟平铺列本来就不是一回事，列宽
+// 自己算，不受这条改动影响，矩阵化判定 7 个条件也没动）。平铺节复用 layoutTable，但列定义
+// 换成整表那一份（见 flatSectionColumns），并且把连续出现的平铺节合并成一次 layoutTable
+// 调用——这样连续的平铺节自然共用一个表头；矩阵节把两段平铺隔开时，后面那段平铺节重新画
+// 一次表头（读者需要重新对齐列义），不连续的段不并起来。
+function layoutSectionedTable(cmds, sections, matrices, raw, axes, pageWidth, y, measure) {
+  const cols = fitColumns(raw, pageWidth, measure)
   let cursor = y
+  let flatLines = []
+
+  function flushFlat() {
+    if (!flatLines.length) return
+    cursor = layoutTable(cmds, { lines: flatLines }, flatSectionColumns(cols, flatLines, axes), cursor, measure)
+    flatLines = []
+  }
+
   sections.forEach(function (section, index) {
     const matrix = matrices[index]
     if (matrix) {
+      flushFlat()
       cursor = layoutMatrixSection(cmds, section, matrix, pageWidth, cursor, measure)
     } else {
-      const raw = tableColumns({ lines: section.lines }, measure)
-      const cols = fitColumns(raw, pageWidth, measure)
-      cursor = layoutTable(cmds, { lines: section.lines }, cols, cursor, measure)
+      flatLines = flatLines.concat(section.lines)
     }
   })
+  flushFlat()
+
   return cursor
 }
 
@@ -904,7 +962,7 @@ function layoutSlip(slip, measure, options) {
   y = layoutMeta(cmds, slip, pageWidth, y, measureFn)
 
   if (hasMatrix) {
-    y = layoutSectionedTable(cmds, sections, matrices, pageWidth, y, measureFn)
+    y = layoutSectionedTable(cmds, sections, matrices, raw, specAxisNames(slip.lines), pageWidth, y, measureFn)
   } else {
     // 全表没有任何矩阵节：老单据、明细态、或矩阵条件一条都没满足的汇总态，都走这条
     // 没改过一个字的老路径——tableColumns/fitColumns/layoutTable 的调用方式和改动前相同。
@@ -1069,6 +1127,26 @@ function queryPageCanvas(page, width, height) {
   })
 }
 
+// exportToTempFile 首选 offscreen canvas（每次新建、互不干扰），只有它不可用或绘制失败
+// 才回落到页面上唯一的 #slipCanvas——那是全页面共享的同一个节点。两次导出并发都走这条
+// 回落路径会互踩：A 设尺寸 → B 设尺寸 → A 画 → B 画 → A 截到的其实是 B 的画面。批 2 的
+// 预生成 + 用户手动点导出就能凑出这种并发，所以「拿页面 canvas + 在它上面画完」这一整段
+// 必须串行——只串行拿 node 那一步没用，画的动作才是真正共享同一块画布的地方，串行范围
+// 要盖到 paint（含 canvasToFile）跑完为止。
+// 队列挂在模块作用域。某一次任务失败要 .catch 掉再接下一个，不能让后面排队的任务跟着
+// 卡死；这里返回给调用方的是 run 本身（未被 catch 吞掉的那份），调用方自己的失败处理
+// （tryScale 换 dpr 重试、offscreen 失败回落）不受影响。
+// offscreen 那条主路径每次都是新画布，本来就不冲突，不进这个队列——进了只会白白排队拖慢。
+let pageCanvasQueue = Promise.resolve()
+
+function withPageCanvas(page, width, height, paint) {
+  const run = pageCanvasQueue.then(function () {
+    return queryPageCanvas(page, width, height).then(paint)
+  })
+  pageCanvasQueue = run.catch(function () {})
+  return run
+}
+
 function canvasToTempPath(canvas, destWidth, destHeight) {
   return new Promise(function (resolve, reject) {
     wx.canvasToTempFilePath({
@@ -1156,10 +1234,10 @@ function exportToTempFile(page, slip, exportStyle) {
     const offscreen = createOffscreen(pixelWidth, pixelHeight)
     if (offscreen && offscreen.getContext) {
       return paint(offscreen).catch(function () {
-        return queryPageCanvas(page, pixelWidth, pixelHeight).then(paint)
+        return withPageCanvas(page, pixelWidth, pixelHeight, paint)
       })
     }
-    return queryPageCanvas(page, pixelWidth, pixelHeight).then(paint)
+    return withPageCanvas(page, pixelWidth, pixelHeight, paint)
   }
 
   function tryScale(index) {

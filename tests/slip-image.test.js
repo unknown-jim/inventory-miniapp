@@ -780,6 +780,140 @@ assert.strictEqual(col13Layout.width, 1700, '6列×13字退回平铺后画布应
 })
 
 // ---------------------------------------------------------------------------
+// 批 3（2026-09-02）：清空前两批留下的非阻塞项。
+// ---------------------------------------------------------------------------
+
+// 10) 【最要紧】分节路径下的平铺节要复用整表的列定义，不能各节自己算——整表轴数超过
+//     SPEC_AXIS_LIMIT 时会把规格并成一列，某个平铺节自己轴数少，per-section 算法会拆回
+//     两列，比整表口径宽出一截；单行金额位数多时，这一截差值会把内容画到画布右边界外，
+//     画布完整、内容静默消失。这条钉子直接复现该失效形态：矩阵节（服装）+ 平铺节（钢材，
+//     自己只有 2 轴、整表 4 轴）+ 9 位数金额撑窄可用宽度，断言没有任何绘制指令画到画布外。
+const overflowMatrixLines = gridLines(['黑色', '白色'], ['S', 'M', 'L'])
+const overflowFlatLines = [
+  specLine({
+    id: 'steel-1',
+    productName: '钢材钢材钢材钢材钢材',
+    sku: 'ST-00000001',
+    specParts: [{ name: '材质', value: '碳钢A型号' }, { name: '规格', value: '6.0毫米规格' }],
+    qtyText: '123456',
+    priceText: '123456789.00',
+    amountText: '123456789123.00'
+  }),
+  specLine({
+    id: 'steel-2',
+    productName: '钢材钢材钢材钢材钢材',
+    sku: 'ST-00000001',
+    specParts: [{ name: '材质', value: '碳钢A型号' }, { name: '规格', value: '8.0毫米规格' }],
+    qtyText: '654321',
+    priceText: '987654321.00',
+    amountText: '987654321987.00'
+  })
+]
+const overflowLayout = slipImage.layoutSlip(matrixFixtureSlip(overflowMatrixLines.concat(overflowFlatLines)))
+assert.ok(hasText(overflowLayout, '小计'), '服装节应仍矩阵化')
+const overflowOffenders = overflowLayout.commands.filter(function (cmd) {
+  return rightEdgeOf(cmd, slipImage.estimateWidth) > overflowLayout.width + 0.5
+})
+assert.deepStrictEqual(overflowOffenders, [], '平铺节复用整表列宽后不该再有指令画到画布右边界外: ' + JSON.stringify(overflowOffenders))
+
+// 11) 相邻的平铺节要合并成一次 layoutTable，只共用一次表头。两个都是「货号」表头的独立商品
+//     （各自都因为行数不足 2 退回平铺），紧挨着排在一个矩阵节之前——合并后表头只出现一次。
+function singleLineFlat(id, productName, sku) {
+  return specLine({ id: id, productName: productName, sku: sku, qtyText: '1' })
+}
+const mergeFlatFirst = [singleLineFlat('mf-a', 'AA商品', 'AA1')]
+const mergeFlatSecond = [singleLineFlat('mf-b', 'BB商品', 'BB1')]
+const mergeMatrixThird = gridLines(['红色', '蓝色'], ['S', 'M', 'L']).map(function (line) {
+  return Object.assign({}, line, { productName: 'CC商品', sku: 'CC1' })
+})
+const mergedLayout = slipImage.layoutSlip(matrixFixtureSlip(
+  mergeFlatFirst.concat(mergeFlatSecond).concat(mergeMatrixThird)
+))
+const mergedHeadCount = textCmds(mergedLayout).filter(function (item) {
+  return item.text === '货号'
+}).length
+assert.strictEqual(mergedHeadCount, 1, '两个连续的平铺节应合并成一次 layoutTable，只画一次表头')
+assert.ok(hasText(mergedLayout, 'AA商品') && hasText(mergedLayout, 'BB商品'), '合并后两个商品的品名都要画出来')
+assert.ok(hasText(mergedLayout, '小计'), 'CC商品节应矩阵化')
+
+// 12) 不连续的平铺节（被矩阵节隔开）不该被并起来，各自重新画一次表头——读者需要重新对齐列义。
+const splitMatrixFirst = gridLines(['黑色', '白色'], ['S', 'M', 'L']).map(function (line) {
+  return Object.assign({}, line, { productName: 'DD商品', sku: 'DD1' })
+})
+const splitFlatMiddle = [singleLineFlat('sf-a', 'EE商品', 'EE1')]
+const splitMatrixSecond = gridLines(['黄色', '绿色'], ['S', 'M', 'L']).map(function (line) {
+  return Object.assign({}, line, { productName: 'FF商品', sku: 'FF1' })
+})
+const splitFlatLast = [singleLineFlat('sf-b', 'GG商品', 'GG1')]
+const splitLayout = slipImage.layoutSlip(matrixFixtureSlip(
+  splitMatrixFirst.concat(splitFlatMiddle).concat(splitMatrixSecond).concat(splitFlatLast)
+))
+const splitHeadCount = textCmds(splitLayout).filter(function (item) {
+  return item.text === '货号'
+}).length
+assert.strictEqual(splitHeadCount, 2, '矩阵节隔开的两段平铺节不连续，各自应该重新画一次表头')
+const splitSubtotalCount = textCmds(splitLayout).filter(function (item) {
+  return item.text === '小计'
+}).length
+assert.strictEqual(splitSubtotalCount, 2, '两个矩阵节都应矩阵化成立')
+
+// 13) 分节路径下，全表只有平铺节这个组合走不到 layoutSectionedTable（hasMatrix 恒为
+//     false，直接退回批 1 之前没改过的老路径），所以这里只用它证明 flatSectionColumns 的
+//     取值口径没有跑偏：矩阵节 + 单一平铺节混排时，平铺节里各列展示的值必须仍然对应
+//     该节自己的行，不能因为改成读整表的列结构就串到别的行/别的节上。数字故意取跟矩阵节
+//     （qty 1~6、单价 59.00）不重叠的值，货号/品名/数量/单价/金额要按序连续出现——
+//     顺序连续本身就是「index 对上了自己这一行」的证据，串行读到别的行会打断这串连续。
+const columnFidelityFlat = [
+  specLine({ id: 'cf-1', productName: '货品甲', sku: 'JIA-1', qtyText: '777', priceText: '88.88', amountText: '68997.76' })
+]
+const columnFidelityMatrix = gridLines(['黑色', '白色'], ['S', 'M', 'L']).map(function (line) {
+  return Object.assign({}, line, { productName: '货品乙', sku: 'YI-1' })
+})
+const columnFidelityLayout = slipImage.layoutSlip(matrixFixtureSlip(columnFidelityMatrix.concat(columnFidelityFlat)))
+const columnFidelityTexts = textCmds(columnFidelityLayout).map(function (item) {
+  return item.text
+})
+const skuIndex = columnFidelityTexts.indexOf('JIA-1')
+assert.ok(skuIndex >= 0, '平铺节的货号应画出来')
+// 这一行没有 specParts，规格列（不管合没合并成一列）取值都是空串，wrapCell 对空串直接
+// 不产出文字指令——所以货号后面下一个有内容的列就是数量，紧跟着单价、金额。
+assert.deepStrictEqual(
+  columnFidelityTexts.slice(skuIndex, skuIndex + 5),
+  ['JIA-1', '货品甲', '777', '88.88', '68997.76'],
+  '平铺节这一行的货号/品名/数量/单价/金额应按列序连续出现，串到别的行会打断这个序列'
+)
+
+// 14) 同一 (行,列) 组合出现多行时格内要累加，不能被后写的行覆盖先写的——覆盖会导致
+//     「可见格之和 ≠ 行小计」，这种算不平的错在单据上代价很高。(黑色,S) 故意给两行
+//     （件数 2 和 3），断言：格内显示两行之和 5，且行小计、节尾小计都能对上。
+const dupCellLines = [
+  specLine({ id: 'dup-a', specParts: [{ name: '颜色', value: '黑色' }, { name: '尺码', value: 'S' }], qtyText: '2' }),
+  specLine({ id: 'dup-b', specParts: [{ name: '颜色', value: '黑色' }, { name: '尺码', value: 'S' }], qtyText: '3' }),
+  specLine({ id: 'dup-c', specParts: [{ name: '颜色', value: '黑色' }, { name: '尺码', value: 'M' }], qtyText: '4' }),
+  specLine({ id: 'dup-d', specParts: [{ name: '颜色', value: '白色' }, { name: '尺码', value: 'S' }], qtyText: '1' }),
+  specLine({ id: 'dup-e', specParts: [{ name: '颜色', value: '白色' }, { name: '尺码', value: 'M' }], qtyText: '6' })
+]
+const dupLayout = slipImage.layoutSlip(matrixFixtureSlip(dupCellLines))
+assert.ok(hasText(dupLayout, '小计'), '矩阵仍应成立（2+2=4 < 5，有压缩收益）')
+assert.ok(hasText(dupLayout, '5'), '(黑色,S) 两行应合并显示为两行之和 5')
+assert.ok(!hasText(dupLayout, '3'), '格内不该只显示后写行的 3，应合并显示为两行之和')
+assert.ok(hasText(dupLayout, '9'), '黑色行小计应为 2+3+4=9')
+assert.ok(hasText(dupLayout, '7'), '白色行小计应为 1+6=7')
+assert.ok(hasText(dupLayout, '小计 16 件'), '节尾小计应为全部行之和 2+3+4+1+6=16')
+
+// 15) 分节 key 的分隔符一直是 U+0000，本次只是把源码里那个裸字节规范成 ' ' 转义
+//     （运行时等价，但从此可见、可 grep——裸字节曾让 grep 把整个 slip-image.js 当二进制）。
+//     这条钉子防的是有人把它退回空格：品名本身含空格时，两个不同的 (品名,货号) 组合会拼出
+//     同一个字符串（'短袖 T'+'TS' 与 '短袖'+'T TS' 都拼成 '短袖 T TS'），那时才会被并成一节。
+//     写清楚这一点是因为「防退化」和「修 bug」不是一回事，别让后来人以为这里修过一个真 bug。
+const collisionLines = [
+  specLine({ id: 'coll-a', productName: '短袖 T', sku: 'TS' }),
+  specLine({ id: 'coll-b', productName: '短袖', sku: 'T TS' })
+]
+const collisionSections = slipImage.sliceLineSections(collisionLines)
+assert.strictEqual(collisionSections.length, 2, '品名+货号拼接后撞车的两个不同商品不该被并成一节')
+
+// ---------------------------------------------------------------------------
 // 送货单弹层组件的**可测性**钉子（和 tests/record-sheet.test.js 末尾那条同形）。
 //
 // 【背景】slip-overlay 从 2026-08-23 到 2026-08-31 一直开着 virtualHost。开了它，
