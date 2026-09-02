@@ -287,9 +287,61 @@ assert.ok(
 // 之间的假设上多走一步都可能出岔子。这条钉子只保证补齐逻辑还在：
 const applySizeSelectionBody = pageMethod(saleJs, 'applySizeSelection')
 assert.ok(
-  applySizeSelectionBody.indexOf('cellQtys[size] == null') >= 0
-    && applySizeSelectionBody.indexOf("cellQtys[size] = ''") >= 0,
+  applySizeSelectionBody.indexOf('cellQtys[cellKey(size)] == null') >= 0
+    && applySizeSelectionBody.indexOf("cellQtys[cellKey(size)] = ''") >= 0,
   'applySizeSelection 应当把 nextSizes 里还没有 key 的格补成空串——少了这一步，'
     + '新选中的格在 cellQtys 里会完全没有条目，跟 selectedSizes 的假设对不齐'
 )
+// cellQtys 的下标必须一律走 cellKey()——站点完整性钉子（2026-09-03）。
+//
+// 规格取值是店主自由输入的（docs/blank-process.md），直接拿它当对象 key 会撞上
+// Object.prototype 上的名字：叫 constructor / toString / valueOf 的取值读出来是函数，
+// 数量框里显示 "function Object() { [native code] }"；叫 __proto__ 的那一格连数量都
+// 存不进去（赋字符串给 __proto__ 被静默忽略）。cellKey 加固定前缀把两者隔开。
+//
+// 这条钉子防的不是那个 bug 本身，而是**站点完整性**：cellQtys 有 8 个读写点，下一个人
+// 加第 9 个时忘了加前缀，不会崩、不会报错，只会静默读到 undefined——表现和它要修的
+// 症状几乎一样（那一格的数量悄悄丢了）。本仓在「一个字段改多点位、漏掉一处、审计
+// 第二轮才找出来」上栽过，见记忆 sku-vs-barcode-levels。
+//
+// 复用上面那个剥注释器：注释里提到 cellQtys[...] 不算违规。
+const bareCellQtyAccess = saleJsNoCommentsForMultiModePin.match(/cellQtys\s*\[\s*(?!cellKey\s*\()/g) || []
+assert.strictEqual(
+  bareCellQtyAccess.length, 0,
+  'pages/sale/sale.js 里所有 cellQtys[...] 的下标都必须走 cellKey()，实测有 '
+    + bareCellQtyAccess.length + ' 处裸用。规格取值是用户自由输入的，'
+    + '不加前缀会撞上 Object.prototype 的属性名'
+)
+
+// 配套的第二半：钉住 cellKey 的实现形态，再证明这个形态确实解决问题。
+//
+// sale.js 是小程序 Page 文件、不能 require，所以上面那条钉子只能保证「下标都走了
+// cellKey」，保证不了 cellKey 自己有没有效。这里先把它的函数体钉成「固定前缀 + 入参」，
+// 再拿同形的实现跑一遍 Object.prototype 的**全部**属性名——两条合起来才是闭环：
+// 下标都走它（钉子一）+ 它的实现是加前缀（钉子二）+ 加前缀对所有原型名有效（下面这段）。
+assert.ok(
+  saleJsNoCommentsForMultiModePin.indexOf("return 'v:' + size") >= 0,
+  "cellKey 的实现应当是「固定前缀 'v:' + 入参」。改了前缀形态就要同步改下面那段验证，"
+    + '否则验证的是一个已经不存在的实现'
+)
+
+const cellKeySameShape = function (size) { return 'v:' + size }
+Object.getOwnPropertyNames(Object.prototype).forEach(function (protoName) {
+  const box = {}
+  box[cellKeySameShape(protoName)] = '5'
+  assert.strictEqual(
+    box[cellKeySameShape(protoName)], '5',
+    '规格取值叫 ' + protoName + ' 时，加前缀后应当能正常存取——这正是店主可以自由'
+      + '输入的取值名，不加前缀时 __proto__ 存不进去、constructor 读出来是函数'
+  )
+})
+// 反过来证明上面那段不是空转：不加前缀时，同一组名字里确实有存不住的
+const bareBox = {}
+bareBox['__proto__'] = '5'
+assert.notStrictEqual(
+  bareBox['__proto__'], '5',
+  '这条断言若红，说明当前 JS 引擎下裸用 __proto__ 当 key 已经不出问题了，'
+    + '上面那整段防护的前提消失，应当重新评估是否还需要 cellKey'
+)
+
 console.log('sale-spec-view tests passed')

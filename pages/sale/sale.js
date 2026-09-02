@@ -5,6 +5,22 @@ const saleSpecView = require('../../utils/sale-spec-view')
 const slipActions = require('../../utils/slip-actions')
 const memberChips = require('../../utils/member-chips').memberChips
 
+// 规格取值是店主自由输入的（docs/blank-process.md：取值可改、可删、可追加，不预置行业
+// 取值），直接拿它当 cellQtys 的对象 key 会撞上 Object.prototype 上的名字：取值叫
+// constructor / toString / valueOf 时读出来是函数，数量框里会显示
+// "function Object() { [native code] }"；取值叫 __proto__ 时那一格连数量都存不进去
+// （赋字符串给 __proto__ 被静默忽略，写 '5' 读回 '[object Object]'），用户填了没反应
+// 也不报错。加一个固定前缀把用户输入和原型属性名隔开。
+//
+// 记账不受影响——inventory.toNumber 的 Number.isFinite 兜底把这些值折成 0，
+// currentLines 的「qty <= 0 continue」会跳过，NaN 行进不了清单。修的是显示与录入。
+//
+// cellQtys 是纯内部状态：wxml 只绑 cellRows 数组，不直接读它，所以 key 格式不外溢。
+// tests/sale-spec-view.test.js 末尾有静态钉子，禁止绕过这个函数裸写下标。
+function cellKey(size) {
+  return 'v:' + size
+}
+
 // 稿 card/客户 3:708 的散客态；副行文案与客户 picker 的散客行同源。
 const WALKIN_NAME = '散客'
 const WALKIN_SUB = '不填客户，送货单不显示收货人'
@@ -560,7 +576,7 @@ Page({
     return (sizeOptions || []).filter(function (opt) {
       return opt.on
     }).map(function (opt) {
-      const raw = cellQtys[opt.value]
+      const raw = cellQtys[cellKey(opt.value)]
       return {
         value: opt.value,
         qtyText: raw == null ? '' : String(raw),
@@ -806,7 +822,7 @@ Page({
   applySizeSelection(product, prevSizes, nextSizes) {
     let cellQtys = Object.assign({}, this.data.cellQtys)
     prevSizes.forEach(function (size) {
-      if (nextSizes.indexOf(size) < 0) delete cellQtys[size]
+      if (nextSizes.indexOf(size) < 0) delete cellQtys[cellKey(size)]
     })
     const wasMulti = prevSizes.length >= 2
     const isMulti = nextSizes.length >= 2
@@ -818,11 +834,11 @@ Page({
       // 规则的自然延伸，别静默丢掉。nextSizes 来自 product.sizes.slice()，所以
       // nextSizes[0] 就是行序第一格，与 firstSelectedSku / cellRows 的行序同源。
       const firstSize = prevSizes[0] || nextSizes[0]
-      if (firstSize) cellQtys[firstSize] = qty
+      if (firstSize) cellQtys[cellKey(firstSize)] = qty
       qty = ''
     } else if (wasMulti && !isMulti) {
       const remain = nextSizes[0]
-      qty = (remain && cellQtys[remain] != null) ? cellQtys[remain] : ''
+      qty = (remain && cellQtys[cellKey(remain)] != null) ? cellQtys[cellKey(remain)] : ''
       cellQtys = {}
       batchQty = ''
     }
@@ -831,7 +847,7 @@ Page({
     // firstSize 那一个，其余全是没 key 的格。
     if (isMulti) {
       nextSizes.forEach(function (size) {
-        if (cellQtys[size] == null) cellQtys[size] = ''
+        if (cellQtys[cellKey(size)] == null) cellQtys[cellKey(size)] = ''
       })
     }
     // 单价 / skuId 追平。判据照抄 applyProductState 的 keepPrice：参照 SKU 没变就留着
@@ -864,7 +880,7 @@ Page({
     const value = e.detail.value
     const cellQtys = Object.assign({}, this.data.cellQtys)
     this.data.selectedSizes.forEach(function (size) {
-      cellQtys[size] = value
+      cellQtys[cellKey(size)] = value
     })
     this.setData({ batchQty: value, cellQtys: cellQtys })
     this.applySettle(this.linePatch(this.data.cart))
@@ -875,7 +891,7 @@ Page({
     const size = e.currentTarget.dataset.value
     const value = e.detail.value
     const cellQtys = Object.assign({}, this.data.cellQtys)
-    cellQtys[size] = value
+    cellQtys[cellKey(size)] = value
     this.setData({ cellQtys: cellQtys })
     this.applySettle(this.linePatch(this.data.cart))
   },
@@ -1055,7 +1071,7 @@ Page({
       for (let i = 0; i < sizes.length; i++) {
         const size = sizes[i]
         if (this.data.selectedSizes.indexOf(size) < 0) continue
-        const qty = inventory.round2(this.data.cellQtys[size])
+        const qty = inventory.round2(this.data.cellQtys[cellKey(size)])
         if (qty <= 0) continue
         const sku = inventory.findSkuBySpec(this.data.skus, product.id, this.data.selectedColor, size)
         if (sku) lines.push(this.toCartItem(product, sku, qty, unitPrice))
