@@ -46,9 +46,19 @@ assert.ok(appWxss.indexOf('.seg') >= 0, 'app.wxss should define .seg')
 assert.ok(appWxss.indexOf('.page.ui-std') < 0, 'app.wxss should not define ui-std')
 assert.ok(appWxss.indexOf('.page.ui-xl') < 0, 'app.wxss should not define ui-xl')
 
-const xsMatch = appWxss.match(/--fs-xs:\s*(\d+)rpx/)
-assert.ok(xsMatch, 'app.wxss should define --fs-xs in rpx')
-const minFont = Number(xsMatch[1])
+// 字面量地板：这条扫描只看写死的 `font-size: NNrpx`，**看不见 `var()`**。
+// 所以它守的不是文档里那个字号地板（`--fs-caption` = 24rpx，见
+// docs/ui-scale.md），而是「不允许绕过 token 直接硬写小字」——想要更小就用
+// `var(--fs-caption)`，全仓 57 处都这么写。两个数字不同是故意的。
+//
+// 2026-09-03：原本这个阀值是从 `app.wxss` 的 `--fs-xs` 里读出来的，还硬断言
+// 它必须存在。而 `--fs-xs` 已经是待删别名（`var()` 消费为 **0**，docs/ui-scale.md:34
+// 把它定性为「保留为别名过渡，新代码不要再用」——注意被判「已废止」的是
+// 「正文 36rpx / 可点高度 96rpx」那一档，不是这个别名本身）——谁哪天把它从 `app.wxss` 删了，这条守卫会
+// 当场红在「找不到 --fs-xs」上，而不是红在它真正要守的东西上。
+// 现在直接写死阀值，不再依赖那个别名存不存在。
+const MIN_LITERAL_FONT_RPX = 32
+const minFont = MIN_LITERAL_FONT_RPX
 
 const indexWxml = read('pages/index/index.wxml')
 assert.ok(indexWxml.indexOf('显示大小') < 0, 'home page should not expose 显示大小')
@@ -381,7 +391,7 @@ wxssFiles.forEach(function (file) {
 assert.strictEqual(
   tinyHits.length,
   0,
-  'operation UI should not use font-size below --fs-xs (' + minFont + 'rpx):\n' + tinyHits.join('\n')
+  'operation UI should not hardcode font-size below ' + minFont + 'rpx (想要更小用 var(--fs-caption)，别写字面量):\n' + tinyHits.join('\n')
 )
 
 const productsWxss = read('pages/products/products.wxss')
