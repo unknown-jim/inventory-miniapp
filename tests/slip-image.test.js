@@ -1362,8 +1362,12 @@ assert.ok(hasText(slipImage.layoutSlip(matrixSlip), '小计'),
 // `if (!grid[r][c])` 判假、不初始化成数组，下一行 `.push` 直接抛
 // `grid[r][c].push is not a function`——**整张送货单导不出来**。
 //
-// 实测触发条件是**列轴**取值撞上原型名；行轴撞上无害
-// （`grid[r]` 拿到函数后，`grid[r][c]` 仍是 undefined，照常初始化）。
+// **会抛异常的只有列轴**——这是下面两轴都要测的原因。
+// **但行轴不是无害**（这里曾经写的是「行轴撞上无害」，错的，而且它读起来
+// 像结论）：`__proto__` 那一支会把格子数组写到 `Object.prototype` 上，
+// **同一张单当场就印错**（两行都印 5/7/9）、且会泄到下一张。
+// `constructor` 那一支不印错、也不跨单泄漏，只污染全局 `Object`。
+// 详见下面 assertNoCrossSlipLeak 那段的说明。
 // 所以下面两轴都要测：只测行轴会结构性地漏掉真正会崩的那一支。
 const PROTO_NAMES = ['constructor', 'toString', 'valueOf', 'hasOwnProperty', '__proto__']
 
@@ -1385,7 +1389,8 @@ PROTO_NAMES.forEach(function (name) {
 
 // 行轴撞上原型名不崩，但危害更隐蔽：`grid['constructor']` 拿到的是全局
 // `Object` 构造函数，于是 `grid[r][c] = []` 直接**写到全局 `Object` 身上**。
-// 后果是跨单据泄漏：下一张送货单新建的 `{}` 会从原型上继承到上一张的行，
+// 后果分两支（别混）：`__proto__` 写到 `Object.prototype`，下一张单新建的 `{}`
+// 会从原型继承到上一张的行；`constructor` 写到 `Object` 本体，**不跨单泄漏**，
 // 客户可能在自己的单子上看到别人的货。静默、持续整个 app 会话。
 //
 // ---- 单行节头不得变高 ------------------------------------------------
@@ -1398,23 +1403,33 @@ PROTO_NAMES.forEach(function (name) {
 ;(function assertSingleLineHeadUnchanged() {
   const lines = gridLines(['\u9ed1\u8272', '\u767d\u8272'], ['S', 'M', 'L'])
   const layout = slipImage.layoutSlip(matrixFixtureSlip(lines))
-  const heads = []
-  JSON.stringify(layout).replace(/"type":"rect"[^}]*"h":(\d+(?:\.\d+)?)/g, function (_, h) {
-    heads.push(Number(h))
-    return ''
+
+  // 按**对象字段**过滤，不对 JSON.stringify 跑正则——rect 的字段序是
+  // {type,x,y,w,h,fill}，`"type":"rect"[^}]*"h":(\d+)` 这种写法在 fill 之前就停了，
+  // 拿不到颜色。节头用 COLORS.header (#F3F4F6)，列表头/合计用 COLORS.total (#FAFAFA)。
+  //
+  // 【为什么这段重写了两次】最早那版是把**全表所有** rect 的 h 收进来、
+  // 再断言「98 在里面」——而列表头本来就是 98，所以那条**恒真**；
+  // 真正干活的只有「不得出现 111」，而它只是一条**针对字面量 111 的牲线**：
+  // 实测 `sectionHeadH = headH + 5`（=103）或 `headH - 10`（=88）时，不但这条绿，
+  // **整个 `npm test` 都是 exit 0**——因为折行那条断言比的是两张图的**相对**高度，
+  // 均匀平移时两边同增同减、差值不变，结构上就抓不到。
+  const headRects = layout.commands.filter(function (c) {
+    return c.type === 'rect' && c.fill === '#F3F4F6'
   })
-  assert.ok(
-    heads.indexOf(98) >= 0,
-    '单行节头的底色条高度必须仍是 98（与折行改动前逐字相同）。'
-      + '写成 Math.max(headH, CELL_PAD_Y*2 + n*LINE_H) 的话 n=1 也会得到 111，'
-      + '每一张既有矩阵单都会无声息长高 13px。实测到的矩形高度：'
-      + JSON.stringify(heads.slice(0, 12))
+
+  // 阳性对照：过滤一旦失效，下面的 forEach 会空跑、一条不断——那就是假绿。
+  assert.strictEqual(
+    headRects.length, 1,
+    '前提：这张单只有一个矩阵节，应当恰好抓到 1 条 #F3F4F6 的节头底色条，'
+      + '实测 ' + headRects.length + ' 条。抓不到就说明过滤失效，下面那条断言是假绿'
   )
-  assert.ok(
-    heads.indexOf(111) < 0,
-    '单行节头不得出现 111 这个高度（= CELL_PAD_Y*2 + 1*LINE_H）——'
-      + '出现它就说明又退回了 Math.max 那个写法。实测：'
-      + JSON.stringify(heads.slice(0, 12))
+  assert.strictEqual(
+    headRects[0].h, 98,
+    '单行节头的底色条高度必须**严格等于** 98（与折行改动前逐字相同），'
+      + '实测 ' + headRects[0].h + '。写成 Math.max(headH, CELL_PAD_Y*2 + n*LINE_H) 的话 '
+      + 'n=1 也会得到 111，每一张既有矩阵单都会无声息长高 13px。'
+      + '（用严格相等而不是「≠111」：后者只是针对 111 的牲线，103 / 88 都能溦过去。）'
   )
 })()
 

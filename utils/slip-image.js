@@ -722,7 +722,7 @@ function layoutMatrixSection(cmds, section, matrix, pageWidth, y, measure) {
   // 「单行时与改动前逐字相同」——逐条指令对比实测 49 条里 31 条不同，
   // contentHeight 1218→1231。**声明不动却实际动了产品行为**，跟把稿的现状
   // 当成稿的意图是同一个错误。本次改回“只有折行才变高”，而不是去改稿——
-  // 节头变高不是本 PR 要解决的问题，不该搭车。
+  // 节头变高不是本 PR 要解决的问题，不该搭车。）
   const sectionHeadH = headerLines.length > 1
     ? CELL_PAD_Y * 2 + headerLines.length * LINE_H
     : headH
