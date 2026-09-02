@@ -271,6 +271,33 @@ pages.forEach(function (page) {
   assert.ok(wxml.indexOf('class="page"') >= 0, page + ' root should be class="page"')
 })
 
+// 单据版式类的豁免只认类名，不认整个文件/目录：docs/ui-scale.md 的规则是「送货单的单据版式
+// 除外」，豁免的判据是版式性质，不是「长在 components/slip-overlay/ 这个目录里」——同一个
+// 组件文件里给店主点的操作控件（.export-style 这类）不是单据版式，要跟其它操作界面一样受检。
+// 名单按前缀写死：模仿纸单排布的类名（.slip 本身，以及 .slip- 开头的那些）继续豁免；
+// 一条规则的选择器只要出现哪怕一个不是 .slip 前缀的类名，就整条规则照常受检——宁可少豁免、
+// 不要看漏新增的操作控件类，方向跟「反过来做成白名单」正相反（那样会让新控件默认漏检）。
+const SLIP_LAYOUT_SELECTOR = /^\.slip(-[\w-]*)?$/
+
+function isSlipLayoutSelector(selectorText) {
+  return selectorText.split(',').every(function (single) {
+    const classNames = single.match(/\.[\w-]+/g)
+    if (!classNames || !classNames.length) return false
+    return classNames.every(function (cls) {
+      return SLIP_LAYOUT_SELECTOR.test(cls)
+    })
+  })
+}
+
+// 把 wxss 源码里「选择器全部是单据版式类」的规则块整体挖掉（连大括号内容一起），剩下的文本
+// （其余选择器的规则、注释、操作控件类）原样交给调用方继续检查。只对 wxss 做——js/wxml 没有
+// 选择器概念，也就没有可豁免的东西，本来就不该整文件跳过。
+function stripSlipLayoutRules(src) {
+  return src.replace(/([^{}]+)\{[^{}]*\}/g, function (whole, selectorPart) {
+    return isSlipLayoutSelector(selectorPart.trim()) ? '' : whole
+  })
+}
+
 const sourceDirs = ['pages', 'utils', 'components']
 const forbiddenHits = []
 sourceDirs.forEach(function (dir) {
@@ -278,11 +305,12 @@ sourceDirs.forEach(function (dir) {
   walk(path.join(root, dir), files)
   files.forEach(function (file) {
     const rel = path.relative(root, file).replace(/\\/g, '/')
-    if (rel.indexOf('components/slip-overlay/') === 0) return
+    const isSlipOverlayWxss = rel.indexOf('components/slip-overlay/') === 0 && path.extname(file) === '.wxss'
     const src = fs.readFileSync(file, 'utf8')
-    if (src.indexOf('ui-std') >= 0) forbiddenHits.push(rel + ' contains ui-std')
-    if (src.indexOf('显示大小') >= 0) forbiddenHits.push(rel + ' contains 显示大小')
-    if (src.indexOf('ui-scale.js') >= 0) forbiddenHits.push(rel + ' contains ui-scale.js')
+    const checked = isSlipOverlayWxss ? stripSlipLayoutRules(src) : src
+    if (checked.indexOf('ui-std') >= 0) forbiddenHits.push(rel + ' contains ui-std')
+    if (checked.indexOf('显示大小') >= 0) forbiddenHits.push(rel + ' contains 显示大小')
+    if (checked.indexOf('ui-scale.js') >= 0) forbiddenHits.push(rel + ' contains ui-scale.js')
   })
 })
 assert.strictEqual(forbiddenHits.length, 0, 'operation UI should not keep scale runtime:\n' + forbiddenHits.join('\n'))
@@ -328,11 +356,11 @@ walk(path.join(root, 'pages'), wxssFiles, '.wxss')
 if (fs.existsSync(path.join(root, 'components'))) walk(path.join(root, 'components'), wxssFiles, '.wxss')
 wxssFiles.forEach(function (file) {
   const rel = path.relative(root, file).replace(/\\/g, '/')
-  if (rel.indexOf('components/slip-overlay/') === 0) return
   const src = fs.readFileSync(file, 'utf8')
+  const checked = rel.indexOf('components/slip-overlay/') === 0 ? stripSlipLayoutRules(src) : src
   const re = /font-size:\s*(\d+)rpx/g
   let match
-  while ((match = re.exec(src))) {
+  while ((match = re.exec(checked))) {
     if (Number(match[1]) < minFont) tinyHits.push(rel + ' font-size:' + match[1] + 'rpx')
   }
 })
