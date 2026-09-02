@@ -1759,17 +1759,53 @@ async function runSalePickerAndSlip(miniProgram) {
   assert.ok(detailChip, '找不到导出样式「明细」chip')
   assert.strictEqual((await sale.data()).exportStyle, 'summary', '没有记忆时导出样式应默认「汇总」')
 
+  // 选中态必须**看得见**。
+  //
+  // 下面两条 waitFor 只证明页面 data.exportStyle 变了。审阅实测：把
+  // components/slip-overlay/index.wxml 里 chip 上的 {{exportStyle === 'x' ? 'on' : ''}}
+  // 整段去掉（选中态永不高亮），整套静态用例和这两条 waitFor **全绿**——这正是当年
+  // 给 slip-overlay 摘 virtualHost 要治的病：**数据对、屏幕上看不出选中**。
+  // 所以每次点完都要回到渲染层核一次 class：当选那枚带 on、另一枚不带。
+  //
+  // 逐个空白切分再比对，不用 indexOf('on')：'on' 是任何含这两个字母的类名的子串，
+  // 将来加一个 .icon / .none 之类的类就会把这条断言变成恒真。
+  function classTokens(cls) {
+    return String(cls || '').split(/\s+/).filter(function (token) { return !!token })
+  }
+  // 每次都重新查一遍元素：class 变了但节点没重建，拿旧句柄读到的也是新值，不过
+  // 重查更贴近「屏上现在长什么样」，也躲开节点真被重建时的失效句柄。
+  async function assertStyleChipOn(host, onSelector, offSelector, label) {
+    const onEl = await waitInSlip(host, onSelector, label + '（当选那枚 chip）')
+    const offEl = await waitInSlip(host, offSelector, label + '（未选那枚 chip）')
+    const onCls = String(await onEl.attribute('class') || '')
+    const offCls = String(await offEl.attribute('class') || '')
+    assert.ok(classTokens(onCls).indexOf('on') >= 0,
+      label + '：当选的那枚 chip 必须带 on 类才看得出选中，实为 class="' + onCls + '"'
+        + '（缺了它就是「data 对、屏上看不出选中」）')
+    assert.ok(classTokens(offCls).indexOf('on') < 0,
+      label + '：没选中的那枚 chip 不许带 on 类（两枚同时高亮＝看不出选的是哪个），'
+        + '实为 class="' + offCls + '"')
+  }
+
+  // 打开时默认「汇总」，高亮就该在「汇总」那枚上
+  await assertStyleChipOn(slipHostEl, '.js-slip-style-summary', '.js-slip-style-detail',
+    '刚打开送货单（默认汇总）')
+
   await detailChip.tap()
   await waitFor(sale, async function () {
     const data = await sale.data()
     return data && data.exportStyle === 'detail'
   }, '点「明细」chip 后页面 data.exportStyle 变成 detail')
+  await assertStyleChipOn(slipHostEl, '.js-slip-style-detail', '.js-slip-style-summary',
+    '点「明细」之后')
 
   await summaryChip.tap()
   await waitFor(sale, async function () {
     const data = await sale.data()
     return data && data.exportStyle === 'summary'
   }, '点回「汇总」chip 后页面 data.exportStyle 变成 summary')
+  await assertStyleChipOn(slipHostEl, '.js-slip-style-summary', '.js-slip-style-detail',
+    '点回「汇总」之后')
 
   await closeSlip(sale, '送货单')
 }
@@ -1895,6 +1931,31 @@ async function runSaleMultiSelect(miniProgram) {
       + '留着旧值会让 onShow 回填时 keepPrice 判假、把整批价打回商品档价')
   assert.strictEqual(afterPick.cellRows.length, 2, '多选形态应当渲染两行逐格输入')
   const sizeValues = afterPick.selectedSizes.slice()
+
+  // 裁定 C 的**分辨步**：只填第一格。
+  //
+  // 裁定原文是「N = 有正数量的格数，不是选中格数」。可原来的用例直接跳到下面
+  // 「两格都填了数」那一步才断言 N===2 —— 那时选中格数和有正数量的格数**都是 2**，
+  // 两种实现给出同一个数。审阅实测：把 batchLineCount 改成取 selectedSizes.length，
+  // npm test 和那两条 UI 断言全绿。只有「选中 2 格、只填 1 格」这一步分得开：
+  // 选中格数 = 2，有正数量的格数 = 1。
+  const cellInputsOnlyFirst = await sale.$$('.js-cell-qty')
+  assert.strictEqual(cellInputsOnlyFirst.length, 2,
+    '刚进多选态就该渲染两个逐格输入框，实为 ' + cellInputsOnlyFirst.length)
+  await cellInputsOnlyFirst[0].input('2')
+  await waitForData(sale, function (d) {
+    return d.cellRows.length === 2 && d.cellRows[0].qtyText === '2' && d.cellRows[1].qtyText === ''
+  }, '只填第一格：第一格 2、第二格仍留空')
+
+  const onlyFirst = await sale.data()
+  assert.strictEqual(onlyFirst.selectedSizes.length, 2,
+    '分辨步前提：必须仍然是两格都选中的（不然「选中格数」和「有数量的格数」又并成一个数了）')
+  assert.strictEqual(onlyFirst.batchLineCount, 1,
+    '裁定 C：N 是**有正数量的格数**，不是选中格数。此刻选中 2 格、只有 1 格填了数，'
+      + 'batchLineCount 应为 1，实为 ' + onlyFirst.batchLineCount
+      + '（等于 2 就说明它取的是 selectedSizes.length）')
+  assert.strictEqual(onlyFirst.addBtnLabel, '加入清单（1 行）',
+    '按钮标签跟着有正数量的格数走，应为「加入清单（1 行）」，实为「' + onlyFirst.addBtnLabel + '」')
 
   // 「全部填 1」：两格都要落进 cellQtys（T8）。数量刻意压得很小——种子里
   // 黑色/L 只有 2 件现货，本用例后面还要再补一批直接提交，两批加起来不能超过它。

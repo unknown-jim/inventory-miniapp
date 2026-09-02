@@ -148,6 +148,33 @@ assert.strictEqual(p3Short, 33)
 const p3Pool = inv.blankAvailability(blankFixture.product, blankFixture.skus, '', '', []).blank
 assert.ok(p3Short > p3Pool, 'P3 前提：短缺应当补不进池子（实为短缺 ' + p3Short + '，池 ' + p3Pool + '）')
 
+// P4「先短后余」：H5 那句「两格短缺各自独立求和，不做跨行滚动累积」**只有这一组
+// 夹具能检验**。P1/P2/P3 三组里没有一格现货有富余，于是「逐格 max(0, qty−ready) 求和」
+// 和「跨行滚动累积（后面格的富余去抵前面格的短缺）」给出完全相同的数，改成滚动累积
+// 三条断言照绿——那是这条约束此前从未被真正检验的原因。
+//
+// 这一组把有富余的格排在短缺格**之后**：
+//   黑色/M 现货 0、要 10 → 短 10
+//   黑色/L 现货 8、要  5 → 富余 3，独立求和不许拿它去抵前面那 10
+// 独立求和 = 10；滚动累积 = (10−0) + (5−8) = 7。两者第一次分得开。
+const rollFixture = makeBlank()
+inv.findSkuBySpec(rollFixture.skus, rollFixture.product.id, '黑色', 'L').stock = 8
+const p4Lines = [
+  { color: '黑色', size: 'M', qty: 10 },
+  { color: '黑色', size: 'L', qty: 5 }
+]
+// 前提先钉死，免得夹具哪天被改成「两格都短缺」又变回分不开的样子
+assert.strictEqual(
+  inv.blankAvailability(rollFixture.product, rollFixture.skus, '黑色', 'M', []).ready, 0,
+  'P4 前提：黑色/M 现货必须是 0（短缺格）')
+assert.strictEqual(
+  inv.blankAvailability(rollFixture.product, rollFixture.skus, '黑色', 'L', []).ready, 8,
+  'P4 前提：黑色/L 现货必须是 8，且要的 5 比它少（富余格，排在短缺格之后）')
+assert.strictEqual(
+  blankShortOf(rollFixture.product, rollFixture.skus, p4Lines, []), 10,
+  'H5：两格短缺各自独立求和，只有黑色/M 那 10 件要从半成品池扣；'
+  + '黑色/L 富余的 3 件不许去抵前面那一格（跨行滚动累积会算成 7）')
+
 // H3 第二道守卫：非待加工商品直接返回 0，即使传进去的数量再大。
 assert.strictEqual(
   blankShortOf(ready.product, ready.skus, [{ color: '黑色', size: 'M', qty: 999 }], []),
