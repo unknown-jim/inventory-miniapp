@@ -2,6 +2,7 @@ const assert = require('assert')
 const fs = require('fs')
 const path = require('path')
 const inv = require('../utils/inventory')
+const util = require('../utils/util')
 const { saleSpecOptions, blankShortOf } = require('../utils/sale-spec-view')
 
 function idFactory() {
@@ -388,5 +389,708 @@ assert.notStrictEqual(
   '这条断言若红，说明当前 JS 引擎下裸用 __proto__ 当 key 已经不出问题了，'
     + '上面那整段防护的前提消失，应当重新评估是否还需要 cellKey'
 )
+
+// ===========================================================================
+// 「本次售价」的归属：多选态换规格一要追平（22:231）
+// ===========================================================================
+//
+// 病灶（2026-09-03 实测）：pickColor 的多选支只写 selectedColor / cellQtys / batchQty，
+// unitPrice 一个字不动。黑色选中 M+L 时单价自动取第一枚选中格（黑 M）的档价 69，
+// 点「白色」之后颜色变了、逐格数量清空了，单价仍是 69 —— 两格各填 1 件加入清单，
+// 就是白 M ×1 @69、白 L ×1 @69，而白色两格的档价是 59，屏上没有任何提示。
+//
+// 稿 22:231 的裁定：换规格一时单价追平到新参照格（第一枚选中格）的档价，除非店主
+// 已经手改过本次售价；**判据是「有没有人动过这个框」，不是「参照格变没变」**——
+// 多选态下 data.skuId 恒为空串，applyProductState 那套 skuId 判据在这里恒假，
+// 分不出「店主手改过」和「系统刚追平过」。
+//
+// 下面这些不是静态钉子，是**真的把 sale.js 里那几个方法拿出来跑**：sale.js 是小程序
+// Page 文件、不能 require，但方法体是纯文本，用上面那个 pageMethod 抽出来重新组装成
+// 一个对象就能在 Node 里执行。这样断言盯的是源码本身，不是一份转写。
+function makeHarnessMethods() {
+  const names = [
+    'pricePatch', 'applyProductState', 'applySizeSelection', 'pickColor', 'pickSize',
+    'pickAllSizes', 'onField', 'firstSelectedSku', 'sizeSelectionPatch', 'singleSelectedSize',
+    'currentSku', 'currentLines', 'toCartItem'
+  ]
+  const bodies = names.map(function (name) { return pageMethod(saleJs, name) }).join(',')
+  // cellKey 是模块级函数，不是方法，单独把它的源码搬进同一个作用域——同样不转写。
+  const cellKeyMatch = /\nfunction cellKey\(size\) \{[\s\S]*?\n\}/.exec(saleJs)
+  assert.ok(cellKeyMatch, '夹具前提：sale.js 里应当找得到模块级的 cellKey 定义')
+  return { bodies: bodies, cellKeySrc: cellKeyMatch[0], names: names }
+}
+
+const harnessSrc = makeHarnessMethods()
+
+// 四格档价刻意互不相同，且都不等于商品档价。ui.test.js 那边吃过这个亏：种子四格
+// 全是 59 = 商品档价时，「追平到该格档价」「退回商品档价」「什么都没做」三种实现
+// 给出同一个数，断言恒真。这里白 M 59 / 白 L 49 / 商品档价 39 三者分开，才分得出
+// 「取了第一枚选中格」和「取了别的格 / 退回了商品档价」。
+function makePricedFixture() {
+  const product = inv.createProduct({
+    name: '短袖', costPrice: 28, salePrice: 39, stock: 0, alertQty: 4,
+    colors: ['黑色', '白色'], sizes: ['M', 'L']
+  }, 1000, 'p-priced')
+  return inv.applyProductSkus(product, [], [
+    { color: '黑色', size: 'M', stock: 9, costPrice: 28, salePrice: 69, alertQty: 4 },
+    { color: '黑色', size: 'L', stock: 9, costPrice: 28, salePrice: 65, alertQty: 4 },
+    { color: '白色', size: 'M', stock: 9, costPrice: 28, salePrice: 59, alertQty: 4 },
+    { color: '白色', size: 'L', stock: 9, costPrice: 28, salePrice: 49, alertQty: 4 }
+  ], 1100, idFactory())
+}
+
+const priced = makePricedFixture()
+const pricedSku = function (color, size) {
+  const found = inv.findSkuBySpec(priced.skus, priced.product.id, color, size)
+  assert.ok(found, '夹具前提：找不到「' + color + ' · ' + size + '」这一格')
+  return found
+}
+const pBlackM = pricedSku('黑色', 'M')
+const pBlackL = pricedSku('黑色', 'L')
+const pWhiteM = pricedSku('白色', 'M')
+const pWhiteL = pricedSku('白色', 'L')
+
+// 夹具前提逐条钉死。少了任何一条，下面的断言就有一条会变成恒真的假绿。
+assert.strictEqual(pBlackM.salePrice, 69, '夹具前提：黑 M 档价 69')
+assert.strictEqual(pBlackL.salePrice, 65, '夹具前提：黑 L 档价 65')
+assert.strictEqual(pWhiteM.salePrice, 59, '夹具前提：白 M 档价 59')
+assert.strictEqual(pWhiteL.salePrice, 49, '夹具前提：白 L 档价 49')
+assert.strictEqual(priced.product.salePrice, 39, '夹具前提：商品档价 39')
+;[
+  ['黑 M 与白 M', pBlackM.salePrice, pWhiteM.salePrice],
+  ['白 M 与白 L', pWhiteM.salePrice, pWhiteL.salePrice],
+  ['白 M 与商品档价', pWhiteM.salePrice, priced.product.salePrice],
+  ['黑 M 与黑 L', pBlackM.salePrice, pBlackL.salePrice]
+].forEach(function (pair) {
+  assert.notStrictEqual(pair[1], pair[2],
+    '夹具前提：' + pair[0] + ' 的档价必须不同，相等的话「追平到第一枚选中格」这条'
+      + '断言分不出真追平和别的实现')
+})
+
+// 三格规格二的夹具。两格是**不够**的：['M','L'] 里点掉任意一格都会掉出多选形态，
+// 那是 T5（多选→单选）另一条路；「多选态内增删格」这个形状——点完前后都还在多选态、
+// 而且「第一枚选中格」换了人——至少要三格才做得出来（['M','L','XL'] 去掉 M）。
+// 六格档价两两不同，且都不等于商品档价 39：相等的话「追平到新的第一枚选中格」
+// 「追平到旧的那一格」「退回商品档价」「什么都没做」会给出同一个数，断言恒真。
+function makeTriFixture() {
+  const product = inv.createProduct({
+    name: '长袖', costPrice: 28, salePrice: 39, stock: 0, alertQty: 4,
+    colors: ['黑色', '白色'], sizes: ['M', 'L', 'XL']
+  }, 2000, 'p-tri')
+  return inv.applyProductSkus(product, [], [
+    { color: '黑色', size: 'M', stock: 9, costPrice: 28, salePrice: 69, alertQty: 4 },
+    { color: '黑色', size: 'L', stock: 9, costPrice: 28, salePrice: 65, alertQty: 4 },
+    { color: '黑色', size: 'XL', stock: 9, costPrice: 28, salePrice: 55, alertQty: 4 },
+    { color: '白色', size: 'M', stock: 9, costPrice: 28, salePrice: 59, alertQty: 4 },
+    { color: '白色', size: 'L', stock: 9, costPrice: 28, salePrice: 49, alertQty: 4 },
+    { color: '白色', size: 'XL', stock: 9, costPrice: 28, salePrice: 45, alertQty: 4 }
+  ], 2100, idFactory())
+}
+
+const tri = makeTriFixture()
+const triSku = function (color, size) {
+  const found = inv.findSkuBySpec(tri.skus, tri.product.id, color, size)
+  assert.ok(found, '夹具前提：三格夹具里找不到「' + color + ' · ' + size + '」这一格')
+  return found
+}
+const tBlackM = triSku('黑色', 'M')
+const tBlackL = triSku('黑色', 'L')
+const tBlackXL = triSku('黑色', 'XL')
+const tWhiteM = triSku('白色', 'M')
+
+assert.deepStrictEqual(tri.product.sizes, ['M', 'L', 'XL'],
+  '夹具前提：三格夹具的行序必须是 M / L / XL——下面「追平到行序第一格」的断言全靠它'
+    + '与点击顺序不一致才分得出「取了行序第一格」和「取了 nextSizes[0]」')
+;[
+  ['黑 M', tBlackM.salePrice, 69], ['黑 L', tBlackL.salePrice, 65],
+  ['黑 XL', tBlackXL.salePrice, 55], ['白 M', tWhiteM.salePrice, 59],
+  ['商品档价', tri.product.salePrice, 39]
+].forEach(function (row) {
+  assert.strictEqual(row[1], row[2], '夹具前提：' + row[0] + ' 的档价应当是 ' + row[2])
+})
+;[tBlackM.salePrice, tBlackL.salePrice, tBlackXL.salePrice, tWhiteM.salePrice, tri.product.salePrice]
+  .forEach(function (a, i, all) {
+    all.forEach(function (b, j) {
+      if (i < j) {
+        assert.notStrictEqual(a, b,
+          '夹具前提：三格夹具里这五个价（黑 M/L/XL、白 M、商品档价）必须两两不同，'
+            + '第 ' + i + ' 个与第 ' + j + ' 个撞了 —— 撞了的话下面至少有一条断言恒真')
+      }
+    })
+  })
+
+// fx 省略时用两格夹具 priced；三格夹具 tri 见上（多选态内增删格要它）。
+function saleHarness(initial, fx) {
+  const fixture = fx || priced
+  const store = {
+    getProduct: function (id) {
+      return id === fixture.product.id ? fixture.product : null
+    }
+  }
+  const make = new Function('store', 'inventory', 'util',
+    harnessSrc.cellKeySrc + '\nreturn { cellKey: cellKey,' + harnessSrc.bodies + '\n}')
+  const methods = make(store, inv, util)
+  harnessSrc.names.forEach(function (name) {
+    assert.strictEqual(typeof methods[name], 'function',
+      '夹具前提：应当从 sale.js 里抽到方法 ' + name + '——抽不到说明它改名或改了签名，'
+        + '下面整段就不再是在测源码了')
+  })
+  return Object.assign({
+    data: Object.assign({
+      products: [fixture.product], skus: fixture.skus, cart: [],
+      productId: fixture.product.id, productName: fixture.product.name,
+      hasSpecs: true, colors: fixture.product.colors, sizes: fixture.product.sizes,
+      selectedColor: '', selectedSizes: [], multiMode: false, skuId: '',
+      qty: '', unitPrice: '', priceTouched: false, cellQtys: {}, batchQty: '',
+      sizeOptions: [], cellRows: []
+    }, initial || {}),
+    setData: function (patch) { Object.assign(this.data, patch) },
+    // 下面这几个是本段不关心的东西（现货 hint / 本行金额 / 结算 / 刷新），一律打桩。
+    // 它们一个都不写 unitPrice 或 priceTouched，桩掉不影响被测的判定。
+    stockPatch: function () { return {} },
+    linePatch: function () { return {} },
+    applySettle: function (patch) { this.setData(patch) },
+    recomputeAfterSpecChange: function () {},
+    cartItems: function () { return [] }
+  }, methods)
+}
+
+function tapColor(page, value) {
+  page.pickColor({ currentTarget: { dataset: { value: value } } })
+}
+function tapSize(page, value) {
+  page.pickSize({ currentTarget: { dataset: { value: value } } })
+}
+function typePrice(page, value) {
+  typeField(page, 'unitPrice', value)
+}
+// onField 是通用入口（remark / qty / unitPrice 都走它），所以辅助函数也做成通用的——
+// 只给 unitPrice 开一个专用口子的话，「往别的框里打字会不会误置位」就没法测。
+function typeField(page, field, value) {
+  page.onField({ currentTarget: { dataset: { field: field } }, detail: { value: value } })
+}
+function multiOnBlack(extra) {
+  const qtys = {}
+  return saleHarness(Object.assign({
+    selectedColor: '黑色', selectedSizes: ['M', 'L'], multiMode: true,
+    // 多选态下 skuId 恒为空串（applySizeSelection 写的就是空串），这是本 bug 的
+    // 直接成因：照抄 applyProductState 的 skuId 判据在这里恒假。
+    skuId: '', unitPrice: String(pBlackM.salePrice), priceTouched: false,
+    cellQtys: qtys, batchQty: ''
+  }, extra || {}))
+}
+
+// --- (1) 多选态换规格一 → 单价追平到新参照格档价 -----------------------------
+const t3 = multiOnBlack({ cellQtys: { 'v:M': '1', 'v:L': '1' }, batchQty: '2' })
+assert.notStrictEqual(t3.data.unitPrice, String(pWhiteM.salePrice),
+  '前提：进入值（' + t3.data.unitPrice + '）不许等于期望值（' + pWhiteM.salePrice + '），'
+    + '相等的话「换规格一要追平」这条断言恒真，实现什么都不做也能过')
+tapColor(t3, '白色')
+assert.strictEqual(t3.data.unitPrice, String(pWhiteM.salePrice),
+  '多选态换规格一之后，单价应当追平到新参照格（第一枚选中格 = 白 M）的档价 '
+    + pWhiteM.salePrice + '，实为 ' + t3.data.unitPrice
+    + '——停在上一个规格一的价就是按错价记账，而且屏上没有任何提示')
+assert.strictEqual(t3.data.priceTouched, false,
+  '系统自己追平的价，归属要收回给系统（priceTouched 复位）——不复位的话下一次换'
+    + '规格一会把这个系统写进去的价当成「店主手改的」保留住，一次追平永久生效')
+// T3 原有的另外半条不许被改坏
+assert.strictEqual(t3.data.selectedColor, '白色', 'T3：规格一应当换成白色')
+assert.deepStrictEqual(t3.data.selectedSizes, ['M', 'L'], 'T3：选中集合保留')
+assert.strictEqual(t3.data.multiMode, true, 'T3：仍在多选形态')
+assert.strictEqual(Object.keys(t3.data.cellQtys).length, 0,
+  'T3：逐格数量清空（换颜色后每格现货会变，留着旧数量会被当成已核过库存）')
+assert.strictEqual(t3.data.batchQty, '', 'T3：「全部填」清空')
+
+// 记账后果：把两格都填上 1 件，出去的两行必须都是白色那一格、都按白色的价。
+// 上面那条只看 data.unitPrice，这条看真正进清单的行——docs/accounting-vs-policy.md
+// 的「不要为了省一次点击，让销售偷偷拿其他规格去充当前规格」，价也是同一件事。
+const t3Qtys = {}
+t3Qtys[t3.cellKey('M')] = '1'
+t3Qtys[t3.cellKey('L')] = '1'
+t3.setData({ cellQtys: t3Qtys })
+const t3Lines = t3.currentLines()
+assert.strictEqual(t3Lines.error, '', 'T3：两格都填了数，不该有 error')
+assert.strictEqual(t3Lines.lines.length, 2, 'T3：两格各一行')
+const t3BySize = {}
+t3Lines.lines.forEach(function (line) { t3BySize[line.size] = line })
+assert.strictEqual(t3BySize.M.skuId, pWhiteM.id, 'T3：M 那行应当记在白 M 上')
+assert.strictEqual(t3BySize.L.skuId, pWhiteL.id, 'T3：L 那行应当记在白 L 上')
+assert.strictEqual(t3BySize.M.unitPrice, pWhiteM.salePrice,
+  '白 M 这一行应当按 ' + pWhiteM.salePrice + ' 记账，实为 ' + t3BySize.M.unitPrice
+    + '——按上一个规格一的价出货，销售额、毛利、欠款三个数一起错')
+assert.strictEqual(t3BySize.L.unitPrice, pWhiteM.salePrice,
+  '整批一个价：白 L 这一行也按第一枚选中格的 ' + pWhiteM.salePrice + ' 记账，实为 '
+    + t3BySize.L.unitPrice)
+
+// --- (2) 追平之后再换一次 → 仍然追平（证明标志真的被复位了）-------------------
+// 接着上面那个 page 的末态（白色，单价 59，归属在系统手里）再换回黑色。
+assert.notStrictEqual(t3.data.unitPrice, String(pBlackM.salePrice),
+  '前提：进入值（' + t3.data.unitPrice + '）不许等于期望值（' + pBlackM.salePrice + '）')
+tapColor(t3, '黑色')
+assert.strictEqual(t3.data.unitPrice, String(pBlackM.salePrice),
+  '第二次换规格一仍然要追平到 ' + pBlackM.salePrice + '，实为 ' + t3.data.unitPrice
+    + '——追平之后 priceTouched 若被写成 true，这里就会把系统上一次写进去的 59'
+    + '当成店主手改的价保留住，一次追平之后永久「保留」')
+
+// --- (2b) onField 的字段守卫：只有「本次售价」带归属 -----------------------
+// `onField` 是个**通用**入口，`sale.wxml` 里给 `remark` / `qty` / `unitPrice`（两个框）
+// 都绑了它。把 `field === 'unitPrice'` 那道守卫放宽成「任何字段都置位」之后，
+// **打个数量就会把系统写的价标成「店主填的」**，之后换颜色就不再追平——
+// 正是本次要修的那个错账形态，只是触发路径换了。
+// （2026-09-04 审计 N1：这道守卫之前没有任何断言盯着，放宽它 `npm test` 全绿。）
+const guard = multiOnBlack()
+typeField(guard, 'qty', '3')
+assert.strictEqual(guard.data.qty, '3', '前提：onField 确实把 qty 写进去了（探针没坏）')
+assert.strictEqual(
+  guard.data.priceTouched, false,
+  '往「数量」框里打字不得把 priceTouched 置位——onField 是通用入口，'
+    + 'remark / qty / unitPrice 都走它；守卫一旦放宽，系统写的价会被当成'
+    + '店主手填的保留下来，换颜色不再追平（就是本次要修的错账形态）'
+)
+// 守卫没坏的话，打完数量再换颜色仍然要追平。
+tapColor(guard, '\u767d\u8272')
+assert.strictEqual(
+  guard.data.unitPrice, String(pWhiteM.salePrice),
+  '打过数量之后换规格一，仍然要追平到 ' + pWhiteM.salePrice
+    + '，实为 ' + guard.data.unitPrice + '——数量框不该影响售价的归属'
+)
+
+// --- (2c) 标志是「谁写的」，不是「等不等于档价」 ----------------------
+// data 的注释声明这个标志**不是**派生量（`unitPrice !== 档价`）。两者在绝大多数
+// 时候结果相同，**只有店主手打的数恰好等于参照格档价时才分得开**：
+// 派生量会判「没改过」、于是下一次换规格一把他的数冲掉。
+// 上面 (3) 那组用的是 88（刻意不等于档价），恰恰避开了这个分辨点。
+// （2026-09-04 审计 N2。）
+const same = multiOnBlack()
+// 关键：手打的数要等于**换过去之后**那一格的档价（白 M = 59），不是换之前的（黑 M = 69）。
+// 我第一版打的是 69，而换白色时派生量判的是 `69 !== 59` —— 也为真、也保留，
+// 两种实现给出同一个结果，这一组当场变成空转。分辨点在「追平目标」上，不在「当前值」上。
+typePrice(same, String(pWhiteM.salePrice))
+assert.strictEqual(
+  same.data.priceTouched, true,
+  '手打的数恰好等于档价时，归属仍然是店主的——标志记的是「谁写的」，'
+    + '不是「等不等于档价」；写成派生量的话这里会判成 false'
+)
+tapColor(same, '\u767d\u8272')
+// 值这一层分不出来：手打 59、追平目标也是 59，两种实现的 unitPrice 都是 59。
+// **唯一的分辨点是标志本身**——真实现走「保留」，标志留 true；派生量实现判
+// `59 !== 59` 为假、走「追平」，pricePatch 会把标志复位成 false。
+assert.strictEqual(same.data.unitPrice, String(pWhiteM.salePrice), '前提：这一步两种实现的值相同，所以只能看标志')
+assert.strictEqual(
+  same.data.priceTouched, true,
+  '手打的数恰好等于追平目标时，走的仍然必须是「保留」那条路（标志留 true）；'
+    + '写成派生量 `unitPrice !== 档价` 的话这里判假、走追平、标志被复位成 false。'
+    + '值这一层看不出差别，只有标志看得出'
+    + '——被追平成 ' + pWhiteM.salePrice + ' 就说明标志被写成了派生量'
+)
+assert.notStrictEqual(
+  String(pBlackM.salePrice), String(pWhiteM.salePrice),
+  '前提：两格档价不许相等，否则这组分不出「保留」和「追平」'
+)
+
+// --- (3) 店主手改过单价 → 换规格一保留他填的 ---------------------------------
+const kept = multiOnBlack()
+typePrice(kept, '88')
+assert.strictEqual(kept.data.priceTouched, true,
+  'onField 是 priceTouched 的唯一置位点：店主往「本次售价」框里打字之后，'
+    + '这个标志必须为真，否则下面「保留他填的价」根本无从判起')
+assert.strictEqual(kept.data.unitPrice, '88', 'onField 应当把值写进 data')
+assert.notStrictEqual('88', String(pWhiteM.salePrice),
+  '前提：手改的价不许恰好等于追平目标，否则「保留」和「追平」分不出来')
+tapColor(kept, '白色')
+assert.strictEqual(kept.data.unitPrice, '88',
+  '店主手改过本次售价之后再换规格一，应当保留他填的 88，实为 ' + kept.data.unitPrice
+    + '——判据是「有没有人动过这个框」（22:231），不是「参照格变没变」')
+assert.strictEqual(kept.data.priceTouched, true,
+  '保留的时候归属不变，还是店主的——写成 false 的话再换一次规格一就会把他的价冲掉')
+
+// --- (4) 站点完整性：系统在**别的**写入点写过框，归属也要收回 -----------------
+// 只在 pickColor 里复位是不够的：applyProductState / applySizeSelection 同样会
+// 拿系统算的价盖掉框里的值，那两处不复位的话，店主手改一次之后这个标志就再也回不去，
+// 后面每一次换规格一都会「保留」一个其实是系统写进去的价。
+const relay = multiOnBlack()
+typePrice(relay, '88')
+assert.strictEqual(relay.data.priceTouched, true, '前提：先手改一次')
+// T5：点掉一格回落单选态，applySizeSelection 追平到剩下那一格（黑 M）
+relay.applySizeSelection(priced.product, ['M', 'L'], ['M'])
+assert.strictEqual(relay.data.unitPrice, String(pBlackM.salePrice),
+  'T5 回落单选态应当追平到剩下那一格的档价 ' + pBlackM.salePrice + '，实为 ' + relay.data.unitPrice)
+assert.strictEqual(relay.data.priceTouched, false,
+  'applySizeSelection 追平之后也要复位归属——只在 pickColor 里复位，标志就成了'
+    + '「店主这辈子动过没有」，而它要答的是「框里现在这个值是不是他填的」')
+relay.applySizeSelection(priced.product, ['M'], ['M', 'L'])
+assert.strictEqual(relay.data.priceTouched, false, '回到多选态，归属仍在系统手里')
+tapColor(relay, '白色')
+assert.strictEqual(relay.data.unitPrice, String(pWhiteM.salePrice),
+  '手改过、但中途系统写过这个框，之后换规格一应当照常追平到 ' + pWhiteM.salePrice
+    + '，实为 ' + relay.data.unitPrice)
+
+// --- (5) 离开页面再回来（onShow 回填），手改过这件事不许被忘掉 ----------------
+// onShow 会对同一件商品再跑一次 selectProduct → applyProductState。那一支的
+// keepPrice 判真、把店主的价原样写回框里，此时**不能**顺手把归属收走：值还是他的。
+const revisit = multiOnBlack()
+typePrice(revisit, '88')
+revisit.applyProductState(priced.product, '黑色', ['M', 'L'], [])
+assert.strictEqual(revisit.data.unitPrice, '88',
+  'onShow 回填不该把店主手改的价打回档价，实为 ' + revisit.data.unitPrice)
+assert.strictEqual(revisit.data.priceTouched, true,
+  '原样留住他的价时，归属也要原样留住——写成 false 的话，离开页面再回来一趟就足以'
+    + '让他手改的价在下一次换规格一时被无声冲掉')
+tapColor(revisit, '白色')
+assert.strictEqual(revisit.data.unitPrice, '88',
+  '回来之后换规格一仍应保留 88，实为 ' + revisit.data.unitPrice)
+
+// --- (6) 单选态的既有行为没被破坏 --------------------------------------------
+// (6a) 单选态换规格一：没手改过就照常追平到新那一格。
+const singleColor = saleHarness({
+  selectedColor: '黑色', selectedSizes: ['M'], multiMode: false,
+  skuId: pBlackM.id, unitPrice: String(pBlackM.salePrice), priceTouched: false
+})
+assert.notStrictEqual(singleColor.data.unitPrice, String(pWhiteM.salePrice), '前提：进入值 ≠ 期望值')
+tapColor(singleColor, '白色')
+assert.strictEqual(singleColor.data.unitPrice, String(pWhiteM.salePrice),
+  '单选态换规格一应当追平到 ' + pWhiteM.salePrice + '，实为 ' + singleColor.data.unitPrice)
+assert.strictEqual(singleColor.data.skuId, pWhiteM.id, '单选态 skuId 要跟着那一格走')
+
+// (6b) 单选态点规格二：**手改过也照样追平**。这条是 tests/ui.test.js:1990 逐字钉着的
+// 行为（逐格售价是真功能，停在上一格就是按错价记账），本次不动它：22:231 新加的
+// 「有没有人动过这个框」写的是换规格一，作用点在 pickColor 的多选支。
+// 把它在 npm test 里复刻一份，是因为那条 UI 断言要跑满整轮 UI 测试才看得到——
+// 换规格一那边一旦顺手把判据"统一"成 priceTouched，这里立刻就红。
+const singleSize = saleHarness({ selectedColor: '黑色', selectedSizes: [], multiMode: false })
+typePrice(singleSize, '1')
+assert.strictEqual(singleSize.data.priceTouched, true, '前提：先手改一次')
+assert.notStrictEqual('1', String(pBlackM.salePrice), '前提：进入值 ≠ 期望值')
+tapSize(singleSize, 'M')
+assert.deepStrictEqual(singleSize.data.selectedSizes, ['M'], '前提：这一下应当选中 M')
+assert.strictEqual(singleSize.data.unitPrice, String(pBlackM.salePrice),
+  '单选态点规格二仍应把单价追平到那一枚 SKU 的档价 ' + pBlackM.salePrice + '，实为 '
+    + singleSize.data.unitPrice + '——这条与 tests/ui.test.js:1990 同源，'
+    + '把换规格一的「手改过就保留」判据扩到这里会当场推翻它')
+assert.strictEqual(singleSize.data.priceTouched, false, '追平了就要复位归属')
+assert.strictEqual(singleSize.data.skuId, pBlackM.id, 'skuId 也要跟上')
+
+// ===========================================================================
+// 「本次售价」的归属（续）：多选态内增删格也按「动过没有」判（22:231 追裁）
+// ===========================================================================
+//
+// 稿 22:231 追加的裁定：换规格二**只在多选态**同理——多选态内增删格，单价同样按
+// 「动过没有」判；**单选形态点规格二仍然一律追平**（那是 2026-09-02「按错价记账」
+// 回归的闸，见下面 (6b) 与 tests/ui.test.js:1990）。两条判据并存不矛盾：单选态每次
+// 点格子就是在挑那一个 SKU，价该跟着走；多选态的价是「整批一个价」，店主填了就是
+// 他要的批价，不该被增删一格冲掉。
+//
+// 病灶（2026-09-03 实测）：applySizeSelection 里那句
+//     keepPrice = !!this.data.unitPrice && this.data.skuId === (refSku ? refSku.id : '')
+// 在多选态**结构性恒假**——进/留在多选态时写进 data 的 skuId 恒为空串，而 refSku.id
+// 非空。后果：多选态手改 88，一点规格二 chip 就无声变回 69。
+
+function triMulti(sizes, extra) {
+  const cellQtys = {}
+  sizes.forEach(function (s) { cellQtys['v:' + s] = '' })
+  return saleHarness(Object.assign({
+    selectedColor: '黑色', selectedSizes: sizes.slice(), multiMode: true,
+    // 多选态下 skuId 恒为空串——这是本 bug 的直接成因，夹具必须照实模拟。
+    skuId: '', priceTouched: false, cellQtys: cellQtys, batchQty: ''
+  }, extra || {}), tri)
+}
+
+// --- (7) 多选态内**删格**，没手改过 → 追平到新的第一枚选中格 ------------------
+const shrink = triMulti(['M', 'L', 'XL'], {
+  unitPrice: String(tBlackM.salePrice),
+  cellQtys: { 'v:M': '1', 'v:L': '2', 'v:XL': '3' }
+})
+assert.strictEqual(shrink.data.priceTouched, false, '前提：店主没动过这个框')
+assert.notStrictEqual(shrink.data.unitPrice, String(tBlackL.salePrice),
+  '前提：进入值（' + shrink.data.unitPrice + '）不许等于期望值（' + tBlackL.salePrice
+    + '），相等的话这条断言恒真，实现什么都不做也能过')
+tapSize(shrink, 'M')
+assert.deepStrictEqual(shrink.data.selectedSizes, ['L', 'XL'],
+  '前提：点掉 M 之后应当剩 L / XL 两格')
+assert.strictEqual(shrink.data.multiMode, true,
+  '前提：剩两格仍在多选形态——掉出多选态就变成 T5 那条路，测的不是这条')
+assert.strictEqual(shrink.data.unitPrice, String(tBlackL.salePrice),
+  '多选态内删掉第一枚选中格之后，没手改过的单价应当追平到新的第一枚选中格（黑 L）的'
+    + '档价 ' + tBlackL.salePrice + '，实为 ' + shrink.data.unitPrice
+    + '——停在被删掉那一格的价就是按错价记账，屏上没有任何提示')
+assert.strictEqual(shrink.data.priceTouched, false,
+  '系统自己追平的价，归属要收回给系统')
+assert.strictEqual(shrink.data.cellQtys[shrink.cellKey('M')], undefined,
+  '删掉的格连 key 一起清掉（选中集合是唯一真相，不留看不见的数）')
+assert.strictEqual(shrink.data.cellQtys[shrink.cellKey('L')], '2', '留下的格数量不动')
+assert.strictEqual(shrink.data.cellQtys[shrink.cellKey('XL')], '3', '留下的格数量不动')
+
+// 记账后果：两格出去的行都得按 65，不是被删掉那一格的 69。
+const shrinkLines = shrink.currentLines()
+assert.strictEqual(shrinkLines.error, '', '两格都填了数，不该有 error')
+assert.strictEqual(shrinkLines.lines.length, 2, '两格各一行')
+shrinkLines.lines.forEach(function (line) {
+  assert.strictEqual(line.unitPrice, tBlackL.salePrice,
+    '「' + line.size + '」这一行应当按新参照格的 ' + tBlackL.salePrice + ' 记账，实为 '
+      + line.unitPrice + '——按已经点掉那一格的价出货，销售额、毛利、欠款三个数一起错')
+})
+
+// --- (8) 多选态内**增格**，没手改过 → 追平到**行序**第一格，不是点击序 --------
+const grow = triMulti(['L', 'XL'], { unitPrice: String(tBlackL.salePrice) })
+assert.notStrictEqual(grow.data.unitPrice, String(tBlackM.salePrice), '前提：进入值 ≠ 期望值')
+tapSize(grow, 'M')
+assert.deepStrictEqual(grow.data.selectedSizes, ['L', 'XL', 'M'],
+  '前提：pickSize 是往末尾 concat，所以点击序是 L / XL / M——与行序 M / L / XL 不同，'
+    + '下面那条才分得出「取了行序第一格」和「取了 nextSizes[0]」')
+assert.strictEqual(grow.data.multiMode, true, '前提：仍在多选形态')
+assert.strictEqual(grow.data.unitPrice, String(tBlackM.salePrice),
+  '多选态内新增一格之后，单价应当追平到**行序**第一枚选中格（黑 M）的档价 '
+    + tBlackM.salePrice + '，实为 ' + grow.data.unitPrice
+    + '——取成点击序第一个（黑 L，' + tBlackL.salePrice + '）就与逐格行 / cellRows 的'
+    + '行序两说了，屏上第一行显示的是 M、价却是 L 的')
+assert.strictEqual(grow.data.cellQtys[grow.cellKey('M')], '',
+  '新选中的格要有一个空串条目，不是压根没有 key')
+
+// --- (9) 多选态内增删格 + 店主手改过 → 保留他填的 ----------------------------
+const triKept = triMulti(['M', 'L', 'XL'], {
+  unitPrice: String(tBlackM.salePrice),
+  cellQtys: { 'v:M': '1', 'v:L': '1', 'v:XL': '1' }
+})
+typePrice(triKept, '88')
+assert.strictEqual(triKept.data.priceTouched, true,
+  'onField 是 priceTouched 的唯一置位点：店主往「本次售价」框里打字之后这个标志必须为真')
+assert.notStrictEqual('88', String(tBlackL.salePrice),
+  '前提：手改的价不许恰好等于追平目标，否则「保留」和「追平」分不出来')
+tapSize(triKept, 'M')
+assert.deepStrictEqual(triKept.data.selectedSizes, ['L', 'XL'], '前提：删掉 M，仍是多选')
+assert.strictEqual(triKept.data.multiMode, true, '前提：仍在多选形态')
+assert.strictEqual(triKept.data.unitPrice, '88',
+  '多选态的价是「整批一个价」，店主手改过之后**增删一格不许冲掉**，应当仍是 88，实为 '
+    + triKept.data.unitPrice + '——判据是「有没有人动过这个框」（22:231 追裁），'
+    + '不是「参照格变没变」；后者在多选态结构性恒假（skuId 恒为空串）')
+assert.strictEqual(triKept.data.priceTouched, true,
+  '保留的时候归属不变，还是店主的——写成 false 的话再增删一格就会把他的价冲掉')
+// 再增一格，仍然保留（证明归属没被中途收走）
+tapSize(triKept, 'M')
+assert.deepStrictEqual(triKept.data.selectedSizes, ['L', 'XL', 'M'], '前提：把 M 加回来')
+assert.strictEqual(triKept.data.unitPrice, '88',
+  '第二次增删格仍应保留店主填的 88，实为 ' + triKept.data.unitPrice)
+// 记账后果：三格都按他填的 88 出去。
+const keptQtys = {}
+;['M', 'L', 'XL'].forEach(function (s) { keptQtys[triKept.cellKey(s)] = '1' })
+triKept.setData({ cellQtys: keptQtys })
+const keptLines = triKept.currentLines()
+assert.strictEqual(keptLines.lines.length, 3, '三格各一行')
+keptLines.lines.forEach(function (line) {
+  assert.strictEqual(line.unitPrice, 88,
+    '「' + line.size + '」这一行应当按店主填的 88 记账，实为 ' + line.unitPrice)
+})
+
+// --- (10) T4（0/1 → 多选）判据**未变**：仍看「参照 SKU 变没变」------------------
+// 这一条是本次改动的边界闸。店主手改过（88），但这一下把参照格换成了行序第一格 M
+// （data.skuId 记的还是 L 那一枚，对不上），所以照旧追平到 69。
+// 把多选态那条 priceTouched 判据顺手"统一"到 T4，这里立刻会停在 88。
+const t4 = saleHarness({
+  selectedColor: '黑色', selectedSizes: ['L'], multiMode: false,
+  skuId: tBlackL.id, unitPrice: String(tBlackL.salePrice), priceTouched: false, qty: '2'
+}, tri)
+typePrice(t4, '88')
+assert.strictEqual(t4.data.priceTouched, true, '前提：先手改一次')
+tapSize(t4, 'M')
+assert.deepStrictEqual(t4.data.selectedSizes, ['L', 'M'], '前提：这一下应当进多选形态')
+assert.strictEqual(t4.data.multiMode, true, '前提：|Z| 1→2，进多选')
+assert.strictEqual(t4.data.unitPrice, String(tBlackM.salePrice),
+  'T4 的判据**没有换**：参照格从黑 L 换成了行序第一格黑 M，应当照旧追平到 '
+    + tBlackM.salePrice + '，实为 ' + t4.data.unitPrice
+    + '——22:231 追裁写的是「多选态内增删格」，T4 是进多选那一下，不在裁定范围内')
+assert.strictEqual(t4.data.priceTouched, false, 'T4 追平了，归属收回给系统')
+assert.strictEqual(t4.data.qty, '', 'T4：数量框清空')
+assert.strictEqual(t4.data.cellQtys[t4.cellKey('L')], '2', 'T4：原数量框的值搬进原选中格 L')
+assert.strictEqual(t4.data.cellQtys[t4.cellKey('M')], '', 'T4：新格留空')
+
+// T4 的 0→N 支（空态点「全选」）同样未变：没有原选中格，追平到行序第一格。
+const t4All = saleHarness({
+  selectedColor: '黑色', selectedSizes: [], multiMode: false,
+  skuId: '', unitPrice: String(tri.product.salePrice), priceTouched: false, qty: '5'
+}, tri)
+assert.notStrictEqual(t4All.data.unitPrice, String(tBlackM.salePrice), '前提：进入值 ≠ 期望值')
+t4All.pickAllSizes()
+assert.deepStrictEqual(t4All.data.selectedSizes, ['M', 'L', 'XL'], '前提：全选三格')
+assert.strictEqual(t4All.data.unitPrice, String(tBlackM.salePrice),
+  'T4 的 0→N 支应当追平到行序第一格（黑 M）的档价 ' + tBlackM.salePrice + '，实为 '
+    + t4All.data.unitPrice)
+assert.strictEqual(t4All.data.cellQtys[t4All.cellKey('M')], '5',
+  'T4 0→N：数量框的值按行序搬进第一格')
+
+// --- (11) T5（多选 → 0/1）判据**未变**：回落到哪一格就按哪一格的档价 ----------
+// 同样是边界闸：店主手改过 88，但回落单选态之后每一次点格子就是在挑那一个 SKU，
+// 价必须跟着走（与 tests/ui.test.js:1990 同源）。扩了 priceTouched 这里会停在 88。
+const t5 = triMulti(['L', 'XL'], {
+  unitPrice: String(tBlackL.salePrice),
+  cellQtys: { 'v:L': '3', 'v:XL': '4' }
+})
+typePrice(t5, '88')
+assert.strictEqual(t5.data.priceTouched, true, '前提：先手改一次')
+tapSize(t5, 'L')
+assert.deepStrictEqual(t5.data.selectedSizes, ['XL'], '前提：这一下应当回落单选形态')
+assert.strictEqual(t5.data.multiMode, false, '前提：|Z| 2→1，回落单选')
+assert.strictEqual(t5.data.unitPrice, String(tBlackXL.salePrice),
+  'T5 的判据**没有换**：回落到黑 XL 就该按它的档价 ' + tBlackXL.salePrice + ' 记账，实为 '
+    + t5.data.unitPrice + '——单选形态每次点格子就是在挑那一枚 SKU，价该跟着走；'
+    + '把多选态那条「手改过就保留」扩到这里，就是从这个方向把 #127「按错价记账」'
+    + '那条闸拆掉（tests/ui.test.js:1990）')
+assert.strictEqual(t5.data.priceTouched, false, 'T5 追平了，归属收回给系统')
+assert.strictEqual(t5.data.skuId, tBlackXL.id, 'T5：skuId 记剩下那一格')
+assert.strictEqual(t5.data.qty, '4', 'T5：那一格的值搬回数量框')
+assert.strictEqual(Object.keys(t5.data.cellQtys).length, 0, 'T5：逐格草稿清空')
+assert.strictEqual(t5.data.batchQty, '', 'T5：「全部填」清空')
+
+// --- (12) 站点完整性静态钉子 --------------------------------------------------
+// 页面 data 的 unitPrice 只准由 pricePatch 写出来（唯一同时决定 priceTouched 的地方），
+// 加上 onField 那个用户输入口（走 patch[field] = value，没有字面量 key）。
+// 本 bug 的形状就是「有个地方改了参照格却没写 unitPrice」，而它不崩、不报错、
+// 屏上也没提示——只有把写入口收敛成一个，漏写才会在结构上做不到。
+// 本仓在「一个字段改多点位、漏掉一处」上栽过不止一次，见记忆 sku-vs-barcode-levels。
+// (?<!\.) 与上面 selectedSizes 那条同源：排掉 `this.data.unitPrice : x` 这类三元
+// 表达式里的冒号——那不是对象字面量的 key，不是写入点。
+const UNIT_PRICE_KEY_RE = /(?<!\.)unitPrice\s*:/g
+assert.ok(
+  ('    unitPrice: price,'.match(UNIT_PRICE_KEY_RE) || []).length === 1,
+  '阳性对照：这条正则应当能认出 `unitPrice:` 这种字面量 key。认不出就说明它被改坏了，'
+    + '下面那条计数是恒真的假绿'
+)
+assert.ok(
+  ('keep ? this.data.unitPrice : fallback'.match(UNIT_PRICE_KEY_RE) || []).length === 0,
+  '阴性对照：三元表达式里的 `this.data.unitPrice :` 不是写入点，不许被数进去——'
+    + '数进去的话计数会随着实现的写法漂移，钉子失去意义'
+)
+const unitPriceKeyCount = (saleJsNoCommentsForMultiModePin.match(UNIT_PRICE_KEY_RE) || []).length
+assert.strictEqual(
+  unitPriceKeyCount, 4,
+  '字面量 "unitPrice:" 应当恰好出现 4 次（data{} 初始值 + pricePatch 的 return + '
+    + 'toCartItem 的清单行 + submit 的 items 映射），实为 ' + unitPriceKeyCount
+    + ' 次。多出来的多半是有地方绕开 pricePatch 直接往页面 data 里写单价——'
+    + '那就又有一个「改了参照格、单价没跟上」或者「把店主手改的价无声冲掉」的点位'
+)
+;['applyProductState', 'applySizeSelection', 'pickColor'].forEach(function (name) {
+  const body = pageMethod(saleJs, name)
+  assert.ok(
+    body.indexOf('this.pricePatch(') >= 0,
+    name + ' 应当经 this.pricePatch() 写单价——三个改变「参照格」的方法都必须走它，'
+      + '否则 unitPrice 和 priceTouched 会分头写，标志迟早开始撒谎'
+  )
+})
+const pricePatchBody = pageMethod(saleJs, 'pricePatch')
+assert.ok(
+  /unitPrice\s*:/.test(pricePatchBody) && /priceTouched\s*:/.test(pricePatchBody),
+  'pricePatch 的返回里两个字段必须都在——只写一个就等于没有这个函数'
+)
+
+// --- (13) 上面那两条钉子的盲区：非字面量 key 的写入口 -------------------------
+// UNIT_PRICE_KEY_RE 只数得到对象字面量 key（`unitPrice:`），三条方法名单只查
+// `this.pricePatch(` 在不在。2026-09-03 审计给了实证：往 pickAllSizes 里插
+//
+//     const px = {}
+//     px.unitPrice = '0'
+//     this.setData(px)
+//
+// —— 换成属性赋值就绕开了字面量 key，pickAllSizes 又不在任何名单里，结果 `npm test`
+// 整个 exit=0，一条断言都没红。下面补上属性赋值和引号计算 key 这两种形态。
+//
+// **说清这条钉子盖不到什么，别吹过头**：`patch[field] = value`（onField 那种全动态
+// 下标）任何静态正则都认不出来——那正是 onField 自己的写法，也是留给用户输入的口。
+// 所以这条挡的是「顺手换个写法绕开 pricePatch」，不是「所有可能的写入」。
+const UNIT_PRICE_WRITE_RE = /(?:\.\s*unitPrice\s*=(?!=)|\[\s*['"]unitPrice['"]\s*\])/g
+assert.strictEqual(
+  ("px.unitPrice = '0'".match(UNIT_PRICE_WRITE_RE) || []).length, 1,
+  '阳性对照：这条正则应当能认出属性赋值 `px.unitPrice = ...`（审计实证用的正是这个'
+    + '写法）。认不出就说明它被改坏了，下面那条 === 0 是恒真的假绿'
+)
+assert.strictEqual(
+  ("px['unitPrice'] = '0'".match(UNIT_PRICE_WRITE_RE) || []).length, 1,
+  '阳性对照：这条正则应当能认出引号计算 key `px[\'unitPrice\']`'
+)
+assert.strictEqual(
+  ('if (this.data.unitPrice === prev) return'.match(UNIT_PRICE_WRITE_RE) || []).length, 0,
+  '阴性对照：`=== ` 是比较不是写入，不许被数进去——数进去的话这条钉子会随实现的'
+    + '读法漂移，迟早被人当噪音删掉'
+)
+assert.strictEqual(
+  ('unitPrice: keep ? this.data.unitPrice : fallback'.match(UNIT_PRICE_WRITE_RE) || []).length, 0,
+  '阴性对照：字面量 key 与三元里的读取都不是这条要数的形态（前者归 UNIT_PRICE_KEY_RE 管）'
+)
+const unitPriceWrites = saleJsNoCommentsForMultiModePin.match(UNIT_PRICE_WRITE_RE) || []
+assert.strictEqual(
+  unitPriceWrites.length, 0,
+  'pages/sale/sale.js 里不许出现 `x.unitPrice = ...` 或 `x[\'unitPrice\'] = ...` 这种'
+    + '绕开 pricePatch 的写法，实测有 ' + unitPriceWrites.length + ' 处：'
+    + JSON.stringify(unitPriceWrites) + '。页面 data 的 unitPrice 只准由 pricePatch'
+    + '（系统）和 onField（用户输入）写出来——分头写的话 priceTouched 迟早开始撒谎'
+)
+
+// priceTouched 同理，且更严：它是本次新加的标志，写岔了不会崩、不会报错，只会让
+// 「框里这个值是不是人填的」这个问题答错，而答错的后果是店主手改的价被无声冲掉
+// （或者反过来，系统写进去的价被永久「保留」）。
+// (?<!\.) 与上面 selectedSizes 那条同源：排掉 `this.data.priceTouched : false` 这类
+// 三元表达式里的冒号。
+const PRICE_TOUCHED_KEY_RE = /(?<!\.)priceTouched\s*:/g
+assert.strictEqual(
+  ('    priceTouched: false,'.match(PRICE_TOUCHED_KEY_RE) || []).length, 1,
+  '阳性对照：这条正则应当能认出 `priceTouched:` 这种字面量 key'
+)
+assert.strictEqual(
+  ('keep ? this.data.priceTouched : false'.match(PRICE_TOUCHED_KEY_RE) || []).length, 0,
+  '阴性对照：三元表达式里的 `this.data.priceTouched :` 不是写入点'
+)
+const priceTouchedKeyCount = (saleJsNoCommentsForMultiModePin.match(PRICE_TOUCHED_KEY_RE) || []).length
+assert.strictEqual(
+  priceTouchedKeyCount, 2,
+  '字面量 "priceTouched:" 应当恰好出现 2 次（data{} 初始值 + pricePatch 的 return），'
+    + '实为 ' + priceTouchedKeyCount + ' 次——多出来的是有地方绕开 pricePatch 单独写了'
+    + '归属标志，那就等于让它和 unitPrice 分头走'
+)
+const PRICE_TOUCHED_WRITE_RE = /(?:\.\s*priceTouched\s*=(?!=)|\[\s*['"]priceTouched['"]\s*\])/g
+assert.strictEqual(
+  ('patch.priceTouched = true'.match(PRICE_TOUCHED_WRITE_RE) || []).length, 1,
+  '阳性对照：这条正则应当能认出属性赋值 `patch.priceTouched = true`（onField 的写法）'
+)
+assert.strictEqual(
+  ('if (this.data.priceTouched === true) return'.match(PRICE_TOUCHED_WRITE_RE) || []).length, 0,
+  '阴性对照：`=== ` 是比较不是写入'
+)
+const priceTouchedWrites = saleJsNoCommentsForMultiModePin.match(PRICE_TOUCHED_WRITE_RE) || []
+assert.strictEqual(
+  priceTouchedWrites.length, 1,
+  '属性赋值形态的 priceTouched 写入应当恰好 1 处（onField 里那句 `patch.priceTouched = '
+    + 'true`，唯一的置位点），实为 ' + priceTouchedWrites.length + ' 处'
+)
+const onFieldBody = stripCommentsForMultiModePin(pageMethod(saleJs, 'onField'))
+assert.strictEqual(
+  (onFieldBody.match(PRICE_TOUCHED_WRITE_RE) || []).length, 1,
+  '那唯一一处必须在 onField 里——挪到别的方法就说明置位点不止一个了，'
+    + '「框里这个值是不是人填的」会开始答错'
+)
+
+// 「方法名单」的另一半：pickSize / pickAllSizes 是两个改变选中集合的入口，它们只准
+// 把价的事**转交出去**（applyProductState / applySizeSelection），自己一个字都不许碰。
+// 审计那条实证插的正是 pickAllSizes——它当时不在任何名单里，插进去也没人红。
+// 先给剥注释器过一道对照：这条钉子判的是「方法体里没有 unitPrice 这个词」，
+// 万一剥注释器把代码也一起剥了，断言会静默变成恒真。
+const stripProbe = stripCommentsForMultiModePin('  // 注释里提到 unitPrice\n  px.unitPrice = 1\n')
+assert.strictEqual(
+  stripProbe.indexOf('注释里提到'), -1,
+  '阳性对照：剥注释器应当真的把行注释剥掉——剥不掉的话下面那条会因为方法体里的'
+    + '注释提到 unitPrice 而误红'
+)
+assert.ok(
+  stripProbe.indexOf('px.unitPrice = 1') >= 0,
+  '阴性对照：剥注释器不许把代码一起剥掉——剥掉了下面那条 indexOf === -1 就是恒真的假绿'
+)
+;['pickSize', 'pickAllSizes'].forEach(function (name) {
+  const body = stripCommentsForMultiModePin(pageMethod(saleJs, name))
+  ;['unitPrice', 'priceTouched'].forEach(function (field) {
+    assert.strictEqual(
+      body.indexOf(field), -1,
+      name + ' 的方法体里不许出现 ' + field + '——这两个入口只准把价的事转交给 '
+        + 'applyProductState / applySizeSelection，自己碰就又多了一个绕开 pricePatch 的'
+        + '写入点（2026-09-03 审计的实证就插在 pickAllSizes 里，当时零断言变红）'
+    )
+  })
+})
 
 console.log('sale-spec-view tests passed')
