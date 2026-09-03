@@ -737,7 +737,10 @@ assert.strictEqual(
 
 // (2c-3) 补 D1（和追平目标比）。这一组值这一层两种实现相同，
 // 分辨点只在标志上——**仅限本场景如此**，不是普遍的（上面两组就分在值上）。
-// 主杀伤不在这一条身上，D1 其实在组 (1) 就会先红；留着作为补钉。
+// D1 这种**纯**派生量会先在组 (1) 响；但**合取形态**（标志 AND 派生量）
+// 只有这一条抓得到，它有独占杀伤。（上一版这里写的是「主杀伤不在这一条
+// 身上」——**说少了**。本仓的「断言不要吹过头」是反过吹，但说少一样会让
+// 后人误删。）
 const sameTgt = multiOnBlack()
 typePrice(sameTgt, String(pWhiteM.salePrice))
 tapColor(sameTgt, '\u767d\u8272')
@@ -745,6 +748,34 @@ assert.strictEqual(sameTgt.data.unitPrice, String(pWhiteM.salePrice), '前提：
 assert.strictEqual(
   sameTgt.data.priceTouched, true,
   '手打的数恰好等于追平目标时，走的仍必须是「保留」那条路（标志留 true）'
+)
+
+// (2c-4) 「档价」有两个自然读法：**该格的 SKU 档价**与**商品档价**。
+// 上面三组钉的都是前一个。后一个同样能把标志写成派生量，而且逃在**置位点**：
+//     onField 里 `patch.priceTouched = !!value && value !== String(product.salePrice)`
+// （决策点上的同族变异已经被组 (1) 抓住，逃的只有置位点这一支。）
+//
+// 2026-09-04 复审实测：这个变异下 `npm test` **全套绿**，而深度 5 的序列差分
+// 有 **168 条**价格分叉：店主在多选态手打商品档价 39，换个颜色就被无声改成 59。
+// 这正是本组那句「标志是谁写的，不是等不等于档价」要守的形态。
+const sameProd = multiOnBlack()
+assert.notStrictEqual(
+  String(priced.product.salePrice), String(pWhiteM.salePrice),
+  '前提：商品档价不许等于追平目标，否则本组分不出「保留」和「追平」'
+)
+typePrice(sameProd, String(priced.product.salePrice))
+assert.strictEqual(
+  sameProd.data.priceTouched, true,
+  '手打的数恰好等于**商品档价**时，归属仍然是店主的——'
+    + '置位点写成「值 != 商品档价」的话这里会判成 false'
+)
+tapColor(sameProd, '\u767d\u8272')
+assert.strictEqual(
+  sameProd.data.unitPrice, String(priced.product.salePrice),
+  '店主手打的数恰好等于商品档价时，换规格一仍要保留 '
+    + priced.product.salePrice + '，实为 ' + sameProd.data.unitPrice
+    + '——被追平成 ' + pWhiteM.salePrice + ' 就说明置位点把「等于商品档价」'
+    + '当成了「没动过」'
 )
 
 // --- (3) 店主手改过单价 → 换规格一保留他填的 ---------------------------------
