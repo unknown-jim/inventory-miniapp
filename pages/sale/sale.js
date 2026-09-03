@@ -52,6 +52,12 @@ Page({
     canAdd: false,
     qty: '',
     unitPrice: '',
+    // 「本次售价」这个框里现在的值是不是**店主自己填的**。false = 系统写进去的
+    // （追平到某一格的档价），true = 有人动过 onField。这不是「和档价不相等」的
+    // 派生量：店主完全可以手打一个恰好等于档价的数，也可以手打完再改回来。
+    // 唯一置位点是 onField（wxml 的 .js-batch-price / .js-single-price 都绑它），
+    // 唯一复位点是 pricePatch（系统每次自己写 unitPrice 都把归属收回去）。
+    priceTouched: false,
     lineAmountText: '0.00',
     // 以下四个字段只在多选形态（multiMode）下被 wxml 消费：batchQty 是「全部填」框的
     // 字面值（一次性动作，不跨批记忆）；cellQtys 是 格(size) -> 数量 的草稿；
@@ -682,6 +688,28 @@ Page({
     return patch
   },
 
+  // 「本次售价」的唯一写出口。keep 为真＝框里现在这个值是店主自己填的、系统不许冲掉；
+  // 为假＝追平到参照格 refSku 的档价（没有参照格就退回商品档价），同时把归属收回给
+  // 系统（priceTouched 复位）。**两个字段必须一起写**，这是这个函数存在的全部理由：
+  //
+  //   · 只写 unitPrice 不写 priceTouched：追平一次之后标志还挂着 true，后面每一次
+  //     多选态换规格一 / 增删格都会「保留」一个其实是系统自己写进去的价——一次手改
+  //     永久生效。
+  //   · 只写 priceTouched 不写 unitPrice：就是本次要修的那个 bug 的形状。
+  //
+  // 页面 data 的 unitPrice 只准由这里写出来（三个调用点：applyProductState /
+  // applySizeSelection / pickColor 的多选支），加上 onField 那个用户输入口。
+  // 2026-09-03 的实测后果：pickColor 的多选支只写了 selectedColor，unitPrice 一个字
+  // 没动——黑色 M+L 单价 69，换到白色（两格档价都是 59）之后屏上仍是 69，两格各 1 件
+  // 加入清单就是白 M ×1 @69、白 L ×1 @69，屏上没有任何提示。
+  // tests/sale-spec-view.test.js 末尾有静态钉子守这条收敛。
+  pricePatch(keep, refSku, product) {
+    return {
+      unitPrice: keep ? this.data.unitPrice : String(refSku ? refSku.salePrice : product.salePrice),
+      priceTouched: keep ? this.data.priceTouched : false
+    }
+  },
+
   // selectedSizes 是选中集合（数组）。sizes.length === 1 时自动选中该值（既有单值轴的
   // 便利行为，一个字不改），|Z| 由此算出的 multiMode 跟着走。
   applyProductState(product, selectedColor, selectedSizes, cart) {
@@ -699,11 +727,14 @@ Page({
     }
     const singleSize = sizesSel.length === 1 ? sizesSel[0] : ''
     const sku = hasSpecs ? inventory.findSkuBySpec(this.data.skus, product.id, color, singleSize) : null
-    const keepPrice = this.data.productId === product.id && this.data.unitPrice && this.data.skuId === (sku ? sku.id : '')
-    const unitPrice = keepPrice
-      ? this.data.unitPrice
-      : String(sku ? sku.salePrice : product.salePrice)
-    this.setData({
+    // 判据仍是「参照 SKU 变没变」，**故意不换成 priceTouched**：这条路上「点规格二
+    // 要把单价追平到那一枚 SKU」是钉死的行为（tests/ui.test.js:1990 逐字钉着，理由是
+    // 逐格售价是真功能，停在上一格就是按错价记账），换成「手改过就保留」会当场推翻它。
+    // 22:231 的「判据是有没有人动过这个框」只作用在**多选态**（pickColor 的多选支 +
+    // applySizeSelection 的 wasMulti && isMulti 支）。这个方法是单选形态的路，
+    // 两条判据并存是有意的，不是漏改。
+    const keepPrice = this.data.productId === product.id && !!this.data.unitPrice && this.data.skuId === (sku ? sku.id : '')
+    this.setData(Object.assign({
       productId: product.id,
       productName: product.name,
       hasSpecs: hasSpecs,
@@ -713,9 +744,8 @@ Page({
       colors: colors,
       sizes: sizes,
       selectedColor: color,
-      skuId: sku ? sku.id : '',
-      unitPrice: unitPrice
-    })
+      skuId: sku ? sku.id : ''
+    }, this.pricePatch(keepPrice, sku, product)))
     this.setData(this.sizeSelectionPatch(sizesSel))
     this.setData(this.stockPatch(product, sku, cart))
     this.applySettle(this.linePatch(cart))
@@ -743,9 +773,25 @@ Page({
     if (!product) return
     const value = e.currentTarget.dataset.value
     if (this.data.selectedSizes.length >= 2) {
-      // T3：多选态换规格一——选中集合与单价保留，逐格数量与「全部填」清空
-      // （换颜色后每格现货会变，留着旧数量会被当成已核过库存；与 T11 同形，样张 S5）。
+      // T3：多选态换规格一（22:231）——选中集合保留；逐格数量与「全部填」清空（换颜色
+      // 后每格现货会变，留着旧数量会被当成已核过库存；与 T11 同形）；**单价追平到新
+      // 参照格（第一枚选中格）的档价，除非店主已经手改过本次售价，那就保留他填的**。
+      //
+      // 判据是「有没有人动过这个框」，不是「参照格变没变」——多选态下 skuId 恒为空串
+      // （见 applySizeSelection 的注释），applyProductState 那套 skuId 判据在这里分不出
+      // 「店主手改过」和「系统刚追平过」，照抄过来等于恒假。
+      //
+      // 这一条原本写的是「单价保留」，并引用「样张 S5」。那个引用是错的：S5 在稿上是
+      // 看板的「本月进货」卡，跟销售规格无关，稿上当时零条注释讲换规格一时什么保留、
+      // 什么清空——那是一条没有稿依据的代码侧自定裁定，且与 applySizeSelection 声明的
+      // 「多选态单价取第一枚选中格的 SKU 售价」互相打架。实测后果见 pricePatch 的注释。
+      //
+      // 顺序有依赖：firstSelectedSku 读的是 data.selectedColor，必须先把新颜色写进去
+      // 再取参照格，否则取到的是**换之前**那一格，追平等于没追。
       this.setData({ selectedColor: value, cellQtys: {}, batchQty: '' })
+      const keepPrice = !!this.data.priceTouched && !!this.data.unitPrice
+      const refSku = this.firstSelectedSku(product, this.data.selectedSizes)
+      this.setData(this.pricePatch(keepPrice, refSku, product))
       this.recomputeAfterSpecChange(product)
       return
     }
@@ -850,9 +896,24 @@ Page({
         if (cellQtys[cellKey(size)] == null) cellQtys[cellKey(size)] = ''
       })
     }
-    // 单价 / skuId 追平。判据照抄 applyProductState 的 keepPrice：参照 SKU 没变就留着
-    // 店主已经改过的价，换了参照 SKU 才追平到新的 salePrice（product 恒等于当前商品，
-    // 所以那条 productId 比较在这里是恒真的，省掉）。
+    // 单价 / skuId 追平。**判据分两套，按路径分**——这是 22:231 的裁定，不是漏改：
+    //
+    //   · 多选态内增删格（wasMulti && isMulti）：判据是「店主动过这个框没有」
+    //     （priceTouched）。多选态的价是「整批一个价」，店主填了就是他要的批价，不该
+    //     被增删一格冲掉；没填过就追平到新的第一枚选中格。
+    //     **这条路不能用下面那套 skuId 判据**：进/留在多选态时写进 data 的 skuId 恒为
+    //     空串（见下），而 refSku.id 非空，那个等式在这条路上**结构性恒假**——
+    //     2026-09-03 实测：多选态手改 88，点掉一格就无声变回 69，屏上没有任何提示。
+    //
+    //   · 两条过渡路径（T4 = 0/1→多选、T5 = 多选→0/1）：判据仍是「参照 SKU 变没变」，
+    //     **故意不换成 priceTouched**。T4 从单选带着那一格的价进来，参照格没变就该留着
+    //     （skuId 此时是真的 SKU id，等式判得出来）；T5 回落到某一格就该按那一格的档价
+    //     记账——与 pickSize 单选分支走 applyProductState 的结果同形，而
+    //     tests/ui.test.js:1990 逐字钉着「单选形态点规格二一律追平」（#127「按错价
+    //     记账」回归的专用闸）。把 priceTouched 扩到 T5 会从这个方向把那条闸拆掉。
+    //
+    // 两条判据并存不矛盾：单选态每次点格子就是在挑那一个 SKU，价该跟着走；多选态的价
+    // 是整批一个价，店主填了就是他要的。
     //   · 进/留在多选态：参照 SKU = 第一枚选中格（返工裁定：多选态单价的默认值取该格
     //     SKU 售价，不是商品档价，与单选形态取值逻辑一致；用户仍可改，仍是整批一个价）。
     //     写进 data 的 skuId 记空串——多选态没有「当前唯一 SKU」（currentSku 在 |Z| != 1
@@ -863,14 +924,15 @@ Page({
     const refSku = isMulti
       ? this.firstSelectedSku(product, nextSizes)
       : this.firstSelectedSku(product, nextSizes.slice(0, 1))
-    const keepPrice = !!this.data.unitPrice && this.data.skuId === (refSku ? refSku.id : '')
+    const keepPrice = (wasMulti && isMulti)
+      ? (!!this.data.priceTouched && !!this.data.unitPrice)
+      : (!!this.data.unitPrice && this.data.skuId === (refSku ? refSku.id : ''))
     this.setData(Object.assign(this.sizeSelectionPatch(nextSizes), {
       cellQtys: cellQtys,
       qty: qty,
       batchQty: batchQty,
-      skuId: (isMulti || !refSku) ? '' : refSku.id,
-      unitPrice: keepPrice ? this.data.unitPrice : String(refSku ? refSku.salePrice : product.salePrice)
-    }))
+      skuId: (isMulti || !refSku) ? '' : refSku.id
+    }, this.pricePatch(keepPrice, refSku, product)))
     this.recomputeAfterSpecChange(product)
   },
 
@@ -901,6 +963,11 @@ Page({
     const value = e.detail.value
     const patch = {}
     patch[field] = value
+    // 「本次售价」是这个通用入口里唯一带**归属**的字段：店主一动这个框，换规格一就不许
+    // 再无声把他填的价冲掉（22:231）。这里是唯一的置位点——wxml 的 .js-batch-price 和
+    // .js-single-price 两个输入框都绑 onField、都带 data-field="unitPrice"，手打的价
+    // 进不来别的路。复位统一在 pricePatch，不在这里。
+    if (field === 'unitPrice') patch.priceTouched = true
     this.setData(patch)
     this.applySettle(this.linePatch(this.data.cart))
   },
@@ -1319,6 +1386,13 @@ Page({
           cart: [],
           // T11 同形：selectedSizes/单价保留，逐格草稿与「全部填」清空（qty 只在
           // 单选态有意义，两边都清不影响对方）。
+          //
+          // **priceTouched 不在这里复位**，跟着单价一起留（下面那个成功分支同理）。
+          // 别照抄旁边的 paidTouched：两个标志的读法不一样。paidAmount 只在 paidTouched
+          // 为真时才被读（settlePatch 里那个三元），所以复位它等于把框还给系统；而
+          // unitPrice 是无条件读的，这里又明明把店主填的价原样留在了框里 —— 复位掉
+          // 就等于「屏上还是他的 88，归属却记成系统的」，下一张单他换个颜色，那 88 会
+          // 自己变成档价，正是本次要修的形态。标志的口径是「框里这个值是不是人填的」。
           qty: '',
           cellQtys: {},
           batchQty: '',
