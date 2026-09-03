@@ -640,52 +640,111 @@ assert.strictEqual(t3.data.unitPrice, String(pBlackM.salePrice),
 // （2026-09-04 审计 N1：这道守卫之前没有任何断言盯着，放宽它 `npm test` 全绿。）
 const guard = multiOnBlack()
 typeField(guard, 'qty', '3')
-assert.strictEqual(guard.data.qty, '3', '前提：onField 确实把 qty 写进去了（探针没坏）')
+assert.strictEqual(guard.data.qty, '3', '\u524d\u63d0\uff1aonField \u786e\u5b9e\u628a qty \u5199\u8fdb\u53bb\u4e86\uff08\u63a2\u9488\u6ca1\u574f\uff09')
+assert.notStrictEqual(
+  String(pBlackM.salePrice), String(pWhiteM.salePrice),
+  '前提：进入值（黑 M 档价）不许等于期望值（白 M 档价），否则下面那条追平断言恒真'
+)
 assert.strictEqual(
   guard.data.priceTouched, false,
-  '往「数量」框里打字不得把 priceTouched 置位——onField 是通用入口，'
-    + 'remark / qty / unitPrice 都走它；守卫一旦放宽，系统写的价会被当成'
-    + '店主手填的保留下来，换颜色不再追平（就是本次要修的错账形态）'
+  '往「数量」框里打字不得把 priceTouched 置位（false → true）'
 )
-// 守卫没坏的话，打完数量再换颜色仍然要追平。
 tapColor(guard, '\u767d\u8272')
 assert.strictEqual(
   guard.data.unitPrice, String(pWhiteM.salePrice),
   '打过数量之后换规格一，仍然要追平到 ' + pWhiteM.salePrice
-    + '，实为 ' + guard.data.unitPrice + '——数量框不该影响售价的归属'
+    + '，实为 ' + guard.data.unitPrice
+)
+
+// 上面只盯住了 false → true。**反方向同样是真钱的 bug**：店主先手打 88，
+// 再去数量框敲个数，归属被无声清掉，接着换颜色 88 就变成档价。
+// （2026-09-04 审计 F2：只钉单向时，「打 qty 顺手清掉标志」这种改法全套绿。）
+const guardBack = multiOnBlack()
+typePrice(guardBack, '88')
+assert.strictEqual(guardBack.data.priceTouched, true, '前提：先把归属打成店主的')
+typeField(guardBack, 'qty', '3')
+assert.strictEqual(
+  guardBack.data.priceTouched, true,
+  '往「数量」框里打字也不得把已经置位的 priceTouched 清掉（true → false）——'
+    + '清掉之后换颜色就会把店主手填的价冲掉'
+)
+tapColor(guardBack, '\u767d\u8272')
+assert.strictEqual(
+  guardBack.data.unitPrice, '88',
+  '打过数量之后换规格一，店主手填的 88 必须还在，实为 ' + guardBack.data.unitPrice
+)
+
+// `remark` 也绑在 onField 上（sale.wxml）。上面的断言文案引用了它来给自己背书，
+// 那就得真测它——否则就是本仓记过的「断言不要吹过头」。
+// （审计 F2：守卫写成 `field !== 'qty'`（即 remark 也置位）时全套绿。）
+const guardRemark = multiOnBlack()
+typeField(guardRemark, 'remark', '备注')
+assert.strictEqual(
+  guardRemark.data.priceTouched, false,
+  '往「备注」框里打字同样不得置位 priceTouched'
+)
+tapColor(guardRemark, '\u767d\u8272')
+assert.strictEqual(
+  guardRemark.data.unitPrice, String(pWhiteM.salePrice),
+  '打过备注之后换规格一，仍然要追平到 ' + pWhiteM.salePrice
+)
+const guardRemarkBack = multiOnBlack()
+typePrice(guardRemarkBack, '88')
+typeField(guardRemarkBack, 'remark', '备注')
+assert.strictEqual(
+  guardRemarkBack.data.priceTouched, true,
+  '往「备注」框里打字也不得清掉已置位的 priceTouched'
 )
 
 // --- (2c) 标志是「谁写的」，不是「等不等于档价」 ----------------------
-// data 的注释声明这个标志**不是**派生量（`unitPrice !== 档价`）。两者在绝大多数
-// 时候结果相同，**只有店主手打的数恰好等于参照格档价时才分得开**：
-// 派生量会判「没改过」、于是下一次换规格一把他的数冲掉。
-// 上面 (3) 那组用的是 88（刻意不等于档价），恰恰避开了这个分辨点。
-// （2026-09-04 审计 N2。）
-const same = multiOnBlack()
-// 关键：手打的数要等于**换过去之后**那一格的档价（白 M = 59），不是换之前的（黑 M = 69）。
-// 我第一版打的是 69，而换白色时派生量判的是 `69 !== 59` —— 也为真、也保留，
-// 两种实现给出同一个结果，这一组当场变成空转。分辨点在「追平目标」上，不在「当前值」上。
-typePrice(same, String(pWhiteM.salePrice))
+// `pages/sale/sale.js` 那条 data 注释声明这个标志**不是**派生量，并给了两条理由：
+// 「店主完全可以手打一个恰好等于档价的数」、「也可以手打完再改回来」。
+// **这两条就是下面要钉的东西。**
+//
+// 【为什么要分两组】「派生量」有两种自然写法，杀伤完全不同：
+//   D1 = 和**追平目标**（新参照格）比 —— 它顺手把多选态换色的追平也废了，
+//        组 (1) 当场就红，轮不到这里。
+//   D2 = 和**值的来源格**（旧参照格）比 —— 语义上更贴近「这个值是不是人填的」，
+//        而且它会把组 (1)(3) 全部蒙混过去。
+// 只钉 D1 等于没钉：2026-09-04 审计实测 D2 下 **全套绿**，而店主明明手打了 69、
+// 单据却按 59 出货。下面前两组专杀 D2（分辨点在**值**上），第三组补 D1。
+//
+// （我曾把第一组删掉、只留第三组，结果删掉的恰恰是唯一有独占杀伤的那一条。）
+
+// (2c-1) 注释第一条理由：手打一个恰好等于**当前**参照格档价的数。
+const sameSrc = multiOnBlack()
+typePrice(sameSrc, String(pBlackM.salePrice))
+assert.strictEqual(sameSrc.data.priceTouched, true, '前提：手打就是手打，哪怕值等于档价')
+tapColor(sameSrc, '\u767d\u8272')
 assert.strictEqual(
-  same.data.priceTouched, true,
-  '手打的数恰好等于档价时，归属仍然是店主的——标志记的是「谁写的」，'
-    + '不是「等不等于档价」；写成派生量的话这里会判成 false'
+  sameSrc.data.unitPrice, String(pBlackM.salePrice),
+  '店主手打的数恰好等于**当前**参照格档价时，换规格一仍要保留 '
+    + pBlackM.salePrice + '，实为 ' + sameSrc.data.unitPrice
+    + '——被追平成 ' + pWhiteM.salePrice + ' 就说明标志被写成了「和来源格比」那种派生量'
 )
-tapColor(same, '\u767d\u8272')
-// 值这一层分不出来：手打 59、追平目标也是 59，两种实现的 unitPrice 都是 59。
-// **唯一的分辨点是标志本身**——真实现走「保留」，标志留 true；派生量实现判
-// `59 !== 59` 为假、走「追平」，pricePatch 会把标志复位成 false。
-assert.strictEqual(same.data.unitPrice, String(pWhiteM.salePrice), '前提：这一步两种实现的值相同，所以只能看标志')
+assert.strictEqual(sameSrc.data.priceTouched, true, '保留时归属也要原样留住')
+
+// (2c-2) 注释第二条理由：手打完再改回来。
+const typedBack = multiOnBlack()
+typePrice(typedBack, '88')
+typePrice(typedBack, String(pBlackM.salePrice))
+tapColor(typedBack, '\u767d\u8272')
 assert.strictEqual(
-  same.data.priceTouched, true,
-  '手打的数恰好等于追平目标时，走的仍然必须是「保留」那条路（标志留 true）；'
-    + '写成派生量 `unitPrice !== 档价` 的话这里判假、走追平、标志被复位成 false。'
-    + '值这一层看不出差别，只有标志看得出'
-    + '——被追平成 ' + pWhiteM.salePrice + ' 就说明标志被写成了派生量'
+  typedBack.data.unitPrice, String(pBlackM.salePrice),
+  '手打 88 再改回 ' + pBlackM.salePrice + ' 之后，那仍然是店主填的数，'
+    + '换规格一不得追平，实为 ' + typedBack.data.unitPrice
 )
-assert.notStrictEqual(
-  String(pBlackM.salePrice), String(pWhiteM.salePrice),
-  '前提：两格档价不许相等，否则这组分不出「保留」和「追平」'
+
+// (2c-3) 补 D1（和追平目标比）。这一组值这一层两种实现相同，
+// 分辨点只在标志上——**仅限本场景如此**，不是普遍的（上面两组就分在值上）。
+// 主杀伤不在这一条身上，D1 其实在组 (1) 就会先红；留着作为补钉。
+const sameTgt = multiOnBlack()
+typePrice(sameTgt, String(pWhiteM.salePrice))
+tapColor(sameTgt, '\u767d\u8272')
+assert.strictEqual(sameTgt.data.unitPrice, String(pWhiteM.salePrice), '前提：这一步两种实现的值相同')
+assert.strictEqual(
+  sameTgt.data.priceTouched, true,
+  '手打的数恰好等于追平目标时，走的仍必须是「保留」那条路（标志留 true）'
 )
 
 // --- (3) 店主手改过单价 → 换规格一保留他填的 ---------------------------------
