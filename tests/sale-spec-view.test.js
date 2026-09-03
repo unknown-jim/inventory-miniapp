@@ -979,13 +979,17 @@ assert.strictEqual(
 
 // --- (7c) 回填 + 档价**没**变 → 值不变，不制造无谓的抖动 ----------------------
 // **两条，杀伤不一样，别只留一条**：
-//   7c-1 只钉值。它在**单选态**里两种实现给的是同一个数（没手改过时框里那个值本来就
-//        等于追平目标），所以它抓不到「判据写坏」那一类。**它没有独占杀伤**——2026-09-04
-//        审计实测：能让它红的变异只有两个，都同时把别的组也打红——
-//          · pricePatch 函数体里忽略 refSku  → 同时红 (1)/(6a)/(6b)/(7a)/(7d)
-//          · 调用点把 refSku 换成 null       → 同时红 (6a)/(6b)/(7a)/(7d)（组 (1) 是绿的）
-//        留着是当可读文档，不是当闸；真正守「参照格取错」的是 (6a)/(6b)/(7a)/(7d)。
-//        —— 说清它盖不到什么，免得后人拿它当护身符。
+//   7c-1 钉值 + 钉参照格身份（`skuId` 不该变）。它在**单选态**里两种实现给的是同一个数
+//        （没手改过时框里那个值本来就等于追平目标），所以它抓不到「判据写坏」那一类。
+//        **没找到只让它红的变异**——2026-09-04 两轮审计跑过的变异里，每一个能让它红的
+//        都同时打红了别的组（pricePatch 忽略 refSku、调用点把 refSku 换 null、
+//        回填时 skuId 写死空串，都是如此）。
+//
+//        这句话只能说到这儿：**「我跑过的变异里没有」不等于「不存在」**，别写成
+//        「只有两个变异能让它红」那种穷不尽的断言——上一版就是这么写的，复审第一次试
+//        就找到第三个。同理，这里不列「谁在守参照格取错」的清单：清单会漏（上一版漏了
+//        本文件自己新加的 (7h)），而漏掉的那条正是后人会误删的那条。
+//        留着是当可读文档，不是当闸——说清它盖不到什么，免得后人拿它当护身符。
 //   7c-2 钉的是**走了哪条路**：手打一个恰好等于档价的数，值这一层两种实现相同，
 //        分辨点在归属上。走「追平」那条路 priceTouched 会被复位成 false，
 //        而店主明明动过这个框。这一条抓的是「回填一律追平」那类实现。
@@ -1053,17 +1057,32 @@ assert.strictEqual(
 )
 assert.strictEqual(switchCell.data.skuId, pBlackL.id, 'skuId 也要跟上')
 
-// (7f) 全不选后回填退回商品档价（多选态入口）——顺带行为改变，声明 + 钉住：`pickAllSizes` 的「全不选」支不写单价，框里会留着
-// 上一批的价；本次修复让下一次回填把它退回商品档价（此时没有参照格）。
+// --- (7f) 全不选后回填退回商品档价（多选态入口）-----------------------------
+// 顺带行为改变，声明 + 钉住：`pickAllSizes` 的「全不选」支不写单价，框里会留着上一批的
+// 价；本次修复让下一次回填把它退回商品档价（此时没有参照格）。
 // 改动前是 69 → 回填后仍 69；改动后是 69 → 回填后 39。
-// 这与 (7d) 钉的规则一致（没有参照格就退回商品档价），但入口不同：(7d) 从单选态点掉
-// 规格二进来，本条从多选态全不选进来。**两个入口都要守**——实测有变异只从这一个漏：
+// **只有「没手改过」时与 (7d) 同结果**，别把这两条读成同一条规则——手改过时它们相反，
+// 而且是既有行为，本次不动（复审实测，base 与 fix 一致）：
 //
-//     keepPrice = sameRefCell && (isMulti || priceTouched || !sku)   ← 加一项 `|| !sku`
+//   · 本条这个入口（多选态全不选）：skuId 两边都是空串 → sameRefCell 判真 →
+//     priceTouched 让它**保留**店主填的价。
+//   · (7d) 那个入口（单选态点掉规格二）：skuId 是旧格 id、参照格没了 → sameRefCell
+//     判假 → **一律追平**，这是 #127 那条闸。
 //
-// 这个变异下 (7a)/(7b)/(7d)/(7e) **全绿**，只有本条红：
-//     「全不选之后回填：没有参照格了，单价应当退回商品档价 39，实为 69」
-// 所以本条**有独占杀伤**，不是纯文档。
+// 同一个屏上状态（没选规格二 + 手打过价），两个入口结果不同。要不要抹平是另一轮的事。
+// 本条只覆盖「没手改过」那一半，下面的断言也只断这一半。
+//
+// 两个入口都得有闸。本条**有独占杀伤**，不是纯文档——2026-09-04 实测，这个变异下
+// (7a)/(7b)/(7d)/(7e)/(7g)/(7h)/(7i) 全绿，只有本条红：
+//
+//     keepPrice = sameRefCell && (isMulti || priceTouched || (hasSpecs && !sku))
+//
+// 红文：「全不选之后回填：没有参照格了，单价应当退回商品档价 39，实为 69」。
+//
+// （更粗的 `|| !sku` 会同时打红 (7i)——那条守的是无规格商品同一形态。所以要分开二者，
+// 变异得带上 `hasSpecs`。这一句在本文件里改过两次：先是漏写了独占杀伤，再是把 `|| !sku`
+// 说成「只从这一个漏」，而 (7i) 补进来之后它就不成立了。**加断言会让旧的杀伤陈述过期**，
+// 不重跑就会留下一句错话。）
 //
 // 上一版这里两处都写错了，一起记下来当反面教材：
 //   1. 夹具用 singleOnBlackM（skuId = 该格 id）——那是**不可达形态**。全不选只在多选态
@@ -1090,22 +1109,33 @@ assert.strictEqual(switchCell.data.skuId, pBlackL.id, 'skuId 也要跟上')
   assert.strictEqual(page.data.unitPrice, String(cell.salePrice), '前提：全不选本身不改单价')
   assert.notStrictEqual(String(cell.salePrice), String(fx.product.salePrice),
     '前提：该格档价不许等于商品档价，否则本条分不出「退回」和「没动」')
-  page.applyProductState(fx.product, '黑色', [], [])
+  // 走 onShow 的真入口 `selectProduct(同 id)`，不手搭 applyProductState 的参数——
+  // (7g) 上一版正是栽在手搭出不可达形态上。
+  page.selectProduct(fx.product.id)
   assert.strictEqual(page.data.unitPrice, String(fx.product.salePrice),
     '全不选之后回填：没有参照格了，单价应当退回商品档价 ' + fx.product.salePrice
-      + '，实为 ' + page.data.unitPrice + '——这是本次修复带来的顺带改变，'
-      + '与 (7d)「没有参照格就退回商品档价」同一条规则')
+      + '，实为 ' + page.data.unitPrice + '——这是本次修复带来的顺带改变。'
+      + '没手改过时与 (7d) 同结果；手改过时两个入口相反，那是既有行为，本条不覆盖')
 })()
 
 // --- (7g) 换商品：手改过的价不许跟着跨到另一个商品上 -------------------------
 // `sameRefCell` 三项里 `this.data.productId === product.id` 那一项，2026-09-04 审计实测
-// 删掉之后**整个 `npm test` 仍然 exit=0**（27 个文件全绿），而穷举 112,896 组里有 7,128
-// 组行为不同。base 上就有这个洞（base 的判据内联着同两项），本次改动既没造成也没加重，
+// 删掉之后**整个 `npm test` 仍然 exit=0**（全部测试文件绿），而穷举差分能跑出成千组行为
+// 不同——不是死代码，是没人测。（这里不写具体组数：那个网格的维度没有记在仓里，谁都复核
+// 不了；两轮审计各用自己的网格独立跑出了同一个定性结论。）
+// base 上就有这个洞（base 的判据内联着同两项），本次改动既没造成也没加重，
 // 但这一行现在归本次改动管，就地补上。
 //
-// 漏的形态：多选态下 `skuId` 恒为空串，换商品之后 `'' === ''` 仍判真——少了 productId
-// 那一项，A 商品手填的批价会**原样带到 B 商品**，屏上没有任何提示。按它出货就是拿 A 的
-// 价记 B 的账。
+// 漏的形态：`skuId` 两边都是空串（进来之前在多选态所以是空串，换完商品 sku 为 null 也是
+// 空串），`'' === ''` 判真——少了 productId 那一项，A 商品手填的批价会**原样带到 B 商品**，
+// 屏上没有任何提示。按它出货就是拿 A 的价记 B 的账。
+//
+// **必须走 `selectProduct` 这个真入口。** `applyProductState` 全仓三个调用点，
+// `this.data.productId !== product.id` 只可能来自 `selectProduct` 的 `same === false` 支，
+// 而那一支传的是 `('', [], cart)`——颜色空、尺码空。上一版这里手搭了「换完商品还停在
+// 多选态」的参数，那是 `selectProduct` 永远不会产生的形态，于是只挡住了 `isMulti` 那一支，
+// 真实泄漏走的是 `priceTouched` 那一支：复审拿 M13（productId 只守 isMulti）实测，
+// **整套 `npm test` 全绿**而 888 原样进了 B 商品。
 ;(function assertPriceDoesNotCrossProducts() {
   const fx = repriceFixture()
   const typed = '888'
@@ -1116,16 +1146,19 @@ assert.strictEqual(switchCell.data.skuId, pBlackL.id, 'skuId 也要跟上')
     multiMode: true, skuId: '', unitPrice: typed, priceTouched: true,
     cellQtys: { 'v:M': '1', 'v:L': '2' }, batchQty: ''
   }, fx)
-  page.applyProductState(fx.product, '黑色', ['M', 'L'], [])
+  page.selectProduct(fx.product.id)
+  assert.deepStrictEqual(page.data.selectedSizes, [],
+    '前提：换商品走的是 same===false 那一支，选中尺码被清空——这一条就是要测那个形态')
+  assert.strictEqual(page.data.selectedColor, '', '前提：颜色同样被清空')
   assert.strictEqual(page.data.unitPrice, String(fx.product.salePrice),
     '换到另一个商品，手填的 ' + typed + ' 必须被冲掉、追平到新商品档价 '
       + fx.product.salePrice + '，实为 ' + page.data.unitPrice
-      + '——多选态 skuId 两边都是空串，只有 productId 那一项拦得住')
+      + '——换完之后 skuId 两边都是空串，只有 productId 那一项拦得住')
 })()
 
 // --- (7h) 价格框被清空 → 回填要把档价填回来，不许留空 -------------------------
 // `sameRefCell` 的 `!!this.data.unitPrice` 那一项，同一轮审计实测：删掉全套仍绿，
-// 穷举差 1,224 组。漏的形态：店主把价格框清空（onField 记 priceTouched=true、
+// 穷举差分同样跑得出行为差异。漏的形态：店主把价格框清空（onField 记 priceTouched=true、
 // unitPrice=''），再 onShow 回填——少了这一项就判成「他手改过，保留」，于是保留一个
 // **空串**，价格框一直空着。
 ;(function assertClearedPriceRefills() {
@@ -1138,10 +1171,36 @@ assert.strictEqual(switchCell.data.skuId, pBlackL.id, 'skuId 也要跟上')
   typePrice(page, '')
   assert.strictEqual(page.data.unitPrice, '', '前提：框已清空')
   assert.strictEqual(page.data.priceTouched, true, '前提：清空也算动过这个框')
-  page.applyProductState(fx.product, '黑色', ['M'], [])
+  page.selectProduct(fx.product.id)   // 同上，走真入口
   assert.strictEqual(page.data.unitPrice, String(cell.salePrice),
     '框被清空之后回填，应当把该格档价 ' + cell.salePrice + ' 填回来，实为「'
       + page.data.unitPrice + '」——保留空串等于让店主对着空价格框出货')
+})()
+
+// --- (7i) 无规格商品：同一条修复也覆盖它 -----------------------------------
+// 复审指出这是本次改动**未声明的行为延伸**：`applyProductState` 里 `hasSpecs === false`
+// 时 color/sizes 被清空、`sku` 恒为 null，走的仍是同一个 `sameRefCell`。改动前回填保留
+// 框里的旧值，改动后没手改过就重新取**商品档价**。方向与本次修复一致（店主改了档价，
+// 回销售页要跟着走），但 sale.js 那段规则只写了「该格档价」和单选/多选，没提这一形态。
+// 在这里声明并钉住——顺带证明「没有规格」不是绕过这条修复的通道。
+;(function assertNoSpecProductAlsoReprices() {
+  const bare = inv.createProduct({
+    name: '毛巾', costPrice: 4, salePrice: 12, stock: 20, alertQty: 2, colors: [], sizes: []
+  }, 2000, 'p-bare')
+  const fx = { product: bare, skus: [] }
+  const page = saleHarness({
+    productId: bare.id, selectedColor: '', selectedSizes: [],
+    multiMode: false, skuId: '', unitPrice: '12', priceTouched: false
+  }, fx)
+  assert.strictEqual(inv.productHasSpecs(bare), false, '前提：这是无规格商品')
+  // 店主去商品编辑把档价 12 改成 15，回销售页 onShow → selectProduct(同 id)
+  const repriced = Object.assign({}, bare, { salePrice: 15 })
+  fx.product = repriced
+  page.data.products = [repriced]
+  page.selectProduct(repriced.id)
+  assert.strictEqual(page.data.unitPrice, '15',
+    '无规格商品改了档价，回填也要跟着更新到 15，实为 ' + page.data.unitPrice
+      + '——没有规格不该成为绕过这条修复的通道')
 })()
 
 // --- (7e) 多选态回填不许被「过期判定」打回商品档价 ----------------------------
