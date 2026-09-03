@@ -88,7 +88,8 @@ G1 契约把一个被两个语义共用的数拆成两个函数：`settledAmount
 ### 已知未修（同一类，按需求排期，不是遗漏）
 
 - **`pages/purchase/purchase.js:187` 进价上有同型缺陷。** 判据 `productId 同 && unitPrice
-  非空 && skuId === nextSkuId` 与销售页改之前一字不差，`onShow` 路径同形。**但那一页没有
+  非空 && skuId === nextSkuId` 与销售页改之前**同型**（字面略有出入：那边是
+  `this.data.unitPrice` 不带 `!!`、`nextSkuId` 不是 `sku ? sku.id : ''`），`onShow` 路径同形。**但那一页没有
   `priceTouched`**（全仓只有 `sale.js` 有），三个写入口都不留归属，直接照抄销售页的修法会
   把店主手填的进价冲掉。要先把归属标志那套搬过去，不是一行改动。
 - **多选态自己的档价过期没解决。** 多选态整个跳过上面那道判定（`sku` 恒为 null、该追平到

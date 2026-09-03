@@ -759,6 +759,9 @@ Page({
     // （applySizeSelection / pickColor 多选支写的）。不加这道闸，每次 onShow 回填会把
     // 整批价从 69 打回商品档价 39（已由 (7e) 钉死）。**多选态自己的档价过期问题
     // 仍在**，另算，这里不冒充解决。
+    //
+    // **无规格商品同单选态**：`hasSpecs === false` 时 color/sizes 被清空、`sku` 恒为 null，
+    // 走同一个 `sameRefCell`，没手改过就退回商品档价、手改过就保留。钉子 (7i)/(7j)。
     const isMulti = sizesSel.length >= 2
     const sameRefCell = this.data.productId === product.id && !!this.data.unitPrice
       && this.data.skuId === (sku ? sku.id : '')
