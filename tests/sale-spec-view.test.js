@@ -409,7 +409,11 @@ assert.notStrictEqual(
 // 一个对象就能在 Node 里执行。这样断言盯的是源码本身，不是一份转写。
 function makeHarnessMethods() {
   const names = [
-    'pricePatch', 'applyProductState', 'applySizeSelection', 'pickColor', 'pickSize',
+    // selectProduct 是 onShow 回填的原路（onShow 末尾 `this.selectProduct(this.data.productId)`），
+    // 抽进来是为了让「离开页面再回来」那组断言走真入口，而不是直接调 applyProductState
+    // 自己替它决定 same / selectedColor / selectedSizes 三个参数——那等于把被测的分支
+    // 判断转写进测试里。
+    'pricePatch', 'applyProductState', 'selectProduct', 'applySizeSelection', 'pickColor', 'pickSize',
     'pickAllSizes', 'onField', 'firstSelectedSku', 'sizeSelectionPatch', 'singleSelectedSize',
     'currentSku', 'currentLines', 'toCartItem'
   ]
@@ -859,6 +863,247 @@ assert.strictEqual(singleSize.data.unitPrice, String(pBlackM.salePrice),
     + '把换规格一的「手改过就保留」判据扩到这里会当场推翻它')
 assert.strictEqual(singleSize.data.priceTouched, false, '追平了就要复位归属')
 assert.strictEqual(singleSize.data.skuId, pBlackM.id, 'skuId 也要跟上')
+
+// ===========================================================================
+// onShow 回填：参照格**身份**没变、**档价**变了（22:231）
+// ===========================================================================
+//
+// 病灶（实测复现，不是推测）：applyProductState 的 keepPrice 只判「还是不是同一枚
+// SKU」。店主选中黑 M（系统追平到 69），中途去商品编辑把**这一格**的档价改成 79，
+// 回销售页 onShow → selectProduct(同一 id) → applyProductState —— 参照格身份没变，
+// 判真，框里留着过期的 69。
+//
+// 危害形态与本仓其它价格 bug 不同，也更重：屏上那个 69 看上去完全正常，只是过期了，
+// 没有任何异常提示。按它出货，销售额 / 毛利 / 欠款三个数一起错 —— 静默错账。
+//
+// 裁定（22:231 逐字）：「没手改过就重新取该格档价，手改过就保留」。
+//
+// 下面这组要在两次调用之间**改档价**，不能碰上面那份被十几处共用的 priced 夹具。
+function repriceFixture() {
+  const fx = makePricedFixture()
+  return {
+    product: fx.product,
+    skus: fx.skus,
+    cell: function (color, size) {
+      const found = inv.findSkuBySpec(fx.skus, fx.product.id, color, size)
+      assert.ok(found, '夹具前提：找得到「' + color + ' · ' + size + '」这一格')
+      return found
+    },
+    // 模拟「店主去商品编辑改了这一格的档价」+ 回页面时 onShow 重新 store.getSkus()：
+    // **换掉数组里那一枚**，不是原地改字段 —— 顺带证明实现判的是身份（id）与值，
+    // 没有偷偷靠对象同一性。data.skus 与 fx.skus 是同一个数组引用（saleHarness 里
+    // `skus: fixture.skus`），所以这一换页面侧立刻看得见，与 onShow 的时序同形。
+    reprice: function (color, size, price) {
+      let idx = -1
+      fx.skus.forEach(function (item, i) {
+        if (item.productId === fx.product.id && item.color === color && item.size === size) idx = i
+      })
+      assert.ok(idx >= 0, '夹具前提：找得到要改价的「' + color + ' · ' + size + '」这一格')
+      const next = Object.assign({}, fx.skus[idx], { salePrice: price })
+      fx.skus[idx] = next
+      return next
+    }
+  }
+}
+
+// 单选态选中黑 M、价由系统追平写进去（归属在系统手里）的起手式。
+function singleOnBlackM(fx, extra) {
+  const cell = fx.cell('黑色', 'M')
+  return saleHarness(Object.assign({
+    selectedColor: '黑色', selectedSizes: ['M'], multiMode: false,
+    skuId: cell.id, unitPrice: String(cell.salePrice), priceTouched: false
+  }, extra || {}), fx)
+}
+
+// --- (7a) 回填 + 档价变了 + 没手改过 → 重新取该格档价 ------------------------
+const staleFx = repriceFixture()
+const staleBefore = staleFx.cell('黑色', 'M')
+const stale = singleOnBlackM(staleFx)
+assert.strictEqual(stale.data.unitPrice, '69', '前提：进入值是黑 M 的旧档价 69')
+assert.strictEqual(stale.data.priceTouched, false, '前提：这个值是系统写的，店主没动过')
+const staleAfter = staleFx.reprice('黑色', 'M', 79)
+assert.strictEqual(
+  staleAfter.id, staleBefore.id,
+  '前提：改的必须是**同一枚 SKU**（身份没变、只有档价变了）——身份也变了的话 skuId '
+    + '判据自己就判假了，这一组测不到要测的东西'
+)
+assert.notStrictEqual(
+  String(staleAfter.salePrice), stale.data.unitPrice,
+  '前提：进入值（' + stale.data.unitPrice + '）不许等于期望值（' + staleAfter.salePrice
+    + '）——相等的话「回填要重新取档价」这条断言恒真，实现什么都不做也能过'
+)
+// onShow 的原路：`this.selectProduct(this.data.productId)`。
+stale.selectProduct(staleFx.product.id)
+assert.strictEqual(
+  stale.data.skuId, staleBefore.id,
+  '前提：回填之后参照格仍是同一枚 SKU——这一组钉的正是「身份没变、内容变了」，'
+    + 'skuId 要是跟着变了就说明夹具没造出要测的形状'
+)
+assert.strictEqual(
+  stale.data.unitPrice, '79',
+  '店主改了这一格的档价（69 → 79），回销售页 onShow 回填时单价必须跟着更新到 79，'
+    + '实为 ' + stale.data.unitPrice + '——停在旧价看上去完全正常、只是过期了，'
+    + '按它出货就是静默错账（销售额 / 毛利 / 欠款一起错）'
+)
+assert.strictEqual(
+  stale.data.priceTouched, false,
+  '重新取的是档价，归属仍在系统手里——写成 true 的话下一次换规格一会把这个系统'
+    + '写进去的价当成「店主手改的」保留住'
+)
+
+// --- (7b) 回填 + 档价变了 + **手改过** → 保留他填的 --------------------------
+const heldFx = repriceFixture()
+const held = singleOnBlackM(heldFx)
+typePrice(held, '88')
+assert.strictEqual(held.data.priceTouched, true, '前提：先手改一次')
+const heldAfter = heldFx.reprice('黑色', 'M', 79)
+assert.notStrictEqual(
+  String(heldAfter.salePrice), '88',
+  '前提：手改的价不许恰好等于新档价，否则「保留」和「重新取档价」分不出来'
+)
+assert.notStrictEqual(
+  String(heldFx.product.salePrice), '88',
+  '前提：手改的价也不许等于商品档价，否则「保留」和「退回商品档价」分不出来'
+)
+held.selectProduct(heldFx.product.id)
+assert.strictEqual(
+  held.data.unitPrice, '88',
+  '店主手改过本次售价之后，就算这一格的档价在商品编辑里被改了，回填也必须保留他填的 88，'
+    + '实为 ' + held.data.unitPrice + '——判据是「没手改过才重新取档价」（22:231）'
+)
+assert.strictEqual(
+  held.data.priceTouched, true,
+  '保留的时候归属不变，还是店主的——收走的话他离开页面回来一趟，'
+    + '那个 88 在下一次换规格一时就会被无声冲掉'
+)
+
+// --- (7c) 回填 + 档价**没**变 → 值不变，不制造无谓的抖动 ----------------------
+// **两条，杀伤不一样，别只留一条**：
+//   7c-1 只钉值。它在**单选态**里两种实现给的是同一个数（没手改过时框里那个值本来就
+//        等于追平目标），所以它抓不到「判据写坏」那一类。**它没有独占杀伤**——2026-09-04
+//        审计实测：唯一能让它红的变异（pricePatch 忽略 refSku）同时也让组 (1)/(6b)/
+//        (7a)/(7d) 变红。留着是当可读文档，不是当闸；真正守「参照格取错」的是别处
+//        上（把 pricePatch 的 refSku 换成 null 之类，回填会把价打回商品档价 39）。
+//        —— 说清它盖不到什么，免得后人拿它当护身符。
+//   7c-2 钉的是**走了哪条路**：手打一个恰好等于档价的数，值这一层两种实现相同，
+//        分辨点在归属上。走「追平」那条路 priceTouched 会被复位成 false，
+//        而店主明明动过这个框。这一条抓的是「回填一律追平」那类实现。
+const steadyFx = repriceFixture()
+const steadyCell = steadyFx.cell('黑色', 'M')
+const steady = singleOnBlackM(steadyFx)
+assert.notStrictEqual(
+  String(steadyCell.salePrice), String(steadyFx.product.salePrice),
+  '前提：该格档价（' + steadyCell.salePrice + '）必须不等于商品档价（'
+    + steadyFx.product.salePrice + '），否则 7c-1 连「参照格取错」都抓不到，纯装饰'
+)
+steady.selectProduct(steadyFx.product.id)
+assert.strictEqual(
+  steady.data.unitPrice, String(steadyCell.salePrice),
+  '档价没变的回填不许改动框里的值，应当仍是 ' + steadyCell.salePrice + '，实为 '
+    + steady.data.unitPrice
+)
+assert.strictEqual(steady.data.skuId, steadyCell.id, '参照格也不该变')
+
+const steadyTypedFx = repriceFixture()
+const steadyTypedCell = steadyTypedFx.cell('黑色', 'M')
+const steadyTyped = singleOnBlackM(steadyTypedFx)
+typePrice(steadyTyped, String(steadyTypedCell.salePrice))
+assert.strictEqual(steadyTyped.data.priceTouched, true, '前提：手打就是手打，哪怕值等于档价')
+steadyTyped.selectProduct(steadyTypedFx.product.id)
+assert.strictEqual(
+  steadyTyped.data.unitPrice, String(steadyTypedCell.salePrice),
+  '前提：这一步两种实现的值相同（' + steadyTypedCell.salePrice + '），分辨点在下一条'
+)
+assert.strictEqual(
+  steadyTyped.data.priceTouched, true,
+  '店主手打的数恰好等于该格档价时，回填走的仍必须是「保留」那条路（归属留 true）——'
+    + '被复位成 false 就说明回填一律在追平，那他这个值下一次换规格一就会被无声冲掉'
+)
+
+// --- (7d) 单选态点规格二仍一律追平（#127「按错价记账」那条闸，回归钉子）--------
+// 与 tests/ui.test.js:1990 同源，也与上面 (6b) 同源，但形状**互补**：(6b) 钉的是
+// 0 格 → 1 格；这一条钉的是店主**手改过**之后在格之间来回换（1 格 → 0 格 → 另一格），
+// 每一步都必须追平。把 (7a)(7b) 那条「没手改过才重新取档价」的判据顺手扩成
+// 「手改过就一直保留」、或者把「身份没变」那一项从判据里删掉，这里立刻红。
+const switchCell = saleHarness({
+  selectedColor: '黑色', selectedSizes: ['M'], multiMode: false,
+  skuId: pBlackM.id, unitPrice: String(pBlackM.salePrice), priceTouched: false
+})
+typePrice(switchCell, '88')
+assert.strictEqual(switchCell.data.priceTouched, true, '前提：先手改一次')
+;[String(priced.product.salePrice), String(pBlackL.salePrice)].forEach(function (p) {
+  assert.notStrictEqual('88', p,
+    '前提：手改的价（88）不许等于下面任何一步的期望值（' + p + '），否则断言恒真')
+})
+tapSize(switchCell, 'M') // 点掉唯一选中的那一格，回落到「没选规格二」
+assert.deepStrictEqual(switchCell.data.selectedSizes, [], '前提：这一下应当把 M 点掉')
+assert.strictEqual(
+  switchCell.data.unitPrice, String(priced.product.salePrice),
+  '单选态点掉规格二之后没有参照格了，单价应当退回商品档价 ' + priced.product.salePrice
+    + '，实为 ' + switchCell.data.unitPrice + '——手改过也照样追平，这是 #127 那条闸'
+)
+assert.strictEqual(switchCell.data.priceTouched, false, '追平了就要复位归属')
+tapSize(switchCell, 'L') // 换到另一格
+assert.deepStrictEqual(switchCell.data.selectedSizes, ['L'], '前提：这一下应当选中 L')
+assert.strictEqual(
+  switchCell.data.unitPrice, String(pBlackL.salePrice),
+  '单选态换到另一格，单价应当追平到那一枚 SKU 的档价 ' + pBlackL.salePrice + '，实为 '
+    + switchCell.data.unitPrice + '——逐格售价是真功能，停在上一格就是按错价记账'
+)
+assert.strictEqual(switchCell.data.skuId, pBlackL.id, 'skuId 也要跟上')
+
+// (7f) 顺带行为改变，声明 + 钉住：`pickAllSizes` 的「全不选」支不写单价，框里会留着
+// 上一批的价；本次修复让下一次回填把它退回商品档价（此时没有参照格）。
+// 改动前是 69 → 回填后仍 69；改动后是 69 → 回填后 39。
+// 这与 (7d) 钉的规则一致（没有参照格就退回商品档价）。审计指出它「未声明、未测」，
+// 所以在这里**声明**——但要说清它是什么：
+//
+// **这一条没有独占杀伤。** 实测：能让「没有参照格却保留旧价」发生的变异，(7d) 会先红
+// （报「单价应当退回商品档价 39，实为 88」）；本条与它守的是同一条规则、只是入口不同
+// （(7d) 从点掉规格二进来，本条从全不选进来）。留着是为了把这个**顺带的行为改变**
+// 写在明面上——改动前全不选后回填仍是 69，改动后是 39——不是为了当闸。
+//
+// 写清楚这一点，是因为本仓反复栽在「注释声称的能力超过断言实际的能力」上；
+// 一条没有独占杀伤的断言不是坏事，把它讲成闸才是。
+;(function assertDeselectAllThenRefill() {
+  const fx = repriceFixture()
+  const cell = fx.cell('黑色', 'M')
+  const page = singleOnBlackM(fx)
+  assert.strictEqual(page.data.unitPrice, String(cell.salePrice), '前提：先追平到该格档价')
+  // 全不选：照 pickAllSizes 那一支的实际写法，只清选中集合与数量，不碰单价
+  page.setData(Object.assign(page.sizeSelectionPatch([]), { cellQtys: {}, batchQty: '', qty: '' }))
+  assert.strictEqual(page.data.unitPrice, String(cell.salePrice), '前提：全不选本身不改单价')
+  assert.notStrictEqual(String(cell.salePrice), String(fx.product.salePrice),
+    '前提：该格档价不许等于商品档价，否则本条分不出「退回」和「没动」')
+  page.applyProductState(fx.product, '黑色', [], [])
+  assert.strictEqual(page.data.unitPrice, String(fx.product.salePrice),
+    '全不选之后回填：没有参照格了，单价应当退回商品档价 ' + fx.product.salePrice
+      + '，实为 ' + page.data.unitPrice + '——这是本次修复带来的顺带改变，'
+      + '与 (7d)「没有参照格就退回商品档价」同一条规则')
+})()
+
+// --- (7e) 多选态回填不许被「过期判定」打回商品档价 ----------------------------
+// (7a) 那道过期判定**必须整个跳过多选态**：多选态下 applyProductState 算出来的 sku
+// 恒为 null，「系统该写的数」退回商品档价，而框里那个值的正主是「第一枚选中格」
+// （applySizeSelection / pickColor 多选支写进去的），两者本来就不相等。把过期判定
+// 无差别铺到多选态，每一次 onShow 回填都会把整批价从 69 打回 39 —— 正是
+// tests/ui.test.js 里「多选态 skuId 记空串」那条注释警告的形状。
+// 上面 (5) 钉的是多选态**手改过**的回填；这一条补的是**没手改过**那一半。
+const multiBack = multiOnBlack()
+assert.strictEqual(multiBack.data.priceTouched, false, '前提：店主没动过这个框')
+assert.strictEqual(multiBack.data.skuId, '', '前提：多选态 skuId 恒为空串')
+assert.notStrictEqual(
+  String(pBlackM.salePrice), String(priced.product.salePrice),
+  '前提：第一枚选中格的档价必须不等于商品档价，否则「保留」和「打回商品档价」分不出来'
+)
+multiBack.selectProduct(priced.product.id)
+assert.strictEqual(
+  multiBack.data.unitPrice, String(pBlackM.salePrice),
+  '多选态离开页面再回来，整批价应当仍是第一枚选中格的档价 ' + pBlackM.salePrice
+    + '，实为 ' + multiBack.data.unitPrice + '——被打回商品档价 '
+    + priced.product.salePrice + ' 就说明单选态那道「过期判定」漏到多选态来了'
+)
+assert.deepStrictEqual(multiBack.data.selectedSizes, ['M', 'L'], '回填不该动选中集合')
 
 // ===========================================================================
 // 「本次售价」的归属（续）：多选态内增删格也按「动过没有」判（22:231 追裁）

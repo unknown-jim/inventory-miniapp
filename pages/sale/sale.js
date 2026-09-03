@@ -727,13 +727,41 @@ Page({
     }
     const singleSize = sizesSel.length === 1 ? sizesSel[0] : ''
     const sku = hasSpecs ? inventory.findSkuBySpec(this.data.skus, product.id, color, singleSize) : null
-    // 判据仍是「参照 SKU 变没变」，**故意不换成 priceTouched**：这条路上「点规格二
-    // 要把单价追平到那一枚 SKU」是钉死的行为（tests/ui.test.js:1990 逐字钉着，理由是
-    // 逐格售价是真功能，停在上一格就是按错价记账），换成「手改过就保留」会当场推翻它。
-    // 22:231 的「判据是有没有人动过这个框」只作用在**多选态**（pickColor 的多选支 +
-    // applySizeSelection 的 wasMulti && isMulti 支）。这个方法是单选形态的路，
-    // 两条判据并存是有意的，不是漏改。
-    const keepPrice = this.data.productId === product.id && !!this.data.unitPrice && this.data.skuId === (sku ? sku.id : '')
+    // 「参照格没变」，`skuId` 只答得了**身份**那一半：
+    //
+    //   · 身份没变（还是同一枚 SKU）—— sameRefCell 判的就是这个。
+    //   · 内容没变（那一枚 SKU 的档价还是原来那个数）—— skuId 一个字都答不了。
+    //
+    // 只判身份的后果（22:231，实测复现）：店主在销售页选中黑 M（系统把本次售价
+    // 追平到 69），中途去商品编辑把**这一格**的档价改成 79，回销售页 onShow →
+    // selectProduct → 这里。skuId 一模一样，判真，框里留着过期的 69。那个 69 看上去
+    // 完全正常、只是过期了，屏上没有任何异常，按它出货销售额 / 毛利 / 欠款一起错 ——
+    // 静默错账，比屏上跳个数危险得多。
+    //
+    // 所以规则就是裁定原文那一句：**身份没变 + 没手改过 → 一律重新取该格档价**；
+    // 手改过就保留他填的。不需要再问一句「框里这个值过期了没」——没手改过时，
+    // 不管过期与否都重新取，没过期时取回来的就是同一个数。
+    //
+    // （2026-09-04：上一版这里多了一项 `|| this.data.unitPrice === systemPrice`，并用
+    // 十几行注释把它讲成本次修复的核心机制。审计穷举 185,040 组证明它**完全不产生行为**：
+    // 那一支里等式为真时写 (this.data.unitPrice, false)、为假时写 (systemPrice, false)，
+    // 而等式为真恰恰意味着两者相等 —— 两条路写出同一对值。`systemPrice` 换成任意
+    // 垃圾全套仍绿。已删。行为一字未变。）
+    //
+    // **单选态点规格二不受影响**：那条路上 skuId 从这一格换成那一格，sameRefCell
+    // 第一层就判假，照常一律追平 —— #127「按错价记账」回归的闸没被碰（钉子两份：
+    // tests/ui.test.js:1990 与 tests/sale-spec-view.test.js 的 (6b)）。审计穷举已证：
+    // 参照格身份变了的组合，base 与 fix **0 差异**。
+    //
+    // **多选态（|Z| >= 2）整个跳过这道判定**，不是漏改：此时 sku 恒为 null，
+    // 该追平到的数退回商品档价，而多选态框里那个值的正主是「第一枚选中格」
+    // （applySizeSelection / pickColor 多选支写的）。不加这道闸，每次 onShow 回填会把
+    // 整批价从 69 打回商品档价 39（已由 (7e) 钉死）。**多选态自己的档价过期问题
+    // 仍在**，另算，这里不冒充解决。
+    const isMulti = sizesSel.length >= 2
+    const sameRefCell = this.data.productId === product.id && !!this.data.unitPrice
+      && this.data.skuId === (sku ? sku.id : '')
+    const keepPrice = sameRefCell && (isMulti || !!this.data.priceTouched)
     this.setData(Object.assign({
       productId: product.id,
       productName: product.name,
