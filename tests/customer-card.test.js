@@ -156,6 +156,10 @@ assert.strictEqual(typeof cardOf, 'function', '抠出来的应当是个函数')
 ;(function assertCardOfIsActuallyWired() {
   // 判据必须和断言文字一个范围。上一版说「fillCustomer 里」却扫全文，于是把原写法
   // 搬进一个没人调的方法当诱饵就能全绿（复审实测）。
+  //
+  // **这一条现在没有独占杀伤**：行为钉子进来之后，把 cardOf 换成写死对象它照样红
+  // （复审实测剪掉本条仍红）。留着是为了更早、更直白地报错——「fillCustomer 里没有
+  // 那一行」比「B 档 label 实为当前欠款」更指得出问题在哪。
   const body = stripJsComments(pageMethod('fillCustomer'))
   assert.ok(body.indexOf('const card = this.cardOf(receivable, prepay)') >= 0,
     'fillCustomer 里应当有 `const card = this.cardOf(receivable, prepay)`——'
@@ -173,16 +177,23 @@ assert.strictEqual(typeof cardOf, 'function', '抠出来的应当是个函数')
     // 要求后面跟一个**非标识符字符**：光前缀会把 `card.hintText` 当成 `card.hint`
     // 命中（card 上没这个字段，屏上 hint 直接消失）；而硬要结尾逗号又会在「挪到最后
     // 一格」这种行为不变的改版上误报。两头的坑复审都实测过。
-    // 下一个字符必须属于**终止符集合**（逗号 / 换行 / 右花括号 / 空白）。
-    // 上一版写「非标识符字符」，于是 `card.hint.text`、`card.amountText.slice(0,1)`、
-    // `card.label + '（历史遗留）'` 这类**继续往下写的表达式**全被放行——复审实测五种，
-    // 屏上分别是 hint 消失、金额被截、label 串字，而测试全绿。
-    const at = body.indexOf(pair[0] + ': ' + pair[1])
-    const tail = at >= 0 ? body.charAt(at + (pair[0] + ': ' + pair[1]).length) : 'x'
-    const TERM = ',' + String.fromCharCode(10) + String.fromCharCode(13) + ' }' + String.fromCharCode(9)
-    assert.ok(at >= 0 && TERM.indexOf(tail) >= 0,
-      'fillCustomer 里 ' + pair[0] + ' 应当接 ' + pair[1]
-        + '——接错格子、接到不存在的字段、或者只把原写法留在注释里，屏上都会串位或空掉')
+    // 把「键: 」之后到下一个逗号/换行/右花括号之间的**整段**切出来比，不看「下一个
+    // 字符」。上一版把空格算进终止符，于是 `card.hint && ''`、`card.label + '（…）'`
+    // 这类继续往下写的表达式照样放行（复审实测，B/C 的 hint 全没了而全套绿）。
+    const head = pair[0] + ': '
+    const at = body.indexOf(head)
+    let seg = ''
+    if (at >= 0) {
+      const from = at + head.length
+      let end = from
+      const STOP = ',' + String.fromCharCode(10) + String.fromCharCode(13) + '}'
+      while (end < body.length && STOP.indexOf(body.charAt(end)) < 0) end += 1
+      seg = body.slice(from, end).trim()
+    }
+    assert.strictEqual(seg, pair[1],
+      'fillCustomer 里 ' + pair[0] + ' 应当就是 ' + pair[1] + '，实为「' + seg + '」'
+        + '——接错格子、接到不存在的字段、在后面接着写表达式、或者只把原写法留在注释里，'
+        + '屏上都会串位或空掉')
   })
 })()
 
@@ -215,9 +226,12 @@ assert.strictEqual(typeof cardOf, 'function', '抠出来的应当是个函数')
   })
   // 收进「带 js-detail-amount 的那个节点的 class 属性里」——上一版扫全文，把它挪到
   // 一个无关节点上（四档颜色全丢）照样绿，与本轮阻塞 2 同型（复审实测）。
-  const clsRe = new RegExp('class="[^"]*' + bs + '{' + bs + '{cardAmountClass' + bs + '}' + bs
-    + '}[^"]*js-detail-amount[^"]*"')
-  assert.ok(clsRe.test(body),
+  // 先把带 js-detail-amount 的那个节点的 class 属性整段取出来，再在里面找绑定——
+  // class token 顺序无意义，上一版把顺序也锁了，行为等价的重排会误报（复审实测）。
+  const attrRe = new RegExp('class="([^"]*js-detail-amount[^"]*)"')
+  const attr = attrRe.exec(body)
+  assert.ok(attr, '应当找得到带 js-detail-amount 的那个节点')
+  assert.ok(attr[1].indexOf('{{cardAmountClass}}') >= 0,
     '金额那一行的颜色 class 应当就地绑 {{cardAmountClass}}（在带 js-detail-amount 的那个'
       + '节点的 class 里）——挪到别处或写死，四档颜色都不跟着走了')
   // **这条盖不到**：`wx:if` 把整块挡掉、兄弟节点覆盖、wxss 隐藏、藏一个写着绑定的
@@ -259,14 +273,26 @@ assert.strictEqual(typeof cardOf, 'function', '抠出来的应当是个函数')
 // 诱饵、前缀诱饵、setData 之后再补一次、拿到 card 之后改字段…），每堵一个就冒一个新的
 // ——因为静态匹配守的是「代码长什么样」，而我们真正要的是「屏上那四个字段是什么」。
 //
-// 这一条真跑：拿 store 替身喂 fillCustomer，断言最终落进 data 的值。它一条顶上面一片。
+// 这一条真跑：拿 store 替身喂 fillCustomer，断言最终落进 data 的值。
+//
+// **它不能顶掉上面那些**（上一版这么写过，是过头的自述）：cardOf 那四组守的是纯函数
+// 本身、pairs 守的是接错格子、wxml 那组守的是屏上绑的是不是死文案——都有行为钉子够
+// 不着的地方。它只是把「跑出来是什么」这一层补上，不是把静态那一层顶掉。
 ;(function assertFillCustomerProducesZeroState() {
   const inventory = require('../utils/inventory')
+  // 四个字段**每档都钉**，期望值写死（不从 cardOf 算回来，否则实现改了期望跟着改，
+  // 断言就恒真）。上一版只钉 label 与 class，把金额和 hint 留在 D 档那两个退化值
+  // （'0.00' / ''）上——于是一行 `card.amountText = util.money(prepay)` 就能把「C 档
+  // hero 数字是欠款不是预收」这条本文件自称最要紧的事撤销掉，而全套绿（复审实测）。
   const cases = [
-    { name: 'A 只有欠款', receivable: 1500, prepay: 0, label: '当前欠款', cls: 'debt' },
-    { name: 'B 只有预收', receivable: 0, prepay: 200, label: '预收款（收超欠款部分）', cls: 'prepay' },
-    { name: 'C 并存', receivable: 84, prepay: 200, label: '当前欠款（另有预收待抵扣）', cls: 'debt' },
-    { name: 'D 两清', receivable: 0, prepay: 0, label: '已结清', cls: '' }
+    { name: 'A 只有欠款', receivable: 1500, prepay: 0,
+      label: '当前欠款', cls: 'debt', amount: '1500.00', hintHead: '' },
+    { name: 'B 只有预收', receivable: 0, prepay: 200,
+      label: '预收款（收超欠款部分）', cls: 'prepay', amount: '200.00', hintHead: '欠款已清' },
+    { name: 'C 并存', receivable: 84, prepay: 200,
+      label: '当前欠款（另有预收待抵扣）', cls: 'debt', amount: '84.00', hintHead: '预收 ¥200.00' },
+    { name: 'D 两清', receivable: 0, prepay: 0,
+      label: '已结清', cls: '', amount: '0.00', hintHead: '' }
   ]
   cases.forEach(function (c) {
     const store = {
@@ -286,22 +312,18 @@ assert.strictEqual(typeof cardOf, 'function', '抠出来的应当是个函数')
         + '——这一条真跑 fillCustomer，静态匹配骗不过它')
     assert.strictEqual(page.data.cardAmountClass, c.cls,
       c.name + '：金额颜色 class 应当是「' + c.cls + '」，实为「' + page.data.cardAmountClass + '」')
+    assert.strictEqual(page.data.cardAmountText, c.amount,
+      c.name + '：屏上金额应当是 ¥' + c.amount + '，实为 ¥' + page.data.cardAmountText
+        + '——C 档尤其要紧：hero 数字是**欠款**不是预收，写成预收的话一个还欠 84 的客户'
+        + '屏上会显示 200，店主会以为不用收钱了')
+    if (c.hintHead === '') {
+      assert.strictEqual(page.data.cardHint, '', c.name + '：这一档不出 hint')
+    } else {
+      assert.ok(String(page.data.cardHint).indexOf(c.hintHead) === 0,
+        c.name + '：hint 应当以「' + c.hintHead + '」开头，实为「' + page.data.cardHint + '」')
+    }
   })
 
-  // D 档的金额与 hint 单独钉：两清时不该出 hint，金额是 0。
-  const store0 = {
-    getCustomer: function () {
-      return { id: 'c1', name: '张三', account: { receivable: 0, prepay: 0, count: 0, amount: 0 } }
-    }
-  }
-  const p0 = new Function('store', 'inventory', 'util',
-    'return { ' + cardOfSrc + ',' + pageMethod('fillCustomer') + ' }')(store0, inventory, util)
-  p0.data = {}
-  p0.setData = function (o) { Object.assign(p0.data, o) }
-  p0.reloadLedger = function () {}
-  p0.fillCustomer('c1')
-  assert.strictEqual(p0.data.cardAmountText, util.money(0), 'D 档金额是 ¥0.00')
-  assert.strictEqual(p0.data.cardHint, '', 'D 档不出 hint')
 })()
 
 console.log('customer-card tests passed')
