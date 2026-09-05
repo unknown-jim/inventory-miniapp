@@ -79,52 +79,16 @@ try {
 }
 assert.strictEqual(typeof cardOf, 'function', '抠出来的应当是个函数')
 
-// --- A 默认：只有欠款 -------------------------------------------------------
-{
-  const a = cardOf(1500, 0)
-  assert.strictEqual(a.label, '当前欠款', '稿 4:369')
-  assert.strictEqual(a.amountText, util.money(1500), 'hero 数字是欠款')
-  assert.strictEqual(a.amountClass, 'debt', '欠款是红的')
-  assert.strictEqual(a.hint, '', 'A 档稿上没有 hint')
-}
-
-// --- B 预收变体：欠款已清、有预收 -------------------------------------------
-{
-  const b = cardOf(0, 200)
-  assert.strictEqual(b.label, '预收款（收超欠款部分）', '稿 7:251')
-  assert.strictEqual(b.amountText, util.money(200), 'B 档 hero 数字是**预收**')
-  assert.strictEqual(b.amountClass, 'prepay', '预收是绿的，不能跟欠款一个色')
-  assert.ok(b.hint.indexOf('欠款已清') === 0, '稿 7:253 的 hint，实为「' + b.hint + '」')
-}
-
-// --- C 并存：既欠款又有预收 -------------------------------------------------
-// **这一条是本文件最要紧的。** 源码注释写着「B 与 C 的差别是本批最容易做错的一处：
-// C 的 hero 数字是欠款不是预收」——把它钉住，别只留一句注释。
-{
-  const c = cardOf(84, 200)
-  assert.strictEqual(c.label, '当前欠款（另有预收待抵扣）', '稿 9:5')
-  assert.strictEqual(c.amountText, util.money(84),
-    'C 档 hero 数字必须是**欠款 84**，不是预收 200——写成 200 的话，一个还欠着 84 的客户'
-      + '屏上会显示一个绿色的 200，店主会以为不用收钱了')
-  assert.strictEqual(c.amountClass, 'debt', 'C 档金额仍是欠款、仍是红的')
-  assert.ok(c.hint.indexOf('预收 ¥' + util.money(200)) === 0,
-    '稿 9:7 的 hint 要把预收数报出来，实为「' + c.hint + '」')
-}
-
-// --- D 已结清：两清 ---------------------------------------------------------
-// 2026-09-05 补画（稿 28:1）。在此之前代码回落成 A 的形状，两清的客户屏上写着
-// 「当前欠款 ¥0.00」——一眼扫过去像是还欠着钱。
-{
-  const d = cardOf(0, 0)
-  assert.strictEqual(d.label, '已结清',
-    '稿 28:1 的 label 28:2——退回补画之前的「当前欠款」这里就红。'
-      + '（上一版在下面另挂了一条 notStrictEqual 说「回退到它这条要红」，'
-      + '实测它永远跑不到：上一行先红。零独占杀伤，已删。）')
-  assert.strictEqual(d.amountText, util.money(0), '¥0.00')
-  assert.strictEqual(d.amountClass, '',
-    '中性色，不是欠款红也不是预收绿——稿 28:3 的 fill 直绑 neutral/900 (3:23)')
-  assert.strictEqual(d.hint, '', 'D 档稿上没有 hint')
-}
+// --- 四档的值由下面的行为钉子守 ----------------------------------------------
+// 这里原本有 A/B/C/D 四块直接调 cardOf 的静态断言。复审用 51 个变异跑矩阵，
+// **四块的独占杀伤为零**，单独关、一起关都没有一条由红变绿——因为行为钉子喂给
+// fillCustomer 的四对输入，经 round2/toNumber 之后与这四块完全同一组，而且金额那格
+// 行为钉子写的是字面量、这四块写的是 util.money(...)（money 自己被改坏时两边一起变、
+// 反而不响）。**行为钉子严格强于它们**，不是「各守一摊」。
+//
+// 上一版这里写着「它不能顶掉上面那些…都有行为钉子够不着的地方」——那是把一句吹过头的
+// 自述换成了一句方向相反、同样不成立的自述。既然实测是纯冗余，就删掉，不留着装门面：
+// 冗余判据会制造「守得很严」的错觉，而且每一条都是将来「声称 ≠ 实际」的新机会。
 
 // --- 边界：负数不该掉进 D 档 ------------------------------------------------
 // 判据写的是 `> 0`。欠款为负（多收了但没走预收路径）时会落到 D，屏上写「已结清」。
@@ -165,36 +129,12 @@ assert.strictEqual(typeof cardOf, 'function', '抠出来的应当是个函数')
     'fillCustomer 里应当有 `const card = this.cardOf(receivable, prepay)`——'
       + '换成写死的对象或别的算法，上面那些断言一条都拦不住：它们测的是纯函数，'
       + '不是它有没有被接上')
-  // 逐**对**核，不只查字符串在不在：复审实测把 cardAmountClass 与 cardHint 对调，
-  // 四个字符串都还在、照样全绿，而屏上会把 hint 当成 class 涂上去。
-  const pairs = [
-    ['cardLabel', 'card.label'],
-    ['cardAmountText', 'card.amountText'],
-    ['cardAmountClass', 'card.amountClass'],
-    ['cardHint', 'card.hint']
-  ]
-  pairs.forEach(function (pair) {
-    // 要求后面跟一个**非标识符字符**：光前缀会把 `card.hintText` 当成 `card.hint`
-    // 命中（card 上没这个字段，屏上 hint 直接消失）；而硬要结尾逗号又会在「挪到最后
-    // 一格」这种行为不变的改版上误报。两头的坑复审都实测过。
-    // 把「键: 」之后到下一个逗号/换行/右花括号之间的**整段**切出来比，不看「下一个
-    // 字符」。上一版把空格算进终止符，于是 `card.hint && ''`、`card.label + '（…）'`
-    // 这类继续往下写的表达式照样放行（复审实测，B/C 的 hint 全没了而全套绿）。
-    const head = pair[0] + ': '
-    const at = body.indexOf(head)
-    let seg = ''
-    if (at >= 0) {
-      const from = at + head.length
-      let end = from
-      const STOP = ',' + String.fromCharCode(10) + String.fromCharCode(13) + '}'
-      while (end < body.length && STOP.indexOf(body.charAt(end)) < 0) end += 1
-      seg = body.slice(from, end).trim()
-    }
-    assert.strictEqual(seg, pair[1],
-      'fillCustomer 里 ' + pair[0] + ' 应当就是 ' + pair[1] + '，实为「' + seg + '」'
-        + '——接错格子、接到不存在的字段、在后面接着写表达式、或者只把原写法留在注释里，'
-        + '屏上都会串位或空掉')
-  })
+  // 这里原本还有一组「pairs 逐对核」：从 fillCustomer 体内切出 `cardX: card.y` 比对。
+  // 复审实测它的 5 条独占杀伤里 **4 条是假红**（`String(card.amountText)` 包装、冒号后
+  // 少一个空格、`card.hint || ''`、`[card.hint, ''].join('')` —— 全是行为完全等价的写法），
+  // 只有 1 条真杀：把值改成依赖输入的表达式（`receivable > 100000 ? '大额' : ...`）。
+  // 那一条已由行为钉子的第五组（大额）接管。字符级切法还漏掉换行续写和字符串字面量诱饵，
+  // 修它要再套一层同层逗号扫描——收益不抵噪声，删掉。
 })()
 
 // --- 屏上那张卡真的在读这四个字段吗 -----------------------------------------
@@ -217,8 +157,11 @@ assert.strictEqual(typeof cardOf, 'function', '抠出来的应当是个函数')
   ]
   const bs = String.fromCharCode(92)
   need.forEach(function (item) {
-    const re = new RegExp('class="[^"]*' + item[0] + '[^"]*"[^>]*>[^<]*' + bs + '{' + bs + '{'
-      + item[1] + bs + '}' + bs + '}')
+    // 前后都不许有别的文案：只管绑定**前**那一段的话，
+    // `<view class="hero-label">当前欠款 {{cardLabel}}</view>` 和
+    // `...>¥{{cardAmountText}} 欠款</view>` 都能过（复审实测），屏上会变成「当前欠款 已结清」。
+    const re = new RegExp('class="[^"]*' + item[0] + '[^"]*"[^>]*>[ ¥]*' + bs + '{' + bs + '{'
+      + item[1] + bs + '}' + bs + '}[ ]*<')
     assert.ok(re.test(body),
       '首卡的' + item[2] + '应当就地绑 {{' + item[1] + '}}（在带 ' + item[0]
         + ' 的那个节点里）——写死文案的话 cardOf 算得再对，屏上也不跟着走，'
@@ -286,13 +229,19 @@ assert.strictEqual(typeof cardOf, 'function', '抠出来的应当是个函数')
   // hero 数字是欠款不是预收」这条本文件自称最要紧的事撤销掉，而全套绿（复审实测）。
   const cases = [
     { name: 'A 只有欠款', receivable: 1500, prepay: 0,
-      label: '当前欠款', cls: 'debt', amount: '1500.00', hintHead: '' },
+      label: '当前欠款', cls: 'debt', amount: '1500.00', hint: '' },
     { name: 'B 只有预收', receivable: 0, prepay: 200,
-      label: '预收款（收超欠款部分）', cls: 'prepay', amount: '200.00', hintHead: '欠款已清' },
+      label: '预收款（收超欠款部分）', cls: 'prepay', amount: '200.00',
+      hint: '欠款已清 · 下次开单可抵 · 点收款可继续记预收' },
     { name: 'C 并存', receivable: 84, prepay: 200,
-      label: '当前欠款（另有预收待抵扣）', cls: 'debt', amount: '84.00', hintHead: '预收 ¥200.00' },
+      label: '当前欠款（另有预收待抵扣）', cls: 'debt', amount: '84.00',
+      hint: '预收 ¥200.00 不自动冲欠款。下次开单会带出抵扣行，可改；要收款先冲这 ¥84.00' },
     { name: 'D 两清', receivable: 0, prepay: 0,
-      label: '已结清', cls: '', amount: '0.00', hintHead: '' }
+      label: '已结清', cls: '', amount: '0.00', hint: '' },
+    // 第五组接管被删掉的 pairs 判据那条唯一真杀伤：把某一格改成依赖输入的表达式
+    // （`receivable > 100000 ? '大额' : card.amountText` 之类）。四档输入都够不着它。
+    { name: 'A 大额', receivable: 200000, prepay: 0,
+      label: '当前欠款', cls: 'debt', amount: '200000.00', hint: '' }
   ]
   cases.forEach(function (c) {
     const store = {
@@ -303,7 +252,9 @@ assert.strictEqual(typeof cardOf, 'function', '抠出来的应当是个函数')
     const page = new Function('store', 'inventory', 'util',
       'return { ' + cardOfSrc + ',' + pageMethod('fillCustomer') + ' }')(store, inventory, util)
     page.data = {}
-    page.setData = function (o) { Object.assign(page.data, o) }
+    // 替身要**收下并调用**第二个参数：fillCustomer 真的传了成功回调，丢掉它的话
+    // 回调里再写一次 setData 就完全逃逸（复审实测，全套绿）。
+    page.setData = function (o, cb) { Object.assign(page.data, o); if (cb) cb() }
     page.reloadLedger = function () {}
     page.fillCustomer('c1')
 
@@ -316,12 +267,11 @@ assert.strictEqual(typeof cardOf, 'function', '抠出来的应当是个函数')
       c.name + '：屏上金额应当是 ¥' + c.amount + '，实为 ¥' + page.data.cardAmountText
         + '——C 档尤其要紧：hero 数字是**欠款**不是预收，写成预收的话一个还欠 84 的客户'
         + '屏上会显示 200，店主会以为不用收钱了')
-    if (c.hintHead === '') {
-      assert.strictEqual(page.data.cardHint, '', c.name + '：这一档不出 hint')
-    } else {
-      assert.ok(String(page.data.cardHint).indexOf(c.hintHead) === 0,
-        c.name + '：hint 应当以「' + c.hintHead + '」开头，实为「' + page.data.cardHint + '」')
-    }
+    // hint 钉**整串**，不只钉开头：只钉开头的话尾巴可以改成语义相反的话而全绿——
+    // 复审实测把 C 档尾巴换成「已自动冲抵，无需再收款」（与「预收不自动冲欠款」这条
+    // 账法口径正相反）全套仍绿。稿号 B 7:253 / C 9:7。
+    assert.strictEqual(page.data.cardHint, c.hint,
+      c.name + '：hint 应当逐字是「' + c.hint + '」，实为「' + page.data.cardHint + '」')
   })
 
 })()
