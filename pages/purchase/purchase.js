@@ -27,6 +27,15 @@ Page({
     specLabel: '',
     qty: '',
     unitPrice: '',
+    // 「本次进价」这个框里现在的值是不是**店主自己给的**。false = 系统写的（追平到
+    // 档案进价），true = 他自己决定的（往框里打字，或者点「最近进货」chip 要来的
+    // 上次进价）。这不是「和档案进价不相等」的派生量：他完全可以手打一个恰好等于
+    // 档案进价的数，也可以手打完再改回来。
+    // 置位点两个：onField（wxml 的 .js-purchase-price 是唯一的输入口）和 pickRecent
+    // （点 chip 是他主动要那个数）。
+    // 系统侧的**复位**只发生在 pricePatch；此外 pickRecent 进场时会先把 unitPrice 与
+    // priceTouched 一起清干净（那是清空不是判定，两个字段仍然成对写）。
+    priceTouched: false,
     remark: '',
     amountText: '0.00',
     totalText: '共 0 件 · ¥0.00',
@@ -169,6 +178,21 @@ Page({
     return inventory.toNumber(product.costPrice)
   },
 
+  // 「本次进价」的唯一系统写出口。keep 为真＝框里现在这个值是店主自己给的、系统不许
+  // 冲掉；为假＝追平到档案进价 baseCost，同时把归属收回给系统。
+  // **两个字段必须一起写**，这是这个函数存在的全部理由：
+  //
+  //   · 只写 unitPrice 不写 priceTouched：追平一次之后标志还挂着 true，后面每一次
+  //     回填都会「保留」一个其实是系统自己写进去的价 —— 一次手改永久生效。
+  //   · 只写 priceTouched 不写 unitPrice：就是下面 applyProductState 里那个要修的
+  //     bug 的形状（销售侧同型缺陷见 PR #138）。
+  pricePatch(keep, baseCost) {
+    return {
+      unitPrice: keep ? this.data.unitPrice : String(baseCost),
+      priceTouched: keep ? this.data.priceTouched : false
+    }
+  },
+
   applyProductState(product, skuId) {
     const hasSpecs = inventory.productHasSpecs(product)
     const blankProcess = inventory.isBlankProcess(product)
@@ -183,11 +207,22 @@ Page({
     const sku = nextSkuId ? store.getSku(nextSkuId) : null
     const blank = blankProcess ? inventory.findBlankSku(this.data.skus, product.id) : null
     const baseCost = this.baseCostOf(product, sku, blank)
-    // 店主手改过的进价要保住：同一个商品、同一格、已经填过价，就不要拿档案价盖掉。
+    // 店主自己给的进价要保住：同一个商品、同一格、框里有值，**而且这个值的归属在他
+    // 手里**，才不拿档案进价盖掉。最后那一条是本次补的判据（销售侧同型缺陷见 PR #138）。
+    //
+    // 病灶（销售侧实测复现，进货侧同形）：旧判据只判**身份**（skuId === nextSkuId）。
+    // 店主选中某一格（系统把本次进价追平到该格档案进价），中途去商品编辑改了**这一格**
+    // 的进价，回进货页 onShow → selectProduct(同一 id) → 这里 —— 同一枚 SKU 判真，
+    // 框里留着**过期的旧进价**。那个数看上去完全正常、只是过期了，按它入库，
+    // 进货金额 / 成本 / 毛利 / 应付一起错 —— 静默错账。
+    //
+    // 加上 priceTouched 之后：没人动过就重新取档案进价，动过就保留他给的。
+    // **换格那条路不受影响**：pickSku 换到另一格时 skuId 与 nextSkuId 对不上，
+    // 第三个条件先判假，照旧一律追平（「按错价记账」那条闸没被碰）。
     const keepPrice = this.data.productId === product.id
-      && this.data.unitPrice
+      && !!this.data.unitPrice
       && this.data.skuId === nextSkuId
-    const unitPrice = keepPrice ? this.data.unitPrice : String(baseCost)
+      && !!this.data.priceTouched
     let stockText = '当前库存 ' + product.stock + ' 件'
     if (hasSpecs) {
       // 稿 库存meta 4:441（$13:637）：「进货前：白色/1.8m 5 · … · 半成品 40（共 63）」。
@@ -195,7 +230,7 @@ Page({
       stockText = '进货前：' + inventory.skuSummaryText(product, this.data.skus)
         + '（共 ' + product.stock + ' 件）'
     }
-    this.setData({
+    this.setData(Object.assign({
       productId: product.id,
       productName: product.name,
       hasSpecs: hasSpecs,
@@ -206,9 +241,8 @@ Page({
       }),
       specLabel: blank ? '待加工' : (sku ? inventory.specText(sku.color, sku.size) : product.name),
       baseCostText: util.money(baseCost),
-      stockText: stockText,
-      unitPrice: unitPrice
-    })
+      stockText: stockText
+    }, this.pricePatch(keepPrice, baseCost)))
     this.refreshAmount()
   },
 
@@ -232,15 +266,28 @@ Page({
       return item.key === key
     })
     if (!hit) return
-    this.setData({ qty: '', unitPrice: '' })
+    // 两处都把 unitPrice 和 priceTouched **一起**写，理由同 pricePatch 的注释。
+    // 先清空是既有写法：清掉之后 applyProductState 的 keepPrice 判假，整套状态照
+    // 新商品/新格重建，不留上一次的残值。
+    this.setData({ qty: '', unitPrice: '', priceTouched: false })
     this.selectProduct(hit.productId, hit.skuId)
-    this.setData({ unitPrice: hit.unitPrice })
+    // 「上次进价」的归属算**店主**的：这个数是他点这枚 chip 主动要来的，不是系统
+    // 追平出来的。标 false 的话，他去别的页面转一圈回来，onShow 回填就会把这个数
+    // 无声换成档案进价 —— 那正是本次要修的那种静默改数，只是换了个方向。
+    // （旧实现里这个值靠身份判据也能活过回填，标 true 是把那份行为原样接住。）
+    this.setData({ unitPrice: hit.unitPrice, priceTouched: true })
     this.refreshAmount()
   },
 
   onField(e) {
+    const field = e.currentTarget.dataset.field
     const patch = {}
-    patch[e.currentTarget.dataset.field] = e.detail.value
+    patch[field] = e.detail.value
+    // 「本次进价」是这个通用入口里唯一带**归属**的字段：店主一动这个框，回填就不许
+    // 再无声把他填的价换成档案进价。wxml 里 .js-purchase-price 是唯一带
+    // data-field="unitPrice" 的输入框，手打的价进不来别的路。
+    // 复位统一在 pricePatch，不在这里。
+    if (field === 'unitPrice') patch.priceTouched = true
     this.setData(patch)
     this.refreshAmount()
   },
