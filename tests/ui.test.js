@@ -837,7 +837,8 @@ async function pageStackForError(miniProgram) {
 // 就没法往下走，直接带标签抛出去比蒙着走好，报错也指得出是哪一步卡住。
 //
 // 【别写成「仅剩的无超时 RPC」】本文件还有若干 await miniProgram.X() 没套超时：
-// 4 处 evaluate（resetStorage / seedExtraPayDocs / countMemoryDocs / 取 customerId）、
+// 5 处 evaluate（resetStorage / seedExtraPayDocs / countMemoryDocs / 取 customerId /
+// runSaleRefillAfterReprice 改档价）、
 // pageScrollTo、run() 里两处 mockWxMethod。它们不在等待/判位置的热路径上，本轮按范围控制
 // 没动，但它们同样会挂住。谁要补，照这里的写法套 withTimeout 即可。
 async function freshCurrentPage(miniProgram, pageId, expectedPath, label) {
@@ -1824,6 +1825,86 @@ async function runSalePickerAndSlip(miniProgram) {
 // 而 npm test 抓不到这类运行期 ReferenceError。所以本用例分两段：先走一次正常的
 // 「选两格 → 全部填 → 改一格 → 加入清单」核对清单行数与合计，再填第二批**不点加入
 // 清单**直接点确认销售，逼 submit() 自己走 currentLines() / mergeLines() 那条路。
+// 【G321】档价改了，销售页回填要跟上——PR #138 / 本批的端到端钉子。
+//
+// 为什么值得单独一个用例：这一类是**静默错账**。框里那个数看上去完全正常、只是过期了，
+// 屏上没有任何异常，按它出货销售额 / 毛利 / 欠款一起错。纯 Node 层已经有 (7a)/(7f)/(7i)
+// 把 base 判红，但 UI 层此前**零覆盖**——`ui.test.js` 里守的那条是 #127（单选点规格二
+// 追平），那是本次不能碰坏的闸，不是本次修的东西。绿只证明没回归，不证明修复生效。
+//
+// 【真实触发是什么，走了几轮弯路才搞清】销售页**没有**「改这个商品」的入口：它只能
+// navigateTo 到新增商品（不带 id）和新增客户（sale.js:413 / 1093）。而 onShow 的回填
+// 挂在 `this.data.productId` 上——必须是**同一个页面实例**，新开一个销售页 data 是空的。
+// 所以「去编辑改价再回来」这条路在真实 UI 里走不通，一开始按它写的用例卡在 productId=''。
+//
+// 真正可达的是：**页面被盖住期间，底层档价被别人改了**——多人店里同事在另一台改完同步
+// 过来，或 app 切后台再切回来。回到销售页 onShow → store.getSkus() 拿到新数据 →
+// selectProduct(this.data.productId) → applyProductState。用例照这个造：改存储里的
+// inv_skus（等价于同步下来的新档价），再点真的「选客户」压一个页、退回来触发 onShow。
+async function runSaleRefillAfterReprice(miniProgram) {
+  console.log('[UI] 销售：页面盖住期间档价被改了，回来时单价要跟着更新（静默错账那条）')
+  const sale = await goto(miniProgram, 'navigateTo', '/pages/sale/sale', '销售页')
+  await waitPageReady(sale)
+  await tap(sale, '.js-product-picker')
+  await typeInto(sale, '.search', '短袖', '商品搜索', 'keyword')
+  await waitFor(sale, '.js-product-item', '出现 .js-product-item')
+  const options = await sale.$$('.js-product-item')
+  assert.strictEqual(options.length, 1, '搜索「短袖」应当只命中一件商品，实为 ' + options.length)
+  await options[0].tap()
+  await waitGone(sale, '.js-product-item')
+
+  await tapWhen(sale, '.js-color-chip')
+  await tapWhen(sale, '.js-size-chip')
+  const picked = await waitForData(sale, function (d) {
+    return !!d.skuId && !!d.unitPrice && d.selectedSizes.length === 1
+  }, '选中一格，系统把单价追平到该格档价')
+
+  const before = String(picked.unitPrice)
+  const skuId = picked.skuId
+  const productId = picked.productId
+  const next = String(Number(before) + 7)
+  assert.notStrictEqual(next, before,
+    '前提：新档价不许等于进入值（' + before + '），否则「跟着更新」这条断言恒真')
+  assert.strictEqual(picked.priceTouched, false,
+    '前提：这个价是系统追平写的、不是店主手打的——手打过的话按裁定就该保留，测的不是这条')
+
+  // 同事在另一台把这一格的档价改了，同步下来。写存储 = store 下次 getSkus 读到的东西。
+  const changed = await miniProgram.evaluate(function (skuId, next) {
+    const skus = wx.getStorageSync('inv_skus') || []
+    let hit = 0
+    const updated = skus.map(function (item) {
+      if (item.id !== skuId) return item
+      hit += 1
+      return Object.assign({}, item, { salePrice: Number(next) })
+    })
+    wx.setStorageSync('inv_skus', updated)
+    return hit
+  }, skuId, next)
+  assert.strictEqual(changed, 1,
+    '应当正好改到一格（skuId=' + skuId + '），实为 ' + changed
+      + ' —— 改不到的话下面那条断言是恒真的假绿')
+
+  // 压一个页再退回来，触发同一个销售页实例的 onShow（点真按钮，不 callMethod）。
+  // 用「＋ 新增商品」这颗：它在商品选择器里，是销售页仅有的两个 navigateTo 出口之一
+  //（另一个是新增客户，那颗 text 没有 js- 钩子）。它不带 id，进去什么都不改就退回来，
+  //   压页 → 退栈 → onShow，正是真实里「被别的页盖住又回来」的形状。
+  await tap(sale, '.js-product-picker')
+  await tapWhen(sale, '.js-add-product')
+  await waitForPage(miniProgram, 'pages/product-edit/product-edit', '新增商品页（用来盖住销售页）')
+  await goBackTo(miniProgram, '销售页（onShow 回填）')
+
+  const after = await waitForData(sale, function (d) {
+    return d.productId === productId && !d.pageLoading
+  }, '回到同一个销售页实例，回填跑完')
+
+  assert.strictEqual(after.skuId, skuId,
+    '回填后仍停在同一格——参照格身份没变，正是这个缺陷的形状：只判身份就会留住旧价')
+  assert.strictEqual(String(after.unitPrice), next,
+    '盖住期间这一格的档价被改了（' + before + ' → ' + next + '），回到销售页时单价必须'
+      + '跟着更新到 ' + next + '，实为 ' + after.unitPrice + '——停在 ' + before
+      + ' 看上去完全正常、只是过期了，按它出货就是静默错账')
+}
+
 async function runSaleMultiSelect(miniProgram) {
   step('销售：规格二多选批量填数——选两格/全部填/改一格/加入清单，再补一批不点加入清单直接确认销售（H1）')
   await backToTabRoot(miniProgram)
@@ -3701,6 +3782,9 @@ async function run() {
       // runSaleReturn 靠 latestOfType 认定「最新销售单」是谁，插到它前面会把那条
       // 前提改错。详见函数定义处的注释。
       ['sale-multi', runSaleMultiSelect],
+      // 必须在 sale-multi 之后：本用例会改掉种子里那一格的档价，
+      // 前面靠固定档价做前提钉子的用例（如 1990 那条 #127 闸）要先跑完。
+      ['sale-reprice', runSaleRefillAfterReprice],
       ['adjust', runAdjust],
       ['stock-take', runStockTake],
       ['convert', runConvert],
@@ -4044,14 +4128,16 @@ reWaitForPage.lastIndex = 0
 while ((hit = reWaitForPage.exec(routeSource)) !== null) waitForPageTargets.push(hit[1])
 assert.strictEqual(
   waitForPageTargets.length,
-  28,
+  29,
   // 4 处是最早的 tap 跳转；3 处是「记一笔」面板三个 picker 的落点
   //（customer-edit / sale-return / adjust）—— 面板的全部意义就是把人送到这三页；
   // 20 处是 2026-08-31 那一批新覆盖（进货 / 退货 / 库存调整 / 换规格 /
   // 商品详情四个动作按钮 / 商品编辑 / 种类模板 / 建店与成员）各自的落点确认；
   // 1 处是 B4 批新增的盘点流程：确认调整成功后自动 navigateBack 回看板，
   // runStockTake 里用 waitForPage(miniProgram, 'pages/index/index', ...) 验这个退栈。
-  '自检：waitForPage 的字面量调用点应当正好 28 处，实为 '
+  // 1 处是 2026-09-05 新增的 runSaleRefillAfterReprice（G321，档价改了销售页要跟上）：
+  // 点「＋ 新增商品」压一个页盖住销售页，确认落点，再退回来触发 onShow。
+  '自检：waitForPage 的字面量调用点应当正好 29 处，实为 '
     + waitForPageTargets.length + ' 处：' + JSON.stringify(waitForPageTargets)
     + ' —— 数目对不上说明要么正则失效了（钉子④是假绿的），要么调用点增减了，两种都要人看一眼'
 )
@@ -4061,7 +4147,7 @@ reGoto.lastIndex = 0
 while ((hit = reGoto.exec(routeSource)) !== null) gotoTargets.push(hit[1])
 assert.strictEqual(
   gotoTargets.length,
-  27,
+  28,
   // 8 处最早就有；2 处是 runRecordSheet 进看板和 runRecordSheetFabEntry 进流水页；
   // 12 处是 2026-08-31 那一批新覆盖自己的入口（含 readCustomerDebts 前后两次进客户页）；
   // 2 处是 A3 批返工时把误判栈深的 goBackTo（switchTab 进流水/客户页之后，栈深恒为 1，
@@ -4069,7 +4155,10 @@ assert.strictEqual(
   // runRecordsLoadMore 结尾回客户页）；
   // 2 处是 B4 批新增的 runStockTake：switchTab 进看板起步，navigateTo 带 id 进盘点页；
   // 1 处是批 2/2026-09-02 新增的 runSaleMultiSelect：navigateTo 进销售页测规格多选。
-  '自检：goto 的字面量调用点应当正好 27 处，实为 ' + gotoTargets.length + ' 处：'
+  // 1 处是 2026-09-05 新增的 runSaleRefillAfterReprice（G321）：navigateTo 进销售页。
+  // 「回来」不是新开一页——onShow 的回填挂在 this.data.productId 上，必须是同一个实例，
+  // 所以走的是压页 + goBackTo 退栈，不再 goto 一次。
+  '自检：goto 的字面量调用点应当正好 28 处，实为 ' + gotoTargets.length + ' 处：'
     + JSON.stringify(gotoTargets)
     + ' —— 数目对不上说明要么正则失效了（钉子④是假绿的），要么调用点增减了，两种都要人看一眼'
 )
