@@ -20,9 +20,24 @@ const src = fs.readFileSync(
 // 写着完整实现的块注释，pageMethod 会把注释里那份当源码抠走——A/B/C/D 四条、data 初值
 // 四条、wiring 一条全部改判在诱饵上（复审实测，整个修复能撤销而全绿）。
 // 另加一条自检：同名方法只许出现一次，出现两次说明还有别的东西在冒充它。
+// 抠两份：静态判据用剥过注释的，**执行**用原文。
+// 上一版两边都用剥过的，于是一个含 /* 的字符串就能让真代码在测试眼里消失——
+// `const OPEN = "/*" … const CLOSE = "*/"` 中间那几行连同引号一起被当成块注释吃掉，
+// 剥完语法仍合法、四档照常绿，而生产上整条修复被撤销（复审实测，全套 EXIT=0）。
+// 「这一条真跑」那句自述在那条通道上不成立。
+//
+// 互校：「先剥再抠」与「先抠再剥」必须一致——不一致就说明剥注释那一步吃错了东西。
 function pageMethod(name) {
+  const a = extractBody(stripJsComments(src), name)
+  const b = stripJsComments(extractBody(src, name))
+  assert.strictEqual(a, b,
+    '方法 ' + name + '「先剥再抠」与「先抠再剥」结果不同——多半是注释标记藏在字符串里，'
+      + '剥注释那一步把真代码吃掉了。这会让下面「真跑一遍」跑的不是文件里的程序')
+  return extractBody(src, name)
+}
+function extractBody(source, name) {
   const needle = String.fromCharCode(10) + '  ' + name + '('
-  const clean = stripJsComments(src)
+  const clean = source
   let hits = 0
   let scan = clean.indexOf(needle)
   while (scan >= 0) { hits += 1; scan = clean.indexOf(needle, scan + 1) }
@@ -182,11 +197,27 @@ assert.strictEqual(typeof cardOf, 'function', '抠出来的应当是个函数')
     ['cardHint', 'card.hint']
   ]
   pairs.forEach(function (pair) {
+    // 每个键在 fillCustomer 体内**只许出现一次**：valueOf 取的是第一处，前面先摆一个
+    // `const shape = { cardLabel: card.label, … }` 当诱饵，真 setData 里那四格就能随便
+    // 算而判据改判在诱饵上（复审实测，全套 EXIT=0）。多出来直接红，不猜哪个是真的。
+    let keyHits = 0
+    let keyScan = body.indexOf(pair[0] + ':')
+    while (keyScan >= 0) { keyHits += 1; keyScan = body.indexOf(pair[0] + ':', keyScan + 1) }
+    assert.strictEqual(keyHits, 1,
+      'fillCustomer 里 ' + pair[0] + ' 出现了 ' + keyHits + ' 次，应当只有 1 次'
+        + '——多出来的那份会让下面这条断言改判在它身上')
     const seg = valueOf(body, pair[0])
     assert.strictEqual(seg, pair[1],
       'fillCustomer 里 ' + pair[0] + ' 应当就是 ' + pair[1] + '，实为「' + seg + '」——'
         + '这四格只许写纯引用，任何计算（三元、拼串、包一层函数、|| 兜底）都要搬进 '
         + 'cardOf。在接线处算，cardOf 的四档就说了不算，而屏上跟着变')
+  })
+  // 规则的后半句（「所有计算都在 cardOf 里」）单独钉：拿到 card 之后、setData 之前
+  // 改它的字段，上面四条看到的仍是纯引用，行为钉子也够不着（替身的客户名恒定）。
+  ;['label', 'amountText', 'amountClass', 'hint'].forEach(function (f) {
+    assert.ok(body.indexOf('card.' + f + ' =') < 0 && body.indexOf('card.' + f + '=') < 0,
+      'fillCustomer 里不许写 `card.' + f + ' = ...`——cardOf 算出来的东西在这里被改掉的话，'
+        + '四档就说了不算，而上面那几条断言看到的仍是纯引用')
   })
 })()
 
@@ -252,12 +283,15 @@ assert.strictEqual(typeof cardOf, 'function', '抠出来的应当是个函数')
   // `data: {` 只许出现一次：取第一处的话，在 Page({ 后面塞一个返回 `{ data: {…正确四格…} }`
   // 的方法当诱饵，真 data 块就能整条改成 A 档而全绿（复审实测）。上一版把洞从「全文第一个
   // cardLabel」挪到了「全文第一个 data: {」，没堵住。
+  // 锁到顶层缩进（换行 + 两个空格）：只数子串的话 `metadata: {` 这种合法邻居会误报，
+  // 而且报的还是「data: { 出现了 2 次」，方向指错（复审实测）。
+  const dataNeedle = String.fromCharCode(10) + '  data: {'
   let dataHits = 0
-  let dataScan = clean.indexOf('data: {')
-  while (dataScan >= 0) { dataHits += 1; dataScan = clean.indexOf('data: {', dataScan + 1) }
+  let dataScan = clean.indexOf(dataNeedle)
+  while (dataScan >= 0) { dataHits += 1; dataScan = clean.indexOf(dataNeedle, dataScan + 1) }
   assert.strictEqual(dataHits, 1,
     '源码里 `data: {` 出现了 ' + dataHits + ' 次，应当只有 1 次——多出来的那份多半是在冒充它')
-  const dataAt = clean.indexOf('data: {')
+  const dataAt = clean.indexOf(dataNeedle)
   assert.ok(dataAt >= 0, '应当找得到 data 块')
   const dataBlock = clean.slice(dataAt, clean.indexOf(String.fromCharCode(10) + '  },', dataAt))
   pairs.forEach(function (pair) {
@@ -300,8 +334,9 @@ assert.strictEqual(typeof cardOf, 'function', '抠出来的应当是个函数')
       hint: '预收 ¥200.00 不自动冲欠款。下次开单会带出抵扣行，可改；要收款先冲这 ¥84.00' },
     { name: 'D 两清', receivable: 0, prepay: 0,
       label: '已结清', cls: '', amount: '0.00', hint: '' },
-    // 第五组接管被删掉的 pairs 判据那条唯一真杀伤：把某一格改成依赖输入的表达式
-    // （`receivable > 100000 ? '大额' : card.amountText` 之类）。四档输入都够不着它。
+    // 第五组守的是「cardOf **内部**按阈值分支」那一类：`if (receivable > 100000) return …`
+    // 写在 cardOf 里面时，pairs 看到的四格仍是纯引用、看不见它。
+    // （上一版这里写「接管被删掉的 pairs」——pairs 本轮已恢复，那是悬空引用。）
     { name: 'A 大额', receivable: 200000, prepay: 0,
       label: '当前欠款', cls: 'debt', amount: '200000.00', hint: '' }
   ]
