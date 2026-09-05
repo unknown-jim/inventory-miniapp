@@ -738,8 +738,7 @@ Page({
     // 完全正常、只是过期了，屏上没有任何异常，按它出货销售额 / 毛利 / 欠款一起错 ——
     // 静默错账，比屏上跳个数危险得多。
     //
-    // 所以规则就是裁定原文那一句（**单选态**；多选态的豁免见下方二十行处）：
-    // **身份没变 + 没手改过 → 一律重新取该格档价**；
+    // 所以规则就是裁定原文那一句：**身份没变 + 没手改过 → 一律重新取该格档价**；
     // 手改过就保留他填的。不需要再问一句「框里这个值过期了没」——没手改过时，
     // 不管过期与否都重新取，没过期时取回来的就是同一个数。
     //
@@ -754,18 +753,37 @@ Page({
     // tests/ui.test.js:1990 与 tests/sale-spec-view.test.js 的 (6b)）。审计穷举已证：
     // 参照格身份变了的组合，base 与 fix **0 差异**。
     //
-    // **多选态（|Z| >= 2）整个跳过这道判定**，不是漏改：此时 sku 恒为 null，
-    // 该追平到的数退回商品档价，而多选态框里那个值的正主是「第一枚选中格」
-    // （applySizeSelection / pickColor 多选支写的）。不加这道闸，每次 onShow 回填会把
-    // 整批价从 69 打回商品档价 39（已由 (7e) 钉死）。**多选态自己的档价过期问题
-    // 仍在**，另算，这里不冒充解决。
+    // **多选态（|Z| >= 2）走同一条规则，差别只在「参照格是谁」**：此时 `sku` 恒为 null
+    // （没有「当前唯一 SKU」），而框里那个值的正主是「第一枚选中格」——
+    // applySizeSelection / pickColor 的多选支写进去的就是它的档价。所以追平的目标取
+    // `refSku`，不是 `sku`：拿 `sku`（null）去追平会退回商品档价，每次 onShow 回填把整批价
+    // 从 69 打回 39，那是 (7e) 钉死的形状。
+    //
+    // 判据这一半仍是 `sameRefCell && priceTouched`，多选态下它自然退化成「同一件商品 +
+    // 框里有值 + 没手改过」：`skuId` 在多选态恒为空串（applySizeSelection 与这里都写
+    // 空串），`sku` 也恒为 null，身份那一项 `'' === ''` 恒真，答不了「参照格变没变」。
+    // 这跟 22:231 追裁一致——多选态的价是「整批一个价」，判据是「动过没有」，不是
+    // 「参照格变没变」（同一条判据也用在 pickColor 多选支和 applySizeSelection 的
+    // wasMulti && isMulti 支上）。于是：没手改过 → 重新取第一枚选中格的档价（本次修的
+    // 就是这一条，多选态的档价过期，钉子 (7k)）；手改过 → 保留他填的批价（钉子 (5)）。
+    //
+    // **`sameRefCell` 里那个身份判据仍然用 `sku` 而不是 `refSku`**：换成 `refSku` 的话
+    // 多选态下 `data.skuId`（空串）永远对不上 `refSku.id`（非空），sameRefCell 结构性恒假，
+    // 店主手改的批价每次回填都会被冲掉——正是 applySizeSelection 那段注释记的
+    // 「结构性恒假」同一个坑。
     //
     // **无规格商品同单选态**：`hasSpecs === false` 时 color/sizes 被清空、`sku` 恒为 null，
     // 走同一个 `sameRefCell`，没手改过就退回商品档价、手改过就保留。钉子 (7i)/(7j)。
     const isMulti = sizesSel.length >= 2
+    // 传 `color` 而不是让 firstSelectedSku 自己去读 `this.data.selectedColor`：这里的
+    // `color` 可能已经被上面那条归一化改过（colors.length === 1 时自动选中），而 data 要到
+    // 下面 setData 才跟上。实际能差出来的形态：店主在商品编辑里删掉了当前选中的那个颜色、
+    // 只剩一个色（product-edit 的 applySpecRemoval），回填时 `color` 是剩下那个色、
+    // `data.selectedColor` 还是被删掉的那个——读 data 会取不到参照格、退回商品档价。钉子 (7l)。
+    const refSku = isMulti ? this.firstSelectedSku(product, sizesSel, color) : sku
     const sameRefCell = this.data.productId === product.id && !!this.data.unitPrice
       && this.data.skuId === (sku ? sku.id : '')
-    const keepPrice = sameRefCell && (isMulti || !!this.data.priceTouched)
+    const keepPrice = sameRefCell && !!this.data.priceTouched
     this.setData(Object.assign({
       productId: product.id,
       productName: product.name,
@@ -777,7 +795,7 @@ Page({
       sizes: sizes,
       selectedColor: color,
       skuId: sku ? sku.id : ''
-    }, this.pricePatch(keepPrice, sku, product)))
+    }, this.pricePatch(keepPrice, refSku, product)))
     this.setData(this.sizeSelectionPatch(sizesSel))
     this.setData(this.stockPatch(product, sku, cart))
     this.applySettle(this.linePatch(cart))
@@ -883,11 +901,15 @@ Page({
 
   // 「第一枚选中格」按行序（product.sizes 顺序）取，不是点击顺序——逐格行与
   // currentLines 的行序都按 product.sizes 走，单价默认值跟着同一个序才不会两说。
-  firstSelectedSku(product, sizes) {
+  // color 省略时读 data.selectedColor：pickColor / applySizeSelection 两个调用点都是
+  // 先把新颜色写进 data 再调（见 pickColor 里那段顺序说明）。applyProductState 那个
+  // 调用点相反——颜色要到之后才 setData，所以它显式传，理由见那里。
+  firstSelectedSku(product, sizes, color) {
+    const useColor = color === undefined ? this.data.selectedColor : color
     const all = (product && product.sizes) || []
     for (let i = 0; i < all.length; i++) {
       if ((sizes || []).indexOf(all[i]) >= 0) {
-        return inventory.findSkuBySpec(this.data.skus, product.id, this.data.selectedColor, all[i]) || null
+        return inventory.findSkuBySpec(this.data.skus, product.id, useColor, all[i]) || null
       }
     }
     return null

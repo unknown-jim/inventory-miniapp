@@ -1072,17 +1072,21 @@ assert.strictEqual(switchCell.data.skuId, pBlackL.id, 'skuId 也要跟上')
 // 同一个屏上状态（没选规格二 + 手打过价），两个入口结果不同。要不要抹平是另一轮的事。
 // 本条只覆盖「没手改过」那一半，下面的断言也只断这一半。
 //
-// 两个入口都得有闸。本条**有独占杀伤**，不是纯文档——2026-09-04 实测，这个变异下
-// (7a)/(7b)/(7d)/(7e)/(7g)/(7h)/(7i) 全绿，只有本条红：
+// 两个入口都得有闸。本条**有独占杀伤**，不是纯文档——2026-09-05 重跑实测，这个变异下
+// 去掉本条之后全套绿，带上本条只有本条红：
 //
-//     keepPrice = sameRefCell && (isMulti || priceTouched || (hasSpecs && !sku))
+//     keepPrice = sameRefCell && (priceTouched || (hasSpecs && !isMulti && !sku))
 //
 // 红文：「全不选之后回填：没有参照格了，单价应当退回商品档价 39，实为 69」。
 //
 // （更粗的 `|| !sku` 会同时打红 (7i)——那条守的是无规格商品同一形态。所以要分开二者，
-// 变异得带上 `hasSpecs`。这一句在本文件里改过两次：先是漏写了独占杀伤，再是把 `|| !sku`
-// 说成「只从这一个漏」，而 (7i) 补进来之后它就不成立了。**加断言会让旧的杀伤陈述过期**，
-// 不重跑就会留下一句错话。）
+// 变异得带上 `hasSpecs`。这一句在本文件里改过三次：先是漏写了独占杀伤，再是把 `|| !sku`
+// 说成「只从这一个漏」而 (7i) 补进来之后它就不成立了，第三次是 2026-09-05：
+// 上一版写的变异是 `sameRefCell && (isMulti || priceTouched || (hasSpecs && !sku))`，
+// 而 `isMulti` 那一项已经从实现里删掉了（多选态不再豁免，见 (7k)）。照着新实现改写成
+// `sameRefCell && (priceTouched || (hasSpecs && !sku))` 之后它**同时打红 (7k)**——多选态
+// 下 `!sku` 也为真，那一项把多选态一并豁免了。要还原成「只有本条红」，变异必须再带上
+// `!isMulti`，就是上面那一行。**加断言会让旧的杀伤陈述过期**，不重跑就会留下一句错话。）
 //
 // 上一版这里两处都写错了，一起记下来当反面教材：
 //   1. 夹具用 singleOnBlackM（skuId = 该格 id）——那是**不可达形态**。全不选只在多选态
@@ -1239,13 +1243,17 @@ assert.strictEqual(switchCell.data.skuId, pBlackL.id, 'skuId 也要跟上')
   assert.strictEqual(page.data.priceTouched, true, '归属仍在店主手里，不该被复位')
 })()
 
-// --- (7e) 多选态回填不许被「过期判定」打回商品档价 ----------------------------
-// (7a) 那道过期判定**必须整个跳过多选态**：多选态下 applyProductState 算出来的 sku
-// 恒为 null，「系统该写的数」退回商品档价，而框里那个值的正主是「第一枚选中格」
-// （applySizeSelection / pickColor 多选支写进去的），两者本来就不相等。把过期判定
-// 无差别铺到多选态，每一次 onShow 回填都会把整批价从 69 打回 39 —— 正是
+// --- (7e) 多选态回填不许被打回商品档价 ----------------------------------------
+// 多选态下 applyProductState 算出来的 `sku` 恒为 null，拿它当追平目标就会退回商品档价，
+// 而框里那个值的正主是「第一枚选中格」（applySizeSelection / pickColor 多选支写进去的），
+// 两者本来就不相等。追平目标取错，每一次 onShow 回填都会把整批价从 69 打回 39 —— 正是
 // tests/ui.test.js 里「多选态 skuId 记空串」那条注释警告的形状。
 // 上面 (5) 钉的是多选态**手改过**的回填；这一条补的是**没手改过**那一半。
+//
+// （2026-09-05 更新：这条闸原先是靠「多选态整个跳过过期判定」实现的，本条的注释也是
+// 那么写的。那个写法顺带把**多选态自己的档价过期**一起豁免掉了，见下面 (7k)。现在闸
+// 换成了「追平目标取第一枚选中格」——本条断的**值**一个字没改，只是它现在守的是
+// 「refSku 取对了没有」，不再是「跳过判定了没有」。）
 const multiBack = multiOnBlack()
 assert.strictEqual(multiBack.data.priceTouched, false, '前提：店主没动过这个框')
 assert.strictEqual(multiBack.data.skuId, '', '前提：多选态 skuId 恒为空串')
@@ -1258,9 +1266,145 @@ assert.strictEqual(
   multiBack.data.unitPrice, String(pBlackM.salePrice),
   '多选态离开页面再回来，整批价应当仍是第一枚选中格的档价 ' + pBlackM.salePrice
     + '，实为 ' + multiBack.data.unitPrice + '——被打回商品档价 '
-    + priced.product.salePrice + ' 就说明单选态那道「过期判定」漏到多选态来了'
+    + priced.product.salePrice + ' 就说明追平目标取成了多选态恒为 null 的那个 sku，'
+    + '没取第一枚选中格'
 )
 assert.deepStrictEqual(multiBack.data.selectedSizes, ['M', 'L'], '回填不该动选中集合')
+
+// --- (7k) 多选态回填：第一枚选中格的**档价变了** → 跟着更新 ------------------
+// (7a) 是这条规则的单选态版本。多选态在 #138 里被**整个豁免**掉了（当时的判据是
+// `sameRefCell && (isMulti || priceTouched)`，isMulti 那一支让多选态永远「保留」），
+// 那是刻意留下并已声明的缺口：店主在多选态选中黑 M + L（系统把整批价追平到第一枚
+// 选中格黑 M 的档价 69），中途去商品编辑把**黑 M 这一格**的档价改成 79，回销售页
+// onShow → selectProduct → applyProductState，框里仍是过期的 69。危害与 (7a) 同类、
+// 同样是静默错账，而且更重一点：多选态是整批一个价，错的是这一批**每一行**。
+//
+// 修法与 (7a) 同一条规则，差别只在参照格的取法：多选态的参照格是「第一枚选中格」
+// （firstSelectedSku），单选态是当前唯一 SKU。判据两边都是「没手改过就重新取」。
+//
+// **进入态由真入口造**：从单选态选中黑 M 出发，点 L 进多选（T4，走 applySizeSelection）。
+// 手搭一个 `skuId: ''` 的多选态也能过，但那样测的是我自己写的形状；这里让真代码去写
+// skuId / unitPrice，顺带把「T4 之后的进入态到底长什么样」也钉住了。
+//
+// 杀伤（2026-09-05 实测，写清跑过什么，不写穷不尽的断言）：
+//   · 拿 e8bc617 的 sale.js 跑，**只留本条**也红（'69' !== '79'）——不是靠别的组带红的。
+//   · 把豁免加回去（`keepPrice = sameRefCell && (isMulti || priceTouched)`）本条红，
+//     但 (7l) **同时**也红。所以本条不是那个变异的独占闸；它是这条修复的正面陈述。
+//   · 没去找「只让本条红」的变异。
+;(function assertMultiRefillTakesFreshCellPrice() {
+  const fx = repriceFixture()
+  const cellBefore = fx.cell('黑色', 'M')
+  const page = singleOnBlackM(fx, { qty: '1' })
+  tapSize(page, 'L')   // T4：1 → 2 格，进多选
+  assert.deepStrictEqual(page.data.selectedSizes, ['M', 'L'], '前提：这一下应当进多选形态')
+  assert.strictEqual(page.data.multiMode, true, '前提：|Z| 1→2')
+  assert.strictEqual(page.data.skuId, '', '前提：多选态 skuId 由真代码写成空串')
+  assert.strictEqual(page.data.unitPrice, String(cellBefore.salePrice),
+    '前提：进多选之后整批价是第一枚选中格黑 M 的档价 ' + cellBefore.salePrice)
+  assert.strictEqual(page.data.priceTouched, false, '前提：这个值是系统写的，店主没动过')
+
+  const cellAfter = fx.reprice('黑色', 'M', 79)
+  assert.strictEqual(cellAfter.id, cellBefore.id,
+    '前提：改的必须是**同一枚 SKU**（身份没变、只有档价变了）——这一组钉的正是这个形状')
+  assert.notStrictEqual(String(cellAfter.salePrice), page.data.unitPrice,
+    '前提：进入值（' + page.data.unitPrice + '）不许等于期望值（' + cellAfter.salePrice
+      + '），相等的话这条断言恒真，实现什么都不做也能过')
+  assert.notStrictEqual(String(cellAfter.salePrice), String(fx.product.salePrice),
+    '前提：新档价不许等于商品档价（' + fx.product.salePrice + '），否则「取了第一枚选中格」'
+      + '和「退回商品档价」这两种实现分不出来')
+
+  page.selectProduct(fx.product.id)   // onShow 的原路
+  assert.strictEqual(page.data.unitPrice, '79',
+    '多选态下店主改了第一枚选中格的档价（69 → 79），回销售页 onShow 回填时整批价必须'
+      + '跟着更新到 79，实为 ' + page.data.unitPrice + '——停在旧价看上去完全正常、'
+      + '只是过期了，按它出货这一批每一行都错（销售额 / 毛利 / 欠款一起错）')
+  assert.strictEqual(page.data.priceTouched, false,
+    '重新取的是档价，归属仍在系统手里——写成 true 的话下一次换规格一会把这个系统'
+      + '写进去的价当成「店主手改的」保留住')
+  assert.strictEqual(page.data.skuId, '',
+    '回填之后仍在多选态，skuId 仍记空串——写成参照格 id 的话 sameRefCell 会结构性恒假，'
+      + '店主手改的批价每次回填都被冲掉')
+  assert.deepStrictEqual(page.data.selectedSizes, ['M', 'L'], '回填不该动选中集合')
+
+  // 记账后果：两格各 1 件，出去的两行都得按新档价 79。上面那条只看 data.unitPrice。
+  const qtys = {}
+  qtys[page.cellKey('M')] = '1'
+  qtys[page.cellKey('L')] = '1'
+  page.setData({ cellQtys: qtys })
+  const lines = page.currentLines()
+  assert.strictEqual(lines.error, '', '两格都填了数，不该有 error')
+  assert.strictEqual(lines.lines.length, 2, '两格各一行')
+  lines.lines.forEach(function (line) {
+    assert.strictEqual(line.unitPrice, 79,
+      '「' + line.size + '」这一行应当按更新后的 79 记账，实为 ' + line.unitPrice
+        + '——整批一个价，过期的话这一批每一行一起错')
+  })
+})()
+
+// --- (7l) 多选态回填：参照格要按**这一次归一化之后**的颜色取 ------------------
+// `applyProductState` 里 `color` 可能与 `this.data.selectedColor` 不同：`colors.length === 1`
+// 时它会自动选中那一个色，而 data 要到之后 setData 才跟上。可达形态（product-edit 的
+// applySpecRemoval，pages/product-edit/product-edit.js:388/410）：商品原有黑 / 白两色，
+// 店主在销售页多选态选中**黑** M + L（整批价 = 黑 M 的 69），中途去商品编辑把「黑色」这个
+// 取值删掉，只剩白色；回销售页 onShow → 归一化把 color 定成白色、屏上也显示白色，
+// 于是这一批出去的行是白 M / 白 L，价就该是白 M 的 59。
+//
+// 三种实现给三个不同的数，这一条同时挡住另外两个：
+//   · 本次改动之前（多选态一律保留）      → 69，拿**已经不存在的那个颜色**的价记白色的账
+//   · 参照格读 this.data.selectedColor    → 取不到（黑色的 SKU 已经没了）→ 退回商品档价 39
+//   · 按归一化之后的 color 取             → 59（白 M），与真正出去的那两行对得上
+//
+// 杀伤（2026-09-05 实测）：把 `firstSelectedSku(product, sizesSel, color)` 的第三个实参
+// 去掉（= 回去读 this.data.selectedColor）时，**去掉本条之后全套绿，带上本条只有本条红**
+// ——这一条是那个实参唯一的闸。另外拿 e8bc617 的 sale.js 跑，只留本条也红。
+;(function assertMultiRefillUsesNormalizedColor() {
+  const fx = repriceFixture()
+  const blackM = fx.cell('黑色', 'M')
+  const whiteM = fx.cell('白色', 'M')
+  const page = singleOnBlackM(fx, { qty: '1' })
+  tapSize(page, 'L')
+  assert.deepStrictEqual(page.data.selectedSizes, ['M', 'L'], '前提：进多选形态')
+  assert.strictEqual(page.data.unitPrice, String(blackM.salePrice),
+    '前提：整批价是黑 M 的 ' + blackM.salePrice)
+
+  // 模拟「店主在商品编辑里删掉了黑色这个取值」+ 回页面时 onShow 重新取商品与 SKU：
+  // 商品的 colors 只剩白色，黑色那两枚 SKU 一并消失。data.skus 与 fx.skus 是同一个
+  // 数组引用（saleHarness 里 `skus: fixture.skus`），所以就地删就等价于 onShow 重取。
+  fx.product = Object.assign({}, fx.product, { colors: ['白色'] })
+  for (let i = fx.skus.length - 1; i >= 0; i--) {
+    if (fx.skus[i].color === '黑色') fx.skus.splice(i, 1)
+  }
+  assert.strictEqual(fx.skus.length, 2, '前提：只剩白色两枚 SKU')
+  ;[String(blackM.salePrice), String(fx.product.salePrice)].forEach(function (other) {
+    assert.notStrictEqual(String(whiteM.salePrice), other,
+      '前提：白 M 的档价（' + whiteM.salePrice + '）不许等于 ' + other
+        + '，否则三种实现里有两种给出同一个数，本条分不出来')
+  })
+
+  page.selectProduct(fx.product.id)
+  assert.strictEqual(page.data.selectedColor, '白色',
+    '前提：只剩一个色时归一化会自动选中它，屏上显示的就是白色')
+  assert.strictEqual(page.data.multiMode, true, '前提：仍在多选形态')
+  assert.strictEqual(page.data.unitPrice, String(whiteM.salePrice),
+    '删掉当前选中的颜色之后回填，整批价应当取**归一化之后**那个色的第一枚选中格'
+      + '（白 M）的档价 ' + whiteM.salePrice + '，实为 ' + page.data.unitPrice
+      + '——停在 ' + blackM.salePrice + ' 是拿已经不存在的黑色的价记白色的账；'
+      + '退成 ' + fx.product.salePrice + ' 是参照格读了还没跟上的 data.selectedColor、'
+      + '取不到格子')
+
+  // 记账后果：出去的两行确实是白色那两格，价与上面那个数对得上。
+  const qtys = {}
+  qtys[page.cellKey('M')] = '1'
+  qtys[page.cellKey('L')] = '1'
+  page.setData({ cellQtys: qtys })
+  const lines = page.currentLines()
+  assert.strictEqual(lines.lines.length, 2, '两格各一行')
+  lines.lines.forEach(function (line) {
+    assert.strictEqual(line.color, '白色', '「' + line.size + '」这一行应当记在白色上')
+    assert.strictEqual(line.unitPrice, whiteM.salePrice,
+      '「' + line.size + '」这一行应当按 ' + whiteM.salePrice + ' 记账，实为 ' + line.unitPrice)
+  })
+})()
 
 // ===========================================================================
 // 「本次售价」的归属（续）：多选态内增删格也按「动过没有」判（22:231 追裁）
