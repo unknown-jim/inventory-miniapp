@@ -27,7 +27,9 @@ Page({
     prepayText: '0.00',
     hasDebt: false,
     hasPrepay: false,
-    cardLabel: '当前欠款',
+    // 初值就是 D 档（稿 28:1）：还没拿到数之前，屏上不该先写「当前欠款」——
+    // reloadCustomer 之前这一瞬间是看得见的。
+    cardLabel: '已结清',
     cardAmountText: '0.00',
     cardAmountClass: '',
     cardHint: '',
@@ -139,7 +141,11 @@ Page({
   //   A 默认      4:369「当前欠款」，无 hint
   //   B 预收变体  7:251「预收款（收超欠款部分）」+ 7:253 hint，金额绿（green/700）
   //   C 并存变体  9:5「当前欠款（另有预收待抵扣）」+ 9:7 hint，金额仍是**欠款**、红
-  // D 档（既没欠款也没预收）稿上没画，按 A 的形状收口：金额 ¥0.00、中性黑、不出 hint。
+  // D 档（既没欠款也没预收）2026-09-05 补进稿：28:1「card/当前欠款·已结清」——
+  //   label 28:2「已结清」、金额 ¥0.00 用 text/strong（3:23）不是欠款红、不出 hint、
+  //   按钮行与「记期初欠款」链接照留。
+  //   在此之前它回落成 A 的形状，两清的客户屏上写着「当前欠款 ¥0.00」——一眼扫过去
+  //   像是还欠着钱。这不是记账错误，是读数错误，但同样会让人误判。
   // **B 与 C 的差别是本批最容易做错的一处：C 的 hero 数字是欠款不是预收。**
   cardOf(receivable, prepay) {
     if (receivable > 0 && prepay > 0) {
@@ -167,7 +173,7 @@ Page({
         hint: '欠款已清 · 下次开单可抵 · 点收款可继续记预收'
       }
     }
-    return { label: '当前欠款', amountText: util.money(0), amountClass: '', hint: '' }
+    return { label: '已结清', amountText: util.money(0), amountClass: '', hint: '' }
   },
 
   // ---------------------------------------------------------------------------

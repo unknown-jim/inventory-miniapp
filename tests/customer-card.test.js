@@ -1,0 +1,106 @@
+// 客户详情首卡四档（pages/customer-detail/customer-detail.js 的 cardOf）。
+//
+// 这四档此前**一条测试都没有**。它们不是记账逻辑，改错了不会让钱算错，但会让店主
+// **读错数**——B 档和 C 档的 hero 数字一个是预收一个是欠款，看混了就会以为客户还欠着
+// 或者已经清了。源码注释自己都写着「B 与 C 的差别是本批最容易做错的一处」，却没人守。
+//
+// 逐字取自稿：A 4:369 / B 7:251 + 7:253 / C 9:5 + 9:7 / D 28:1（2026-09-05 补画）。
+const assert = require('assert')
+const fs = require('fs')
+const path = require('path')
+
+const src = fs.readFileSync(
+  path.join(__dirname, '..', 'pages', 'customer-detail', 'customer-detail.js'), 'utf8')
+
+// 从源码里抠出 cardOf 的真身，不复刻一份——复刻的那份改了这里不会知道。
+// 用 indexOf 找而不是正则：本文件第一版用 new RegExp 写判据，写文件的工具把反斜杠折掉
+// 了一层，括号的转义变成了捕获组、整条匹配不上，报出来却是「missing method cardOf」，
+// 看着像源码改名了。**判据自己出错时要能分辨得出来**，所以这里换成不需要转义的写法。
+function pageMethod(name) {
+  const needle = String.fromCharCode(10) + '  ' + name + '('
+  const at = src.indexOf(needle)
+  assert.ok(at >= 0, 'missing method ' + name + '——它改名或改了签名，下面测的就不是源码了')
+  let i = src.indexOf('{', at)
+  assert.ok(i > 0, name + ' 后面找不到函数体的左花括号')
+  i += 1
+  let depth = 1
+  while (i < src.length && depth > 0) {
+    if (src[i] === '{') depth += 1
+    else if (src[i] === '}') depth -= 1
+    i += 1
+  }
+  assert.strictEqual(depth, 0, name + ' 的花括号没配平，抠出来的不是完整函数体')
+  return src.slice(at + 1, i)
+}
+
+const util = require('../utils/util')
+const cardOf = new Function('util',
+  'return { ' + pageMethod('cardOf') + ' }').call(null, util).cardOf
+
+// --- A 默认：只有欠款 -------------------------------------------------------
+{
+  const a = cardOf(1500, 0)
+  assert.strictEqual(a.label, '当前欠款', '稿 4:369')
+  assert.strictEqual(a.amountText, util.money(1500), 'hero 数字是欠款')
+  assert.strictEqual(a.amountClass, 'debt', '欠款是红的')
+  assert.strictEqual(a.hint, '', 'A 档稿上没有 hint')
+}
+
+// --- B 预收变体：欠款已清、有预收 -------------------------------------------
+{
+  const b = cardOf(0, 200)
+  assert.strictEqual(b.label, '预收款（收超欠款部分）', '稿 7:251')
+  assert.strictEqual(b.amountText, util.money(200), 'B 档 hero 数字是**预收**')
+  assert.strictEqual(b.amountClass, 'prepay', '预收是绿的，不能跟欠款一个色')
+  assert.ok(b.hint.indexOf('欠款已清') === 0, '稿 7:253 的 hint，实为「' + b.hint + '」')
+}
+
+// --- C 并存：既欠款又有预收 -------------------------------------------------
+// **这一条是本文件最要紧的。** 源码注释写着「B 与 C 的差别是本批最容易做错的一处：
+// C 的 hero 数字是欠款不是预收」——把它钉住，别只留一句注释。
+{
+  const c = cardOf(84, 200)
+  assert.strictEqual(c.label, '当前欠款（另有预收待抵扣）', '稿 9:5')
+  assert.strictEqual(c.amountText, util.money(84),
+    'C 档 hero 数字必须是**欠款 84**，不是预收 200——写成 200 的话，一个还欠着 84 的客户'
+      + '屏上会显示一个绿色的 200，店主会以为不用收钱了')
+  assert.notStrictEqual(c.amountText, util.money(200), '再钉一遍：不许是预收那个数')
+  assert.strictEqual(c.amountClass, 'debt', 'C 档金额仍是欠款、仍是红的')
+  assert.ok(c.hint.indexOf('预收 ¥' + util.money(200)) === 0,
+    '稿 9:7 的 hint 要把预收数报出来，实为「' + c.hint + '」')
+}
+
+// --- D 已结清：两清 ---------------------------------------------------------
+// 2026-09-05 补画（稿 28:1）。在此之前代码回落成 A 的形状，两清的客户屏上写着
+// 「当前欠款 ¥0.00」——一眼扫过去像是还欠着钱。
+{
+  const d = cardOf(0, 0)
+  assert.strictEqual(d.label, '已结清', '稿 28:1 的 label 28:2')
+  assert.notStrictEqual(d.label, '当前欠款',
+    '两清的客户不该写「当前欠款」——这是补画 D 档之前的行为，回退到它这条要红')
+  assert.strictEqual(d.amountText, util.money(0), '¥0.00')
+  assert.strictEqual(d.amountClass, '',
+    '中性色，不是欠款红也不是预收绿——稿 28:3 用的是 text/strong (3:23)')
+  assert.strictEqual(d.hint, '', 'D 档稿上没有 hint')
+}
+
+// --- 边界：负数不该掉进 D 档 ------------------------------------------------
+// 判据写的是 `> 0`。欠款为负（多收了但没走预收路径）时会落到 D，屏上写「已结清」。
+// 这不是本次要改的东西，但**把现状钉住**，免得以后有人改了 cardOf 却没发现这一支。
+{
+  const neg = cardOf(-50, 0)
+  assert.strictEqual(neg.label, '已结清',
+    '负欠款目前落 D 档（判据是 > 0）。这是现状不是主张——真要区分得先改稿')
+}
+
+// --- data 初值也得是 D 档 ---------------------------------------------------
+// reloadCustomer 拿到数之前那一瞬间屏上是看得见的，初值写「当前欠款」就是先给一个错读数。
+{
+  const m = /cardLabel:\s*'([^']*)'/.exec(src)
+  assert.ok(m, 'data 里应当有 cardLabel 初值')
+  assert.strictEqual(m[1], '已结清',
+    'data 的 cardLabel 初值应当是 D 档的「已结清」，实为「' + m[1] + '」'
+      + '——首屏那一瞬间不该先写「当前欠款」')
+}
+
+console.log('customer-card tests passed')
