@@ -1617,9 +1617,16 @@ assert.deepStrictEqual(multiBack.data.selectedSizes, ['M', 'L'], '回填不该�
   removed.skus.forEach(function (item) { fx.skus.push(item) })
   assert.strictEqual(inv.findSkuBySpec(fx.skus, fx.product.id, '黑色', 'M'), null,
     '前提：参照格已经取不到了——与 (7n) 同一个形态')
+  // 照抄 (7n) 的两条「形态没跑偏」前提。缺了它们夹具一漂本条就无声失去杀伤：复审实测，
+  // 把红色两格也清零、删到只剩白色，归一化接管、refSku 变成白 M，本条**仍然全绿**，
+  // 而那个逃逸变异下整文件也跟着变绿。
+  assert.deepStrictEqual(fx.product.colors, ['白色', '红色'],
+    '前提：删完还剩**两个**色——只剩一个的话归一化会接管，参照格就取得到了，测的不是这条')
 
   page.selectProduct(fx.product.id)   // onShow 的原路
 
+  assert.strictEqual(page.data.selectedColor, '黑色',
+    '前提：回填后 selectedColor 仍停在已被删掉的黑色——归一化没接管，参照格才真的取不到')
   assert.strictEqual(page.data.unitPrice, typed,
     '多选态参照格取不到、但店主手打过批价时，应当保留他填的 ' + typed
       + '，实为 ' + page.data.unitPrice + '——退回商品档价 ' + fx.product.salePrice
