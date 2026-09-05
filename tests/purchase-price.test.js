@@ -183,7 +183,7 @@ function harness(initial) {
     getSkus: function () { return fx.skus },
     addPurchase: function (input) {
       const done = inv.applyPurchase(
-        fx.products.slice(), fx.records.slice(), input, 9000, 'rec-sub', fx.skus.slice(), idFactory())
+        fx.products.slice(), fx.records.slice(), input, 9000, 'rec-sub', fx.skus.slice())
       fx.products = done.products
       fx.skus = done.skus
       fx.records = done.records
@@ -687,6 +687,18 @@ async function recentGroup() {
   assert.strictEqual(page.data.priceTouched, true, '保留时归属不变')
 }
 
+// 收尾闸：异步断言没跑完就退出的话，进程会安安静静 exit 0——复审实测过这条假绿通道
+// （把 addPurchase 换成永不 settle 的 promise，上一版照样 exit 0）。这里钉死：
+// 没走到最后一行就是失败。
+let finished = false
+process.on('exit', function (code) {
+  if (code === 0 && !finished) {
+    console.error('异步断言没跑完就退出了——下面这些一条都没验：P12 / P13。'
+      + '多半是某个 await 的 promise 永远不 settle，或者链被谁截断了。')
+    process.exitCode = 1
+  }
+})
+
 recentGroup().then(function () {
   // --- (P12) 提交之后归属交还系统（2026-09-06 翻案）------------------------------
 // 上一版裁定「不复位」，论据是「进货走移动加权平均、复位会填进一个没人报过价的平均数」。
@@ -718,18 +730,18 @@ recentGroup().then(function () {
       + '实为 `' + line + '`——留着 true 的话，以后别人改了档案进价这一格再也追不上，'
       + '就是本批一直在修的静默错账')
   assert.ok(line.indexOf("unitPrice: ''") >= 0,
-    '归属与价必须**一起**写（同 P10 那条不变量）：这次清空里应当同时有 '
+    '归属与价必须**一起**写（守这件事的是本条，不是 P10——P10 只保证写入点总数收敛）：'
+      + '这次清空里应当同时有 '
       + "`unitPrice: ''`，实为 `" + line + '`')
 })()
 
-// submit 会走 util.showToast / showError，那两个要 wx。只桩它真正调到的三个，
-// 不造一整个 wx——桩多了就等于把生产代码的依赖偷偷改宽。
+// submit 直接调 `wx.showToast`（purchase.js:359）；错误路径经 `util.showError` 用到
+// `wx.showModal` / `wx.showToast`。只桩这两个——**桩多了就等于把生产代码的依赖偷偷
+// 改宽**：上一版桩了五个并写「只桩它真正调到的三个」，两句都是假的（`util.showToast`
+// 这个函数根本不存在，实际只调到 showToast 一个），复审拿 Proxy 记账当场比出来。
 global.wx = global.wx || {
   showToast: function () {},
-  showModal: function () {},
-  hideLoading: function () {},
-  showLoading: function () {},
-  nextTick: function (f) { f() }
+  showModal: function () {}
 }
 
 // --- (P13) 真跑一遍 submit：归属确实被交还了 ---------------------------------
@@ -757,9 +769,9 @@ global.wx = global.wx || {
   assert.strictEqual(page.data.unitPrice, '33',
     '复位之后回填应当拿回刚覆盖上去的档案进价 33，实为 ' + page.data.unitPrice
       + '——不等于的话「复位在提交那一刻是显示等价的」这句话就不成立')
-})().catch(function (e) { console.error(e); process.exit(1) })
-
-console.log('purchase-price tests passed')
+})()
+  .then(function () { finished = true; console.log('purchase-price tests passed') })
+  .catch(function (e) { console.error(e); process.exit(1) })
 }, function (error) {
   console.error(error)
   process.exit(1)

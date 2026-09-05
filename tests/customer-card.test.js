@@ -138,11 +138,38 @@ assert.strictEqual(typeof cardOf, 'function', '抠出来的应当是个函数')
     'fillCustomer 里应当有 `const card = this.cardOf(receivable, prepay)`——'
       + '换成写死的对象或别的算法，上面那些断言一条都拦不住：它们测的是纯函数，'
       + '不是它有没有被接上')
-  const fields = ['card.label', 'card.amountText', 'card.amountClass', 'card.hint']
-  fields.forEach(function (f) {
-    assert.ok(src.indexOf(f) >= 0,
-      '首卡的 ' + f + ' 应当从 cardOf 的返回里取——取不到就意味着这一格是另算的，'
-        + 'cardOf 说了不算')
+  // 逐**对**核，不只查字符串在不在：复审实测把 cardAmountClass 与 cardHint 对调，
+  // 四个字符串都还在、照样全绿，而屏上会把 hint 当成 class 涂上去。
+  const pairs = [
+    ['cardLabel', 'card.label'],
+    ['cardAmountText', 'card.amountText'],
+    ['cardAmountClass', 'card.amountClass'],
+    ['cardHint', 'card.hint']
+  ]
+  pairs.forEach(function (pair) {
+    assert.ok(src.indexOf(pair[0] + ': ' + pair[1]) >= 0,
+      'fillCustomer 里 ' + pair[0] + ' 应当接 ' + pair[1]
+        + '——接错格子的话四个字符串都还在，测不出来，屏上却会串位')
+  })
+})()
+
+// --- 屏上那张卡真的在读这四个字段吗 -----------------------------------------
+// 复审实测：把 wxml 的 `{{cardLabel}}` 写死成「当前欠款」——**等于把这次修复整个撤销**
+// ——完整 npm test 仍然 EXIT=0。上面所有断言测的都是 js 侧，没有一条看 wxml。
+// tests/ 全仓 grep `hero-label` / `hero-num` 零命中，ui.test.js 也不读这张卡的文案。
+;(function assertHeroCardReadsTheFields() {
+  const wxml = fs.readFileSync(
+    path.join(__dirname, '..', 'pages', 'customer-detail', 'customer-detail.wxml'), 'utf8')
+  const need = [
+    ['{{cardLabel}}', 'label 那一行'],
+    ['{{cardAmountClass}}', '金额的颜色 class'],
+    ['{{cardAmountText}}', '金额本身'],
+    ['{{cardHint}}', 'hint']
+  ]
+  need.forEach(function (pair) {
+    assert.ok(wxml.indexOf(pair[0]) >= 0,
+      '首卡的' + pair[1] + '应当绑 ' + pair[0] + '——写死文案的话 cardOf 算得再对，'
+        + '屏上也不跟着走，而 js 侧的断言一条都拦不住')
   })
 })()
 
