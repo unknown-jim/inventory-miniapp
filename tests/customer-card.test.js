@@ -130,13 +130,9 @@ assert.strictEqual(typeof cardOf, 'function', '抠出来的应当是个函数')
 // 正常路径上看不见这个初值：fillCustomer 把 pageLoading:false 与 cardLabel 写在同一次
 // setData 里，两者同时翻，没有中间帧。真正看得见它的是 onShow 里 store.ready() 失败那条
 // return——那条路上首卡说什么都是错的（见 customer-detail.js 里同一段说明）。
-{
-  const m = /cardLabel:\s*'([^']*)'/.exec(src)
-  assert.ok(m, 'data 里应当有 cardLabel 初值')
-  assert.strictEqual(m[1], '已结清',
-    'data 的 cardLabel 初值应当是 D 档的「已结清」，实为「' + m[1] + '」'
-      + '——零态该长 cardOf(0, 0) 的样子')
-}
+// 这一节的判据在下面 assertDataDefaultsAreZeroState 里，四格一起核、且在剥过注释的
+// 那份上切。上一版这里另有一条只核 cardLabel、取全文第一个匹配、不剥注释的断言——
+// **它是第三个逃逸口**（注释诱饵直接放行），已删。
 
 // --- 账号 → 屏上文案这一段也要有人守 -----------------------------------------
 // 复审实测两条逃逸，上面那些断言一条都拦不住：
@@ -147,7 +143,10 @@ assert.strictEqual(typeof cardOf, 'function', '抠出来的应当是个函数')
 //      也是全绿——而注释声称「初值取 D 档、与 cardOf(0, 0) 的返回一致」。
 // 两条都用静态判据补上：纯函数对不对是一回事，**它有没有被接上**是另一回事。
 ;(function assertCardOfIsActuallyWired() {
-  assert.ok(stripJsComments(src).indexOf('const card = this.cardOf(receivable, prepay)') >= 0,
+  // 判据必须和断言文字一个范围。上一版说「fillCustomer 里」却扫全文，于是把原写法
+  // 搬进一个没人调的方法当诱饵就能全绿（复审实测）。
+  const body = stripJsComments(pageMethod('fillCustomer'))
+  assert.ok(body.indexOf('const card = this.cardOf(receivable, prepay)') >= 0,
     'fillCustomer 里应当有 `const card = this.cardOf(receivable, prepay)`——'
       + '换成写死的对象或别的算法，上面那些断言一条都拦不住：它们测的是纯函数，'
       + '不是它有没有被接上')
@@ -159,11 +158,13 @@ assert.strictEqual(typeof cardOf, 'function', '抠出来的应当是个函数')
     ['cardAmountClass', 'card.amountClass'],
     ['cardHint', 'card.hint']
   ]
-  const body = stripJsComments(pageMethod('fillCustomer'))
   pairs.forEach(function (pair) {
-    // 带结尾逗号：不带的话 `cardHint: card.hintText,` 会被当成命中（前缀匹配），
-    // 而 card 上根本没有 hintText，屏上 hint 直接消失。复审实测过这条。
-    assert.ok(body.indexOf(pair[0] + ': ' + pair[1] + ',') >= 0,
+    // 要求后面跟一个**非标识符字符**：光前缀会把 `card.hintText` 当成 `card.hint`
+    // 命中（card 上没这个字段，屏上 hint 直接消失）；而硬要结尾逗号又会在「挪到最后
+    // 一格」这种行为不变的改版上误报。两头的坑复审都实测过。
+    const at = body.indexOf(pair[0] + ': ' + pair[1])
+    const tail = at >= 0 ? body.charAt(at + (pair[0] + ': ' + pair[1]).length) : 'x'
+    assert.ok(at >= 0 && 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_$'.indexOf(tail) < 0,
       'fillCustomer 里 ' + pair[0] + ' 应当接 ' + pair[1]
         + '——接错格子、接到不存在的字段、或者只把原写法留在注释里，屏上都会串位或空掉')
   })
@@ -172,23 +173,32 @@ assert.strictEqual(typeof cardOf, 'function', '抠出来的应当是个函数')
 // --- 屏上那张卡真的在读这四个字段吗 -----------------------------------------
 // 复审实测：把 wxml 的 `{{cardLabel}}` 写死成「当前欠款」——**等于把这次修复整个撤销**
 // ——完整 npm test 仍然 EXIT=0。上面所有断言测的都是 js 侧，没有一条看 wxml。
-// tests/ 全仓 grep `hero-label` / `hero-num` 零命中，ui.test.js 也不读这张卡的文案。
+// 补这条之前，tests/ 全仓 grep `hero-label` / `hero-num` 是零命中的；ui.test.js 至今
+// 也不读这张卡的文案（它只用商品详情那几个 js- 钩子）。
 ;(function assertHeroCardReadsTheFields() {
   const wxml = fs.readFileSync(
     path.join(__dirname, '..', 'pages', 'customer-detail', 'customer-detail.wxml'), 'utf8')
   const body = stripWxmlComments(wxml)
   // 判**成对形态**，不是全文有没有这个 token：复审实测两条绕过——把原 token 留在
   // wxml 注释里、或者把 {{cardLabel}} 挪到别的节点上，全文 indexOf 都照样命中。
+  // 判「带这个 class 的节点里，正文就是这个绑定」，不锁属性顺序 / 个数 / 折行——
+  // 上一版把整串写死，加一个属性或折一行就误报（复审实测）。假红不如没有，但也别过紧。
   const need = [
-    ['class="hero-label">{{cardLabel}}<', 'label 那一行'],
-    ['{{cardAmountClass}} js-detail-amount">¥{{cardAmountText}}<', '金额的颜色 class 与金额本身'],
-    ['class="hero-hint js-detail-hint">{{cardHint}}<', 'hint 那一行']
+    ['hero-label', 'cardLabel', 'label 那一行'],
+    ['js-detail-amount', 'cardAmountText', '金额本身'],
+    ['js-detail-hint', 'cardHint', 'hint 那一行']
   ]
-  need.forEach(function (pair) {
-    assert.ok(body.indexOf(pair[0]) >= 0,
-      '首卡的' + pair[1] + '应当就地绑 `' + pair[0] + '`——写死文案的话 cardOf 算得再对，'
-        + '屏上也不跟着走，而 js 侧的断言一条都拦不住')
+  const bs = String.fromCharCode(92)
+  need.forEach(function (item) {
+    const re = new RegExp('class="[^"]*' + item[0] + '[^"]*"[^>]*>[^<]*' + bs + '{' + bs + '{'
+      + item[1] + bs + '}' + bs + '}')
+    assert.ok(re.test(body),
+      '首卡的' + item[2] + '应当就地绑 {{' + item[1] + '}}（在带 ' + item[0]
+        + ' 的那个节点里）——写死文案的话 cardOf 算得再对，屏上也不跟着走，'
+        + '而 js 侧的断言一条都拦不住')
   })
+  assert.ok(body.indexOf('{{cardAmountClass}}') >= 0,
+    '金额那一行的颜色 class 应当绑 {{cardAmountClass}}——写死的话四档颜色就不跟着走了')
   // **这条盖不到**：`wx:if` 把整块挡掉、兄弟节点覆盖、wxss 隐藏。它只保证「这几个
   // 节点上写的是绑定不是死文案」，不保证它们真的显示出来——那要 test:ui 才看得见。
 })()
@@ -204,9 +214,12 @@ assert.strictEqual(typeof cardOf, 'function', '抠出来的应当是个函数')
   const q = String.fromCharCode(39)
   // 只在 data 块里找：全文第一个 `cardLabel: '` 现在恰好在 data 里，但只要将来有别的
   // 字面量排到它前面，这四条就会静默去核错的那个值。
-  const dataAt = src.indexOf('data: {')
+  // **在剥过注释的那份上切**：不剥的话把四格整体退回 A 档、注释里留一份原值，
+  // 这四条照样全绿——等于本分支要修的那个 bug 可以整条撤销而没人拦（复审实测）。
+  const clean = stripJsComments(src)
+  const dataAt = clean.indexOf('data: {')
   assert.ok(dataAt >= 0, '应当找得到 data 块')
-  const dataBlock = src.slice(dataAt, src.indexOf(String.fromCharCode(10) + '  },', dataAt))
+  const dataBlock = clean.slice(dataAt, clean.indexOf(String.fromCharCode(10) + '  },', dataAt))
   pairs.forEach(function (pair) {
     const at = dataBlock.indexOf(pair[0] + ': ' + q)
     assert.ok(at >= 0, 'data 里应当有 ' + pair[0] + ' 初值')

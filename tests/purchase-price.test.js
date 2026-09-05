@@ -640,6 +640,7 @@ assert.ok(pageMethod(purchaseJs, 'applyProductState').indexOf('this.pricePatch('
 //
 // chip 条目不手搭：拿真的进货流水喂 loadRecent，让它自己拼出来。
 async function recentGroup() {
+  started += 1
   const page = harness()
   const cell = page.cell('p-spec', '黑色', 'M')
   // 上一次这一格是按 31 进的货 —— 用真引擎造这张流水，形状与线上一致。
@@ -685,22 +686,26 @@ async function recentGroup() {
       + ' —— 被换成档案进价 28 的话，店主点 chip 要来的那个数就在他没看见的时候变了，'
       + '而旧实现靠身份判据本来是留得住的（这条同时是本次修复的回归闸）')
   assert.strictEqual(page.data.priceTouched, true, '保留时归属不变')
-  doneBlocks += 1   // 本块跑完（收尾闸靠它）
+  ended += 1   // 本块跑完（收尾闸靠它，与开头的 started 配对）
 }
 
 // 收尾闸：异步断言没跑完就退出的话，进程会安安静静 exit 0——复审实测过这条假绿通道
 // （把 addPurchase 换成永不 settle 的 promise，上一版照样 exit 0）。这里钉死：
 // 没走到最后一行就是失败。
-// 每个异步块**自己在最后一行**报数——把信号挂在最外层 .then 上是不够的：块内提前
-// return 时 promise 照常 resolve，闸看不见（复审实测 P13 与 recentGroup 各插一行
-// `if (1) return`，两次都是安静退出 0）。
-const TOTAL_BLOCKS = 2
-let doneBlocks = 0
+// 收尾闸：每个异步块**进出各报一次**，退出时要求进出相等。
+//
+// 不用「总块数」那个常量：我写过一版数 `async function` 来自检，结果它数的 token 就
+// 出现在数它的代码里，越改越绕（先数出 6 处，改窄之后 5 处）。进出配对不需要知道总数，
+// 加块时只要照抄这一对，忘了改常量这种事就不存在。
+//
+// 它抓得住：块内提前 return、await 的 promise 永不 settle、链被截断。
+// 它抓不住：整个块被删掉或从未被调用（那样进出都是 0）。
+let started = 0
+let ended = 0
 process.on('exit', function (code) {
-  if (code === 0 && doneBlocks !== TOTAL_BLOCKS) {
-    console.error('异步断言没跑完就退出了：跑完了 ' + doneBlocks + ' / ' + TOTAL_BLOCKS
-      + ' 个异步块。多半是某个 await 的 promise 永远不 settle、链被谁截断了，'
-      + '或者块内提前 return 了。')
+  if (code === 0 && started !== ended) {
+    console.error('异步断言没跑完就退出了：进了 ' + started + ' 个异步块，只跑完 ' + ended
+      + ' 个。多半是某个 await 的 promise 永远不 settle、链被谁截断了，或者块内提前 return 了。')
     process.exitCode = 1
   }
 })
@@ -754,6 +759,7 @@ global.wx = global.wx || {
 // P12 是静态的，看不见「那行代码执不执行」。复审实测：把整行挂在永假条件后面
 // （`if (!record) this.setData(...)`），字面量一字未改，全套仍绿。这一条真跑。
 ;(async function assertSubmitActuallyReleasesOwnership() {
+  started += 1
   const page = harness()
   const cell = page.cell('p-spec', '黑色', 'M')
   page.selectProduct('p-spec')
@@ -775,7 +781,7 @@ global.wx = global.wx || {
   assert.strictEqual(page.data.unitPrice, '33',
     '复位之后回填应当拿回刚覆盖上去的档案进价 33，实为 ' + page.data.unitPrice
       + '——不等于的话「复位在提交那一刻是显示等价的」这句话就不成立')
-  doneBlocks += 1   // 本块跑完（收尾闸靠它）
+  ended += 1   // 本块跑完（收尾闸靠它，与开头的 started 配对）
 })()
   .then(function () { console.log('purchase-price tests passed') })
   .catch(function (e) { console.error(e); process.exit(1) })
