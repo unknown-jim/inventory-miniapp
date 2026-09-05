@@ -122,7 +122,8 @@ function makeFixture() {
   }
 }
 
-// 夹具前提逐条钉死。少了任何一条，下面就有断言会变成恒真的假绿。
+// 夹具前提逐条钉死。这里钉的比下面用到的多——白M(24) 与黑L(26) 目前没有断言用到，
+// 钉着是为了「换一格」时随手取得到一个价不同的格子。不要读成「少了任何一条下面就假绿」。
 ;(function pinFixture() {
   const fx = makeFixture()
   const cost = function (color, size) {
@@ -480,8 +481,11 @@ function onBlackM(qty) {
   const page = harness()
   page.selectProduct('p-plain')
   typePrice(page, '19')
-  page.repriceProduct('p-plain', 17)
-  assert.notStrictEqual('19', '17', '前提：手改的价 ≠ 新档案进价')
+  const plainAfter = page.repriceProduct('p-plain', 17)
+  // 拿**实际取值**比，不比两个字面量——字面量互比恒真，改了上面的数这条也不会跟着动。
+  assert.notStrictEqual(page.data.unitPrice, String(plainAfter.costPrice),
+    '前提：手改的价（' + page.data.unitPrice + '）不许等于新档案进价（'
+      + plainAfter.costPrice + '），否则本组分不出「保留」和「追平」')
 
   page.selectProduct('p-plain')
 
@@ -646,11 +650,16 @@ async function recentGroup() {
   assert.notStrictEqual(chip.unitPrice, '28',
     '前提：chip 的价不许等于档案进价，否则下面那条断言恒真')
 
+  // 先往数量框里填一个数——不填的话下面那条「数量留空」是恒真的：qty 进场就是空串，
+  // 把 pickRecent 里的 `qty: ''` 整个删掉，11 组也全绿（复审实测）。
+  typeField(page, 'qty', '7')
+  assert.strictEqual(page.data.qty, '7', '前提：框里先有个数，下面那条才分得出「清空了」和「本来就空」')
+
   tapRecent(page, chip.key)
 
   assert.strictEqual(page.data.productId, 'p-spec', '点 chip 应当带出商品')
   assert.strictEqual(page.data.skuId, cell.id, '点 chip 应当带出规格')
-  assert.strictEqual(page.data.qty, '', '稿 4:713：数量留空')
+  assert.strictEqual(page.data.qty, '', '稿 4:713：点 chip 之后数量留空——刚填的 7 要被清掉')
   assert.strictEqual(page.data.unitPrice, '31', '点 chip 应当带出上次进价 31')
   assert.strictEqual(page.data.priceTouched, true,
     '点 chip 是店主主动要这个数，归属算他的 —— 标成系统的话下面那条回填会把它换掉')

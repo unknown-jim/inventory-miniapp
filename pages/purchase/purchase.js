@@ -32,7 +32,9 @@ Page({
     // 上次进价）。这不是「和档案进价不相等」的派生量：他完全可以手打一个恰好等于
     // 档案进价的数，也可以手打完再改回来。
     // 置位点两个：onField（wxml 的 .js-purchase-price 是唯一的输入口）和 pickRecent
-    // （点 chip 是他主动要那个数）。复位点唯一，就是 pricePatch。
+    // （点 chip 是他主动要那个数）。
+    // 系统侧的**复位**只发生在 pricePatch；此外 pickRecent 进场时会先把 unitPrice 与
+    // priceTouched 一起清干净（那是清空不是判定，两个字段仍然成对写）。
     priceTouched: false,
     remark: '',
     amountText: '0.00',
