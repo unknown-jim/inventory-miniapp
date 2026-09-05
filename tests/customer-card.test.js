@@ -54,6 +54,39 @@ function stripJsComments(text) {
   const line = new RegExp('(^|[^:])' + bs + '/' + bs + '/[^' + bs + 'n]*', 'g')
   return text.replace(block, ' ').replace(line, '$1')
 }
+// 从 `key:` 起，扫到**同层**的逗号或右花括号为止：括号/方括号/引号里的逗号不算。
+// 上一版按「下一个终止字符」切，于是值里含逗号（`f(a, b)`）会切歪、换行续写会漏。
+function valueOf(body, key) {
+  let i = body.indexOf(key + ':')
+  if (i < 0) return ''
+  i += key.length + 1
+  let depth = 0
+  let quote = ''
+  let out = ''
+  while (i < body.length) {
+    const ch = body.charAt(i)
+    if (quote) {
+      out += ch
+      if (ch === quote) quote = ''
+    } else if (ch === String.fromCharCode(39) || ch === '"' || ch === '`') {
+      quote = ch; out += ch
+    } else if ('([{'.indexOf(ch) >= 0) {
+      depth += 1; out += ch
+    } else if (')]'.indexOf(ch) >= 0) {
+      depth -= 1; out += ch
+    } else if (ch === '}') {
+      if (depth === 0) break
+      depth -= 1; out += ch
+    } else if (ch === ',' && depth === 0) {
+      break
+    } else {
+      out += ch
+    }
+    i += 1
+  }
+  return out.trim()
+}
+
 function stripWxmlComments(text) {
   const bs = String.fromCharCode(92)
   return text.replace(new RegExp('<!--[' + bs + 's' + bs + 'S]*?-->', 'g'), ' ')
@@ -80,9 +113,9 @@ try {
 assert.strictEqual(typeof cardOf, 'function', '抠出来的应当是个函数')
 
 // --- 四档的值由下面的行为钉子守 ----------------------------------------------
-// 这里原本有 A/B/C/D 四块直接调 cardOf 的静态断言。复审用 51 个变异跑矩阵，
+// 这里原本有 A/B/C/D 四块直接调 cardOf 的静态断言。复审跑变异矩阵实测，
 // **四块的独占杀伤为零**，单独关、一起关都没有一条由红变绿——因为行为钉子喂给
-// fillCustomer 的四对输入，经 round2/toNumber 之后与这四块完全同一组，而且金额那格
+// fillCustomer 的那几组输入，经 round2/toNumber 之后覆盖了这四块的全部四组，而且金额那格
 // 行为钉子写的是字面量、这四块写的是 util.money(...)（money 自己被改坏时两边一起变、
 // 反而不响）。**行为钉子严格强于它们**，不是「各守一摊」。
 //
@@ -129,12 +162,32 @@ assert.strictEqual(typeof cardOf, 'function', '抠出来的应当是个函数')
     'fillCustomer 里应当有 `const card = this.cardOf(receivable, prepay)`——'
       + '换成写死的对象或别的算法，上面那些断言一条都拦不住：它们测的是纯函数，'
       + '不是它有没有被接上')
-  // 这里原本还有一组「pairs 逐对核」：从 fillCustomer 体内切出 `cardX: card.y` 比对。
-  // 复审实测它的 5 条独占杀伤里 **4 条是假红**（`String(card.amountText)` 包装、冒号后
-  // 少一个空格、`card.hint || ''`、`[card.hint, ''].join('')` —— 全是行为完全等价的写法），
-  // 只有 1 条真杀：把值改成依赖输入的表达式（`receivable > 100000 ? '大额' : ...`）。
-  // 那一条已由行为钉子的第五组（大额）接管。字符级切法还漏掉换行续写和字符串字面量诱饵，
-  // 修它要再套一层同层逗号扫描——收益不抵噪声，删掉。
+  // --- 接线处不许做计算 -------------------------------------------------------
+  // 规则：首卡这四格必须是**纯 `card.X` 引用**，所有计算都在 cardOf 里。
+  //
+  // 上一轮我把这组删了，理由是「5 条独占里 4 条假红」（`String(card.amountText)`、
+  // `card.hint || ''`、`.join('')`、冒号后少个空格）。**删过头了**：它杀的是「值不是
+  // 纯引用」这**一整类**，我拿矩阵里出现过的一个样本（`receivable > 100000 ? …`）当成
+  // 了那一类，删完之后同类的别的写法全逃——换个阈值、换个字段、按客户名分支，复审实测
+  // 四种全绿。行为钉子按输入组取样，天生盖不住一个连续区间。
+  //
+  // 这一版把规则挑明：在**这里**做计算就是红的，哪怕行为等价。所以 `String(...)` 包装
+  // 之类不再算「假红」——它们确实违反这条规则，计算该搬进 cardOf。真正要修的是当初那个
+  // 糙切法（按「下一个终止字符」切），现在改成**同层逗号扫描**：跳过成对括号与引号里的
+  // 逗号，冒号后的空白也不写死。
+  const pairs = [
+    ['cardLabel', 'card.label'],
+    ['cardAmountText', 'card.amountText'],
+    ['cardAmountClass', 'card.amountClass'],
+    ['cardHint', 'card.hint']
+  ]
+  pairs.forEach(function (pair) {
+    const seg = valueOf(body, pair[0])
+    assert.strictEqual(seg, pair[1],
+      'fillCustomer 里 ' + pair[0] + ' 应当就是 ' + pair[1] + '，实为「' + seg + '」——'
+        + '这四格只许写纯引用，任何计算（三元、拼串、包一层函数、|| 兜底）都要搬进 '
+        + 'cardOf。在接线处算，cardOf 的四档就说了不算，而屏上跟着变')
+  })
 })()
 
 // --- 屏上那张卡真的在读这四个字段吗 -----------------------------------------
@@ -160,8 +213,8 @@ assert.strictEqual(typeof cardOf, 'function', '抠出来的应当是个函数')
     // 前后都不许有别的文案：只管绑定**前**那一段的话，
     // `<view class="hero-label">当前欠款 {{cardLabel}}</view>` 和
     // `...>¥{{cardAmountText}} 欠款</view>` 都能过（复审实测），屏上会变成「当前欠款 已结清」。
-    const re = new RegExp('class="[^"]*' + item[0] + '[^"]*"[^>]*>[ ¥]*' + bs + '{' + bs + '{'
-      + item[1] + bs + '}' + bs + '}[ ]*<')
+    const re = new RegExp('class="[^"]*' + item[0] + '[^"]*"[^>]*>[' + bs + 's¥]*' + bs + '{' + bs + '{'
+      + item[1] + bs + '}' + bs + '}' + bs + 's*<')
     assert.ok(re.test(body),
       '首卡的' + item[2] + '应当就地绑 {{' + item[1] + '}}（在带 ' + item[0]
         + ' 的那个节点里）——写死文案的话 cardOf 算得再对，屏上也不跟着走，'
@@ -196,6 +249,14 @@ assert.strictEqual(typeof cardOf, 'function', '抠出来的应当是个函数')
   // **在剥过注释的那份上切**：不剥的话把四格整体退回 A 档、注释里留一份原值，
   // 这四条照样全绿——等于本分支要修的那个 bug 可以整条撤销而没人拦（复审实测）。
   const clean = stripJsComments(src)
+  // `data: {` 只许出现一次：取第一处的话，在 Page({ 后面塞一个返回 `{ data: {…正确四格…} }`
+  // 的方法当诱饵，真 data 块就能整条改成 A 档而全绿（复审实测）。上一版把洞从「全文第一个
+  // cardLabel」挪到了「全文第一个 data: {」，没堵住。
+  let dataHits = 0
+  let dataScan = clean.indexOf('data: {')
+  while (dataScan >= 0) { dataHits += 1; dataScan = clean.indexOf('data: {', dataScan + 1) }
+  assert.strictEqual(dataHits, 1,
+    '源码里 `data: {` 出现了 ' + dataHits + ' 次，应当只有 1 次——多出来的那份多半是在冒充它')
   const dataAt = clean.indexOf('data: {')
   assert.ok(dataAt >= 0, '应当找得到 data 块')
   const dataBlock = clean.slice(dataAt, clean.indexOf(String.fromCharCode(10) + '  },', dataAt))
@@ -218,9 +279,10 @@ assert.strictEqual(typeof cardOf, 'function', '抠出来的应当是个函数')
 //
 // 这一条真跑：拿 store 替身喂 fillCustomer，断言最终落进 data 的值。
 //
-// **它不能顶掉上面那些**（上一版这么写过，是过头的自述）：cardOf 那四组守的是纯函数
-// 本身、pairs 守的是接错格子、wxml 那组守的是屏上绑的是不是死文案——都有行为钉子够
-// 不着的地方。它只是把「跑出来是什么」这一层补上，不是把静态那一层顶掉。
+// **它顶不掉的是 wxml 那一层**（屏上绑的是不是死文案）和 data 初值那一节——它只看
+// fillCustomer 跑出来的 data，看不见模板。cardOf 那四块与 pairs 的关系见上面各自的
+// 说明：四块是纯冗余已删，pairs 守的是「接线处不许做计算」，行为钉子按输入取样、
+// 盖不住连续区间，两者互补。
 ;(function assertFillCustomerProducesZeroState() {
   const inventory = require('../utils/inventory')
   // 四个字段**每档都钉**，期望值写死（不从 cardOf 算回来，否则实现改了期望跟着改，
@@ -256,6 +318,7 @@ assert.strictEqual(typeof cardOf, 'function', '抠出来的应当是个函数')
     // 回调里再写一次 setData 就完全逃逸（复审实测，全套绿）。
     page.setData = function (o, cb) { Object.assign(page.data, o); if (cb) cb() }
     page.reloadLedger = function () {}
+    page.openPay = function () {}   // 回调那条路真跑起来时别崩成 TypeError
     page.fillCustomer('c1')
 
     assert.strictEqual(page.data.cardLabel, c.label,
