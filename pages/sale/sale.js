@@ -768,7 +768,7 @@ Page({
     // 就是这一条，多选态的档价过期，钉子 (7k)）；手改过 → 保留他填的批价（钉子 (5)）。
     //
     // **`sameRefCell` 里那个身份判据仍然用 `sku` 而不是 `refSku`**：换成 `refSku` 的话
-    // 多选态下 `data.skuId`（空串）永远对不上 `refSku.id`（非空），sameRefCell 结构性恒假，
+    // 多选态下 `data.skuId`（空串）只要取得到参照格就对不上 `refSku.id`，sameRefCell 恒假，
     // 店主手改的批价每次回填都会被冲掉——正是 applySizeSelection 那段注释记的
     // 「结构性恒假」同一个坑。
     //
@@ -901,9 +901,11 @@ Page({
 
   // 「第一枚选中格」按行序（product.sizes 顺序）取，不是点击顺序——逐格行与
   // currentLines 的行序都按 product.sizes 走，单价默认值跟着同一个序才不会两说。
-  // color 省略时读 data.selectedColor：pickColor / applySizeSelection 两个调用点都是
-  // 先把新颜色写进 data 再调（见 pickColor 里那段顺序说明）。applyProductState 那个
-  // 调用点相反——颜色要到之后才 setData，所以它显式传，理由见那里。
+  // color 省略时读 data.selectedColor，两个调用点各有各的理由：
+  //   · pickColor 多选支：先把新颜色写进 data 再调（见 pickColor 里那段顺序说明）。
+  //   · applySizeSelection：**它压根不改颜色**（全程不写 selectedColor），data 里那个
+  //     本来就是当前色。
+  // applyProductState 那个调用点相反——颜色要到之后才 setData，所以它显式传，理由见那里。
   firstSelectedSku(product, sizes, color) {
     const useColor = color === undefined ? this.data.selectedColor : color
     const all = (product && product.sizes) || []

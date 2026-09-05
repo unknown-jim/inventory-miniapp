@@ -1084,7 +1084,7 @@ assert.strictEqual(switchCell.data.skuId, pBlackL.id, 'skuId 也要跟上')
 // 说成「只从这一个漏」而 (7i) 补进来之后它就不成立了，第三次是 2026-09-05：
 // 上一版写的变异是 `sameRefCell && (isMulti || priceTouched || (hasSpecs && !sku))`，
 // 而 `isMulti` 那一项已经从实现里删掉了（多选态不再豁免，见 (7k)）。照着新实现改写成
-// `sameRefCell && (priceTouched || (hasSpecs && !sku))` 之后它**同时打红 (7k)**——多选态
+// `sameRefCell && (priceTouched || (hasSpecs && !sku))` 之后它**同时打红 (7k) 与 (7l)**——多选态
 // 下 `!sku` 也为真，那一项把多选态一并豁免了。要还原成「只有本条红」，变异必须再带上
 // `!isMulti`，就是上面那一行。**加断言会让旧的杀伤陈述过期**，不重跑就会留下一句错话。）
 //
@@ -1243,6 +1243,29 @@ assert.strictEqual(switchCell.data.skuId, pBlackL.id, 'skuId 也要跟上')
   assert.strictEqual(page.data.priceTouched, true, '归属仍在店主手里，不该被复位')
 })()
 
+// --- (7m) 多选态把价格框清空 → 回填填第一枚选中格的档价（(7h) 的多选版）---------
+// 复审指出这是本次改动**悄悄换掉、没人守**的一格：删掉 `isMulti ||` 之后，多选态清空
+// 价格框再回填，从「填商品档价」变成「填第一枚选中格的档价」。方向对——多选态那个值的
+// 正主本来就是第一枚选中格——但没有断言分得出来。声明并钉住。
+;(function assertMultiClearedPriceRefillsFromRefCell() {
+  const fx = repriceFixture()
+  const first = fx.cell('黑色', 'M')
+  const page = singleOnBlackM(fx, { qty: '1' })
+  tapSize(page, 'L')   // T4：进多选
+  assert.strictEqual(page.data.multiMode, true, '前提：在多选形态')
+  assert.strictEqual(page.data.skuId, '', '前提：多选态 skuId 是空串')
+  typePrice(page, '')
+  assert.strictEqual(page.data.unitPrice, '', '前提：框已清空')
+  assert.strictEqual(page.data.priceTouched, true, '前提：清空也算动过这个框')
+  assert.notStrictEqual(String(first.salePrice), String(fx.product.salePrice),
+    '前提：第一枚选中格的档价不许等于商品档价，否则本组分不出这两种实现')
+  page.selectProduct(fx.product.id)
+  assert.strictEqual(page.data.unitPrice, String(first.salePrice),
+    '多选态清空价格框之后回填，应当填第一枚选中格的档价 ' + first.salePrice
+      + '，实为 ' + page.data.unitPrice + '——填商品档价 ' + fx.product.salePrice
+      + ' 是本次改动之前的行为，那个数不是这一批任何一行的价')
+})()
+
 // --- (7e) 多选态回填不许被打回商品档价 ----------------------------------------
 // 多选态下 applyProductState 算出来的 `sku` 恒为 null，拿它当追平目标就会退回商品档价，
 // 而框里那个值的正主是「第一枚选中格」（applySizeSelection / pickColor 多选支写进去的），
@@ -1289,8 +1312,14 @@ assert.deepStrictEqual(multiBack.data.selectedSizes, ['M', 'L'], '回填不该�
 // 杀伤（2026-09-05 实测，写清跑过什么，不写穷不尽的断言）：
 //   · 拿 e8bc617 的 sale.js 跑，**只留本条**也红（'69' !== '79'）——不是靠别的组带红的。
 //   · 把豁免加回去（`keepPrice = sameRefCell && (isMulti || priceTouched)`）本条红，
-//     但 (7l) **同时**也红。所以本条不是那个变异的独占闸；它是这条修复的正面陈述。
-//   · 没去找「只让本条红」的变异。
+//     但 (7l) **同时**也红。所以本条不是**那个**变异的独占闸。
+//   · 但它确实有独占杀伤，换个变异就现出来了——只红本条这三条断言，(7l) 绿：
+//
+//         keepPrice = sameRefCell && (priceTouched || (isMulti && this.data.selectedColor === color))
+//
+//     （上一版这里写的是「没去找只让本条红的变异」。复审替我找到了、我自己复现确认。
+//     诚实的自陈不算错，但**能找到就该写进去**：一条被标成「只是正面陈述」的断言，
+//     后人清理时会先删它。本仓在 (7f) 上正反两个方向都栽过。）
 ;(function assertMultiRefillTakesFreshCellPrice() {
   const fx = repriceFixture()
   const cellBefore = fx.cell('黑色', 'M')
@@ -1348,6 +1377,12 @@ assert.deepStrictEqual(multiBack.data.selectedSizes, ['M', 'L'], '回填不该�
 // 店主在销售页多选态选中**黑** M + L（整批价 = 黑 M 的 69），中途去商品编辑把「黑色」这个
 // 取值删掉，只剩白色；回销售页 onShow → 归一化把 color 定成白色、屏上也显示白色，
 // 于是这一批出去的行是白 M / 白 L，价就该是白 M 的 59。
+//
+// **前置条件**：删色只在该色各格**库存为 0** 时可达——`inventory.applyProductSkus`
+// （utils/inventory.js:535）和 `product-edit.js:380-390` 的 `removeColor` 两道闸都会拦
+// 「还有库存，不能删除该规格」。本组夹具用 `stock: 9` + 手工 splice 直接造末态，走的不是
+// 那条真路径；复审用库存 0 走**真** `applyProductSkus` 复现过，结论一致。照注释去真 UI
+// 复现时记得先把库存清零，否则会撞上那道闸、以为形态不可达。
 //
 // 三种实现给三个不同的数，这一条同时挡住另外两个：
 //   · 本次改动之前（多选态一律保留）      → 69，拿**已经不存在的那个颜色**的价记白色的账
