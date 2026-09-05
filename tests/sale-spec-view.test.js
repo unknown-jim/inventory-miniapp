@@ -1486,7 +1486,7 @@ assert.deepStrictEqual(multiBack.data.selectedSizes, ['M', 'L'], '回填不该�
   //
   // 黑色两格 stock 0：删一个规格一取值有两道闸都要求该色各格库存为 0
   // （pages/product-edit/product-edit.js:381 的 removeColor、
-  // utils/inventory.js:527 的 applyProductSkus），不为 0 的话这个形态在真 UI 上够不着。
+  // utils/inventory.js:535 的 applyProductSkus 抛「还有库存，不能删除该规格」），
   // 下面那一步删色**走的就是真 applyProductSkus**，不是手工 splice，闸是真过的。
   const base = inv.createProduct({
     name: '短袖', costPrice: 28, salePrice: 39, stock: 0, alertQty: 4,
@@ -1509,8 +1509,11 @@ assert.deepStrictEqual(multiBack.data.selectedSizes, ['M', 'L'], '回填不该�
   const blackM = fx.cell('黑色', 'M')
   assert.strictEqual(blackM.salePrice, 69, '夹具前提：黑 M 档价 69')
   assert.strictEqual(fx.product.salePrice, 39, '夹具前提：商品档价 39')
+  assert.strictEqual(inv.toNumber(fx.cell('黑色', 'M').stock), 0,
+    '夹具前提：黑 M 库存要是 0，否则下面那道删色闸会 throw——那是崩溃红不是断言红，'
+      + '诊断信息会差一截')
   assert.strictEqual(inv.toNumber(fx.cell('黑色', 'L').stock), 0,
-    '夹具前提：黑 L 库存也要是 0，否则下面那道删色闸拦下来，形态就不可达了')
+    '夹具前提：黑 L 库存也要是 0，理由同上')
 
   // 进入态由真入口造：单选态选中黑 M → 点 L 进多选（T4，走 applySizeSelection）。
   const page = singleOnBlackM(fx, { qty: '1' })
@@ -1564,6 +1567,64 @@ assert.deepStrictEqual(multiBack.data.selectedSizes, ['M', 'L'], '回填不该�
   assert.strictEqual(lines.lines.length, 0,
     '两格都填了数，但两格都找不到 SKU，一行都出不来——这条记的是本形态的量级：'
       + '上面那个数错了也出不了货。哪天它出得了行，本条的量级就得重估')
+})()
+
+// --- (7o) 同一形态但**手改过** → 保留他填的（(7n) 的另一半）--------------------
+// (7n) 只断「没手改过」那一半。复审实测另一半没人守：变异
+//     keepPrice = !(isMulti && !refSku) && sameRefCell && !!priceTouched
+// （多选态取不到参照格时**丢掉**店主手填的批价）下红集合是**空**的，完整 npm test 绿。
+//
+// 这是 (7j) 之于 (7i)、(7b) 之于 (7a) 的同一种配对缺口，baseline 上就漏。(7f) 在同样
+// 位置写了免责句说明自己只断一半，(7n) 作为「(7f) 的多选版」没写——与其只补一句免责，
+// 不如把另一半也钉上。
+;(function assertMultiRefillWithoutRefCellKeepsTypedPrice() {
+  const base = inv.createProduct({
+    name: '短袖', costPrice: 28, salePrice: 39, stock: 0, alertQty: 4,
+    colors: ['黑色', '白色', '红色'], sizes: ['M', 'L']
+  }, 3000, 'p-7o')
+  const built = inv.applyProductSkus(base, [], [
+    { color: '黑色', size: 'M', stock: 0, costPrice: 28, salePrice: 69, alertQty: 4 },
+    { color: '黑色', size: 'L', stock: 0, costPrice: 28, salePrice: 65, alertQty: 4 },
+    { color: '白色', size: 'M', stock: 9, costPrice: 28, salePrice: 59, alertQty: 4 },
+    { color: '白色', size: 'L', stock: 9, costPrice: 28, salePrice: 49, alertQty: 4 },
+    { color: '红色', size: 'M', stock: 9, costPrice: 28, salePrice: 45, alertQty: 4 },
+    { color: '红色', size: 'L', stock: 9, costPrice: 28, salePrice: 35, alertQty: 4 }
+  ], 3100, idFactory())
+  const fx = { product: built.product, skus: built.skus }
+  fx.cell = function (color, size) {
+    const found = inv.findSkuBySpec(fx.skus, fx.product.id, color, size)
+    assert.ok(found, '夹具前提：找得到「' + color + ' · ' + size + '」')
+    return found
+  }
+  assert.strictEqual(inv.toNumber(fx.cell('黑色', 'M').stock), 0, '夹具前提：黑 M 库存 0')
+  assert.strictEqual(inv.toNumber(fx.cell('黑色', 'L').stock), 0, '夹具前提：黑 L 库存 0')
+
+  const page = singleOnBlackM(fx, { qty: '1' })
+  tapSize(page, 'L')
+  assert.strictEqual(page.data.multiMode, true, '前提：进多选形态')
+
+  // 与 (7n) 唯一的差别：店主手打了一个批价。
+  const typed = '88'
+  typePrice(page, typed)
+  assert.strictEqual(page.data.priceTouched, true, '前提：手打过，归属在店主手里')
+  assert.notStrictEqual(typed, String(fx.product.salePrice),
+    '前提：手填价不许等于商品档价 ' + fx.product.salePrice + '，否则分不出「保留」和「退回」')
+
+  const removed = inv.applyProductSkus(
+    Object.assign({}, fx.product, { colors: ['白色', '红色'] }), fx.skus, null, 3200, idFactory())
+  fx.product = removed.product
+  fx.skus.length = 0
+  removed.skus.forEach(function (item) { fx.skus.push(item) })
+  assert.strictEqual(inv.findSkuBySpec(fx.skus, fx.product.id, '黑色', 'M'), null,
+    '前提：参照格已经取不到了——与 (7n) 同一个形态')
+
+  page.selectProduct(fx.product.id)   // onShow 的原路
+
+  assert.strictEqual(page.data.unitPrice, typed,
+    '多选态参照格取不到、但店主手打过批价时，应当保留他填的 ' + typed
+      + '，实为 ' + page.data.unitPrice + '——退回商品档价 ' + fx.product.salePrice
+      + ' 等于把他填的数无声抹掉，那是 (7n) 那一半的规则，不是这一半的')
+  assert.strictEqual(page.data.priceTouched, true, '归属仍在店主手里，不该被复位')
 })()
 
 // ===========================================================================
