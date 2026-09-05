@@ -337,20 +337,21 @@ Page({
       this.data.skus = store.getSkus()
       const recordLine = inventory.firstLine(record)
       const latest = store.getProduct(recordLine.productId)
-      // 【提交之后**不复位** priceTouched，2026-09-05 裁定】
-      // 复审提过「那一单已经记完、表单已半复位，这条归属其实已经过期」，听着有道理，
-      // 但它的前提不成立：进货**不是**把档案进价改成刚才填的那个数，而是走**移动加权
-      // 平均**（cloudfunctions/ledger/inventory.js:192）：
+      // 【提交之后**复位** priceTouched，2026-09-06 裁定】
+      // 那个价是店主为**这一单**给的；单已经记完，归属就该交还给系统。
       //
-      //     sku.costPrice = (原库存 × 原进价 + 本次件数 × 本次进价) / 新库存
+      // 进货**直接覆盖**档案进价，不是加权平均——`applyPurchase` 三条分支
+      // （utils/inventory.js:745 / 769 / 781）都是 `costPrice = unitPrice`，
+      // 本文件 :172-174 那段 baseline 注释早就写着「被这次进价覆盖」。
+      // （移动加权平均那条 :192 只服务调拨与退货回格，进货够不着它。我上一版把它
+      // 当成进货路径、据此裁定「不复位」，论据整段是错的，已推翻。）
       //
-      // 实测：原库存 0 进 10 件 @33 → 33（复审当时看到的就是这一档，才误以为等于填的数）；
-      //       原库存 10 @28 再进 10 件 @33 → 30.5；原库存 100 @28 进 1 件 @50 → 28.22。
-      //
-      // 所以「复位」等于把框填成一个**没人报过价的平均数**。店主接着录同一批货的下一件
-      // 时，最可能的数是刚才那个成交价，不是加权平均。保留他填的更省事，也更不容易记错。
-      // 归属语义上也说得通：那个数确实是他给的，提交并不会让它变成系统的。
-      this.setData({ skus: this.data.skus, qty: '', remark: '' })
+      // 所以复位在**提交那一刻是显示等价**的：`baseCostOf` 取回来的就是刚覆盖上去的
+      // 同一个数。差别只在之后——别人改了档案进价，复位过的会跟上，不复位的停在旧数。
+      // 后者正是本批一直在修的那类静默错账。
+      // 两个字段**一起**写（P10 那条钉子要的就是这个）：清空价、交还归属，
+      // 紧接着的 applyProductState 会按档案进价重填。
+      this.setData({ skus: this.data.skus, qty: '', remark: '', unitPrice: '', priceTouched: false })
       if (latest) this.applyProductState(latest, this.data.skuId)
       this.loadRecent()
       // 稿 toast/进货完成 7:313「已记进货 · 25 件 · ¥2,375.00」。

@@ -20,15 +20,22 @@ Page({
     phoneText: '未填',
     addressText: '未填',
 
-    // 首卡（稿 4:368 / 7:250 / 9:4 三档 + 稿未画的第四档）
+    // 首卡（稿 4:368 / 7:250 / 9:4 / 28:1 四档）
     receivable: 0,
     receivableText: '0.00',
     prepay: 0,
     prepayText: '0.00',
     hasDebt: false,
     hasPrepay: false,
-    // 初值就是 D 档（稿 28:1）：还没拿到数之前，屏上不该先写「当前欠款」——
-    // reloadCustomer 之前这一瞬间是看得见的。
+    // 初值取 D 档（稿 28:1），与 cardOf(0, 0) 的返回一致——零态就该长一个样。
+    //
+    // **正常路径上看不见这个初值**：`fillCustomer` 把 pageLoading:false 和 cardLabel
+    // 写在同一个 setData 里（:111 与 :125），两者同时翻，没有中间帧；在那之前
+    // pageLoading 把首卡挡在 wxml 的 wx:else 后面。
+    // 真正看得见它的是 onShow 里 `store.ready()` 失败那条路（:83-86）：pageLoading
+    // 落回 false 而 notFound 仍是 false，首卡带着初值渲染出来。**那条路上这张卡说什么
+    // 都是错的**——一个真欠钱的客户会看到「已结清 ¥0.00」。那需要一个自己的错误态，
+    // 稿上没有，已登记 G322，不在本次范围内。
     cardLabel: '已结清',
     cardAmountText: '0.00',
     cardAmountClass: '',
@@ -142,7 +149,7 @@ Page({
   //   B 预收变体  7:251「预收款（收超欠款部分）」+ 7:253 hint，金额绿（green/700）
   //   C 并存变体  9:5「当前欠款（另有预收待抵扣）」+ 9:7 hint，金额仍是**欠款**、红
   // D 档（既没欠款也没预收）2026-09-05 补进稿：28:1「card/当前欠款·已结清」——
-  //   label 28:2「已结清」、金额 ¥0.00 用 text/strong（3:23）不是欠款红、不出 hint、
+  //   label 28:2「已结清」、金额 ¥0.00 用 text/primary（3:77 → neutral/900 3:23）不是欠款红、不出 hint、
   //   按钮行与「记期初欠款」链接照留。
   //   在此之前它回落成 A 的形状，两清的客户屏上写着「当前欠款 ¥0.00」——一眼扫过去
   //   像是还欠着钱。这不是记账错误，是读数错误，但同样会让人误判。

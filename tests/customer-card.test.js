@@ -34,8 +34,22 @@ function pageMethod(name) {
 }
 
 const util = require('../utils/util')
-const cardOf = new Function('util',
-  'return { ' + pageMethod('cardOf') + ' }').call(null, util).cardOf
+
+// 把 SyntaxError 翻译成人话。**扫描器不跳字符串和注释**：cardOf 里出现一个游离的
+// 左/右花括号（注释里、或将来某个 hint 字符串里）就会静默越界，抠出半截函数体，
+// 报出来是 `SyntaxError: Unexpected token`，看着像源码写坏了。下面那条「花括号没配平」
+// 只在**不配平一直延续到文件末尾**时才响——复审实测的边界，如实写在这儿。
+let cardOf
+try {
+  cardOf = new Function('util', 'return { ' + pageMethod('cardOf') + ' }').call(null, util).cardOf
+} catch (e) {
+  assert.fail('从源码里抠 cardOf 抠出了一段编译不了的东西：' + e.message
+    + String.fromCharCode(10)
+    + '——这多半是**提取器**的问题不是源码的问题：它按花括号配对扫，不跳字符串和'
+    + '注释，cardOf 里多一个游离的 { 或 } 就会截错位置。先去看那段源码有没有这种'
+    + '字符，再怀疑源码本身。')
+}
+assert.strictEqual(typeof cardOf, 'function', '抠出来的应当是个函数')
 
 // --- A 默认：只有欠款 -------------------------------------------------------
 {
@@ -64,7 +78,6 @@ const cardOf = new Function('util',
   assert.strictEqual(c.amountText, util.money(84),
     'C 档 hero 数字必须是**欠款 84**，不是预收 200——写成 200 的话，一个还欠着 84 的客户'
       + '屏上会显示一个绿色的 200，店主会以为不用收钱了')
-  assert.notStrictEqual(c.amountText, util.money(200), '再钉一遍：不许是预收那个数')
   assert.strictEqual(c.amountClass, 'debt', 'C 档金额仍是欠款、仍是红的')
   assert.ok(c.hint.indexOf('预收 ¥' + util.money(200)) === 0,
     '稿 9:7 的 hint 要把预收数报出来，实为「' + c.hint + '」')
@@ -75,9 +88,10 @@ const cardOf = new Function('util',
 // 「当前欠款 ¥0.00」——一眼扫过去像是还欠着钱。
 {
   const d = cardOf(0, 0)
-  assert.strictEqual(d.label, '已结清', '稿 28:1 的 label 28:2')
-  assert.notStrictEqual(d.label, '当前欠款',
-    '两清的客户不该写「当前欠款」——这是补画 D 档之前的行为，回退到它这条要红')
+  assert.strictEqual(d.label, '已结清',
+    '稿 28:1 的 label 28:2——退回补画之前的「当前欠款」这里就红。'
+      + '（上一版在下面另挂了一条 notStrictEqual 说「回退到它这条要红」，'
+      + '实测它永远跑不到：上一行先红。零独占杀伤，已删。）')
   assert.strictEqual(d.amountText, util.money(0), '¥0.00')
   assert.strictEqual(d.amountClass, '',
     '中性色，不是欠款红也不是预收绿——稿 28:3 用的是 text/strong (3:23)')
@@ -90,7 +104,9 @@ const cardOf = new Function('util',
 {
   const neg = cardOf(-50, 0)
   assert.strictEqual(neg.label, '已结清',
-    '负欠款目前落 D 档（判据是 > 0）。这是现状不是主张——真要区分得先改稿')
+    '负欠款目前落 D 档（判据是 > 0）。这是现状不是主张——真要区分得先改稿。'
+      + '（不写它「什么时候会发生」：utils/inventory.js 的 assertAccountsValid 直接拒收'
+      + ' receivable < 0 的账，所以正常路径上到不了这里。钉着是防判据被改坏。）')
 }
 
 // --- data 初值也得是 D 档 ---------------------------------------------------

@@ -564,9 +564,9 @@ assert.strictEqual(('    unitPrice: price,'.match(UNIT_PRICE_KEY_RE) || []).leng
 assert.strictEqual(('keep ? this.data.unitPrice : fallback'.match(UNIT_PRICE_KEY_RE) || []).length, 0,
   '阴性对照：三元表达式里的 `this.data.unitPrice :` 不是写入点，不许被数进去')
 const unitPriceKeyCount = (purchaseNoComments.match(UNIT_PRICE_KEY_RE) || []).length
-assert.strictEqual(unitPriceKeyCount, 6,
-  '字面量 "unitPrice:" 应当恰好出现 6 次（data{} 初始值 + pricePatch 的 return + '
-    + 'loadRecent 拼的 chip 条目 + pickRecent 的清空与回填两处 + submit 的 payload），'
+assert.strictEqual(unitPriceKeyCount, 7,
+  '字面量 "unitPrice:" 应当恰好出现 7 次（data{} 初始值 + pricePatch 的 return + '
+    + 'loadRecent 拼的 chip 条目 + pickRecent 的清空与回填两处 + submit 的 payload + submit 尾部的复位），'
     + '实为 ' + unitPriceKeyCount + ' 次。多出来的多半是有地方绕开 pricePatch 直接往'
     + '页面 data 里写进价 —— 那就又有一个「把店主填的价无声冲掉」或者「改了格价没跟上」'
     + '的点位')
@@ -577,9 +577,9 @@ assert.strictEqual(('    priceTouched: false,'.match(PRICE_TOUCHED_KEY_RE) || []
 assert.strictEqual(('keep ? this.data.priceTouched : false'.match(PRICE_TOUCHED_KEY_RE) || []).length, 0,
   '阴性对照：三元表达式里的 `this.data.priceTouched :` 不是写入点')
 const priceTouchedKeyCount = (purchaseNoComments.match(PRICE_TOUCHED_KEY_RE) || []).length
-assert.strictEqual(priceTouchedKeyCount, 4,
-  '字面量 "priceTouched:" 应当恰好出现 4 次（data{} 初始值 + pricePatch 的 return + '
-    + 'pickRecent 的清空与回填两处），实为 ' + priceTouchedKeyCount + ' 次 —— '
+assert.strictEqual(priceTouchedKeyCount, 5,
+  '字面量 "priceTouched:" 应当恰好出现 5 次（data{} 初始值 + pricePatch 的 return + '
+    + 'pickRecent 的清空与回填两处 + submit 尾部的复位），实为 ' + priceTouchedKeyCount + ' 次 —— '
     + '**每一处都必须和 unitPrice 写在同一个 setData 里**，分头写的话这个标志迟早开始撒谎')
 
 const WRITE_RE = /(?:\.\s*(unitPrice|priceTouched)\s*=(?!=)|\[\s*['"](?:unitPrice|priceTouched)['"]\s*\])/g
@@ -675,7 +675,34 @@ async function recentGroup() {
 }
 
 recentGroup().then(function () {
-  console.log('purchase-price tests passed')
+  // --- (P12) 提交之后归属交还系统（2026-09-06 翻案）------------------------------
+// 上一版裁定「不复位」，论据是「进货走移动加权平均、复位会填进一个没人报过价的平均数」。
+// **那个论据整段是错的**：进货走 `applyPurchase`，三条分支都是 `costPrice = unitPrice`
+// 直接覆盖（utils/inventory.js:745 / 769 / 781），移动加权平均那条 :192 只服务调拨与
+// 退货回格。purchase.js:172-174 那段 baseline 注释早就写着「被这次进价覆盖」。
+//
+// 事实翻过来，裁决跟着翻：那个价是店主为**这一单**给的，单记完归属就该还回系统。
+// 复位在提交那一刻是**显示等价**的（档案进价刚被覆盖成同一个数），差别只在之后——
+// 别人改了档案进价，复位过的会跟上，不复位的停在旧数，正是本批一直在修的静默错账。
+// 这一条只能**静态**钉：submit 要打服务端，跑不动；而把那一行 setData 抄进测试里
+// 自己写一遍、再断言自己写的东西，是纯摆设——第一版正是这么写的，把复位改成不复位
+// 它一声不吭（实测）。所以改成从源码里抠 submit 的函数体，看那次清空是怎么写的。
+;(function assertSubmitReleasesOwnership() {
+  const body = pageMethod(purchaseJs, 'submit')
+  const line = (body.match(/this\.setData\(\{[^}]*qty:\s*''[^}]*\}\)/) || [])[0]
+  assert.ok(line,
+    'submit 里应当有一处「清空 qty」的 setData——找不到说明它改了写法，'
+      + '下面两条就不是在测源码了')
+  assert.ok(line.indexOf('priceTouched: false') >= 0,
+    '提交之后归属要交还系统：那次清空的 setData 里应当写 `priceTouched: false`，'
+      + '实为 `' + line + '`——留着 true 的话，以后别人改了档案进价这一格再也追不上，'
+      + '就是本批一直在修的静默错账')
+  assert.ok(line.indexOf("unitPrice: ''") >= 0,
+    '归属与价必须**一起**写（同 P10 那条不变量）：这次清空里应当同时有 '
+      + "`unitPrice: ''`，实为 `" + line + '`')
+})()
+
+console.log('purchase-price tests passed')
 }, function (error) {
   console.error(error)
   process.exit(1)
