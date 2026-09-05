@@ -39,9 +39,13 @@ const util = require('../utils/util')
 // 左/右花括号（注释里、或将来某个 hint 字符串里）就会静默越界，抠出半截函数体，
 // 报出来是 `SyntaxError: Unexpected token`，看着像源码写坏了。下面那条「花括号没配平」
 // 只在**不配平一直延续到文件末尾**时才响——复审实测的边界，如实写在这儿。
+// pageMethod 留在 try **外面**：它自己那三条断言（找不到方法 / 找不到左括号 /
+// 花括号没配平）说的就是源码的事，落进下面的 catch 会被贴上「多半是提取器的问题」，
+// 方向正好反了（复审实测：真·改名会被翻译成提取器的锅）。
+const cardOfSrc = pageMethod('cardOf')
 let cardOf
 try {
-  cardOf = new Function('util', 'return { ' + pageMethod('cardOf') + ' }').call(null, util).cardOf
+  cardOf = new Function('util', 'return { ' + cardOfSrc + ' }').call(null, util).cardOf
 } catch (e) {
   assert.fail('从源码里抠 cardOf 抠出了一段编译不了的东西：' + e.message
     + String.fromCharCode(10)
@@ -94,7 +98,7 @@ assert.strictEqual(typeof cardOf, 'function', '抠出来的应当是个函数')
       + '实测它永远跑不到：上一行先红。零独占杀伤，已删。）')
   assert.strictEqual(d.amountText, util.money(0), '¥0.00')
   assert.strictEqual(d.amountClass, '',
-    '中性色，不是欠款红也不是预收绿——稿 28:3 用的是 text/strong (3:23)')
+    '中性色，不是欠款红也不是预收绿——稿 28:3 的 fill 直绑 neutral/900 (3:23)')
   assert.strictEqual(d.hint, '', 'D 档稿上没有 hint')
 }
 
@@ -110,13 +114,57 @@ assert.strictEqual(typeof cardOf, 'function', '抠出来的应当是个函数')
 }
 
 // --- data 初值也得是 D 档 ---------------------------------------------------
-// reloadCustomer 拿到数之前那一瞬间屏上是看得见的，初值写「当前欠款」就是先给一个错读数。
+// 正常路径上看不见这个初值：fillCustomer 把 pageLoading:false 与 cardLabel 写在同一次
+// setData 里，两者同时翻，没有中间帧。真正看得见它的是 onShow 里 store.ready() 失败那条
+// return——那条路上首卡说什么都是错的（见 customer-detail.js 里同一段说明）。
 {
   const m = /cardLabel:\s*'([^']*)'/.exec(src)
   assert.ok(m, 'data 里应当有 cardLabel 初值')
   assert.strictEqual(m[1], '已结清',
     'data 的 cardLabel 初值应当是 D 档的「已结清」，实为「' + m[1] + '」'
-      + '——首屏那一瞬间不该先写「当前欠款」')
+      + '——零态该长 cardOf(0, 0) 的样子')
 }
+
+// --- 账号 → 屏上文案这一段也要有人守 -----------------------------------------
+// 复审实测两条逃逸，上面那些断言一条都拦不住：
+//   1. 把 fillCustomer 里的 `this.cardOf(receivable, prepay)` 换成写死的 A 档对象，
+//      四档全塌回「当前欠款」红字，完整 npm test **全绿**。上面测的是从源码抠出来的
+//      纯函数 cardOf，没有任何一条检查 fillCustomer 还在调它。
+//   2. data 初值四格里只有 cardLabel 被钉住。把 cardAmountText/Class/Hint 改成 A 档的值，
+//      也是全绿——而注释声称「初值取 D 档、与 cardOf(0, 0) 的返回一致」。
+// 两条都用静态判据补上：纯函数对不对是一回事，**它有没有被接上**是另一回事。
+;(function assertCardOfIsActuallyWired() {
+  assert.ok(src.indexOf('const card = this.cardOf(receivable, prepay)') >= 0,
+    'fillCustomer 里应当有 `const card = this.cardOf(receivable, prepay)`——'
+      + '换成写死的对象或别的算法，上面那些断言一条都拦不住：它们测的是纯函数，'
+      + '不是它有没有被接上')
+  const fields = ['card.label', 'card.amountText', 'card.amountClass', 'card.hint']
+  fields.forEach(function (f) {
+    assert.ok(src.indexOf(f) >= 0,
+      '首卡的 ' + f + ' 应当从 cardOf 的返回里取——取不到就意味着这一格是另算的，'
+        + 'cardOf 说了不算')
+  })
+})()
+
+;(function assertDataDefaultsAreZeroState() {
+  const zero = cardOf(0, 0)
+  const pairs = [
+    ['cardLabel', zero.label],
+    ['cardAmountText', zero.amountText],
+    ['cardAmountClass', zero.amountClass],
+    ['cardHint', zero.hint]
+  ]
+  const q = String.fromCharCode(39)
+  pairs.forEach(function (pair) {
+    const at = src.indexOf(pair[0] + ': ' + q)
+    assert.ok(at >= 0, 'data 里应当有 ' + pair[0] + ' 初值')
+    const from = at + (pair[0] + ': ' + q).length
+    const got = src.slice(from, src.indexOf(q, from))
+    assert.strictEqual(got, pair[1],
+      'data 的 ' + pair[0] + ' 初值应当等于 cardOf(0, 0) 给的「' + pair[1] + '」，'
+        + '实为「' + got + '」——四格里只钉一格的话，另外三格可以悄悄改成 A 档的值，'
+        + '在 store.ready() 失败那条路上会渲染出「已结清 ¥1,500.00」这种自相矛盾的卡')
+  })
+})()
 
 console.log('customer-card tests passed')
