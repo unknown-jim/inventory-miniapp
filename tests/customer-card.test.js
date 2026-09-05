@@ -16,21 +16,32 @@ const src = fs.readFileSync(
 // 用 indexOf 找而不是正则：本文件第一版用 new RegExp 写判据，写文件的工具把反斜杠折掉
 // 了一层，括号的转义变成了捕获组、整条匹配不上，报出来却是「missing method cardOf」，
 // 看着像源码改名了。**判据自己出错时要能分辨得出来**，所以这里换成不需要转义的写法。
+// **在剥过注释的那份上抠**，不是抠出来之后再剥：剥在抠之后的话，在真方法前面塞一段
+// 写着完整实现的块注释，pageMethod 会把注释里那份当源码抠走——A/B/C/D 四条、data 初值
+// 四条、wiring 一条全部改判在诱饵上（复审实测，整个修复能撤销而全绿）。
+// 另加一条自检：同名方法只许出现一次，出现两次说明还有别的东西在冒充它。
 function pageMethod(name) {
   const needle = String.fromCharCode(10) + '  ' + name + '('
-  const at = src.indexOf(needle)
+  const clean = stripJsComments(src)
+  let hits = 0
+  let scan = clean.indexOf(needle)
+  while (scan >= 0) { hits += 1; scan = clean.indexOf(needle, scan + 1) }
+  assert.strictEqual(hits, 1,
+    '方法 ' + name + ' 在剥过注释的源码里出现了 ' + hits + ' 次，应当只有 1 次'
+      + '——多出来的那份多半是在冒充它')
+  const at = clean.indexOf(needle)
   assert.ok(at >= 0, 'missing method ' + name + '——它改名或改了签名，下面测的就不是源码了')
-  let i = src.indexOf('{', at)
+  let i = clean.indexOf('{', at)
   assert.ok(i > 0, name + ' 后面找不到函数体的左花括号')
   i += 1
   let depth = 1
-  while (i < src.length && depth > 0) {
-    if (src[i] === '{') depth += 1
-    else if (src[i] === '}') depth -= 1
+  while (i < clean.length && depth > 0) {
+    if (clean[i] === '{') depth += 1
+    else if (clean[i] === '}') depth -= 1
     i += 1
   }
   assert.strictEqual(depth, 0, name + ' 的花括号没配平，抠出来的不是完整函数体')
-  return src.slice(at + 1, i)
+  return clean.slice(at + 1, i)
 }
 
 const util = require('../utils/util')
@@ -162,9 +173,14 @@ assert.strictEqual(typeof cardOf, 'function', '抠出来的应当是个函数')
     // 要求后面跟一个**非标识符字符**：光前缀会把 `card.hintText` 当成 `card.hint`
     // 命中（card 上没这个字段，屏上 hint 直接消失）；而硬要结尾逗号又会在「挪到最后
     // 一格」这种行为不变的改版上误报。两头的坑复审都实测过。
+    // 下一个字符必须属于**终止符集合**（逗号 / 换行 / 右花括号 / 空白）。
+    // 上一版写「非标识符字符」，于是 `card.hint.text`、`card.amountText.slice(0,1)`、
+    // `card.label + '（历史遗留）'` 这类**继续往下写的表达式**全被放行——复审实测五种，
+    // 屏上分别是 hint 消失、金额被截、label 串字，而测试全绿。
     const at = body.indexOf(pair[0] + ': ' + pair[1])
     const tail = at >= 0 ? body.charAt(at + (pair[0] + ': ' + pair[1]).length) : 'x'
-    assert.ok(at >= 0 && 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_$'.indexOf(tail) < 0,
+    const TERM = ',' + String.fromCharCode(10) + String.fromCharCode(13) + ' }' + String.fromCharCode(9)
+    assert.ok(at >= 0 && TERM.indexOf(tail) >= 0,
       'fillCustomer 里 ' + pair[0] + ' 应当接 ' + pair[1]
         + '——接错格子、接到不存在的字段、或者只把原写法留在注释里，屏上都会串位或空掉')
   })
@@ -173,8 +189,8 @@ assert.strictEqual(typeof cardOf, 'function', '抠出来的应当是个函数')
 // --- 屏上那张卡真的在读这四个字段吗 -----------------------------------------
 // 复审实测：把 wxml 的 `{{cardLabel}}` 写死成「当前欠款」——**等于把这次修复整个撤销**
 // ——完整 npm test 仍然 EXIT=0。上面所有断言测的都是 js 侧，没有一条看 wxml。
-// 补这条之前，tests/ 全仓 grep `hero-label` / `hero-num` 是零命中的；ui.test.js 至今
-// 也不读这张卡的文案（它只用商品详情那几个 js- 钩子）。
+// 补这条之前，tests/ 全仓 grep `hero-label` / `hero-num` 是零命中的。ui.test.js **已经在
+// 这张卡上点按钮**（js-pay-open / js-detail-sale 就长在这张卡里），但从没读过卡上的文案。
 ;(function assertHeroCardReadsTheFields() {
   const wxml = fs.readFileSync(
     path.join(__dirname, '..', 'pages', 'customer-detail', 'customer-detail.wxml'), 'utf8')
@@ -197,10 +213,16 @@ assert.strictEqual(typeof cardOf, 'function', '抠出来的应当是个函数')
         + ' 的那个节点里）——写死文案的话 cardOf 算得再对，屏上也不跟着走，'
         + '而 js 侧的断言一条都拦不住')
   })
-  assert.ok(body.indexOf('{{cardAmountClass}}') >= 0,
-    '金额那一行的颜色 class 应当绑 {{cardAmountClass}}——写死的话四档颜色就不跟着走了')
-  // **这条盖不到**：`wx:if` 把整块挡掉、兄弟节点覆盖、wxss 隐藏。它只保证「这几个
-  // 节点上写的是绑定不是死文案」，不保证它们真的显示出来——那要 test:ui 才看得见。
+  // 收进「带 js-detail-amount 的那个节点的 class 属性里」——上一版扫全文，把它挪到
+  // 一个无关节点上（四档颜色全丢）照样绿，与本轮阻塞 2 同型（复审实测）。
+  const clsRe = new RegExp('class="[^"]*' + bs + '{' + bs + '{cardAmountClass' + bs + '}' + bs
+    + '}[^"]*js-detail-amount[^"]*"')
+  assert.ok(clsRe.test(body),
+    '金额那一行的颜色 class 应当就地绑 {{cardAmountClass}}（在带 js-detail-amount 的那个'
+      + '节点的 class 里）——挪到别处或写死，四档颜色都不跟着走了')
+  // **这条盖不到**：`wx:if` 把整块挡掉、兄弟节点覆盖、wxss 隐藏、藏一个写着绑定的
+  // 诱饵节点再让真节点写死。准确说它只保证「**存在**一个带这个 class 的节点写的是绑定」，
+  // 不保证屏上显示的就是它——那要 test:ui 才看得见。
 })()
 
 ;(function assertDataDefaultsAreZeroState() {
@@ -230,6 +252,56 @@ assert.strictEqual(typeof cardOf, 'function', '抠出来的应当是个函数')
         + '实为「' + got + '」——四格里只钉一格的话，另外三格可以悄悄改成 A 档的值，'
         + '在 store.ready() 失败那条路上会渲染出「已结清 ¥1,500.00」这种自相矛盾的卡')
   })
+})()
+
+// --- 行为钉子：真跑一遍 fillCustomer -----------------------------------------
+// 上面那些全是**对源码文本的静态匹配**。复审连着六轮从新形态绕过去（注释诱饵、死方法
+// 诱饵、前缀诱饵、setData 之后再补一次、拿到 card 之后改字段…），每堵一个就冒一个新的
+// ——因为静态匹配守的是「代码长什么样」，而我们真正要的是「屏上那四个字段是什么」。
+//
+// 这一条真跑：拿 store 替身喂 fillCustomer，断言最终落进 data 的值。它一条顶上面一片。
+;(function assertFillCustomerProducesZeroState() {
+  const inventory = require('../utils/inventory')
+  const cases = [
+    { name: 'A 只有欠款', receivable: 1500, prepay: 0, label: '当前欠款', cls: 'debt' },
+    { name: 'B 只有预收', receivable: 0, prepay: 200, label: '预收款（收超欠款部分）', cls: 'prepay' },
+    { name: 'C 并存', receivable: 84, prepay: 200, label: '当前欠款（另有预收待抵扣）', cls: 'debt' },
+    { name: 'D 两清', receivable: 0, prepay: 0, label: '已结清', cls: '' }
+  ]
+  cases.forEach(function (c) {
+    const store = {
+      getCustomer: function () {
+        return { id: 'c1', name: '张三', account: { receivable: c.receivable, prepay: c.prepay, count: 0, amount: 0 } }
+      }
+    }
+    const page = new Function('store', 'inventory', 'util',
+      'return { ' + cardOfSrc + ',' + pageMethod('fillCustomer') + ' }')(store, inventory, util)
+    page.data = {}
+    page.setData = function (o) { Object.assign(page.data, o) }
+    page.reloadLedger = function () {}
+    page.fillCustomer('c1')
+
+    assert.strictEqual(page.data.cardLabel, c.label,
+      c.name + '：屏上 label 应当是「' + c.label + '」，实为「' + page.data.cardLabel + '」'
+        + '——这一条真跑 fillCustomer，静态匹配骗不过它')
+    assert.strictEqual(page.data.cardAmountClass, c.cls,
+      c.name + '：金额颜色 class 应当是「' + c.cls + '」，实为「' + page.data.cardAmountClass + '」')
+  })
+
+  // D 档的金额与 hint 单独钉：两清时不该出 hint，金额是 0。
+  const store0 = {
+    getCustomer: function () {
+      return { id: 'c1', name: '张三', account: { receivable: 0, prepay: 0, count: 0, amount: 0 } }
+    }
+  }
+  const p0 = new Function('store', 'inventory', 'util',
+    'return { ' + cardOfSrc + ',' + pageMethod('fillCustomer') + ' }')(store0, inventory, util)
+  p0.data = {}
+  p0.setData = function (o) { Object.assign(p0.data, o) }
+  p0.reloadLedger = function () {}
+  p0.fillCustomer('c1')
+  assert.strictEqual(p0.data.cardAmountText, util.money(0), 'D 档金额是 ¥0.00')
+  assert.strictEqual(p0.data.cardHint, '', 'D 档不出 hint')
 })()
 
 console.log('customer-card tests passed')
