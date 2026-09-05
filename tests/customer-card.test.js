@@ -35,6 +35,19 @@ function pageMethod(name) {
 
 const util = require('../utils/util')
 
+// 剥注释再判——注释诱饵是本仓实测过的逃逸：真代码写死、把原来的 token 留在注释里，
+// 全文 indexOf 照样命中（复审两次都从这儿绕过去）。
+function stripJsComments(text) {
+  const bs = String.fromCharCode(92)
+  const block = new RegExp(bs + '/' + bs + '*[' + bs + 's' + bs + 'S]*?' + bs + '*' + bs + '/', 'g')
+  const line = new RegExp('(^|[^:])' + bs + '/' + bs + '/[^' + bs + 'n]*', 'g')
+  return text.replace(block, ' ').replace(line, '$1')
+}
+function stripWxmlComments(text) {
+  const bs = String.fromCharCode(92)
+  return text.replace(new RegExp('<!--[' + bs + 's' + bs + 'S]*?-->', 'g'), ' ')
+}
+
 // 把 SyntaxError 翻译成人话。**扫描器不跳字符串和注释**：cardOf 里出现一个游离的
 // 左/右花括号（注释里、或将来某个 hint 字符串里）就会静默越界，抠出半截函数体，
 // 报出来是 `SyntaxError: Unexpected token`，看着像源码写坏了。下面那条「花括号没配平」
@@ -134,7 +147,7 @@ assert.strictEqual(typeof cardOf, 'function', '抠出来的应当是个函数')
 //      也是全绿——而注释声称「初值取 D 档、与 cardOf(0, 0) 的返回一致」。
 // 两条都用静态判据补上：纯函数对不对是一回事，**它有没有被接上**是另一回事。
 ;(function assertCardOfIsActuallyWired() {
-  assert.ok(src.indexOf('const card = this.cardOf(receivable, prepay)') >= 0,
+  assert.ok(stripJsComments(src).indexOf('const card = this.cardOf(receivable, prepay)') >= 0,
     'fillCustomer 里应当有 `const card = this.cardOf(receivable, prepay)`——'
       + '换成写死的对象或别的算法，上面那些断言一条都拦不住：它们测的是纯函数，'
       + '不是它有没有被接上')
@@ -146,10 +159,13 @@ assert.strictEqual(typeof cardOf, 'function', '抠出来的应当是个函数')
     ['cardAmountClass', 'card.amountClass'],
     ['cardHint', 'card.hint']
   ]
+  const body = stripJsComments(pageMethod('fillCustomer'))
   pairs.forEach(function (pair) {
-    assert.ok(src.indexOf(pair[0] + ': ' + pair[1]) >= 0,
+    // 带结尾逗号：不带的话 `cardHint: card.hintText,` 会被当成命中（前缀匹配），
+    // 而 card 上根本没有 hintText，屏上 hint 直接消失。复审实测过这条。
+    assert.ok(body.indexOf(pair[0] + ': ' + pair[1] + ',') >= 0,
       'fillCustomer 里 ' + pair[0] + ' 应当接 ' + pair[1]
-        + '——接错格子的话四个字符串都还在，测不出来，屏上却会串位')
+        + '——接错格子、接到不存在的字段、或者只把原写法留在注释里，屏上都会串位或空掉')
   })
 })()
 
@@ -160,17 +176,21 @@ assert.strictEqual(typeof cardOf, 'function', '抠出来的应当是个函数')
 ;(function assertHeroCardReadsTheFields() {
   const wxml = fs.readFileSync(
     path.join(__dirname, '..', 'pages', 'customer-detail', 'customer-detail.wxml'), 'utf8')
+  const body = stripWxmlComments(wxml)
+  // 判**成对形态**，不是全文有没有这个 token：复审实测两条绕过——把原 token 留在
+  // wxml 注释里、或者把 {{cardLabel}} 挪到别的节点上，全文 indexOf 都照样命中。
   const need = [
-    ['{{cardLabel}}', 'label 那一行'],
-    ['{{cardAmountClass}}', '金额的颜色 class'],
-    ['{{cardAmountText}}', '金额本身'],
-    ['{{cardHint}}', 'hint']
+    ['class="hero-label">{{cardLabel}}<', 'label 那一行'],
+    ['{{cardAmountClass}} js-detail-amount">¥{{cardAmountText}}<', '金额的颜色 class 与金额本身'],
+    ['class="hero-hint js-detail-hint">{{cardHint}}<', 'hint 那一行']
   ]
   need.forEach(function (pair) {
-    assert.ok(wxml.indexOf(pair[0]) >= 0,
-      '首卡的' + pair[1] + '应当绑 ' + pair[0] + '——写死文案的话 cardOf 算得再对，'
+    assert.ok(body.indexOf(pair[0]) >= 0,
+      '首卡的' + pair[1] + '应当就地绑 `' + pair[0] + '`——写死文案的话 cardOf 算得再对，'
         + '屏上也不跟着走，而 js 侧的断言一条都拦不住')
   })
+  // **这条盖不到**：`wx:if` 把整块挡掉、兄弟节点覆盖、wxss 隐藏。它只保证「这几个
+  // 节点上写的是绑定不是死文案」，不保证它们真的显示出来——那要 test:ui 才看得见。
 })()
 
 ;(function assertDataDefaultsAreZeroState() {
@@ -182,11 +202,16 @@ assert.strictEqual(typeof cardOf, 'function', '抠出来的应当是个函数')
     ['cardHint', zero.hint]
   ]
   const q = String.fromCharCode(39)
+  // 只在 data 块里找：全文第一个 `cardLabel: '` 现在恰好在 data 里，但只要将来有别的
+  // 字面量排到它前面，这四条就会静默去核错的那个值。
+  const dataAt = src.indexOf('data: {')
+  assert.ok(dataAt >= 0, '应当找得到 data 块')
+  const dataBlock = src.slice(dataAt, src.indexOf(String.fromCharCode(10) + '  },', dataAt))
   pairs.forEach(function (pair) {
-    const at = src.indexOf(pair[0] + ': ' + q)
+    const at = dataBlock.indexOf(pair[0] + ': ' + q)
     assert.ok(at >= 0, 'data 里应当有 ' + pair[0] + ' 初值')
     const from = at + (pair[0] + ': ' + q).length
-    const got = src.slice(from, src.indexOf(q, from))
+    const got = dataBlock.slice(from, dataBlock.indexOf(q, from))
     assert.strictEqual(got, pair[1],
       'data 的 ' + pair[0] + ' 初值应当等于 cardOf(0, 0) 给的「' + pair[1] + '」，'
         + '实为「' + got + '」——四格里只钉一格的话，另外三格可以悄悄改成 A 档的值，'

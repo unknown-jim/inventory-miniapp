@@ -685,16 +685,22 @@ async function recentGroup() {
       + ' —— 被换成档案进价 28 的话，店主点 chip 要来的那个数就在他没看见的时候变了，'
       + '而旧实现靠身份判据本来是留得住的（这条同时是本次修复的回归闸）')
   assert.strictEqual(page.data.priceTouched, true, '保留时归属不变')
+  doneBlocks += 1   // 本块跑完（收尾闸靠它）
 }
 
 // 收尾闸：异步断言没跑完就退出的话，进程会安安静静 exit 0——复审实测过这条假绿通道
 // （把 addPurchase 换成永不 settle 的 promise，上一版照样 exit 0）。这里钉死：
 // 没走到最后一行就是失败。
-let finished = false
+// 每个异步块**自己在最后一行**报数——把信号挂在最外层 .then 上是不够的：块内提前
+// return 时 promise 照常 resolve，闸看不见（复审实测 P13 与 recentGroup 各插一行
+// `if (1) return`，两次都是安静退出 0）。
+const TOTAL_BLOCKS = 2
+let doneBlocks = 0
 process.on('exit', function (code) {
-  if (code === 0 && !finished) {
-    console.error('异步断言没跑完就退出了——下面这些一条都没验：P12 / P13。'
-      + '多半是某个 await 的 promise 永远不 settle，或者链被谁截断了。')
+  if (code === 0 && doneBlocks !== TOTAL_BLOCKS) {
+    console.error('异步断言没跑完就退出了：跑完了 ' + doneBlocks + ' / ' + TOTAL_BLOCKS
+      + ' 个异步块。多半是某个 await 的 promise 永远不 settle、链被谁截断了，'
+      + '或者块内提前 return 了。')
     process.exitCode = 1
   }
 })
@@ -735,7 +741,7 @@ recentGroup().then(function () {
       + "`unitPrice: ''`，实为 `" + line + '`')
 })()
 
-// submit 直接调 `wx.showToast`（purchase.js:359）；错误路径经 `util.showError` 用到
+// submit 直接调 `wx.showToast`（purchase.js:360）；错误路径经 `util.showError` 用到
 // `wx.showModal` / `wx.showToast`。只桩这两个——**桩多了就等于把生产代码的依赖偷偷
 // 改宽**：上一版桩了五个并写「只桩它真正调到的三个」，两句都是假的（`util.showToast`
 // 这个函数根本不存在，实际只调到 showToast 一个），复审拿 Proxy 记账当场比出来。
@@ -769,8 +775,9 @@ global.wx = global.wx || {
   assert.strictEqual(page.data.unitPrice, '33',
     '复位之后回填应当拿回刚覆盖上去的档案进价 33，实为 ' + page.data.unitPrice
       + '——不等于的话「复位在提交那一刻是显示等价的」这句话就不成立')
+  doneBlocks += 1   // 本块跑完（收尾闸靠它）
 })()
-  .then(function () { finished = true; console.log('purchase-price tests passed') })
+  .then(function () { console.log('purchase-price tests passed') })
   .catch(function (e) { console.error(e); process.exit(1) })
 }, function (error) {
   console.error(error)
