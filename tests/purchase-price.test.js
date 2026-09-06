@@ -187,7 +187,12 @@ function harness(initial) {
       fx.products = done.products
       fx.skus = done.skus
       fx.records = done.records
-      return Promise.resolve(done.records[done.records.length - 1])
+      // 取 `done.record`：`applyPurchase` 返回的是 `records: [record].concat(records)`，
+      // **新单在下标 0**，`records[len-1]` 取到的是最旧那条（复审实测：连进两单后
+      // `records[len-1].id` 是第一单）。今天不出错只因为本块夹具 records 是空的，
+      // 一旦有人加一条前置流水，firstLine 会取到别的商品、测试为错误的理由变绿或变红。
+      // 真 store.addPurchase 回的也是 `res.result.record`，这样更同构。
+      return Promise.resolve(done.record)
     }
   }
   const make = new Function('store', 'inventory', 'util',
@@ -700,9 +705,14 @@ async function recentGroup() {
 //   · 链在某个块**之前**被截断（那个块压根没进，进出都少一次，仍然相等）
 //   · 整个块从未被调用
 //   · 块内异常被吞，而 `ended += 1` 写在 catch 之外
-// 上一版把「链被截断」列进「抓得住」，是错的；「那样进出都是 0」这句解释也不成立
-// （截断在 P13 之前时进出都是 1）。这类形态连 `purchase-price tests passed` 都不会打印，
-// 但没有任何东西检查那一行有没有出现——要堵得靠 CI 侧核对输出，不是这道闸能做的。
+//
+// 这三种**不是一回事**（复审逐条实测）：
+//   · 「链被截断」不打印 `purchase-price tests passed`——CI 侧核对那一行堵得住它。
+//   · 另外两种**照常打印成功行并 exit 0**——CI 核对输出对它们一条都不管用，
+//     这个文件里目前也没有任何东西堵得住。
+// 上一版把三种混成一句「都不会打印…靠 CI 核对输出」，对其中两种是假的。
+// 真要堵后两种，得换成不靠块自报的形态（闸自己数调用点、或全局断言计数下界），
+// 那是另一轮的事；这里先把边界写成实测到的样子。
 let started = 0
 let ended = 0
 process.on('exit', function (code) {
