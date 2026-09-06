@@ -7,6 +7,18 @@
      稿注 4:457 自己写着「实现随云函数写路径分期」。见规格 6-1 与 OPEN-Q-1。 -->
 <view class="page">
   <page-loading wx:if="{{pageLoading}}" />
+
+  <!-- 稿 state/error 3:759（可重试：标题 + 一句话 + 一枚 primary）与
+       state/error/blocking（不可重试）4:1041。标题和正文由 store.readyOrFailure()
+       给，**不在这里写死**：「被移出店铺」和「网络断了」不是同一句话，
+       而这一支两种都要落。 -->
+  <view wx:elif="{{loadErrorText}}" class="card empty js-load-error">
+    <view class="empty-title js-load-error-title">{{loadErrorTitle}}</view>
+    <view class="muted js-load-error-text">{{loadErrorText}}</view>
+    <view wx:if="{{loadErrorRetry}}" class="empty-actions">
+      <button class="btn-primary js-load-error-retry" bindtap="reload">重试</button>
+    </view>
+  </view>
   <block wx:else>
     <!-- 稿 4:693 + 注 4:713：点选带出商品 + 规格 + 上次进价，只改数量即可确认 -->
     <block wx:if="{{recent.length}}">
