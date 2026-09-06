@@ -78,6 +78,11 @@ assert.ok(wrapped.length > 1)
 const slip = sampleSlip()
 const layout = slipImage.layoutSlip(slip)
 const text = textsOf(layout)
+// 默认（不传 options）解析成汇总态，而汇总态**没有规格列**——规格进了数量格的胶囊。
+// 所以「货号 / 颜色 / 尺码」这几个**表头**的断言要对着明细态提，不能对着默认那份提。
+// 上一版这几条写在默认那份上，胶囊改动一上来就红——红得对：它们钉的是矩阵版的列结构。
+const detailLayout = slipImage.layoutSlip(slip, null, { exportStyle: 'detail' })
+const detailText = textsOf(detailLayout)
 assert.strictEqual(layout.width, 1700)
 assert.ok(layout.height > 400)
 // 竖版：高比宽大，手机预览时上下黑边才压得住
@@ -95,14 +100,23 @@ assert.ok(text.indexOf('赊账') < 0)
 assert.ok(text.indexOf('门口放') >= 0)
 assert.ok(text.indexOf('¥118.00') >= 0)
 assert.ok(text.indexOf('序号') < 0)
-assert.ok(text.indexOf('货号') >= 0)
-assert.ok(text.indexOf('品名') >= 0)
-assert.ok(text.indexOf('颜色') >= 0)
-assert.ok(text.indexOf('尺码') >= 0)
 assert.ok(text.indexOf('规格') < 0)
+// 两态共有的四个表头
+assert.ok(text.indexOf('品名') >= 0)
 assert.ok(text.indexOf('数量') >= 0)
 assert.ok(text.indexOf('单价') >= 0)
 assert.ok(text.indexOf('金额') >= 0)
+// 明细态：规格各占一列，货号也自成一列
+assert.ok(detailText.indexOf('货号') >= 0)
+assert.ok(detailText.indexOf('颜色') >= 0)
+assert.ok(detailText.indexOf('尺码') >= 0)
+assert.ok(detailText.indexOf('TS-005') >= 0)
+// 汇总态：**没有**规格列的表头，规格在胶囊里；货号仍然要印得出来（在品名格第二行）。
+// 「货号整个不见了」是本批实测过的回归：上一版为了省 65px 只在「≥2 条规格」时才印
+// 第二行，单商品单规格的单子（也就是最常见的那种）货号就没了。
+assert.ok(text.indexOf('颜色') < 0, '汇总态不该有「颜色」表头——规格进了胶囊')
+assert.ok(text.indexOf('尺码') < 0, '汇总态不该有「尺码」表头')
+assert.ok(text.indexOf('TS-005') >= 0, '汇总态也必须印得出货号，省版面不能省掉单据字段')
 // 合计和结算并成一块：总数 / 应收 / 实收
 assert.ok(text.indexOf('总数') >= 0)
 assert.ok(text.indexOf('应收') >= 0)

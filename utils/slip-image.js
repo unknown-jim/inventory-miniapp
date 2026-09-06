@@ -20,7 +20,21 @@ const SPEC_AXIS_LIMIT = 2
 // R1（2026-09-02）之后这条只是提前退出的快速否决——列数不多但列值字数长照样能撑宽画布，
 // 真正兜底是 layoutSlip 里「矩阵节画布下限 <= 平铺基准」的条件 7。这条注释记的推理仍然
 // 成立（列数本身也是撑宽的一个来源），所以保留，不删。
-const MATRIX_COL_LIMIT = 6
+// 规格胶囊（汇总态数量列）。画布是 1700 宽的高清图，这几个数跟 LINE_H(65) 同一量级。
+// 胶囊高度必须 **>= 字号 + 上下内边距**。上一版写死 52 而胶囊文字是 56px 的 FONT.num——
+// 胶囊比字还矮，textTop 算出来的顶端比胶囊顶端还高 2px，文字上下都露在灰底外面；
+// 排距也只剩 8px，相邻两排的字贴在一起。**这两条真机同样会有**，不是预览器的失真。
+// 胶囊文字用 FONT.small（48px / 12.1pt）：它比表格正文低一档，但胶囊有底色、对比度更高，
+// 而且店主反馈的第一条就是「胶囊太大」。字号一降，一排能多放一枚。
+const PILL_TEXT = 44
+// 等宽胶囊开关（评审用，定了就把死的那一支删掉，不留配置项）
+const PILL_EQUAL_WIDTH = true
+const PILL_PAD_Y = 10
+const PILL_H = PILL_TEXT + PILL_PAD_Y * 2
+const PILL_PAD_X = 16
+const PILL_GAP = 10
+const PILL_ROW_GAP = 10
+const PILL_ROW_H = PILL_H + PILL_ROW_GAP
 
 // 列宽按量出来的字宽定，但真机字体和估算值有出入，留一点余量，免得货号顶出格线。
 const MEASURE_SLACK = 1.04
@@ -53,8 +67,12 @@ const FONT = {
   total: '700 80px sans-serif',        // 20.1pt 合计，客户最想看清的数
   debt: '700 64px sans-serif',         // 16.1pt 结算盒主行的值
   small: '48px sans-serif',            // 12.1pt 往来欠款那一行
-  smallStrong: '700 56px sans-serif'   // 14.1pt 累计欠款，小字里唯一要跳出来的
+  smallStrong: '700 56px sans-serif',  // 14.1pt 累计欠款，小字里唯一要跳出来的
+  pill: '44px sans-serif'              // 11.1pt 规格胶囊与合计胶囊：格内密排，比正文低两档
 }
+
+// 胶囊文字。放在 FONT 之后声明——常量块在上面，那里还引用不到 FONT。
+const PILL_FONT = FONT.pill
 
 function parseFontSize(font) {
   const match = String(font || '').match(/(\d+)px/)
@@ -108,6 +126,13 @@ function textTop(y, rowH, font) {
   return y + (rowH - parseFontSize(font)) / 2
 }
 
+// baseline 只有胶囊用：em 盒顶端对齐（textTop）在 103px 高的表格行里差几像素看不出来，
+// 在 68px 高的胶囊里一眼就是没居中。中线对齐把这件事交给渲染器算，两端都精确。
+function pushTextMiddle(cmds, text, x, yCenter, font, color, align) {
+  cmds.push({ type: 'text', text: String(text), x: x, y: yCenter, font: font,
+    color: color, align: align || 'left', baseline: 'middle' })
+}
+
 function pushText(cmds, text, x, y, font, color, align) {
   cmds.push({
     type: 'text',
@@ -122,6 +147,30 @@ function pushText(cmds, text, x, y, font, color, align) {
 
 function pushRect(cmds, x, y, w, h, fill) {
   cmds.push({ type: 'rect', x: x, y: y, w: w, h: h, fill: fill })
+}
+
+// 胶囊：圆角矩形底 + 居中文字。**不用 ctx.roundRect** —— 微信旧版 CanvasContext 没有它，
+// drawSlip 那边用 arc 拼路径，两端半圆半径恒等于高的一半。
+// 底色默认用表头那个灰（COLORS.header）：单据上已经有它，不为胶囊新引一个颜色。
+// 不描边——1700 宽画布缩到手机上时 1px 边会糊成一层脏灰。
+// 文字走 pushTextMiddle（中线对齐），不走 textTop 那套 em 盒顶端对齐：68px 高的胶囊里
+// 后者一眼就是没居中（店主实测反馈的第一条）。
+function pushPillOf(cmds, text, x, y, w, font, fill, color) {
+  cmds.push({ type: 'pill', x: x, y: y, w: w, h: PILL_H, fill: fill })
+  pushTextMiddle(cmds, text, x + w / 2, y + PILL_H / 2, font, color, 'center')
+  return w
+}
+
+function pushPill(cmds, text, x, y, w, font) {
+  return pushPillOf(cmds, text, x, y, w, font, COLORS.header, COLORS.value)
+}
+
+// 合计胶囊：同一格里 2 枚以上时才出（只有一枚时合计就是它自己，纯废话）。
+// **深底白字**，字号与字重和规格胶囊完全相同——换成加粗的话文字会比量出来的盒子宽，
+// 又变回「文字超出胶囊」，那正是这一轮在修的毛病。浅一档的底色（COLORS.total）
+// 和 COLORS.header 差别太小，在缩印的单子上分不出来。
+function pushTotalPill(cmds, text, x, y, w, font) {
+  return pushPillOf(cmds, text, x, y, w, font, COLORS.value, COLORS.bg)
 }
 
 function pushLine(cmds, x1, y1, x2, y2, width) {
@@ -228,10 +277,15 @@ function specCellValue(line, axisName) {
 
 function canWrapColumn(col) {
   // 数量、单价、金额折行会被看错，品名/货号/规格折行只是变矮一点。
+  // 胶囊列（汇总态数量列）也可压：它的 floor 是「一排放得下一枚」，压到底也不截断，
+  // 只是排数变多。不让它可压的话，宽度不够时它会去撑宽画布——那是矩阵那版的老毛病。
+  if (col.pillValues) return true
   return col.key === 'name' || col.key === 'sku' || col.key.indexOf('spec:') === 0
 }
 
 function floorWidth(col, measure) {
+  // 胶囊列的下限是**最宽的那一枚**：再窄就要截断规格，单据上不许。
+  if (col.pillFloor) return col.pillFloor + CELL_PAD_X * 2
   return Math.ceil(measure('汉'.repeat(NAME_MIN_CHARS), col.font)) + CELL_PAD_X * 2
 }
 
@@ -309,10 +363,15 @@ function fitColumns(cols, pageWidth, measure) {
   const contentWidth = pageWidth - PAD * 2
   let over = cols.natural - contentWidth
   if (over <= 0) {
-    const nameCol = defs.find(function (col) {
+    // 富余优先给**胶囊列**（汇总态）：它的自然宽度只保证放得下最宽的一枚，不补的话
+    // 胶囊会一枚一行、行高暴涨，正好把「单子更短」这件事做反。没有胶囊列时照旧给品名。
+    const pillCol = defs.find(function (col) {
+      return !!col.pillValues
+    })
+    const target = pillCol || defs.find(function (col) {
       return col.key === 'name'
     })
-    if (nameCol) nameCol.width -= over
+    if (target) target.width -= over
   } else {
     defs.forEach(function (col) {
       if (over <= 0 || !canWrapColumn(col)) return
@@ -407,23 +466,32 @@ function layoutMeta(cmds, slip, pageWidth, y, measure) {
 function layoutTable(cmds, slip, cols, y, measure) {
   const headerH = 98
   const defs = cols.defs
-  const lines = slip.lines || []
-  const rows = lines.map(function (line, index) {
+  // 行数取自列本身，不再取自 slip.lines：汇总态一行是「一个商品 + 一个单价」的组，
+  // 和原始行数不是一回事（明细态两者相等，走的还是同一条路）。
+  const rowCount = defs.length ? (defs[0].values || []).length : 0
+  const rows = []
+  for (let index = 0; index < rowCount; index++) {
     const cells = {}
+    let blockH = LINE_H
     defs.forEach(function (col) {
+      const pills = col.pillValues && col.pillValues[index]
+      if (pills && pills.length) {
+        const totalAt = col.pillTotalFrom ? col.pillTotalFrom[index] : -1
+        const packed = packPills(pills, Math.max(24, col.width - CELL_PAD_X * 2), col.font, measure, totalAt, PILL_EQUAL_WIDTH ? col.pillFloor : null)
+        cells[col.key] = { pills: packed }
+        blockH = Math.max(blockH, packed.length * PILL_ROW_H)
+        return
+      }
+      const fixed = col.textLines && col.textLines[index]
       const raw = col.values[index]
-      cells[col.key] = canWrapColumn(col)
-        ? wrapCell(raw, col, measure)
-        : [raw == null ? '' : String(raw)]
+      const texts = fixed && fixed.length
+        ? fixed
+        : (canWrapColumn(col) ? wrapCell(raw, col, measure) : [raw == null ? '' : String(raw)])
+      cells[col.key] = texts
+      blockH = Math.max(blockH, texts.length * LINE_H)
     })
-    const lineCount = defs.reduce(function (max, col) {
-      return Math.max(max, (cells[col.key] || []).length)
-    }, 1)
-    return {
-      cells: cells,
-      height: Math.max(103, CELL_PAD_Y * 2 + lineCount * LINE_H)
-    }
-  })
+    rows.push({ cells: cells, height: Math.max(103, CELL_PAD_Y * 2 + blockH) })
+  }
   const tableTop = y
   const headerY = y
   y += headerH
@@ -450,7 +518,24 @@ function layoutTable(cmds, slip, cols, y, measure) {
 
   rows.forEach(function (row) {
     defs.forEach(function (col) {
-      const texts = row.cells[col.key] || []
+      const cell = row.cells[col.key]
+      if (cell && cell.pills) {
+        // 每一排胶囊在列内水平居中；整块在行内垂直居中，和文字格同一个口径。
+        let py = row.y + (row.height - cell.pills.length * PILL_ROW_H) / 2
+        // **左对齐**，不居中。居中时一排只放得下一两枚，两侧各空一大块（店主的原话是
+        // 「左右两侧白边太宽、空间利用率低」）；左对齐之后空白只落在最后一排的尾巴上。
+        cell.pills.forEach(function (pillRow) {
+          let px = col.x + CELL_PAD_X
+          pillRow.forEach(function (item) {
+            if (item.total) pushTotalPill(cmds, item.text, px, py, item.w, col.font)
+            else pushPill(cmds, item.text, px, py, item.w, col.font)
+            px += item.w + PILL_GAP
+          })
+          py += PILL_ROW_H
+        })
+        return
+      }
+      const texts = cell || []
       const blockH = texts.length * LINE_H
       let ty = row.y + (row.height - blockH) / 2
       texts.forEach(function (line) {
@@ -508,33 +593,6 @@ function sliceLineSections(lines) {
   return sections
 }
 
-// 判定条件 3：该行 specParts 里「有名字、有值」的轴恰好 2 个，返回轴名序列；
-// 不满足（轴数不是 2、或存在无名轴）一律返回 null，调用方据此退回平铺。
-function lineAxisPair(line) {
-  const parts = (line && line.specParts) || []
-  const valued = parts.filter(function (part) {
-    return part && part.value
-  })
-  if (valued.length !== 2) return null
-  if (!valued[0].name || !valued[1].name) return null
-  return [valued[0].name, valued[1].name]
-}
-
-// 节内所有行的轴名序列必须完全一致（名字和顺序都要对上），否则不成表。
-function sectionAxisPair(section) {
-  let pair = null
-  for (let i = 0; i < section.lines.length; i++) {
-    const current = lineAxisPair(section.lines[i])
-    if (!current) return null
-    if (!pair) {
-      pair = current
-    } else if (current[0] !== pair[0] || current[1] !== pair[1]) {
-      return null
-    }
-  }
-  return pair
-}
-
 // 判定条件 4：节内单价必须逐字相同，单价要提到节头，不同价就提不上去。
 function sectionPriceText(section) {
   const first = section.lines[0] && section.lines[0].priceText
@@ -542,14 +600,6 @@ function sectionPriceText(section) {
     return line.priceText === first
   })
   return same ? first : null
-}
-
-function uniqueValuesInOrder(values) {
-  const seen = []
-  values.forEach(function (value) {
-    if (seen.indexOf(value) < 0) seen.push(value)
-  })
-  return seen
 }
 
 // 汇总一节金额：明细行 amountText 相加，口径同 utils/util.js 的 money()（四舍五入到分），
@@ -562,317 +612,192 @@ function amountSumText(lines) {
   return (Math.round((total + Number.EPSILON) * 100) / 100).toFixed(2)
 }
 
-// 逐条核对矩阵化条件 2~6（条件 1 是 exportStyle==='summary'，由调用方在决定要不要调这个
-// 函数时把关；条件 7——矩阵化不得让画布比平铺更宽，见方案 R1——需要 basePageWidth，
-// 这里还没算出来，由调用方 layoutSlip 在算完 basePageWidth 之后再对这里的结果补一刀）。
-// 任一条不满足就返回 null，调用方据此退回平铺。
-function buildMatrixSection(section) {
-  if (section.lines.length < 2) return null // 条件 2：节行数 ≥ 2
-  const axes = sectionAxisPair(section) // 条件 3
-  if (!axes) return null
-  const priceText = sectionPriceText(section) // 条件 4
-  if (priceText == null) return null
-  const rowAxis = axes[0]
-  const colAxis = axes[1]
-  const rowValues = uniqueValuesInOrder(section.lines.map(function (line) {
-    return specCellValue(line, rowAxis)
-  }))
-  const colValues = uniqueValuesInOrder(section.lines.map(function (line) {
-    return specCellValue(line, colAxis)
-  }))
-  if (colValues.length > MATRIX_COL_LIMIT) return null // 条件 5
-  if (!(2 + rowValues.length < section.lines.length)) return null // 条件 6：有压缩收益
-  // 同一 (行,列) 组合理论上可能出现多行（实际链路里 pages/sale/sale.js 的 mergeLine 已经
-  // 按 productId+规格在购物车阶段合并过，这里能碰到的概率很低，但存下来防的就是这条）。
-  // grid 存的是行数组、不是单行，格内累加显示，不让后写的行覆盖先写的——行小计本来就是按
-  // section.lines 全量算的，格子如果只挑最后一行，会出现「格之和 ≠ 小计」这种在单据上
-  // 代价很高的错，还会让行数只增 N 不增 R，反而更容易凑到条件 6 的压缩收益。
-  // Object.create(null) 而不是 {}：规格取值是店主自由输入的字符串，正好叫 `constructor`
-  // / `toString` / `valueOf` / `hasOwnProperty` / `__proto__` 时，`{}` 会从原型上读到
-  // 一个真值，`if (!grid[r][c])` 判假、不初始化成数组，下一行 `.push` 直接抛
-  // `grid[r][c].push is not a function`——**整张送货单导不出来**。
-  // **列轴**撞上时抛异常；**行轴撞上不抛异常，但不是无害**（上一版这里
-  // 写的是「行轴撞上无害」，错的）：`grid[r]` 拿到的是原型上那个对象本体，
-  // 于是 `grid[r][c] = []` 写到全局 `Object`（`constructor`）或 `Object.prototype`
-  // （`__proto__`）身上。实测后果有两层：
-  //   · **`__proto__` 那一支：同一张单当场就印错**——两行共用同一批格子数组，本该 1/2/3（小计 6）
-  //     和 4/5/6（小计 15），实际两行都印 5/7/9
-  //     （`constructor` 那一支实测**不**印错，它只污染全局 `Object`）
-  //   · `__proto__` 那一支还会泄到**下一张单**（新建的 `{}` 从 `Object.prototype`
-  //     继承到上一张的格子），客户可能在自己的单子上看到别人的货
-  // 两处都换掉，别只换一处。
-  const grid = Object.create(null)
-  section.lines.forEach(function (line) {
-    const r = specCellValue(line, rowAxis)
-    const c = specCellValue(line, colAxis)
-    if (!grid[r]) grid[r] = Object.create(null)
-    if (!grid[r][c]) grid[r][c] = []
-    grid[r][c].push(line)
-  })
-  return {
-    rowAxis: rowAxis,
-    colAxis: colAxis,
-    rowValues: rowValues,
-    colValues: colValues,
-    priceText: priceText,
-    grid: grid
-  }
+// 合计搬出表格：金额列原本被合计的 ¥1582.00 撑着，明细行最长才 495.00。搬出来这列窄一截，
+// 画布跟着窄，字号就能再大一点；合计本身也不再受列宽约束，可以用最大的字。
+// ---------------------------------------------------------------------------
+// 汇总态：**去掉规格列**，「同一商品 + 同一单价」并成一行，规格与件数并进数量列画成胶囊。
+//
+// 为什么不是从前那套交叉表：交叉表要付「节头 + 表头 + 节尾」三行固定开销，所以它有一条
+// 「压缩收益」门槛（2 + 行轴取值数 < 原行数）。代入满行的 R×C 网格就是 R×(C−1) > 2 ——
+// **2 色 × 2 码永远不满足**，而那正是日常最常见的单子形状：店主点了「汇总」，屏上和明细
+// 一模一样，chip 上「单子更短」那句承诺不兑现（2026-09-06 拿真实单据 SH20260906-Q0FW
+// 实测复现：4 行的单子两种模式逐字相同）。
+// 胶囊几乎零开销：一个商品一行，规格在格内横向排、排不下往下折——**纵向便宜、横向贵**，
+// 而交叉表恰好把规格摊在横轴上，所以它还需要「列数上限」和「不许比平铺更宽」两道闸。
+// 换成胶囊之后，那两道闸连同压缩收益、轴数恰好为 2、节行数 ≥2 一起不需要了。
+//
+// 保留的那道闸是**单价**：只有节内单价逐字相同才并成一行。这不是为了省事——单价并进一
+// 行之后，客户核单的算式就是「胶囊件数之和 × 单价 = 金额」，单价不统一这条算式就不成立。
+// 同一商品两种价时按价分成两组（各自并一行），不退回逐行，列还是这五列，没有第二套版式。
+// ---------------------------------------------------------------------------
+
+// 胶囊文字：规格值之间用 ' · '（与 mergedSpecValues 同一个连接符），后面跟 ×件数。
+// 无规格的行返回空串，调用方据此让数量列退回纯数字。
+function pillTextFor(line, axes) {
+  const label = axes.map(function (name) {
+    return specCellValue(line, name)
+  }).filter(function (value) {
+    return value
+  }).join('/')
+  if (!label) return ''
+  return label + ' ×' + String(line && line.qtyText == null ? '' : line.qtyText)
 }
 
-// 矩阵节的列定义：第一列（key 特意叫 'name'）＝行轴取值，中间各列＝列轴取值格内件数，
-// 最后一列＝小计。key 'name' 是刻意对齐 fitColumns/canWrapColumn 已有的判断（吸收富余
-// 宽度、允许折行），不必另写一套列宽算法。
-function matrixColumnDefs(section, matrix) {
-  const defs = [{
-    key: 'name',
-    title: matrix.rowAxis,
-    align: 'left',
-    font: FONT.name,
-    values: matrix.rowValues.slice()
-  }]
-  matrix.colValues.forEach(function (colValue) {
-    defs.push({
-      key: 'col:' + colValue,
-      title: colValue,
-      align: 'center',
-      font: FONT.num,
-      values: matrix.rowValues.map(function (rowValue) {
-        const cellLines = matrix.grid[rowValue] && matrix.grid[rowValue][colValue]
-        // 没卖过的格子画 —（U+2014），不留空白——留白会被当成漏印。
-        // 同一格多行：件数相加显示，不挑某一行——qtyTotalText 跟节尾小计、行小计用的是
-        // 同一套求和口径，格之和才对得上小计。
-        return cellLines && cellLines.length ? qtyTotalText(cellLines) : '—'
-      })
+// 先按商品分节（沿用 sliceLineSections 那套 productId 优先的身份判定），再按单价分组。
+// index 用 Object.create(null)：priceText 虽然由 money() 生成、正常只含数字和点，但
+// 这里的教训（同一文件矩阵那版踩过）是**别拿用户数据当对象键还用 {}**，代价是印错单。
+function slicePillGroups(lines) {
+  const groups = []
+  sliceLineSections(lines).forEach(function (section) {
+    const index = Object.create(null)
+    section.lines.forEach(function (line) {
+      const key = String(line && line.priceText == null ? '' : line.priceText)
+      if (!index[key]) {
+        index[key] = {
+          productName: section.productName,
+          sku: section.sku,
+          priceText: key,
+          lines: []
+        }
+        groups.push(index[key])
+      }
+      index[key].lines.push(line)
     })
   })
-  defs.push({
-    key: 'subtotal',
-    title: '小计',
-    align: 'center',
-    font: FONT.num,
-    values: matrix.rowValues.map(function (rowValue) {
-      const rowLines = section.lines.filter(function (line) {
-        return specCellValue(line, matrix.rowAxis) === rowValue
-      })
-      return qtyTotalText(rowLines)
-    })
-  })
-  return defs
+  return groups
 }
 
-// 表头和每列的每个值都量一遍取最宽，跟 tableColumns 同一套算法，量出来的宽度才可信。
-function measureColsWidth(defs, measure) {
+// 把一组胶囊按可用宽度排进若干行。单个胶囊比可用宽度还宽时照样独占一行（不截断）——
+// 单据上宁可撑出去也不能少印一个规格。
+// unitW 非空时所有胶囊按同一个宽度走（等宽），每排枚数因此固定、上下排能对齐成列；
+// 为空则各按自己文字的宽度，右边缘是毛的。
+function packPills(texts, inner, font, measure, totalAt, unitW) {
+  const rows = []
+  let current = []
+  let used = 0
+  texts.forEach(function (text, i) {
+    const w = unitW || (Math.ceil(measure(text, font)) + PILL_PAD_X * 2)
+    const item = { text: text, w: w, total: totalAt != null && totalAt >= 0 && i === totalAt }
+    const need = current.length ? used + PILL_GAP + w : w
+    if (current.length && need > inner) {
+      rows.push(current)
+      current = [item]
+      used = w
+      return
+    }
+    current.push(item)
+    used = need
+  })
+  if (current.length) rows.push(current)
+  return rows
+}
+
+// 一格里 2 枚以上才出合计胶囊：只有一枚时合计等于它自己。
+function totalPillTextFor(group) {
+  return '小计 ' + qtyTotalText(group.lines) + ' 件'
+}
+
+// 汇总态的列：品名（含货号第二行）/ 数量 / 单价 / 金额。**没有规格列**——规格在胶囊里。
+function summaryColumns(slip, groups, measure) {
+  const axes = specAxisNames((slip && slip.lines) || [])
+  // **没有独立的货号列**：汇总态一行就是一个商品，货号整列重复同一个值，白占宽度；
+  // 而且它每占 242px，胶囊一排就少放一枚（实测：有货号列时一排 2 枚，去掉之后 3 枚）。
+  // 货号放在品名格的**第二行**，而且**只在这一组有 2 条以上规格时才放**：
+  //   · 并进同一行不行 —— 横向空间是守恒的，品名列跟着变宽，等于把宽度从胶囊那里
+  //     拿走，一排又只剩一枚（实测：3 色×4 码从「每排 3 枚、短 35%」退回「每排 1 枚、
+  //     短 14%」）。第二行只占高度，不占宽度（两行各自量宽，取较宽的那个）。
+  //   · **每一组都要有货号，一条规格的组也不例外。** 上一版为了省那 65px 写了
+  //     「只在 2 条以上规格时才放第二行」，结果单商品单规格的单子货号整个不见了
+  //     ——而默认导出样式就是汇总，那是最常见的单子（tests/slip-image.test.js:92
+  //     当场逮住）。省版面不能省掉单据上的字段。
+  //
+  // 顺带纠正一条上一版写错的理由：去掉货号列不是因为「整列重复同一个值」——那是
+  // **明细态**的现象（同一商品 4 行印 4 次）。汇总态一行就是一个商品，每行货号都不同。
+  // 去掉它的真实理由只有一条：那一列占 242px，胶囊一排就少放一枚。
+  // 腾出来的这一列全给胶囊：实测 3 色×4 码从「一枚一排、短 22%」变成「两枚一排、短 39%」，
+  // 而且不必动字号——降字号那条实测**没有额外收益**（列宽不够放第三枚），却要破
+  // docs/ui-scale.md 的适老化字号线，不该付这个代价。
+  const defs = [
+    { key: 'name', title: '品名', align: 'left', font: FONT.name,
+      values: groups.map(function (group) { return group.productName }),
+      textLines: groups.map(function (group) {
+        return [group.productName, group.sku].filter(function (text) { return text })
+      }) },
+    { key: 'qty', title: '数量', align: 'center', font: PILL_FONT,
+      values: groups.map(function (group) { return qtyTotalText(group.lines) }),
+      pillValues: groups.map(function (group) {
+        const texts = group.lines.map(function (line) {
+          return pillTextFor(line, axes)
+        }).filter(function (text) { return text })
+        return texts.length >= 2 ? texts.concat([totalPillTextFor(group)]) : texts
+      }),
+      // 最后那一枚是合计，绘制时换个底色和字重。
+      pillTotalFrom: groups.map(function (group) {
+        const count = group.lines.filter(function (line) {
+          return pillTextFor(line, axes)
+        }).length
+        return count >= 2 ? count : -1
+      }) },
+    { key: 'price', title: '单价', align: 'right', font: FONT.num,
+      values: groups.map(function (group) { return group.priceText }) },
+    { key: 'amount', title: '金额', align: 'right', font: FONT.num,
+      values: groups.map(function (group) { return amountSumText(group.lines) }) }
+  ]
   defs.forEach(function (col) {
     let need = measure(col.title, FONT.head)
     col.values.forEach(function (value) {
       need = Math.max(need, measure(value == null ? '' : String(value), col.font))
     })
+    ;(col.textLines || []).forEach(function (texts) {
+      texts.forEach(function (text) {
+        need = Math.max(need, measure(text, col.font))
+      })
+    })
+    // 胶囊列只记 floor（最宽的一枚 —— 再窄就要截断规格），宽度下面单独给。
+    if (col.pillValues) {
+      let widest = 0
+      col.pillValues.forEach(function (texts) {
+        texts.forEach(function (text) {
+          widest = Math.max(widest, Math.ceil(measure(text, col.font)) + PILL_PAD_X * 2)
+        })
+      })
+      if (widest) col.pillFloor = widest
+      need = Math.max(need, widest)
+    }
     col.width = Math.ceil(need * MEASURE_SLACK) + CELL_PAD_X * 2
   })
+  // **其它列按自然宽度取走，剩下的全给胶囊列。** 不能像别的列那样只按内容量宽：
+  // 胶囊的自然宽度就是一枚，量完富余会被 fitColumns 派给品名，胶囊只好一枚一行、
+  // 行高暴涨——正好把「单子更短」做反（实测：4 枚排成 4 排、12 枚排成 12 排）。
+  // 也不能反过来贪心要「全排一行」：那会把货号和品名一起压到 3 字底线，品名跟着折行。
+  // 剩余不足一枚时退回 floor，此时 natural 超出内容宽，交给 fitColumns 照常压。
+  // **两趟定宽。** 第一趟：其它列按内容量走，剩下的全归胶囊列（可用上限）。
+  // 第二趟：按最宽那枚算「这么宽的一排最多放几枚」，再把列**收到正好放下那几枚**，
+  // 余下的还给品名列。只做第一趟的话，胶囊按实际宽度左对齐排完，列右边会剩一大块空白
+  // ——店主实测反馈的第二条（「右边空白还是多」）。
+  const pillCol = defs.find(function (col) {
+    return !!col.pillFloor
+  })
+  const nameCol = defs.find(function (col) {
+    return col.key === 'name'
+  })
+  if (pillCol) {
+    const others = defs.reduce(function (sum, col) {
+      return col === pillCol ? sum : sum + col.width
+    }, 0)
+    const avail = Math.max(pillCol.pillFloor + CELL_PAD_X * 2, WIDTH - PAD * 2 - others)
+    const inner = avail - CELL_PAD_X * 2
+    const unit = pillCol.pillFloor
+    const perRow = Math.max(1, Math.floor((inner + PILL_GAP) / (unit + PILL_GAP)))
+    const tight = unit * perRow + PILL_GAP * (perRow - 1) + CELL_PAD_X * 2
+    pillCol.width = Math.min(avail, tight)
+    if (nameCol) nameCol.width += avail - pillCol.width
+  }
   return { defs: defs, natural: defs.reduce(function (sum, col) {
     return sum + col.width
   }, 0) }
 }
 
-// 矩阵节自己的列下限——形状照抄 pageWidthFor，但量的是这一节的矩阵列（行轴+各列取值+小计），
-// 不是平铺全表的列。老路径靠 pageWidthFor(raw) 保证 fitColumns 一定塞得下，矩阵节的列压根
-// 没进那个式子，所以矩阵节必须单独算一次下限，调用方（layoutSlip）拿它和 pageWidthFor 取 max。
-function matrixPageWidthFor(section, matrix, measure) {
-  const raw = measureColsWidth(matrixColumnDefs(section, matrix), measure)
-  const floor = raw.defs.reduce(function (sum, col) {
-    return sum + (canWrapColumn(col) ? floorWidth(col, measure) : col.width)
-  }, 0)
-  return floor + PAD * 2
-}
-
-// 矩阵节画四种行：节头（货号+品名 / 单价）、列表头（行轴名 / 各列取值 / 小计）、
-// 数据行（行轴取值 / 各列件数 / 该行小计）、节尾（小计 N 件 / ¥金额合计）。
-// 列的边框只画在列表头到数据行这一段，节头和节尾是跨列的整行文字，不该被竖线切开。
-function layoutMatrixSection(cmds, section, matrix, pageWidth, y, measure) {
-  const contentWidth = pageWidth - PAD * 2
-  const tableRight = PAD + contentWidth
-  const raw = measureColsWidth(matrixColumnDefs(section, matrix), measure)
-  const cols = fitColumns(raw, pageWidth, measure)
-  const defs = cols.defs
-  const headH = 98
-
-  // 节头是「货号+品名」和「¥单价」共用的一行，两段都不进列布局，所以边界得自己划：
-  // 品名可用宽 = 内容宽 − 左右内边距 − 单价文本宽 − 安全间距。
-  // 不算这一刀的话（改动前就是直接 pushText 单行硬画）：单价 ¥59.00、画布 1700 时实测
-  // **28 个汉字起**节头右边界压过单价左边界、**33 个汉字起**整段画到画布外。阈值随单价
-  // 位数走——单价越长可用宽越窄，越早出事，所以这里按实际单价文本宽现算，不写死字数。
-  // 同一份数据在明细态不出事：那边品名走 wrapCell，受列宽约束。
-  // 先 fitFont 降字号，还塞不下再折行，行数计进节头高度。
-  const priceLabel = '¥' + matrix.priceText
-  // 纯观感留白：品名和单价之间别贴到一起。断言只钉「不越过单价左边界」，钉不住这个间距
-  // （去掉它测试仍然绿，实测过）——它是余量，不是正确性边界，别当钉子读。
-  const headGap = CELL_PAD_X * 2
-  // 下限 48 是给 fitFont 的最小字号（36px）留的余量：单个汉字最宽就是字号，48 > 36，
-  // 折出来的每一行至少还塞得下一个字，不会出现「一个字都放不下反而溢出」。
-  const headAvail = Math.max(48, contentWidth - CELL_PAD_X * 2 - measure(priceLabel, FONT.head) - headGap)
-  const headerLabel = (section.sku ? section.sku + ' ' : '') + section.productName
-  const headerFont = fitFont(headerLabel, FONT.head, headAvail, measure)
-  const headerLines = wrapText(headerLabel, headAvail, function (part) {
-    return measure(part, headerFont)
-  })
-  // 只有折了行才变高。**不能写成 `Math.max(headH, CELL_PAD_Y*2 + n*LINE_H)`**：
-  // n=1 时那个式子是 23*2+65=111，而 headH=98，`Math.max` 恒取 111——于是
-  // **每一张既有矩阵送货单的节头都无条件长高 13px**，短品名一张也不例外。
-  // （2026-09-03 审计拉出来的。上一版就是那么写的，而旁边的注释声称
-  // 「单行时与改动前逐字相同」——逐条指令对比实测 49 条里 31 条不同，
-  // contentHeight 1218→1231。**声明不动却实际动了产品行为**，跟把稿的现状
-  // 当成稿的意图是同一个错误。本次改回“只有折行才变高”，而不是去改稿——
-  // 节头变高不是本 PR 要解决的问题，不该搭车。）
-  const sectionHeadH = headerLines.length > 1
-    ? CELL_PAD_Y * 2 + headerLines.length * LINE_H
-    : headH
-
-  const tableTop = y
-  const sectionHeadY = y
-  y += sectionHeadH
-  const listHeadY = y
-  y += headH
-
-  const rows = matrix.rowValues.map(function (rowValue, index) {
-    const cells = {}
-    defs.forEach(function (col) {
-      const raw2 = col.values[index]
-      cells[col.key] = canWrapColumn(col)
-        ? wrapCell(raw2, col, measure)
-        : [raw2 == null ? '' : String(raw2)]
-    })
-    const lineCount = defs.reduce(function (max, col) {
-      return Math.max(max, (cells[col.key] || []).length)
-    }, 1)
-    return {
-      cells: cells,
-      height: Math.max(103, CELL_PAD_Y * 2 + lineCount * LINE_H)
-    }
-  })
-  rows.forEach(function (row) {
-    row.y = y
-    y += row.height
-  })
-
-  const footY = y
-  y += headH
-
-  const tableH = y - tableTop
-
-  pushRect(cmds, PAD, sectionHeadY, contentWidth, sectionHeadH, COLORS.header)
-  pushRect(cmds, PAD, listHeadY, contentWidth, headH, COLORS.total)
-  pushRect(cmds, PAD, footY, contentWidth, headH, COLORS.total)
-  pushStroke(cmds, PAD, tableTop, contentWidth, tableH, 2)
-  pushLine(cmds, PAD, sectionHeadY + sectionHeadH, tableRight, sectionHeadY + sectionHeadH, 1)
-  pushLine(cmds, PAD, listHeadY + headH, tableRight, listHeadY + headH, 1)
-  rows.forEach(function (row) {
-    pushLine(cmds, PAD, row.y + row.height, tableRight, row.y + row.height, 1)
-  })
-  defs.slice(1).forEach(function (col) {
-    pushLine(cmds, col.x, listHeadY, col.x, footY, 1)
-  })
-
-  // 单行时沿用 textTop 的垂直居中（和改动前逐字相同）；折行了才按整块文字居中。
-  let headTextY = headerLines.length > 1
-    ? sectionHeadY + (sectionHeadH - headerLines.length * LINE_H) / 2
-    : textTop(sectionHeadY, sectionHeadH, headerFont)
-  headerLines.forEach(function (part) {
-    pushText(cmds, part, PAD + CELL_PAD_X, headTextY, headerFont, COLORS.value, 'left')
-    headTextY += LINE_H
-  })
-  pushText(cmds, priceLabel, tableRight - CELL_PAD_X, textTop(sectionHeadY, sectionHeadH, FONT.head), FONT.head, COLORS.value, 'right')
-
-  defs.forEach(function (col) {
-    pushText(cmds, col.title, cellX(col), textTop(listHeadY, headH, FONT.head), FONT.head, COLORS.value, col.align)
-  })
-
-  rows.forEach(function (row) {
-    defs.forEach(function (col) {
-      const texts = row.cells[col.key] || []
-      const blockH = texts.length * LINE_H
-      let ty = row.y + (row.height - blockH) / 2
-      texts.forEach(function (line) {
-        pushText(cmds, line, cellX(col), ty, col.font, COLORS.value, col.align)
-        ty += LINE_H
-      })
-    })
-  })
-
-  const sectionQtyText = qtyTotalText(section.lines)
-  const sectionAmountText = amountSumText(section.lines)
-  pushText(cmds, '小计 ' + sectionQtyText + ' 件', PAD + CELL_PAD_X, textTop(footY, headH, FONT.head), FONT.head, COLORS.value, 'left')
-  pushText(cmds, '¥' + sectionAmountText, tableRight - CELL_PAD_X, textTop(footY, headH, FONT.head), FONT.head, COLORS.value, 'right')
-
-  return y + 24
-}
-
-// 平铺节的列结构/宽度/x 坐标一律照抄整表那一份（sharedCols，由调用方用整表的
-// tableColumns+fitColumns 算好），不再各节自己重算——整表轴数超过 SPEC_AXIS_LIMIT 时会把
-// 规格并成一列，单独拆出来的某一节可能自己没那么多轴、算出来的列反而更宽，而 pageWidth
-// 是按整表口径定的，两边一混，宽的那份会被裁掉一截，画到画布外静默丢失（R2 审计实测：
-// 服装节矩阵化+钢材节平铺，整表 4 轴合并成一列 spec:*，钢材节自己只有 2 轴不合并，两种
-// 口径差 216px，8 条指令最右画到了 1820，画布却只有 1736）。
-// 这里只换 values——按传入的这组行重新取值，取值口径（哪一列取哪个字段/哪个规格轴）跟
-// tableColumns 内部完全一致，只是不重新决定「轴要不要合并成一列」，那个决定权在整表。
-function flatSectionColumns(sharedCols, groupLines, axes) {
-  const defs = sharedCols.defs.map(function (col) {
-    let values
-    if (col.key === 'sku') {
-      values = columnValues(groupLines, 'sku')
-    } else if (col.key === 'name') {
-      values = columnValues(groupLines, 'productName')
-    } else if (col.key === 'spec:*') {
-      values = mergedSpecValues(groupLines, axes)
-    } else if (col.key.indexOf('spec:') === 0) {
-      values = columnValues(groupLines, 'spec', col.key.slice(5))
-    } else if (col.key === 'qty') {
-      values = columnValues(groupLines, 'qtyText')
-    } else if (col.key === 'price') {
-      values = columnValues(groupLines, 'priceText')
-    } else if (col.key === 'amount') {
-      values = columnValues(groupLines, 'amountText')
-    } else {
-      values = groupLines.map(function () {
-        return ''
-      })
-    }
-    return Object.assign({}, col, { values: values })
-  })
-  return { defs: defs, contentWidth: sharedCols.contentWidth }
-}
-
-// 全表按节渲染：矩阵节走 layoutMatrixSection（矩阵列结构跟平铺列本来就不是一回事，列宽
-// 自己算，不受这条改动影响，矩阵化判定 7 个条件也没动）。平铺节复用 layoutTable，但列定义
-// 换成整表那一份（见 flatSectionColumns），并且把连续出现的平铺节合并成一次 layoutTable
-// 调用——这样连续的平铺节自然共用一个表头；矩阵节把两段平铺隔开时，后面那段平铺节重新画
-// 一次表头（读者需要重新对齐列义），不连续的段不并起来。
-function layoutSectionedTable(cmds, sections, matrices, raw, axes, pageWidth, y, measure) {
-  const cols = fitColumns(raw, pageWidth, measure)
-  let cursor = y
-  let flatLines = []
-
-  function flushFlat() {
-    if (!flatLines.length) return
-    cursor = layoutTable(cmds, { lines: flatLines }, flatSectionColumns(cols, flatLines, axes), cursor, measure)
-    flatLines = []
-  }
-
-  sections.forEach(function (section, index) {
-    const matrix = matrices[index]
-    if (matrix) {
-      flushFlat()
-      cursor = layoutMatrixSection(cmds, section, matrix, pageWidth, cursor, measure)
-    } else {
-      flatLines = flatLines.concat(section.lines)
-    }
-  })
-  flushFlat()
-
-  return cursor
-}
-
-// 合计搬出表格：金额列原本被合计的 ¥1582.00 撑着，明细行最长才 495.00。搬出来这列窄一截，
-// 画布跟着窄，字号就能再大一点；合计本身也不再受列宽约束，可以用最大的字。
 function summaryRows(slip) {
   // 结算方式去掉了：应收 1582 / 实收 0 已经把赊账说清楚，再写一遍是废话。
   const rows = [
@@ -969,51 +894,17 @@ function layoutSlip(slip, measure, options) {
   // 导出样式是用户导出那一刻的选择，不是单据数据，所以放在 options 而不是 slip 上。
   // 只认字面 'detail'，别的值（含不传）一律按 'summary'。
   const exportStyle = options && options.exportStyle === 'detail' ? 'detail' : 'summary'
-  const raw = tableColumns(slip, measureFn)
+  // 汇总态与明细态的差别**全部**落在列定义上：汇总态用 summaryColumns（没有规格列、
+  // 数量列带胶囊、一行是「一个商品 + 一个单价」的组），明细态用 tableColumns（一行一条
+  // 原始流水）。往下 pageWidthFor / fitColumns / layoutTable 两条路共用，没有第二套版式。
+  //
+  // 注意：**不传 options 解析成 'summary'**，和 'detail' 不是一回事。这一条从矩阵那版
+  // 就成立，换成胶囊之后照旧——常驻断言钉着「不传 ≡ 显式 summary、且 ≠ detail」。
+  const raw = exportStyle === 'summary'
+    ? summaryColumns(slip, slicePillGroups(slip.lines), measureFn)
+    : tableColumns(slip, measureFn)
 
-  // exportStyle === 'detail' 时连分节都不算，sections/matrices 留 null、hasMatrix 恒为
-  // false，整张单走 tableColumns / fitColumns / layoutTable 这条不分节的路径。
-  // 注意：**不传 options 解析成 'summary'**，会分节、会矩阵化，和 'detail' 不是一回事；
-  // 上一版注释把这两者说成同一条老路径，不对。
-  let sections = null
-  let matrices = null
-  let hasMatrix = false
-  if (exportStyle === 'summary') {
-    sections = sliceLineSections(slip.lines)
-    matrices = sections.map(buildMatrixSection)
-  }
-
-  // 基准画布：不管有没有矩阵节都先按平铺算一遍。这一步必须排在「矩阵节是否成立」判定之前——
-  // R1 新增的条件 7 要拿它当上限，先有基准才能问「矩阵化会不会撑得比它更宽」，否则「画布宽度
-  // 取决于哪些节矩阵化、矩阵化又取决于画布宽度」会绕成循环依赖（方案 R1 明确点出这一条）。
-  const basePageWidth = pageWidthFor(raw, measureFn)
-
-  // 条件 7（方案 R1，2026-09-02）：矩阵化不得让画布比平铺更宽。逐节判断——这节矩阵化后的
-  // 列宽下限一旦超过 basePageWidth，就地退回平铺（matrices[index] 置 null），不牵连其它节，
-  // 混排照旧成立。前 6 条件都满足也不例外：这个功能的出发点是「单子太长」，不是「字太大」，
-  // 拿字号换行数是走反了。MATRIX_COL_LIMIT（条件 5）留着当快速否决，但真正兜底是这一条。
-  if (matrices) {
-    matrices = matrices.map(function (matrix, index) {
-      if (!matrix) return null
-      if (matrixPageWidthFor(sections[index], matrix, measureFn) > basePageWidth) return null
-      return matrix
-    })
-    hasMatrix = matrices.some(function (matrix) {
-      return !!matrix
-    })
-  }
-
-  // R1 之后 pageWidth 恒等于 basePageWidth（条件 7 保证了留下来的每个矩阵节的列宽下限都
-  // <= 它）。这里仍然走 Math.max 而不是直接赋值 basePageWidth，是留一道兜底：万一条件 7
-  // 本身判断有误，静默丢列的代价比画布多撑一点更高，宁可画布跟着变宽也不要截断内容——
-  // 正常路径下这段是 no-op，不改变任何结果。
-  let pageWidth = basePageWidth
-  if (hasMatrix) {
-    pageWidth = matrices.reduce(function (width, matrix, index) {
-      if (!matrix) return width
-      return Math.max(width, matrixPageWidthFor(sections[index], matrix, measureFn))
-    }, pageWidth)
-  }
+  const pageWidth = pageWidthFor(raw, measureFn)
 
   const cmds = []
   let y = PAD
@@ -1029,14 +920,8 @@ function layoutSlip(slip, measure, options) {
 
   y = layoutMeta(cmds, slip, pageWidth, y, measureFn)
 
-  if (hasMatrix) {
-    y = layoutSectionedTable(cmds, sections, matrices, raw, specAxisNames(slip.lines), pageWidth, y, measureFn)
-  } else {
-    // 全表没有任何矩阵节：老单据、明细态、或矩阵条件一条都没满足的汇总态，都走这条
-    // 没改过一个字的老路径——tableColumns/fitColumns/layoutTable 的调用方式和改动前相同。
-    const cols = fitColumns(raw, pageWidth, measureFn)
-    y = layoutTable(cmds, slip, cols, y, measureFn)
-  }
+  const cols = fitColumns(raw, pageWidth, measureFn)
+  y = layoutTable(cmds, slip, cols, y, measureFn)
 
   // 签收和欠款先画在临时数组里量高，好把差的高度补成中间留白，把签收区压到底部。
   const footCmds = []
@@ -1065,7 +950,10 @@ function drawSlip(ctx, layout) {
       ctx.font = cmd.font
       ctx.fillStyle = cmd.color
       ctx.textAlign = cmd.align
+      // 只有胶囊文字带 baseline:'middle'，其余仍是全局那个 'top'，一个字没改。
+      if (cmd.baseline) ctx.textBaseline = cmd.baseline
       ctx.fillText(cmd.text, cmd.x, cmd.y)
+      if (cmd.baseline) ctx.textBaseline = 'top'
     } else if (cmd.type === 'rect') {
       ctx.fillStyle = cmd.fill
       ctx.fillRect(cmd.x, cmd.y, cmd.w, cmd.h)
@@ -1076,6 +964,26 @@ function drawSlip(ctx, layout) {
       if (ctx.setLineDash) ctx.setLineDash([])
       ctx.strokeRect(cmd.x, cmd.y, cmd.w, cmd.h)
       ctx.restore()
+    } else if (cmd.type === 'pill') {
+      // 胶囊路径：左右两端各一个半圆（r = h/2），中间两条直线。
+      const r = cmd.h / 2
+      ctx.beginPath()
+      ctx.moveTo(cmd.x + r, cmd.y)
+      ctx.lineTo(cmd.x + cmd.w - r, cmd.y)
+      ctx.arc(cmd.x + cmd.w - r, cmd.y + r, r, -Math.PI / 2, Math.PI / 2)
+      ctx.lineTo(cmd.x + r, cmd.y + cmd.h)
+      ctx.arc(cmd.x + r, cmd.y + r, r, Math.PI / 2, -Math.PI / 2)
+      ctx.closePath()
+      ctx.fillStyle = cmd.fill
+      ctx.fill()
+      if (cmd.stroke) {
+        ctx.save()
+        ctx.strokeStyle = cmd.stroke
+        ctx.lineWidth = 1
+        if (ctx.setLineDash) ctx.setLineDash([])
+        ctx.stroke()
+        ctx.restore()
+      }
     } else if (cmd.type === 'line') {
       ctx.save()
       ctx.strokeStyle = cmd.color
