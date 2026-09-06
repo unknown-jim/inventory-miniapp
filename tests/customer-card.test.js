@@ -5,6 +5,21 @@
 // 或者已经清了。源码注释自己都写着「B 与 C 的差别是本批最容易做错的一处」，却没人守。
 //
 // 逐字取自稿：A 4:369 / B 7:251 + 7:253 / C 9:5 + 9:7 / D 28:1（2026-09-05 补画）。
+// 【这些判据防什么、不防什么】
+//
+// 防的是**误改**：有人改 cardOf 或 fillCustomer 时不小心把四档的值、颜色、接线、
+// 模板绑定弄错——这是真实会发生的事，本文件每一条都对着一个实测过的这类形态。
+//
+// **不防刻意伪装**。一个想让改动躲过测试的编辑者总能做到：把代码藏进字符串里让剥注释
+// 那步吃掉（执行用原文之后这条被行为钉子逮住，但静态判据仍被骗）、用计算键
+// `['card' + 'Label']` 绕开键名计数、把分支阈值卡在行为钉子的取样点之间。这些复审都
+// 实测过，一一列在各条旁边。**堵不完**——静态文本判据对着刻意伪装是打不赢的，
+// 每加一层都会带出新的缝和新的假红。
+//
+// 所以这里的取舍是：行为钉子（真跑 fillCustomer）当主防线，静态判据守它够不着的层
+// （模板绑定、data 初值、接线处不许做计算），**每条都写清自己盖不到什么**，不写
+// 「这一类都守住了」。
+
 const assert = require('assert')
 const fs = require('fs')
 const path = require('path')
@@ -26,7 +41,12 @@ const src = fs.readFileSync(
 // 剥完语法仍合法、四档照常绿，而生产上整条修复被撤销（复审实测，全套 EXIT=0）。
 // 「这一条真跑」那句自述在那条通道上不成立。
 //
-// 互校：「先剥再抠」与「先抠再剥」必须一致——不一致就说明剥注释那一步吃错了东西。
+// 互校：「先剥再抠」与「先抠再剥」必须一致。
+// **它只覆盖一种情况**：被吃掉的那段里花括号不配平（两条路径的抠取边界因此分叉）。
+// 伪装如果整段落在同一个方法体内且花括号配平，两边删的是同一段，`a === b` 恒成立，
+// 互校静默放行——复审实测过，`// "/*"` 包一段重复键，四条静态判据全过而生产行为已错。
+// 真正挡住那条通道的是**执行用原文**（下面 return 的那份）：伪装的代码会真的跑起来，
+// 由行为钉子逮住。互校只是多一道诊断，不是那条通道的防线。
 function pageMethod(name) {
   const a = extractBody(stripJsComments(src), name)
   const b = stripJsComments(extractBody(src, name))
@@ -50,9 +70,23 @@ function extractBody(source, name) {
   assert.ok(i > 0, name + ' 后面找不到函数体的左花括号')
   i += 1
   let depth = 1
+  // 扫描时**跳过注释**：原文那条路径上，注释里一个落单的 { 或 } 会让扫描越界，
+  // 而互校报出来的是「剥注释那步吃掉了真代码」——方向正好相反（复审实测）。
+  const SL = String.fromCharCode(47)
   while (i < clean.length && depth > 0) {
-    if (clean[i] === '{') depth += 1
-    else if (clean[i] === '}') depth -= 1
+    const c = clean[i]
+    if (c === SL && clean[i + 1] === SL) {
+      while (i < clean.length && clean[i] !== String.fromCharCode(10)) i += 1
+      continue
+    }
+    if (c === SL && clean[i + 1] === '*') {
+      i += 2
+      while (i < clean.length && !(clean[i] === '*' && clean[i + 1] === SL)) i += 1
+      i += 2
+      continue
+    }
+    if (c === '{') depth += 1
+    else if (c === '}') depth -= 1
     i += 1
   }
   assert.strictEqual(depth, 0, name + ' 的花括号没配平，抠出来的不是完整函数体')
@@ -214,11 +248,20 @@ assert.strictEqual(typeof cardOf, 'function', '抠出来的应当是个函数')
   })
   // 规则的后半句（「所有计算都在 cardOf 里」）单独钉：拿到 card 之后、setData 之前
   // 改它的字段，上面四条看到的仍是纯引用，行为钉子也够不着（替身的客户名恒定）。
-  ;['label', 'amountText', 'amountClass', 'hint'].forEach(function (f) {
-    assert.ok(body.indexOf('card.' + f + ' =') < 0 && body.indexOf('card.' + f + '=') < 0,
-      'fillCustomer 里不许写 `card.' + f + ' = ...`——cardOf 算出来的东西在这里被改掉的话，'
-        + '四档就说了不算，而上面那几条断言看到的仍是纯引用')
-  })
+  // 对 card 的写操作：点号赋值、下标赋值、Object.assign 三种都拦。
+  // 上一版只拦点号赋值，`card['label'] = …` 和 `Object.assign(card, {…})` 全过（假绿）；
+  // 而且子串匹配把 `card.label === '已结清'` 这种纯比较也判红（假红）。两头都实测过。
+  const bs2 = String.fromCharCode(92)
+  const assignRe = new RegExp('card' + bs2 + '.(label|amountText|amountClass|hint)'
+    + bs2 + 's*=(?!=)')
+  const m = assignRe.exec(body)
+  assert.ok(!m, 'fillCustomer 里不许写 `card.X = ...`，实为「' + (m ? m[0] : '') + '」'
+    + '——cardOf 算出来的东西在这里被改掉的话，四档就说了不算，'
+    + '而上面那几条断言看到的仍是纯引用')
+  assert.ok(body.indexOf('card[') < 0,
+    'fillCustomer 里不许用下标写 card（`card[...] = ...`）——同上')
+  assert.ok(body.indexOf('Object.assign(card') < 0,
+    'fillCustomer 里不许 Object.assign 到 card 上——同上')
 })()
 
 // --- 屏上那张卡真的在读这四个字段吗 -----------------------------------------
@@ -295,9 +338,17 @@ assert.strictEqual(typeof cardOf, 'function', '抠出来的应当是个函数')
   assert.ok(dataAt >= 0, '应当找得到 data 块')
   const dataBlock = clean.slice(dataAt, clean.indexOf(String.fromCharCode(10) + '  },', dataAt))
   pairs.forEach(function (pair) {
-    const at = dataBlock.indexOf(pair[0] + ': ' + q)
+    // 锁顶层缩进 + 只许出现一次：块**内**排一个诱饵在真四格之前，取第一处就会改判在它
+    // 身上（复审实测，真初值整条改成 A 档而全绿）。这个洞已经挪过两层，这次连块内一起锁。
+    const dataKey = String.fromCharCode(10) + '    ' + pair[0] + ': ' + q
+    let dHits = 0
+    let dScan = dataBlock.indexOf(dataKey)
+    while (dScan >= 0) { dHits += 1; dScan = dataBlock.indexOf(dataKey, dScan + 1) }
+    assert.strictEqual(dHits, 1,
+      'data 块里 ' + pair[0] + ' 出现了 ' + dHits + ' 次，应当只有 1 次')
+    const at = dataBlock.indexOf(dataKey)
     assert.ok(at >= 0, 'data 里应当有 ' + pair[0] + ' 初值')
-    const from = at + (pair[0] + ': ' + q).length
+    const from = at + dataKey.length
     const got = dataBlock.slice(from, dataBlock.indexOf(q, from))
     assert.strictEqual(got, pair[1],
       'data 的 ' + pair[0] + ' 初值应当等于 cardOf(0, 0) 给的「' + pair[1] + '」，'
@@ -334,8 +385,10 @@ assert.strictEqual(typeof cardOf, 'function', '抠出来的应当是个函数')
       hint: '预收 ¥200.00 不自动冲欠款。下次开单会带出抵扣行，可改；要收款先冲这 ¥84.00' },
     { name: 'D 两清', receivable: 0, prepay: 0,
       label: '已结清', cls: '', amount: '0.00', hint: '' },
-    // 第五组守的是「cardOf **内部**按阈值分支」那一类：`if (receivable > 100000) return …`
-    // 写在 cardOf 里面时，pairs 看到的四格仍是纯引用、看不见它。
+    // 第五组守的是「cardOf **内部**按阈值分支」这一类**里的这一个取样点**：阈值高于
+    // 200000 时会被它抓到；落在四档取样点之间的同类分支（`receivable > 300 && < 1000`）
+    // 它看不见——行为钉子按输入取样，天生盖不住连续区间，加几组输入也堵不完。
+    // 上一版这里写「那一类」，是又一次「从一个样本泛化成一类」。
     // （上一版这里写「接管被删掉的 pairs」——pairs 本轮已恢复，那是悬空引用。）
     { name: 'A 大额', receivable: 200000, prepay: 0,
       label: '当前欠款', cls: 'debt', amount: '200000.00', hint: '' }
