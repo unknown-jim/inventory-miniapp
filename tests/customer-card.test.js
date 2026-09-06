@@ -11,8 +11,8 @@
 // 模板绑定弄错——这是真实会发生的事，本文件每一条都对着一个实测过的这类形态。
 //
 // **不防刻意伪装**。一个想让改动躲过测试的编辑者总能做到：把代码藏进字符串里让剥注释
-// 那步吃掉（执行用原文之后这条被行为钉子逮住，但静态判据仍被骗）、用计算键
-// `['card' + 'Label']` 绕开键名计数、把分支阈值卡在行为钉子的取样点之间。这些复审都
+// 那步吃掉（行为钉子加载真模块、跑的就是文件里那份，逮得住；静态判据仍被骗）、用计算键
+// `['card' + 'Label']` 绕开键名计数（**只绕计数**——值真错了仍由行为钉子逮住）、把分支阈值卡在行为钉子的取样点之间。这些复审都
 // 实测过，一一列在各条旁边。**堵不完**——静态文本判据对着刻意伪装是打不赢的，
 // 每加一层都会带出新的缝和新的假红。
 //
@@ -45,7 +45,7 @@ const src = fs.readFileSync(
 // **它只覆盖一种情况**：被吃掉的那段里花括号不配平（两条路径的抠取边界因此分叉）。
 // 伪装如果整段落在同一个方法体内且花括号配平，两边删的是同一段，`a === b` 恒成立，
 // 互校静默放行——复审实测过，`// "/*"` 包一段重复键，四条静态判据全过而生产行为已错。
-// 真正挡住那条通道的是**执行用原文**（下面 return 的那份）：伪装的代码会真的跑起来，
+// 真正挡住那条通道的是**行为钉子加载真模块**（见 loadPage）：伪装的代码会真的跑起来，
 // 由行为钉子逮住。互校只是多一道诊断，不是那条通道的防线。
 function pageMethod(name) {
   const a = extractBody(stripJsComments(src), name)
@@ -112,11 +112,53 @@ const util = require('../utils/util')
 
 // 剥注释再判——注释诱饵是本仓实测过的逃逸：真代码写死、把原来的 token 留在注释里，
 // 全文 indexOf 照样命中（复审两次都从这儿绕过去）。
-function stripJsComments(text) {
+// 逐字符扫描，**剥注释与抠花括号共用同一套跳法**。
+// 上一版剥注释用正则、抠花括号用扫描器，各写一份：一个跳字符串一个不跳，复审连着两轮
+// 从这个不一致里造出假红——`String(x).replace('//', '/')` 里的 `//` 被正则当成行注释、
+// 把字符串右半截连同收尾引号一起吃掉，留下落单引号让扫描器一路跑飞，报「花括号没配平」
+// 而真因在剥注释那步。两边同一套之后这一整类消失。
+//
+// **它不认正则字面量**：`/['"]/g` 里的引号会被当成字符串开头。已知缺口，写在这儿；
+// 本页当前没有正则字面量，真出现时报的是「抠出来的不是完整函数体」。
+function scanJs(text, opts) {
   const bs = String.fromCharCode(92)
-  const block = new RegExp(bs + '/' + bs + '*[' + bs + 's' + bs + 'S]*?' + bs + '*' + bs + '/', 'g')
-  const line = new RegExp('(^|[^:])' + bs + '/' + bs + '/[^' + bs + 'n]*', 'g')
-  return text.replace(block, ' ').replace(line, '$1')
+  const SL = String.fromCharCode(47)
+  const QU = String.fromCharCode(39)
+  const BT = String.fromCharCode(96)
+  let out = ''
+  let i = 0
+  while (i < text.length) {
+    const c = text.charAt(i)
+    if (c === QU || c === '"' || c === BT) {
+      const q = c
+      out += c
+      i += 1
+      while (i < text.length) {
+        if (text.charAt(i) === bs) { out += text.substr(i, 2); i += 2; continue }
+        out += text.charAt(i)
+        if (text.charAt(i) === q) { i += 1; break }
+        i += 1
+      }
+      continue
+    }
+    if (c === SL && text.charAt(i + 1) === SL) {
+      while (i < text.length && text.charAt(i) !== String.fromCharCode(10)) i += 1
+      continue
+    }
+    if (c === SL && text.charAt(i + 1) === '*') {
+      i += 2
+      while (i < text.length && !(text.charAt(i) === '*' && text.charAt(i + 1) === SL)) i += 1
+      i += 2
+      out += ' '
+      continue
+    }
+    out += c
+    i += 1
+  }
+  return out
+}
+function stripJsComments(text) {
+  return scanJs(text)
 }
 // 从 `key:` 起，扫到**同层**的逗号或右花括号为止：括号/方括号/引号里的逗号不算。
 // 上一版按「下一个终止字符」切，于是值里含逗号（`f(a, b)`）会切歪、换行续写会漏。
@@ -170,9 +212,10 @@ try {
 } catch (e) {
   assert.fail('从源码里抠 cardOf 抠出了一段编译不了的东西：' + e.message
     + String.fromCharCode(10)
-    + '——这多半是**提取器**的问题不是源码的问题：它按花括号配对扫，不跳字符串和'
-    + '注释，cardOf 里多一个游离的 { 或 } 就会截错位置。先去看那段源码有没有这种'
-    + '字符，再怀疑源码本身。')
+    + '——这多半是**提取器**的问题不是源码的问题。它逐字符扫，注释与字符串都跳，'
+    + '但**不认正则字面量**：`/[' + String.fromCharCode(39) + '"]/g` 这种里面的引号会被'
+    + '当成字符串开头，从那儿一路跑飞。先去看 cardOf 里有没有正则字面量，'
+    + '再怀疑源码本身。（字符串或注释里的游离花括号已经不是原因了——本轮修掉了。）')
 }
 assert.strictEqual(typeof cardOf, 'function', '抠出来的应当是个函数')
 
@@ -285,8 +328,13 @@ assert.strictEqual(typeof cardOf, 'function', '抠出来的应当是个函数')
   assert.ok(!mi, 'fillCustomer 里不许用下标写 card，实为「' + (mi ? mi[0] : '') + '」——同上')
   assert.ok(body.indexOf('Object.assign(card') < 0,
     'fillCustomer 里不许 Object.assign 到 card 上——同上')
-  // **这三条盖不到**：先起别名再写（`const c = card; c.label = …`）。挂条件时行为钉子
-  // 也够不着（替身的 customer 只有 id/name/account）。属已知缺口，不再加第四条判据去追。
+  // **这三条盖不到**（都实测过，挂一个替身看不见的条件就全逃——替身的 customer 只有
+  // id/name/account，行为钉子够不着）：
+  //   · 先起别名再写：`const c = card; c.label = …`
+  //   · 移位复合赋值：`card.hint >>= 2`、`card.label <<= 2`（正则的运算符集合不含移位）
+  //   · 下标前带空格：`card ['label'] = 'x'`
+  // **不再加第四条正则去追**——本文件过去几轮的假红全部来自「再加一层判据」，
+  // 复审自己也给了这条建议。这几种属已知缺口，写在明面上。
 })()
 
 // --- 屏上那张卡真的在读这四个字段吗 -----------------------------------------
@@ -388,6 +436,34 @@ assert.strictEqual(typeof cardOf, 'function', '抠出来的应当是个函数')
 // fillCustomer 跑出来的 data，看不见模板。cardOf 那四块与 pairs 的关系见上面各自的
 // 说明：四块是纯冗余已删，pairs 守的是「接线处不许做计算」，行为钉子按输入取样、
 // 盖不住连续区间，两者互补。
+// 加载页面模块并拿到 Page() 交上来的那个对象；`stub` 会顶掉 utils/store。
+function loadPage(stub) {
+  const storePath = require.resolve('../utils/store')
+  const modPath = require.resolve('../pages/customer-detail/customer-detail.js')
+  const prevStore = require.cache[storePath]
+  const prevPage = global.Page
+  const prevGetApp = global.getApp
+  const prevWx = global.wx
+  let captured = null
+  require.cache[storePath] = { id: storePath, filename: storePath, loaded: true, exports: stub }
+  global.Page = function (o) { captured = o }
+  global.getApp = global.getApp || function () { return { globalData: {} } }
+  global.wx = global.wx || { setStorageSync: function () {}, getStorageSync: function () {} }
+  delete require.cache[modPath]
+  try {
+    require(modPath)
+  } finally {
+    if (prevStore) require.cache[storePath] = prevStore
+    else delete require.cache[storePath]
+    global.Page = prevPage
+    global.getApp = prevGetApp
+    global.wx = prevWx
+    delete require.cache[modPath]
+  }
+  assert.ok(captured, '页面模块应当调用一次 Page()')
+  return captured
+}
+
 ;(function assertFillCustomerProducesZeroState() {
   const inventory = require('../utils/inventory')
   // 四个字段**每档都钉**，期望值写死（不从 cardOf 算回来，否则实现改了期望跟着改，
@@ -421,9 +497,15 @@ assert.strictEqual(typeof cardOf, 'function', '抠出来的应当是个函数')
         return { id: 'c1', name: '张三', account: { receivable: c.receivable, prepay: c.prepay, count: 0, amount: 0 } }
       }
     }
-    const page = new Function('store', 'inventory', 'util',
-      'return { ' + cardOfSrc + ',' + pageMethod('fillCustomer') + ' }')(store, inventory, util)
-    page.data = {}
+    // **加载真模块，不靠文本抠取。** 往 require.cache 里塞一个 store 替身，再 require
+    // 页面模块，拿 Page() 交上来的那个对象——跑的就是文件里那份程序，一个字都没经过
+    // stripJsComments / extractBody。
+    //
+    // 上一版用 `new Function(pageMethod(...))` 拼，于是「跑的是哪份程序」取决于那两个
+    // 文本工具对不对：它们各写一份扫描、一个跳字符串一个不跳，复审连着两轮从这个不一致
+    // 里造出假红（字符串含 `//`、正则字面量含引号，都让合法源码判红且诊断指错方向）。
+    // 换成真加载之后，这一整类问题连同 extractBody 的执行路径一起消失。
+    const page = loadPage(store)
     // 替身要**收下并调用**第二个参数：fillCustomer 真的传了成功回调，丢掉它的话
     // 回调里再写一次 setData 就完全逃逸（复审实测，全套绿）。
     page.setData = function (o, cb) { Object.assign(page.data, o); if (cb) cb() }
