@@ -371,4 +371,24 @@ assert.strictEqual(unusedComponentDirs.length, 0, 'unreferenced component:\n' + 
 assert.ok(usedComponents['components/page-loading/index'], 'page-loading should be declared on a page')
 assert.ok(usedComponents['components/slip-overlay/index'], 'slip-overlay should be declared on a page')
 
+// cloudbaserc.json 里的资源配置是 cloudfunctions/ledger/config.json 的**重复定义**。
+// 本仓没有任何代码读 cloudbaserc.json——部署脚本读的是 config.json（wxcloud-deploy-ledger.js:15）——
+// 但开发者工具的云开发面板和 tcb 系工具读它。两份不一致时，从那条路部署一次就把函数打回旧值。
+// 这不是假设：wxcloud-deploy-ledger.js:10 记着同一个覆盖真的发生过一次（当时那份写死在
+// 部署脚本里），代价是 migrateRecords 当场超时，而**部署日志里看不出发生过覆盖**。
+// 2026-09-06 实测：config.json 与线上都是 60/512，cloudbaserc.json 还停在 20/256。
+//
+// 这条钉子盖不到的：它只比 timeout 和 memorySize 两个键，不比 runtime / handler /
+// installDependency（那几个两份现在恰好一致，但没人守）；也不验线上实际是什么。
+const fnConfig = readJson('cloudfunctions/ledger/config.json')
+const baseRc = readJson('cloudbaserc.json')
+const baseLedger = (baseRc.functions || []).find(function (item) { return item.name === 'ledger' })
+assert.ok(baseLedger, 'cloudbaserc.json 里应当有名为 ledger 的函数条目')
+;['timeout', 'memorySize'].forEach(function (key) {
+  assert.strictEqual(baseLedger[key], fnConfig[key],
+    'cloudbaserc.json 的 ' + key + '（' + baseLedger[key] + '）应当等于 '
+      + 'cloudfunctions/ledger/config.json 的（' + fnConfig[key] + '）——两份不一致时，'
+      + '从开发者工具/tcb 那条路部署一次就会把线上打回 cloudbaserc 里这个值')
+})
+
 console.log('pack-refs: ' + Object.keys(included).length + ' include entries ok')
