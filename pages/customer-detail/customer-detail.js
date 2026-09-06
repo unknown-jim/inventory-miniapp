@@ -73,9 +73,12 @@ Page({
 
     pageLoading: true,
     notFound: false,
-    // 空串 = 没出错。`store.ready()` 失败那条路专用：那条路上首卡说什么都是错的，
-    // 所以它不渲染首卡，改渲染稿 state/error 3:759 那一支。
-    loadErrorText: ''
+    // 空串 = 没出错。`store.readyOrFailure()` 失败那条路专用：那条路上首卡说什么都是
+    // 错的，所以它不渲染首卡，改渲染稿 state/error 3:759 那一支。
+    // `loadErrorRetry` 为假时走稿 state/error/blocking（不可重试）4:1041：没选店 /
+    // 被移出店铺点几次都不会好，那时给的是「返回」不是「重试」。
+    loadErrorText: '',
+    loadErrorRetry: false
   },
 
   onLoad(query) {
@@ -91,13 +94,19 @@ Page({
       return
     }
     if (!store.isReady()) this.setData({ pageLoading: true })
-    if (!(await store.ready())) {
-      // store.ready() 内部已经用 util.showError 报过一次具体原因（utils/store.js:828），
-      // 这里不再报第二遍，只把屏留在可重试的错误态上（同 pages/sale-return/sale-return.js）。
-      // 副文案说的是**算不出来**，不是「网络不好」：要挡的就是把「不知道」讲成「¥0.00」。
+    const failure = await store.readyOrFailure()
+    if (failure) {
+      // store 内部已经用 util.showError 报过一次具体原因，这里不再报第二遍
+      //（同 pages/sale-return/sale-return.js）。
+      // 可重试那一半的副文案说的是**算不出来**，不是「网络不好」：要挡的就是把
+      // 「不知道」讲成「¥0.00」。不可重试那一半（没选店 / 被移出店铺）改说 store
+      // 给的那句 —— 对它们写「检查网络后重试」是错的诊断，而且屏上不该留重试按钮。
       this.setData({
         pageLoading: false,
-        loadErrorText: '这个客户的欠款和预收都算不出来。检查网络后重试。'
+        loadErrorText: failure.retryable
+          ? '这个客户的欠款和预收都算不出来。检查网络后重试。'
+          : failure.text,
+        loadErrorRetry: failure.retryable
       })
       return
     }
@@ -132,6 +141,7 @@ Page({
       pageLoading: false,
       notFound: false,
       loadErrorText: '',
+      loadErrorRetry: false,
       name: customer.name,
       phone: customer.phone,
       address: customer.address,
