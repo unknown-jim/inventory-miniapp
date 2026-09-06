@@ -544,4 +544,86 @@ function loadPage(stub) {
 
 })()
 
-console.log('customer-card tests passed')
+// --- G322：store.ready() 失败那条路不许渲染首卡 -------------------------------
+// 那条路上首卡带着 data 初值渲染，对一个真欠钱的客户说「已结清 ¥0.00」——**一句肯定的
+// 假话**。修复是给它一条自己的错误态（loadErrorText，稿 state/error 3:759）。
+//
+// 两半，因为这件事横跨 js 和模板：
+//   · 行为钉（下面第二个）真跑 onShow，守「data 里那个标志确实被写上了」；
+//   · 静态钉（下面第一个）守「模板里首卡那支排在它后面」——这一半跑不起来，只能看文本。
+
+;(function assertHeroCardIsGuardedByLoadError() {
+  const wxml = fs.readFileSync(
+    path.join(__dirname, '..', 'pages', 'customer-detail', 'customer-detail.wxml'), 'utf8')
+  const body = stripWxmlComments(wxml)
+
+  // 【这一条盖不到什么】它只看两个子串在**全文**里的先后，不解析 wxml：
+  // 两支不在同一条 wx:if 链上、或者 loadErrorText 那支挂在别的父节点下面，它都看不出来；
+  // 屏上最终渲染的是哪一支要 test:ui 才知道，本仓的 ui 测试没覆盖「账本读不到」这条路
+  // （造不出那个失败）。它挡的是「有人把首卡那支挪到前面去」这类误改。
+  const guard = body.indexOf('wx:elif="{{loadErrorText}}"')
+  assert.ok(guard >= 0,
+    'wxml 应当有 loadErrorText 那一支（稿 state/error 3:759）——没有它，ready() 失败时'
+      + '落到的是首卡，屏上会对一个可能真欠钱的客户写「已结清 ¥0.00」')
+
+  const hero = body.indexOf('<block wx:else>')
+  assert.ok(hero >= 0, 'wxml 应当还有首卡那支 <block wx:else>')
+  assert.ok(guard < hero,
+    'loadErrorText 那支要排在首卡的 <block wx:else> 之前，排在后面就永远轮不到它')
+
+  // 标题是模板里的死字（副文案才由 js 传），所以钉在这里。
+  assert.ok(body.indexOf('账本没读到') >= 0,
+    '错误态标题应当是「账本没读到」：这条路的因是账本没取到，不是客户不存在')
+
+  // 按钮接在哪个处理函数上：行为钉钉的是 retryLoad 真的重走加载，
+  // 但它看不见模板里那枚按钮到底绑的是谁。
+  assert.ok(body.indexOf('bindtap="retryLoad"') >= 0,
+    '错误态里那枚按钮应当绑 retryLoad，否则屏上这条路没有出口')
+})()
+
+;(function assertReadyFailureSetsErrorState() {
+  // **同一个页面实例**先失败、再重试成功。上一版是加载两个新页面各跑一次，于是
+  // 「成功时 loadErrorText 被清成空串」那条断言落在新页面的初值 '' 上、恒真——
+  // 变异实测：把 fillCustomer 里那行 `loadErrorText: ''` 整个删掉，全套仍然绿。
+  // 摆设钉子和没有钉子是一回事。
+  const seq = [false, true]
+  const store = {
+    isReady: function () { return false },
+    ready: function () { return Promise.resolve(seq.shift()) },
+    getCustomer: function () {
+      // 一个**真欠钱**的客户：首卡初值会对他说「已结清 ¥0.00」，这条路要挡的就是这个。
+      return { id: 'c1', name: '张三',
+        account: { receivable: 84, prepay: 0, count: 0, amount: 0 } }
+    }
+  }
+  const page = loadPage(store)
+  page.setData = function (o, cb) { Object.assign(page.data, o); if (cb) cb() }
+  page.reloadLedger = function () {}
+  page.openPay = function () {}
+  page.data.id = 'c1'
+
+  return Promise.resolve(page.onShow()).then(function () {
+    assert.ok(page.data.loadErrorText,
+      'store.ready() 返 false 时 data.loadErrorText 应当非空——空的话 wxml 会落到首卡那支，'
+        + '屏上对一个欠着 ¥84 的客户写「已结清 ¥0.00」')
+    assert.strictEqual(page.data.pageLoading, false,
+      '……而且不能把屏留在加载态上：转圈转到天荒地老也是一种说谎')
+    assert.strictEqual(page.data.notFound, false,
+      '不许借 notFound 那一支：它的副文案说客户「可能已经被删掉了」，'
+        + '而这条路上客户很可能好好的，只是账本没读到')
+    assert.strictEqual(page.data.cardLabel, '已结清',
+      '前置条件：失败时首卡字段还停在初值上——正是这个初值不能给人看见')
+    // 走重试按钮那条真路径，不是直接再调 onShow：按钮绑的是 retryLoad。
+    return page.retryLoad()
+  }).then(function () {
+    // 这次 ready() 返 true。两条反向控制：
+    assert.strictEqual(page.data.cardLabel, '当前欠款',
+      '重试成功后应当真的把首卡填上（欠 ¥84 → A 档「当前欠款」）——'
+        + '填不上说明 retryLoad 没有真的重走加载')
+    assert.strictEqual(page.data.loadErrorText, '',
+      '重试成功后 loadErrorText 应当被清成空串，实为「' + page.data.loadErrorText + '」——'
+        + '留着的话错误态会盖在填好的数据上（失败后把小程序切后台再切回来也会走到这里）')
+  })
+})().then(function () {
+  console.log('customer-card tests passed')
+})

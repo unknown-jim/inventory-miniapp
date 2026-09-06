@@ -29,13 +29,13 @@ Page({
     hasPrepay: false,
     // 初值取 D 档（稿 28:1），与 cardOf(0, 0) 的返回一致——零态就该长一个样。
     //
-    // **正常路径上看不见这个初值**：`fillCustomer` 把 pageLoading:false 和 cardLabel
+    // **这个初值屏上看不见**：`fillCustomer` 把 pageLoading:false 和 cardLabel
     // 写在**同一次 setData** 里，两者同时翻，没有中间帧；在那之前
     // pageLoading 把首卡挡在 wxml 的 wx:else 后面。
-    // 真正看得见它的是 onShow 里 `store.ready()` 失败那条 return：pageLoading
-    // 落回 false 而 notFound 仍是 false，首卡带着初值渲染出来。**那条路上这张卡说什么
-    // 都是错的**——一个真欠钱的客户会看到「已结清 ¥0.00」。那需要一个自己的错误态，
-    // 稿上没有，已登记 G322，不在本次范围内。
+    // `store.ready()` 失败那条 return 曾经看得见它：pageLoading 落回 false 而
+    // notFound 仍是 false，首卡带着初值渲染出来，**一个真欠钱的客户会看到
+    // 「已结清 ¥0.00」**——一句肯定的假话。G322 之后那条路有自己的错误态
+    // （loadErrorText，稿 state/error 3:759），也走不到首卡了。
     cardLabel: '已结清',
     cardAmountText: '0.00',
     cardAmountClass: '',
@@ -72,7 +72,10 @@ Page({
     openingSubmitting: false,
 
     pageLoading: true,
-    notFound: false
+    notFound: false,
+    // 空串 = 没出错。`store.ready()` 失败那条路专用：那条路上首卡说什么都是错的，
+    // 所以它不渲染首卡，改渲染稿 state/error 3:759 那一支。
+    loadErrorText: ''
   },
 
   onLoad(query) {
@@ -89,10 +92,20 @@ Page({
     }
     if (!store.isReady()) this.setData({ pageLoading: true })
     if (!(await store.ready())) {
-      this.setData({ pageLoading: false })
+      // store.ready() 内部已经用 util.showError 报过一次具体原因（utils/store.js:828），
+      // 这里不再报第二遍，只把屏留在可重试的错误态上（同 pages/sale-return/sale-return.js）。
+      // 副文案说的是**算不出来**，不是「网络不好」：要挡的就是把「不知道」讲成「¥0.00」。
+      this.setData({
+        pageLoading: false,
+        loadErrorText: '这个客户的欠款和预收都算不出来。检查网络后重试。'
+      })
       return
     }
     this.fillCustomer(this.data.id)
+  },
+
+  retryLoad() {
+    return this.onShow()
   },
 
   // 金额几项（累计销售笔数 / 累计销售额 / 当前欠款 / 预收余额）一律用服务端权威的
@@ -118,6 +131,7 @@ Page({
     this.setData({
       pageLoading: false,
       notFound: false,
+      loadErrorText: '',
       name: customer.name,
       phone: customer.phone,
       address: customer.address,

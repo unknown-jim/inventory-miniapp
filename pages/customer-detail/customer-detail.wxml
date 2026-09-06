@@ -17,6 +17,18 @@
     </view>
   </view>
 
+  <!-- 稿 state/error 3:759：标题 + 一句话 + 一枚按钮。
+       ready() 失败时首卡的初值是「已结清 ¥0.00」，对一个可能真欠钱的客户那是一句
+       肯定的假话，所以这条路不渲染首卡（G322）。这条错误态只有可重试一种：
+       ready() 内部已经用 util.showError 报过具体原因，这里只负责别说谎。 -->
+  <view wx:elif="{{loadErrorText}}" class="card empty js-detail-load-error">
+    <view class="empty-title">账本没读到</view>
+    <view class="muted">{{loadErrorText}}</view>
+    <view class="empty-actions">
+      <button class="btn-primary js-detail-retry" bindtap="retryLoad">重试</button>
+    </view>
+  </view>
+
   <block wx:else>
     <!-- 稿首卡四档，label / 金额颜色 / hint 由 customer-detail.js 的 cardOf 决定：
          A 有欠款无预收 4:368 ／ B 无欠款有预收 7:250 ／ C 两者并存 9:4 ／
