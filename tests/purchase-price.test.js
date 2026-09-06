@@ -707,7 +707,11 @@ async function recentGroup() {
 //   · 块内异常被吞，而 `ended += 1` 写在 catch 之外
 //
 // 这三种**不是一回事**（复审逐条实测）：
-//   · 「链被截断」不打印 `purchase-price tests passed`——CI 侧核对那一行堵得住它。
+//   · 「链被截断」不打印 `purchase-price tests passed`——核对那一行堵得住它，
+//     但**本仓目前没有 CI**（没有 .github/、没有 yml），`npm test` 也不核对输出，
+//     所以这一种眼下同样没人堵。
+//   · 第四种（复审补的）：新加一个 async 块、忘了抄那对计数器——块跑了、进出都没记，
+//     照样打印成功行并 exit 0。正是「加块时照抄这一对即可」要防的人为疏漏。
 //   · 另外两种**照常打印成功行并 exit 0**——CI 核对输出对它们一条都不管用，
 //     这个文件里目前也没有任何东西堵得住。
 // 上一版把三种混成一句「都不会打印…靠 CI 核对输出」，对其中两种是假的。
@@ -744,7 +748,11 @@ recentGroup().then(function () {
 // 真跑 submit 的行为钉子——「submit 打服务端跑不动」这个理由不成立，harness 本来就有
 // store 替身，补上 getSkus / addPurchase（走真 applyPurchase 落账）就跑得起来。
 ;(function assertSubmitReleasesOwnership() {
-  const body = pageMethod(purchaseJs, 'submit')
+  // **先剥注释再 match**：P12 读原文的话，在复位行上方摆一行障眼注释
+  // （`// 例如 this.setData({ …, unitPrice: '', priceTouched: false })`）、再把真正的复位
+  // 拆成两次 setData，P12 就匹配到注释那一行、全套绿——而「两个字段一起写」这条不变量
+  // 已经破了（复审实测）。P10 早就用 stripComments 解决过同一个问题，这条没跟上。
+  const body = stripComments(pageMethod(purchaseJs, 'submit'))
   const line = (body.match(/this\.setData\(\{[^}]*qty:\s*''[^}]*\}\)/) || [])[0]
   assert.ok(line,
     'submit 里应当有一处「清空 qty」的 setData——找不到说明它改了写法，'
