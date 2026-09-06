@@ -1,5 +1,5 @@
 <!-- 客户详情。稿 Screen/10 客户详情 4:297（content 4:300）、UX注释/客户详情 4:406。
-     首卡三个变体：默认 card/当前欠款 4:368、预收变体 7:250、欠款预收并存 9:4。
+     首卡四个变体：默认 4:368、预收变体 7:250、欠款预收并存 9:4、已结清 28:1。
      弹层两枚：sheet/收款·默认态 13:450（空值禁用态 9:26）、
               sheet/记期初欠款·默认态 13:451（空值禁用态 9:27）。
      三个入口都带 ?id=<客户id>，其中两个还带 &pay=1（进来直接开收款层）：
@@ -18,9 +18,9 @@
   </view>
 
   <block wx:else>
-    <!-- 稿首卡三档，label / 金额颜色 / hint 由 customer-detail.js 的 cardOf 决定：
+    <!-- 稿首卡四档，label / 金额颜色 / hint 由 customer-detail.js 的 cardOf 决定：
          A 有欠款无预收 4:368 ／ B 无欠款有预收 7:250 ／ C 两者并存 9:4 ／
-         D 两者都没有（稿未画，按 A 的形状收口、不出 hint、金额中性黑）。 -->
+         D 两者都没有 28:1「已结清」（2026-09-05 补画，不出 hint、金额中性黑）。 -->
     <view class="card hero-card js-detail-card">
       <view class="hero-label">{{cardLabel}}</view>
       <view class="hero-num {{cardAmountClass}} js-detail-amount">¥{{cardAmountText}}</view>

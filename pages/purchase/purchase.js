@@ -337,7 +337,22 @@ Page({
       this.data.skus = store.getSkus()
       const recordLine = inventory.firstLine(record)
       const latest = store.getProduct(recordLine.productId)
-      this.setData({ skus: this.data.skus, qty: '', remark: '' })
+      // 【提交之后**复位** priceTouched，2026-09-06 裁定】
+      // 那个价是店主为**这一单**给的；单已经记完，归属就该交还给系统。
+      //
+      // 进货**直接覆盖**档案进价，不是加权平均——`applyPurchase` 三条分支
+      // （utils/inventory.js:745 / 769 / 781）都是 `costPrice = unitPrice`，
+      // 本文件 :172-174 那段 baseline 注释早就写着「被这次进价覆盖」。
+      // （移动加权平均那条 :192 只服务调拨与退货回格，进货够不着它。我上一版把它
+      // 当成进货路径、据此裁定「不复位」，论据整段是错的，已推翻。）
+      //
+      // 所以复位在**提交那一刻是显示等价**的（严格说：四舍五入到两位、去掉尾零之后——
+      // 打 33.456 回填是 '33.46'，打 33.0 回填是 '33'）：`baseCostOf` 取回来的就是刚覆盖上去的
+      // 同一个数。差别只在之后——别人改了档案进价，复位过的会跟上，不复位的停在旧数。
+      // 后者正是本批一直在修的那类静默错账。
+      // 两个字段**一起**写（守这件事的是 P12 那条静态钉，不是 P10）：清空价、交还归属，
+      // 紧接着的 applyProductState 会按档案进价重填。
+      this.setData({ skus: this.data.skus, qty: '', remark: '', unitPrice: '', priceTouched: false })
       if (latest) this.applyProductState(latest, this.data.skuId)
       this.loadRecent()
       // 稿 toast/进货完成 7:313「已记进货 · 25 件 · ¥2,375.00」。

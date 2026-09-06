@@ -61,7 +61,7 @@ function stripComments(src) {
 // pickRecent / pickSku / onField 同理：三个改动点各自的真入口。
 const METHOD_NAMES = [
   'pricePatch', 'applyProductState', 'selectProduct', 'pickSku', 'pickRecent',
-  'loadRecent', 'onField', 'skuOptionsOf', 'baseCostOf', 'refreshAmount'
+  'loadRecent', 'onField', 'skuOptionsOf', 'baseCostOf', 'refreshAmount', 'submit'
 ]
 
 // RECENT_SCAN / RECENT_KEEP 是模块级常量，不是方法，loadRecent 用得到 ——
@@ -177,6 +177,22 @@ function harness(initial) {
     },
     listRecords: function () {
       return Promise.resolve({ records: fx.records })
+    },
+    // submit 只多用这两个。addPurchase 走**真** applyPurchase 落账，不是打桩返回，
+    // 这样「提交之后档案进价变成什么」是引擎自己算的，不是测试替它编的。
+    getSkus: function () { return fx.skus },
+    addPurchase: function (input) {
+      const done = inv.applyPurchase(
+        fx.products.slice(), fx.records.slice(), input, 9000, 'rec-sub', fx.skus.slice())
+      fx.products = done.products
+      fx.skus = done.skus
+      fx.records = done.records
+      // 取 `done.record`：`applyPurchase` 返回的是 `records: [record].concat(records)`，
+      // **新单在下标 0**，`records[len-1]` 取到的是最旧那条（复审实测：连进两单后
+      // `records[len-1].id` 是第一单）。今天不出错只因为本块夹具 records 是空的，
+      // 一旦有人加一条前置流水，firstLine 会取到别的商品、测试为错误的理由变绿或变红。
+      // 真 store.addPurchase 回的也是 `res.result.record`，这样更同构。
+      return Promise.resolve(done.record)
     }
   }
   const make = new Function('store', 'inventory', 'util',
@@ -564,9 +580,9 @@ assert.strictEqual(('    unitPrice: price,'.match(UNIT_PRICE_KEY_RE) || []).leng
 assert.strictEqual(('keep ? this.data.unitPrice : fallback'.match(UNIT_PRICE_KEY_RE) || []).length, 0,
   '阴性对照：三元表达式里的 `this.data.unitPrice :` 不是写入点，不许被数进去')
 const unitPriceKeyCount = (purchaseNoComments.match(UNIT_PRICE_KEY_RE) || []).length
-assert.strictEqual(unitPriceKeyCount, 6,
-  '字面量 "unitPrice:" 应当恰好出现 6 次（data{} 初始值 + pricePatch 的 return + '
-    + 'loadRecent 拼的 chip 条目 + pickRecent 的清空与回填两处 + submit 的 payload），'
+assert.strictEqual(unitPriceKeyCount, 7,
+  '字面量 "unitPrice:" 应当恰好出现 7 次（data{} 初始值 + pricePatch 的 return + '
+    + 'loadRecent 拼的 chip 条目 + pickRecent 的清空与回填两处 + submit 的 payload + submit 尾部的复位），'
     + '实为 ' + unitPriceKeyCount + ' 次。多出来的多半是有地方绕开 pricePatch 直接往'
     + '页面 data 里写进价 —— 那就又有一个「把店主填的价无声冲掉」或者「改了格价没跟上」'
     + '的点位')
@@ -577,10 +593,12 @@ assert.strictEqual(('    priceTouched: false,'.match(PRICE_TOUCHED_KEY_RE) || []
 assert.strictEqual(('keep ? this.data.priceTouched : false'.match(PRICE_TOUCHED_KEY_RE) || []).length, 0,
   '阴性对照：三元表达式里的 `this.data.priceTouched :` 不是写入点')
 const priceTouchedKeyCount = (purchaseNoComments.match(PRICE_TOUCHED_KEY_RE) || []).length
-assert.strictEqual(priceTouchedKeyCount, 4,
-  '字面量 "priceTouched:" 应当恰好出现 4 次（data{} 初始值 + pricePatch 的 return + '
-    + 'pickRecent 的清空与回填两处），实为 ' + priceTouchedKeyCount + ' 次 —— '
-    + '**每一处都必须和 unitPrice 写在同一个 setData 里**，分头写的话这个标志迟早开始撒谎')
+assert.strictEqual(priceTouchedKeyCount, 5,
+  '字面量 "priceTouched:" 应当恰好出现 5 次（data{} 初始值 + pricePatch 的 return + '
+    + 'pickRecent 的清空与回填两处 + submit 尾部的复位），实为 ' + priceTouchedKeyCount + ' 次 —— '
+    + '这条只保证**写入点总数收敛**，不保证同址：把某一处拆成两次 setData，计数不变、'
+    + '它照样绿（复审在 pickRecent 上实证过，baseline 就守不住）。「同一次 setData」'
+    + '这件事目前只有 submit 那一处有静态钉（见 P12），别的入口靠人看')
 
 const WRITE_RE = /(?:\.\s*(unitPrice|priceTouched)\s*=(?!=)|\[\s*['"](?:unitPrice|priceTouched)['"]\s*\])/g
 assert.strictEqual(("px.unitPrice = '0'".match(WRITE_RE) || []).length, 1,
@@ -627,6 +645,7 @@ assert.ok(pageMethod(purchaseJs, 'applyProductState').indexOf('this.pricePatch('
 //
 // chip 条目不手搭：拿真的进货流水喂 loadRecent，让它自己拼出来。
 async function recentGroup() {
+  started += 1
   const page = harness()
   const cell = page.cell('p-spec', '黑色', 'M')
   // 上一次这一格是按 31 进的货 —— 用真引擎造这张流水，形状与线上一致。
@@ -672,10 +691,121 @@ async function recentGroup() {
       + ' —— 被换成档案进价 28 的话，店主点 chip 要来的那个数就在他没看见的时候变了，'
       + '而旧实现靠身份判据本来是留得住的（这条同时是本次修复的回归闸）')
   assert.strictEqual(page.data.priceTouched, true, '保留时归属不变')
+  ended += 1   // 本块跑完（收尾闸靠它，与开头的 started 配对）
 }
 
+// 收尾闸：每个异步块**进出各报一次**，退出时要求进出相等。
+//
+// 不用「总块数」那个常量：常量会漂（加了块忘了改，闸就静默放行），而用「数一遍
+// async function」来自检又会把判据自己的那份也数进去。进出配对不需要知道总数，
+// 加块时照抄这一对即可。
+//
+// 它抓得住：块内提前 return、await 的 promise 永不 settle、异常被吞而 `ended` 在 try 内。
+// 它**抓不住任何让进出仍然相等的形态**——复审实测三种：
+//   · 链在某个块**之前**被截断（那个块压根没进，进出都少一次，仍然相等）
+//   · 整个块从未被调用
+//   · 块内异常被吞，而 `ended += 1` 写在 catch 之外
+//
+// 这三种**不是一回事**（复审逐条实测）：
+//   · 「链被截断」不打印 `purchase-price tests passed`——核对那一行堵得住它，
+//     但**本仓目前没有 CI**（没有 .github/、没有 yml），`npm test` 也不核对输出，
+//     所以这一种眼下同样没人堵。
+//   · 第四种（复审补的）：新加一个 async 块、忘了抄那对计数器——块跑了、进出都没记，
+//     照样打印成功行并 exit 0。正是「加块时照抄这一对即可」要防的人为疏漏。
+//   · 另外两种**照常打印成功行并 exit 0**——CI 核对输出对它们一条都不管用，
+//     这个文件里目前也没有任何东西堵得住。
+// 上一版把三种混成一句「都不会打印…靠 CI 核对输出」，对其中两种是假的。
+// 真要堵后两种，得换成不靠块自报的形态（闸自己数调用点、或全局断言计数下界），
+// 那是另一轮的事；这里先把边界写成实测到的样子。
+let started = 0
+let ended = 0
+process.on('exit', function (code) {
+  if (code === 0 && started !== ended) {
+    console.error('异步断言没跑完就退出了：进了 ' + started + ' 个异步块，只跑完 ' + ended
+      + ' 个。多半是某个 await 的 promise 永远不 settle、链被谁截断了，或者块内提前 return 了。')
+    process.exitCode = 1
+  }
+})
+
 recentGroup().then(function () {
-  console.log('purchase-price tests passed')
+  // --- (P12) 提交之后归属交还系统（2026-09-06 翻案）------------------------------
+// 上一版裁定「不复位」，论据是「进货走移动加权平均、复位会填进一个没人报过价的平均数」。
+// **那个论据整段是错的**：进货走 `applyPurchase`，三条分支都是 `costPrice = unitPrice`
+// 直接覆盖（utils/inventory.js:745 / 769 / 781），移动加权平均那条 :192 只服务调拨与
+// 退货回格。purchase.js:172-174 那段 baseline 注释早就写着「被这次进价覆盖」。
+//
+// 事实翻过来，裁决跟着翻：那个价是店主为**这一单**给的，单记完归属就该还回系统。
+// 复位在提交那一刻是**显示等价**的（档案进价刚被覆盖成同一个数），差别只在之后——
+// 别人改了档案进价，复位过的会跟上，不复位的停在旧数，正是本批一直在修的静默错账。
+// 两条一起钉：一条静态、一条真跑。
+//
+// 静态那条从源码抠 submit 的函数体看那次清空怎么写——**不能**把那行 setData 抄进测试
+// 里自己写一遍再断言自己写的东西，那是纯摆设（第一版正是这么写的，把复位改成不复位
+// 它一声不吭）。
+//
+// 但静态钉子只看那一行**怎么写**，看不见它**执不执行**：复审实测，把整行挂在一个永假
+// 条件后面（`if (!record) this.setData(...)`），字面量一字未改，全套仍绿。所以补一条
+// 真跑 submit 的行为钉子——「submit 打服务端跑不动」这个理由不成立，harness 本来就有
+// store 替身，补上 getSkus / addPurchase（走真 applyPurchase 落账）就跑得起来。
+;(function assertSubmitReleasesOwnership() {
+  // **先剥注释再 match**：P12 读原文的话，在复位行上方摆一行障眼注释
+  // （`// 例如 this.setData({ …, unitPrice: '', priceTouched: false })`）、再把真正的复位
+  // 拆成两次 setData，P12 就匹配到注释那一行、全套绿——而「两个字段一起写」这条不变量
+  // 已经破了（复审实测）。P10 早就用 stripComments 解决过同一个问题，这条没跟上。
+  const body = stripComments(pageMethod(purchaseJs, 'submit'))
+  const line = (body.match(/this\.setData\(\{[^}]*qty:\s*''[^}]*\}\)/) || [])[0]
+  assert.ok(line,
+    'submit 里应当有一处「清空 qty」的 setData——找不到说明它改了写法，'
+      + '下面两条就不是在测源码了')
+  assert.ok(line.indexOf('priceTouched: false') >= 0,
+    '提交之后归属要交还系统：那次清空的 setData 里应当写 `priceTouched: false`，'
+      + '实为 `' + line + '`——留着 true 的话，以后别人改了档案进价这一格再也追不上，'
+      + '就是本批一直在修的静默错账')
+  assert.ok(line.indexOf("unitPrice: ''") >= 0,
+    '归属与价必须**一起**写（守这件事的是本条，不是 P10——P10 只保证写入点总数收敛）：'
+      + '这次清空里应当同时有 '
+      + "`unitPrice: ''`，实为 `" + line + '`')
+})()
+
+// submit 直接调 `wx.showToast`（purchase.js:360）；错误路径经 `util.showError` 用到
+// `wx.showModal` / `wx.showToast`。只桩这两个——**桩多了就等于把生产代码的依赖偷偷
+// 改宽**：上一版桩了五个并写「只桩它真正调到的三个」，两句都是假的（`util.showToast`
+// 这个函数根本不存在，实际只调到 showToast 一个），复审拿 Proxy 记账当场比出来。
+global.wx = global.wx || {
+  showToast: function () {},
+  showModal: function () {}
+}
+
+// --- (P13) 真跑一遍 submit：归属确实被交还了 ---------------------------------
+// P12 是静态的，看不见「那行代码执不执行」。复审实测：把整行挂在永假条件后面
+// （`if (!record) this.setData(...)`），字面量一字未改，全套仍绿。这一条真跑。
+;(async function assertSubmitActuallyReleasesOwnership() {
+  started += 1
+  const page = harness()
+  const cell = page.cell('p-spec', '黑色', 'M')
+  page.selectProduct('p-spec')
+  tapSku(page, cell.id)
+  typeField(page, 'qty', '2')
+  typePrice(page, '33')
+  assert.strictEqual(page.data.priceTouched, true, '前提：手打过价，归属在店主手里')
+  assert.notStrictEqual('33', String(cell.costPrice),
+    '前提：手打的价不许等于原档案进价 ' + cell.costPrice + '，否则分不出复位与否')
+
+  await page.submit()
+
+  assert.strictEqual(page.data.priceTouched, false,
+    '提交之后归属应当交还系统，实为 ' + page.data.priceTouched
+      + '——留着 true 的话，以后别人改了档案进价这一格再也追不上，就是静默错账')
+  assert.strictEqual(page.data.qty, '', '提交之后数量也该清空')
+  // 「显示等价」那句话的实证：进货是直接覆盖（不是加权平均），所以回填拿回来的
+  // 就是刚才填的那个数**四舍五入到两位之后**的样子。
+  assert.strictEqual(page.data.unitPrice, '33',
+    '复位之后回填应当拿回刚覆盖上去的档案进价 33，实为 ' + page.data.unitPrice
+      + '——不等于的话「复位在提交那一刻是显示等价的」这句话就不成立')
+  ended += 1   // 本块跑完（收尾闸靠它，与开头的 started 配对）
+})()
+  .then(function () { console.log('purchase-price tests passed') })
+  .catch(function (e) { console.error(e); process.exit(1) })
 }, function (error) {
   console.error(error)
   process.exit(1)
