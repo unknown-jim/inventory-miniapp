@@ -32,6 +32,7 @@ const core = require('../cloudfunctions/ledger/ledger-core')
 const apply = require('../utils/ledger-apply')
 const inventory = require('../utils/inventory')
 const util = require('../utils/util')
+const messages = require('../utils/messages')
 const shard = require('../utils/ledger-shard')
 const memory = require('./memory-db')
 
@@ -967,6 +968,89 @@ require.cache[require.resolve('../utils/cloud-config')].exports = {
     await rejects(function () { return store.ensureReady() }, /账本没取到/)
     assert.ok(h.toasts.length, 'ready() 失败要给用户一句话')
     h.rewrite = null
+  }
+
+  // -------------------------------------------------------------------------
+  // 5'') readyOrFailure()：把 ready() 那个 false 分成两类（G322）。
+  //
+  //      页面只拿得到 false 时，屏上只能一律写「检查网络后重试」—— 对
+  //      「没选店」「被移出店铺」那一类**是错的诊断**，而且还摆一枚点了不会好的
+  //      重试按钮。三条各自真跑：MemoryDb + 真的 ledger-core.dispatch，
+  //      没有一条是靠替身摆出来的。
+  // -------------------------------------------------------------------------
+  {
+    // (a) 网络 / 服务端那一类 —— 可重试，文案取稿 state/error 3:759 的 title 与 sub
+    const h = newHarness({ ids: idFactory('ra') })
+    await openShop(h)
+    const store = loadStore(h)
+    h.rewrite = function (data, result) {
+      if (data.action !== 'getLedger') return result
+      const copy = Object.assign({}, result)
+      delete copy.ledger
+      return copy
+    }
+    const netFail = await store.readyOrFailure()
+    assert.ok(netFail, '账本没取到时 readyOrFailure() 必须给出失败描述，不能是 null')
+    assert.strictEqual(netFail.retryable, true,
+      '网络 / 服务端那一类点重试是有用的，必须给重试按钮')
+    assert.strictEqual(netFail.title, '加载失败', '稿 state/error 3:759 的 title 逐字')
+    assert.strictEqual(netFail.text, '网络异常，请检查网络后重试',
+      '稿 state/error 3:759 的 sub 逐字。**不要换成 forStaff(error)** ——'
+      + '那句是「请退出这个页面重新进来试一次」，和屏上这枚重试按钮打架')
+    assert.ok(h.toasts.length, 'readyOrFailure() 也要像 ready() 那样报一次')
+
+    // **屏上给了「重试」，再点一次就必须真的再去要一次账本。**
+    // 从前不是这样：失败的那个 promise 会留在 readyState 上，后面每一次
+    // ensureReady 都改去 await 它，一个请求都不发 —— 一次失败把这家店锁到进程结束，
+    // 而 sale-return / customer-detail 屏上那枚重试按钮点几次都只是复读同一个错误。
+    const before = countCalls(h, 'getLedger')
+    await store.readyOrFailure()
+    assert.ok(countCalls(h, 'getLedger') > before,
+      '重试必须真的重发一次 getLedger —— 不发的话那枚「重试」按钮是个摆设')
+
+    // 恢复之后必须回 null：一切正常时页面不能留着一张错误卡
+    h.rewrite = null
+    assert.strictEqual(await store.readyOrFailure(), null,
+      '就绪时必须回 null —— 回一个真值的话每一页都会常驻错误卡')
+    assert.strictEqual(await store.ready(), true,
+      'ready() 还是那个 ready()：20 多处 `if (!(await store.ready())) return` 不许被改坏')
+  }
+  {
+    // (b) 没选店 —— 不可重试。这一类从 getStatus().canBookkeep 那道门回来。
+    const h = newHarness({ ids: idFactory('rb') })
+    const store = loadStore(h)
+    assert.strictEqual(store.getStatus().canBookkeep, false, '前置条件：没选店')
+    const failure = await store.readyOrFailure()
+    assert.ok(failure, '没选店时 readyOrFailure() 不能回 null')
+    assert.strictEqual(failure.retryable, false,
+      '没选店点几次重试都不会好 —— 给了按钮就是骗人')
+    assert.strictEqual(failure.title, '还没有选店',
+      '标题与看板阻断卡同源（utils/messages.js 的 BLOCKING，稿 4:1110）')
+    assert.strictEqual(failure.text, messages.forStaff(store.getStatus().message).text,
+      '正文逐字等于话术层那一句，仓库里不许存第二份文案')
+    assert.notStrictEqual(failure.text.indexOf('创建一家店'), -1,
+      '而且那一句真的在说该怎么办，不是「检查网络」')
+  }
+  {
+    // (c) 被移出店铺 —— 不可重试，**而且它不从 canBookkeep 那道门回来**。
+    //     老板把我移出去之后，本机的 inv_shop_id 还在，状态门一无所知；
+    //     真正拦住我的是 getLedger 自己的 requireMember
+    //     （cloudfunctions/ledger/ledger-core.js:956）。
+    //     这条是 G322 的头号场景，也正是「只看 canBookkeep」会漏掉的那一条。
+    const h = newHarness({ ids: idFactory('rc') })
+    await openShop(h)
+    h.openid = 'kicked-out-openid'
+    const store = loadStore(h)
+    assert.strictEqual(store.getStatus().canBookkeep, true,
+      '前置条件：被移出之后本机状态门看不出任何异常')
+    const failure = await store.readyOrFailure()
+    assert.ok(failure, '被移出店铺时 readyOrFailure() 不能回 null')
+    assert.strictEqual(failure.retryable, false,
+      '被移出店铺点几次重试都不会好 —— 只看 canBookkeep 的实现会在这里判成可重试')
+    assert.strictEqual(failure.text, messages.forStaff('不是该店成员').text,
+      '正文走话术层，不是服务端那五个字')
+    assert.notStrictEqual(failure.text.indexOf('店主'), -1,
+      '而且要说清找谁：光说「不是该店成员」店员不知道下一步做什么')
   }
 
   // -------------------------------------------------------------------------

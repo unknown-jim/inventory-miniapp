@@ -4,6 +4,7 @@ const cloudConfig = require('./cloud-config')
 const util = require('./util')
 const shard = require('./ledger-shard')
 const maintenance = require('./maintenance')
+const messages = require('./messages')
 
 const KEYS = {
   products: 'inv_products',
@@ -795,6 +796,21 @@ async function ensureReady() {
     if (!cache.ready) throw new Error('账本没取到，请重试')
     cache.shopId = shopId
     readyState.ok = true
+  }).catch(function (error) {
+    // **失败就把这一格让开。** 不让开的话下面记下的 `readyState.promise` 会一直
+    // 挂着这个已经拒绝的 promise，后面每一次 ensureReady 都走「已经有人在飞了」
+    // 那一支去 `await` 它 —— 一次失败就把这家店锁到进程结束：
+    // 实测（探针：拿调用次数当判据）第二次 `ready()` **一个请求都不发**，
+    // 屏上那枚「重试」点几次都只是复读同一个错误。
+    // 只在这一格还是自己的时候让（期间可能已经换了店 / 已经有人 invalidate 过）。
+    //
+    // **必须是 `.catch()`，不能写成 `.then(成功支, 失败支)`**：上面那个成功支自己
+    // 会抛（`cache.ready` 为假时抛「账本没取到，请重试」），而 `then` 的第二个参数
+    // 只接前一环的拒绝，接不住同一个 `then` 里成功支抛出来的东西。
+    // 第一版就是这么写的，探针（拿网络失败造的）显示已经修好，
+    // 而回包缺 ledger 那条路上一次请求都没多发 —— tests/store.test.js 5'') 逮住的。
+    if (readyState.promise === promise) invalidateReady()
+    throw error
   })
   readyState = { shopId: shopId, promise: promise, ok: false }
   await promise
@@ -820,14 +836,60 @@ function dataVersion() {
   return mutationSeq
 }
 
-async function ready() {
+// 页面要在屏上留一张错误卡时调这个，不调 `ready()`。
+//
+// `ready()` 把两条完全不同的失败因塌成同一个 `false`，页面拿到的只有「不行」，
+// 于是一律写「检查网络后重试」—— 对「没选店」「被移出店铺」那一类是**错的诊断**，
+// 对的诊断只在 showError 那个一闪而过的 toast 里。
+//
+// 返回 `null` = 就绪；否则返回 `{ retryable, title, text }`。
+//
+// **为什么是「跟着这一次调用返回」而不是 `store.lastReadyError()`：**
+// 两个页面同时 await 时，两个 catch 各在自己的 microtask 里跑，先失败的那个可能
+// 读到后失败的那个刚写下的错误。把原因跟着本次调用返回就没有这个错配。
+// `ready()` 改成薄薄一层包在它上面 —— 20 多处 `if (!(await store.ready())) return`
+// 一个字都不用改，`util.showError` 也还是只报一次。
+async function readyOrFailure() {
   try {
     await ensureReady()
-    return true
+    return null
   } catch (error) {
     util.showError(error)
-    return false
+    return describeReadyFailure(error)
   }
+}
+
+// 「再点一次还有没有用」由两道门分着答，缺一道就会给出错的诊断：
+//   · `getStatus().canBookkeep` —— 本机自己就知道的那半（没选店、云环境没配好）。
+//     `ensureReady` 的第一道门就是它，为假时抛的正是 `status.message`。
+//   · `messages.isPermanent(error)` —— 只有服务端知道的那半。**「被移出店铺」走的是
+//     这一条**：`getLedger` 自己也过 `requireMember`
+//     （cloudfunctions/ledger/ledger-core.js:956），人被移出之后本机 shopId 还在、
+//     `canBookkeep` 仍是真，第一道门看不见它。
+// 两道都没拦下的一律当可重试：网络、超时、`账本没取到，请重试`。
+function describeReadyFailure(error) {
+  const status = getStatus()
+  if (!status.canBookkeep) return blockedReadyFailure(status.message)
+  if (messages.isPermanent(error)) return blockedReadyFailure(error)
+  // 稿 state/error 3:759 的 title 与 sub 逐字。
+  // **这里不过 `messages.forStaff(error)`**：那层话术是给 toast / modal 写的，
+  // 「账本没取到」那条的第一步写着「请退出这个页面重新进来试一次」，而屏上此刻就有
+  // 一枚重试按钮，两句话打架；未命中规则时它还会把技术原文原样透传，错误对象没有
+  // message 时干脆是空串 —— 空串会渲染成一张没有正文的错误卡。
+  return { retryable: true, title: '加载失败', text: '网络异常，请检查网络后重试' }
+}
+
+// 不可重试那一档的 title / body 与 pages/index、pages/shop 的阻断卡同源
+// （`messages.blockingFor`），同一件事在哪一页都是同一句话，仓库里不存第二份文案。
+// blockingFor 还给一个 action（「去店铺页」），**这里不取**：这几页没有那枚按钮的位置，
+// 出口是原生返回箭头和 tabBar。
+function blockedReadyFailure(errorOrMessage) {
+  const blocking = messages.blockingFor(errorOrMessage)
+  return { retryable: false, title: blocking.title, text: blocking.body }
+}
+
+async function ready() {
+  return !(await readyOrFailure())
 }
 
 function invalidateReady() {
@@ -1366,6 +1428,7 @@ module.exports = {
   initCloud: initCloud,
   ensureReady: ensureReady,
   ready: ready,
+  readyOrFailure: readyOrFailure,
   isReady: isReady,
   refreshIfStale: refreshIfStale,
   dataVersion: dataVersion,
