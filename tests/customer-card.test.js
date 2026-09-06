@@ -10,11 +10,19 @@
 // 防的是**误改**：有人改 cardOf 或 fillCustomer 时不小心把四档的值、颜色、接线、
 // 模板绑定弄错——这是真实会发生的事，本文件每一条都对着一个实测过的这类形态。
 //
-// **不防刻意伪装**。一个想让改动躲过测试的编辑者总能做到：把代码藏进字符串里让剥注释
-// 那步吃掉（行为钉子加载真模块、跑的就是文件里那份，逮得住；静态判据仍被骗）、用计算键
-// `['card' + 'Label']` 绕开键名计数（**只绕计数**——值真错了仍由行为钉子逮住）、把分支阈值卡在行为钉子的取样点之间。这些复审都
-// 实测过，一一列在各条旁边。**堵不完**——静态文本判据对着刻意伪装是打不赢的，
-// 每加一层都会带出新的缝和新的假红。
+// **不防刻意伪装**。已知还能绕过去的（都实测过，一一列在各条旁边）：
+//   · 挂一个替身看不见的条件（`customer` 只有 id/name/account），再用别名 / 移位复合
+//     赋值 / 下标带空格改 card ——见 pairs 那节的「盖不到」清单。
+//   · 把分支阈值卡在行为钉子的取样点之间（`> 300 && < 1000`）或高于最大取样点。
+//   · 用计算键写坏值，**同时**另摆一个同名诱饵键去凑计数——单用计算键会把键名计数
+//     踩成 0、当场红，得配诱饵才绕得过。
+//   · 正则字面量：`scanJs` 不认它，里面的引号会让抠取跑飞（报「花括号没配平」）。
+//
+// **注意这几条是实测出来的，不是想当然。** 上一版这里写「藏进字符串让剥注释吃掉」和
+// 「计算键绕开键名计数」——本轮 scanJs 让字符串对剥注释不透明、键名计数会把裸计算键
+// 踩响，两条**都已经不成立**：写自己盖不到而实际盖得住，和吹过头是同一种病。
+//
+// **堵不完**——静态文本判据对着刻意伪装是打不赢的，每加一层都会带出新的缝和新的假红。
 //
 // 所以这里的取舍是：行为钉子（真跑 fillCustomer）当主防线，静态判据守它够不着的层
 // （模板绑定、data 初值、接线处不许做计算），**每条都写清自己盖不到什么**，不写
@@ -61,11 +69,14 @@ function extractBody(source, name) {
   let hits = 0
   let scan = clean.indexOf(needle)
   while (scan >= 0) { hits += 1; scan = clean.indexOf(needle, scan + 1) }
+  // 0 次和 2 次要分开报：合成一条的话，改名会得到「出现了 0 次…多出来的那份在冒充它」
+  // ——方向正好反（复审实测）。而且下面那条 `at >= 0` 在合成版里是**死代码**：
+  // hits===1 已经保证找得到。
+  assert.notStrictEqual(hits, 0,
+    'missing method ' + name + '——它改名或改了签名，下面测的就不是源码了')
   assert.strictEqual(hits, 1,
-    '方法 ' + name + ' 在剥过注释的源码里出现了 ' + hits + ' 次，应当只有 1 次'
-      + '——多出来的那份多半是在冒充它')
+    '方法 ' + name + ' 出现了 ' + hits + ' 次，应当只有 1 次——多出来的那份多半是在冒充它')
   const at = clean.indexOf(needle)
-  assert.ok(at >= 0, 'missing method ' + name + '——它改名或改了签名，下面测的就不是源码了')
   let i = clean.indexOf('{', at)
   assert.ok(i > 0, name + ' 后面找不到函数体的左花括号')
   i += 1
@@ -120,7 +131,7 @@ const util = require('../utils/util')
 //
 // **它不认正则字面量**：`/['"]/g` 里的引号会被当成字符串开头。已知缺口，写在这儿；
 // 本页当前没有正则字面量，真出现时报的是「抠出来的不是完整函数体」。
-function scanJs(text, opts) {
+function scanJs(text) {
   const bs = String.fromCharCode(92)
   const SL = String.fromCharCode(47)
   const QU = String.fromCharCode(39)
@@ -333,6 +344,9 @@ assert.strictEqual(typeof cardOf, 'function', '抠出来的应当是个函数')
   //   · 先起别名再写：`const c = card; c.label = …`
   //   · 移位复合赋值：`card.hint >>= 2`、`card.label <<= 2`（正则的运算符集合不含移位）
   //   · 下标前带空格：`card ['label'] = 'x'`
+  //   · 计算键 + 诱饵：真 setData 用 `['card' + 'Label']` 写坏值，**同时**另摆一句
+  //     `const shape = { cardLabel: card.label }` 去把键名计数凑成 1（单用计算键会把
+  //     计数踩成 0、当场红；上一版把这条写成「绕开键名计数」，少说了「得配诱饵」）
   // **不再加第四条正则去追**——本文件过去几轮的假红全部来自「再加一层判据」，
   // 复审自己也给了这条建议。这几种属已知缺口，写在明面上。
 })()
@@ -465,7 +479,6 @@ function loadPage(stub) {
 }
 
 ;(function assertFillCustomerProducesZeroState() {
-  const inventory = require('../utils/inventory')
   // 四个字段**每档都钉**，期望值写死（不从 cardOf 算回来，否则实现改了期望跟着改，
   // 断言就恒真）。上一版只钉 label 与 class，把金额和 hint 留在 D 档那两个退化值
   // （'0.00' / ''）上——于是一行 `card.amountText = util.money(prepay)` 就能把「C 档
