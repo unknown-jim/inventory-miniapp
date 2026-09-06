@@ -138,9 +138,31 @@ const nameHead = layout.commands.find(function (item) {
 // 合计搬出表格：不再挤在数量列旁边受列宽约束
 assert.strictEqual(totalLabel.align, 'left')
 assert.strictEqual(amountLabel.align, 'left')
-assert.ok(totalLabel.x < nameHead.x)
 assert.ok(totalLabel.y > qtyHead.y)
 assert.ok(amountLabel.x > totalLabel.x)
+// 这里原来还有一条 `totalLabel.x < nameHead.x`。它成立只是因为矩阵/明细态第一列是货号、
+// 品名被推到第二列（x=302）；汇总态没有货号列，品名就是第一列（x=60），而合计块的左内边距
+// 是 68 —— 不等式跟着翻了个面。它本来想说的是「合计不在表格里」，所以直接钉那件事，
+// 两态各钉一遍：合计块整个落在货物表格外框的下沿之下。
+;[['汇总态', layout], ['明细态', detailLayout]].forEach(function (entry) {
+  const box = entry[1].commands.filter(function (item) {
+    return item.type === 'stroke'
+  })
+  assert.strictEqual(box.length, 1, entry[0] + '：货物表格应当恰好画一个外框')
+  const total = entry[1].commands.find(function (item) {
+    return item.type === 'text' && item.text === '总数'
+  })
+  assert.ok(total.y > box[0].y + box[0].h,
+    entry[0] + '：合计块要落在货物表格外框（下沿 ' + (box[0].y + box[0].h) + '）之下，实测 y=' + total.y)
+})
+// 两态第一列不是同一列：汇总态是品名（贴左内边距），明细态是货号，品名被推到它右边。
+assert.strictEqual(nameHead.x, 36 + 24, '汇总态品名是第一列，表头应贴左内边距')
+assert.ok(
+  detailLayout.commands.find(function (item) {
+    return item.type === 'text' && item.text === '品名'
+  }).x > nameHead.x,
+  '明细态品名在货号列右边，表头 x 应大于汇总态'
+)
 // 签收区去掉，欠款三项并成一行小字
 assert.ok(text.indexOf('客户签收') < 0)
 assert.ok(text.indexOf('之前欠款') >= 0)
@@ -153,7 +175,10 @@ assert.ok(text.indexOf('进价') < 0)
 assert.ok(text.indexOf('内部备注') < 0)
 
 const drawn = []
-slipImage.drawSlip({
+// 每次 fillText 连当时的 textBaseline 一起记下来：胶囊文字走中线对齐这件事是在
+// drawSlip 里落地的（layoutSlip 只在指令上标 baseline:'middle'），得有人看着它真的翻译过去。
+const drawnText = []
+const fakeCtx = {
   fillStyle: '',
   font: '',
   textAlign: '',
@@ -161,19 +186,41 @@ slipImage.drawSlip({
   strokeStyle: '',
   lineWidth: 1,
   fillRect: function () { drawn.push('fillRect') },
-  fillText: function () { drawn.push('fillText') },
+  fillText: function (t) { drawn.push('fillText'); drawnText.push({ text: t, baseline: fakeCtx.textBaseline }) },
   strokeRect: function () { drawn.push('strokeRect') },
   beginPath: function () {},
   moveTo: function () {},
   lineTo: function () {},
+  // 胶囊底走 arc + fill 拼路径（微信旧版 CanvasContext 没有 roundRect）。
+  arc: function () { drawn.push('arc') },
+  closePath: function () {},
+  fill: function () { drawn.push('fill') },
   stroke: function () { drawn.push('stroke') },
   save: function () {},
   restore: function () {},
   setLineDash: function () {}
-}, layout)
+}
+slipImage.drawSlip(fakeCtx, layout)
 assert.ok(drawn.indexOf('fillText') >= 0)
 assert.ok(drawn.indexOf('strokeRect') >= 0)
 assert.ok(drawn.indexOf('stroke') >= 0)
+// 胶囊真的画了：arc（两端半圆）+ fill（底色）。汇总态一定有胶囊，前面已经钉过。
+assert.ok(drawn.indexOf('arc') >= 0, 'drawSlip 必须用 arc 拼胶囊两端的半圆')
+assert.ok(drawn.indexOf('fill') >= 0, 'drawSlip 必须给胶囊填底色')
+// 胶囊文字画的时候 textBaseline 必须是 'middle'，别的文字必须是 'top'，而且画完要复位——
+// 不复位的话它后面所有文字都会跟着往上跳半个字。
+const pillTexts = layout.commands.filter(function (item) {
+  return item.type === 'text' && item.baseline === 'middle'
+}).map(function (item) {
+  return item.text
+})
+assert.ok(pillTexts.length > 0, '汇总态应当有中线对齐的胶囊文字，否则下面两条是空转的')
+drawnText.forEach(function (item, index) {
+  const want = pillTexts.indexOf(item.text) >= 0 ? 'middle' : 'top'
+  assert.strictEqual(item.baseline, want,
+    '第' + index + '条 fillText「' + item.text + '」画的时候 textBaseline 应为 ' + want
+      + '，实测 ' + item.baseline + '（胶囊文字走中线，其余走顶端，画完必须复位）')
+})
 
 // detail ≡ 默认态的钉子：sampleSlip 只有 1 行，节内行数不满足矩阵条件 2，'summary' 态本就
 // 退回平铺，所以两态必须逐字相同。这条钉的是「detail 不会走出一条自己的路」。
@@ -182,7 +229,23 @@ assert.ok(drawn.indexOf('stroke') >= 0)
 // 逐字节。那条性质靠的是评审期把 baseline 的 utils/slip-image.js 单独加载成对照模块、
 // 比 JSON.stringify(layout)（三轮审计各自独立验过一次，老形态夹具全部逐字节相等）。
 // 仓库里留不住 baseline 模块，所以这条只能是评审期证据，不是常驻钉子。
-assert.deepStrictEqual(layout, slipImage.layoutSlip(slip, null, { exportStyle: 'detail' }))
+// 这里原来是 `deepStrictEqual(layout, detailLayout)`：sampleSlip 只有 1 行，矩阵条件 2
+// （节行数 ≥ 2）不满足、汇总态本就退回平铺，两态逐字相同。**胶囊版这条不再成立**——
+// 汇总态一行也画胶囊。它本来钉的是「detail 不会走出一条自己的路」，换成直接钉明细态的
+// 形态：一条 pill 指令都没有；后面那条阳性对照保证这不是空转。
+assert.deepStrictEqual(
+  detailLayout.commands.filter(function (item) {
+    return item.type === 'pill'
+  }),
+  [],
+  '明细态不该有任何胶囊指令'
+)
+assert.ok(
+  layout.commands.some(function (item) {
+    return item.type === 'pill'
+  }),
+  '汇总态必须画胶囊——否则上面那条「明细态没有胶囊」是空转的'
+)
 
 const walkin = slipImage.layoutSlip(sampleSlip({
   hasCustomer: false,
@@ -247,7 +310,18 @@ const unlabeled = slipImage.layoutSlip(sampleSlip({
   }]
 }))
 const unlabeledText = textsOf(unlabeled)
-assert.ok(unlabeledText.indexOf('规格') >= 0)
+// 「规格」是**列表头**，只有明细态有；汇总态规格进了胶囊，所以这条对着明细态提。
+assert.ok(textsOf(slipImage.layoutSlip(sampleSlip({
+  lines: [{
+    id: 'u1',
+    productName: '短袖 T恤',
+    specText: '黑色 · M',
+    qtyText: '1',
+    priceText: '59.00',
+    amountText: '59.00'
+  }]
+}), null, { exportStyle: 'detail' })).indexOf('规格') >= 0)
+// 取值两态都要印得出来：明细态在规格列，汇总态在胶囊文字里（「黑色 · M ×1」）。
 assert.ok(unlabeledText.indexOf('黑色 · M') >= 0)
 
 const mixedLines = [
@@ -279,7 +353,9 @@ const mixedLines = [
 assert.deepStrictEqual(slipImage.specAxisNames(mixedLines), ['颜色', '尺码', '口味', '克数'])
 // 四轴超过上限：并成一列「规格」，轴名不再各占一个表头，值用 · 串起来
 const mixedText = textsOf(slipImage.layoutSlip(sampleSlip({ lines: mixedLines })))
-assert.ok(mixedText.indexOf('规格') >= 0)
+// 同上：四轴并成的那一列叫「规格」，是明细态的列表头。
+assert.ok(textsOf(slipImage.layoutSlip(sampleSlip({ lines: mixedLines }), null,
+  { exportStyle: 'detail' })).indexOf('规格') >= 0)
 assert.ok(mixedText.indexOf('颜色') < 0)
 assert.ok(mixedText.indexOf('克数') < 0)
 assert.ok(mixedText.indexOf('原味') >= 0)
@@ -306,7 +382,9 @@ const named = util.withSlipView({
 }, 118, [{ id: 'p-tee', specAxis1: '颜色', specAxis2: '尺码' }])
 assert.strictEqual(named.lines[0].specText, '颜色 黑色 · 尺码 M')
 assert.strictEqual(named.lines[0].specParts[0].name, '颜色')
-assert.ok(textsOf(slipImage.layoutSlip(named)).indexOf('尺码') >= 0)
+// 「尺码」是轴名，明细态才当列表头印；汇总态胶囊里只有取值（「黑色/M ×2」）。
+assert.ok(textsOf(slipImage.layoutSlip(named, null, { exportStyle: 'detail' })).indexOf('尺码') >= 0)
+assert.ok(textsOf(slipImage.layoutSlip(named)).indexOf('黑色/M ×2') >= 0)
 
 const blankSku = util.withSlipView({
   id: 'order-blank-sku',
@@ -463,12 +541,15 @@ function headX(layout, title) {
   }).x
 }
 const shortSku = slipImage.layoutSlip(sampleSlip())
-const longSku = slipImage.layoutSlip(sampleSlip({
+const longSkuSlip = sampleSlip({
   lines: [Object.assign({}, sampleSlip().lines[0], { sku: 'TS-005-EXTRA-LONG-CODE' })]
-}))
-// 货号列量出来更宽，居中表头会右移，并把它右边的品名列整体右推
-assert.ok(headX(longSku, '货号') > headX(shortSku, '货号'))
-assert.ok(headX(longSku, '品名') > headX(shortSku, '品名'))
+})
+// 货号列量出来更宽，居中表头会右移，并把它右边的品名列整体右推。
+// **货号列只有明细态有**（汇总态货号在品名格第二行，不占列），所以这两条对着明细态提。
+const shortSkuDetail = slipImage.layoutSlip(sampleSlip(), null, { exportStyle: 'detail' })
+const longSkuDetail = slipImage.layoutSlip(longSkuSlip, null, { exportStyle: 'detail' })
+assert.ok(headX(longSkuDetail, '货号') > headX(shortSkuDetail, '货号'))
+assert.ok(headX(longSkuDetail, '品名') > headX(shortSkuDetail, '品名'))
 
 // 规格轴多到折行也救不回来时，画布变宽保信息完整，不缩字号
 const fourAxes = slipImage.layoutSlip(sampleSlip({
@@ -536,10 +617,33 @@ const small = slipImage.exportScales(1000, 1000, 3)
 assert.deepStrictEqual(small, [3, 1])
 
 // ---------------------------------------------------------------------------
-// 批 1：送货单导出「汇总/明细」两态。上面所有断言一条都没改——按 1.3 的矩阵化判定，
-// 前面用到的夹具（sampleSlip 1 行、many 三个不同商品各 1 行、mixedLines 两个不同商品
-// 各 1 行）每节都只有 1 行，条件 2「该节行数 ≥ 2」先就不满足，一律退回平铺，所以默认
-// exportStyle: 'summary' 不会改变它们任何一条结果。
+// 汇总态：规格胶囊（2026-09-07 由矩阵版逐块迁过来）
+//
+// 形态换了：不再是「行=规格一取值、列=规格二取值、格内件数」的交叉表，而是
+// **一个商品 + 一个单价 = 一行，规格进数量格画成等宽胶囊**。所以汇总态
+// **没有货号列、没有规格列**，四列是 品名 / 数量 / 单价 / 金额；货号在品名格第二行；
+// 胶囊文字形如「黑色/M ×3」；一格 2 枚以上时末尾多一枚深底白字的合计胶囊「小计 N 件」。
+//
+// 每删掉一块之前都先问「它防的那件事在胶囊版上还会不会发生」。会，就换个形态留下来；
+// 不会，把原因记在这儿——**跟着矩阵一起消失的判据，逐条在案**：
+//
+//  · 矩阵化的六条否决条件（节行数 >= 2 / 轴恰好 2 根 / 节内轴名一致 / 列轴取值数 <= 6 /
+//    压缩收益 / 不得撑宽画布）连同它们的翻转夹具和对照组一起删了。交叉表要付「节头 +
+//    表头 + 节尾」三行固定开销，才需要「压缩收益」那道闸；它把规格摊在**横轴**上，才需要
+//    列数上限和「不许比平铺更宽」。胶囊几乎零开销、而且是**纵向**排的，这些闸门连同它们
+//    要挡的那件事一起不存在了。
+//    **只有单价那一条活了下来，而且换了身份**：不再是「不同价就不矩阵化」，而是
+//    「不同价拆成两行」——见下面第 3 节。
+//  · 「分节表格」的一整套（平铺节复用整表列定义 / 相邻平铺节合并表头 / 不连续平铺节各画
+//    一次表头）删了：胶囊版全表只有一张表、一套列定义、一份表头，多节表格这个结构没了。
+//    结构没了不等于判据没了——「全表恒一份表头」下面钉着；当年那条会让内容画到画布外的
+//    夹具（钢材 9 位数金额）也留着，进了越界扫描。
+//  · 矩阵格寻址 grid[行轴值][列轴值] 删了，针对 grid 的那部分 Object.prototype 钉子跟着删。
+//    **判据留着**：拿用户数据当对象键这件事胶囊版还在做一次（slicePillGroups 按 priceText
+//    分组），钉子挪到那个键上，见第 15 节。
+//
+// 本段所有几何判据都落在 layoutSlip 吐出的坐标上，**不看渲染结果**。这一轮预览器骗过两次
+// （一次横向出框、一次竖向错位），两次都是预览器自己的失真，布局坐标是对的。
 // ---------------------------------------------------------------------------
 
 function specLine(overrides) {
@@ -553,7 +657,9 @@ function specLine(overrides) {
   }, overrides || {})
 }
 
-// 按 颜色 × 尺码 铺满一个货号的矩阵夹具；skip(color, size) 返回 true 的组合不生成（缺货）。
+// 按 颜色 x 尺码 铺满一个商品的规格；skip(color, size) 返回 true 的组合不生成（缺货）。
+// 件数按生成顺序 1、2、3…，所以「第 k 个组合的件数 = k」，手算期望值时用得上。
+// 金额恒等于 件数 x 单价 —— 下面「金额 = 件数之和 x 单价」那条不变量靠这个前提。
 function gridLines(colors, sizes, skip, unitPrice) {
   const price = unitPrice == null ? 59 : unitPrice
   const lines = []
@@ -574,9 +680,9 @@ function gridLines(colors, sizes, skip, unitPrice) {
   return lines
 }
 
-function matrixFixtureSlip(lines, overrides) {
-  // hasCustomer: false + operatorText 显式给值：避免「经手人」缺省兜底的 '—' 混进
-  // 「矩阵缺格画 —」的断言里，两个 '—' 来源不一样，不能靠字符串搜索混着判。
+// hasCustomer: false + operatorText 显式给值：避免「经手人」缺省兜底的 '—' 混进按字符串
+// 搜索的断言里。remark 清空，免得备注文字混进表格的文本序列。
+function pillFixtureSlip(lines, overrides) {
   return sampleSlip(Object.assign({ lines: lines, hasCustomer: false, remark: '', operatorText: '小李' }, overrides || {}))
 }
 
@@ -600,7 +706,197 @@ function labelValueText(layout, label) {
   return index >= 0 ? texts[index + 1].text : undefined
 }
 
-// 1) 分节函数：A、B、A 三行 -> 两节，第一节 2 行（顺序不变，不连续的同货号行仍归一节）
+function pillCmds(layout) {
+  return layout.commands.filter(function (item) {
+    return item.type === 'pill'
+  })
+}
+
+function uniq(list) {
+  const out = []
+  list.forEach(function (item) {
+    if (out.indexOf(item) < 0) out.push(item)
+  })
+  return out
+}
+
+// 画布常量。slip-image.js 没导出，这里照抄——和本文件里已有的 1700 硬编码同一个待遇。
+const PAD = 36
+const CELL_PAD_X = 24
+const LINE_H = 65
+
+function fontSizeOf(font) {
+  return Number(/(\d+)px/.exec(font)[1])
+}
+
+// ---------------------------------------------------------------------------
+// 把 layoutSlip 的指令流解回「表格行」。绘制顺序是固定的（见 layoutTable）：先画外框和
+// 横分隔线，再画表头文字，然后逐行逐列画内容，列序是 品名 / 数量 / 单价 / 金额。
+// 行的上下沿取自**画出来的横分隔线**，所以这个解析器本身就在核对「内容落在自己那一行里」。
+// ---------------------------------------------------------------------------
+function tableBands(layout, label) {
+  const box = layout.commands.filter(function (item) {
+    return item.type === 'stroke'
+  })
+  assert.strictEqual(box.length, 1, label + '：货物表格应当恰好画一个外框，实测 ' + box.length + ' 个')
+  const top = box[0].y
+  const bottom = box[0].y + box[0].h
+  const seps = layout.commands.filter(function (item) {
+    return item.type === 'line' && item.y1 === item.y2 && item.y1 > top + 0.5 && item.y1 <= bottom + 0.5
+  }).map(function (item) {
+    return item.y1
+  }).sort(function (a, b) {
+    return a - b
+  })
+  assert.ok(seps.length >= 2,
+    label + '：表格里至少要有「表头下沿 + 一行下沿」两条横线，实测 ' + seps.length + ' 条')
+  const bands = []
+  for (let i = 0; i < seps.length - 1; i++) bands.push({ top: seps[i], bottom: seps[i + 1] })
+  return { boxTop: top, boxBottom: bottom, headH: seps[0] - top, bands: bands }
+}
+
+// 一行解成 { name: [品名格逐行文字], pills: [{box, text}], price, amount, plainQty }。
+// 胶囊按绘制序取，紧跟每条 pill 指令的那条中线文字就是它的文字（pushPillOf 保证相邻）。
+function summaryRowsOf(layout, label) {
+  const info = tableBands(layout, label)
+  return info.bands.map(function (band) {
+    const inBand = layout.commands.filter(function (item) {
+      const y = item.type === 'line' ? item.y1 : item.y
+      return y > band.top - 0.5 && y < band.bottom + 0.5
+    })
+    const pills = []
+    inBand.forEach(function (item, index) {
+      if (item.type !== 'pill') return
+      const next = inBand[index + 1]
+      assert.ok(next && next.type === 'text' && next.baseline === 'middle',
+        label + '：每枚胶囊后面都应紧跟一条中线对齐的文字，实测 ' + JSON.stringify(next))
+      pills.push({ box: item, text: next })
+    })
+    const texts = inBand.filter(function (item) {
+      return item.type === 'text' && item.baseline !== 'middle'
+    })
+    const rights = texts.filter(function (item) {
+      return item.align === 'right'
+    }).sort(function (a, b) {
+      return a.x - b.x
+    })
+    return {
+      band: band,
+      name: texts.filter(function (item) {
+        return item.align === 'left'
+      }).sort(function (a, b) {
+        return a.y - b.y
+      }).map(function (item) {
+        return item.text
+      }),
+      pills: pills,
+      pillTexts: pills.map(function (item) {
+        return item.text.text
+      }),
+      plainQty: texts.filter(function (item) {
+        return item.align === 'center'
+      }).map(function (item) {
+        return item.text
+      }),
+      price: rights[0] && rights[0].text,
+      amount: rights[1] && rights[1].text
+    }
+  })
+}
+
+// ---------------------------------------------------------------------------
+// 几何自检。本次改动最容易出错的两件事，原来只是 scratchpad 里的一次性脚本，收成常驻断言。
+// 只读坐标，不经过任何渲染器：
+//   1) 胶囊两两不重叠
+//   2) 每条胶囊文字的盒子落在自己那枚胶囊框内（baseline:'middle'，所以文字盒顶端 = y - 字号/2）
+// estimateWidth 就是 layoutSlip 排版时用的那个度量函数（测试传 measure=null 时的默认值），
+// 所以这里算出来的文字宽度和排版时用的**是同一个数**，不是近似。
+// ---------------------------------------------------------------------------
+function assertPillGeometry(layout, label) {
+  const pills = pillCmds(layout)
+  // 阳性对照：这条自检只对真有胶囊的单据有意义，一枚都没有说明夹具或导出模式给错了。
+  assert.ok(pills.length > 0, label + '：这张单一枚胶囊都没有，几何自检会空跑')
+
+  for (let i = 0; i < pills.length; i++) {
+    for (let j = i + 1; j < pills.length; j++) {
+      const a = pills[i]
+      const b = pills[j]
+      const hit = a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+      assert.ok(!hit, label + '：第 ' + i + ' 枚胶囊 (' + a.x + ',' + a.y + ' ' + a.w + 'x' + a.h
+        + ') 和第 ' + j + ' 枚 (' + b.x + ',' + b.y + ' ' + b.w + 'x' + b.h + ') 重叠了')
+    }
+  }
+
+  const cmds = layout.commands
+  let paired = 0
+  cmds.forEach(function (cmd, index) {
+    if (cmd.type !== 'pill') return
+    const t = cmds[index + 1]
+    assert.ok(t && t.type === 'text' && t.baseline === 'middle',
+      label + '：第 ' + paired + ' 枚胶囊后面没有紧跟中线对齐的文字')
+    paired++
+    const w = slipImage.estimateWidth(t.text, t.font)
+    const h = fontSizeOf(t.font)
+    const left = t.align === 'center' ? t.x - w / 2 : t.x
+    const top = t.y - h / 2
+    assert.ok(left >= cmd.x - 0.5,
+      label + '：胶囊文字「' + t.text + '」左边出框 ' + (cmd.x - left).toFixed(1) + 'px')
+    assert.ok(left + w <= cmd.x + cmd.w + 0.5,
+      label + '：胶囊文字「' + t.text + '」右边出框 ' + (left + w - cmd.x - cmd.w).toFixed(1) + 'px')
+    assert.ok(top >= cmd.y - 0.5,
+      label + '：胶囊文字「' + t.text + '」上边出框 ' + (cmd.y - top).toFixed(1) + 'px')
+    assert.ok(top + h <= cmd.y + cmd.h + 0.5,
+      label + '：胶囊文字「' + t.text + '」下边出框 ' + (top + h - cmd.y - cmd.h).toFixed(1) + 'px')
+  })
+  assert.strictEqual(paired, pills.length,
+    label + '：配对到的胶囊 ' + paired + ' 枚，实际 ' + pills.length + ' 枚')
+}
+
+// ---------------------------------------------------------------------------
+// 越界扫描：任何一条绘制指令都不许画到画布外。画布外的东西在导出图上直接不存在。
+// **pill 也要算进来**——矩阵版没有这个指令类型，漏掉它整列胶囊就是扫描的盲区。
+// 断言越界必须真的抓住越界，不能写成恒真：align:'right' 的指令 x 本身就是右边界，
+// align:'center' 要把文字宽度折算成右边界，align:'left'（含 rect/stroke/pill/line）按左边 + 宽度算。
+// ---------------------------------------------------------------------------
+function rightEdgeOf(cmd, measure) {
+  if (cmd.type === 'text') {
+    const w = measure(cmd.text, cmd.font)
+    if (cmd.align === 'right') return cmd.x
+    if (cmd.align === 'center') return cmd.x + w / 2
+    return cmd.x + w
+  }
+  if (cmd.type === 'rect' || cmd.type === 'stroke' || cmd.type === 'pill') return cmd.x + cmd.w
+  if (cmd.type === 'line') return Math.max(cmd.x1, cmd.x2)
+  return 0
+}
+function leftEdgeOf(cmd, measure) {
+  if (cmd.type === 'text') {
+    const w = measure(cmd.text, cmd.font)
+    if (cmd.align === 'right') return cmd.x - w
+    if (cmd.align === 'center') return cmd.x - w / 2
+    return cmd.x
+  }
+  if (cmd.type === 'rect' || cmd.type === 'stroke' || cmd.type === 'pill') return cmd.x
+  if (cmd.type === 'line') return Math.min(cmd.x1, cmd.x2)
+  return 0
+}
+function assertInside(layout, label) {
+  const over = layout.commands.filter(function (cmd) {
+    return rightEdgeOf(cmd, slipImage.estimateWidth) > layout.width + 0.5
+  })
+  assert.deepStrictEqual(over, [], label + '：有 ' + over.length + ' 条指令画到画布右边界('
+    + layout.width + ')外 -> ' + JSON.stringify(over.slice(0, 6)))
+  const under = layout.commands.filter(function (cmd) {
+    return leftEdgeOf(cmd, slipImage.estimateWidth) < -0.5
+  })
+  assert.deepStrictEqual(under, [], label + '：有 ' + under.length + ' 条指令画到画布左边界外 -> '
+    + JSON.stringify(under.slice(0, 6)))
+}
+
+// ---------------------------------------------------------------------------
+// 1) 分节：A、B、A 三行 -> 两节，第一节 2 行（顺序不变，不连续的同商品行仍归一节）。
+//    胶囊版复用的就是这个 sliceLineSections，这条判据原样成立。
+// ---------------------------------------------------------------------------
 const sliced = slipImage.sliceLineSections([
   specLine({ id: 'a1', productName: 'A商品', sku: 'A1' }),
   specLine({ id: 'b1', productName: 'B商品', sku: 'B1' }),
@@ -613,573 +909,14 @@ assert.strictEqual(sliced[0].lines[1].id, 'a2')
 assert.strictEqual(sliced[1].lines.length, 1)
 assert.strictEqual(sliced[1].lines[0].id, 'b1')
 
-// 2) 矩阵路径：3 色 × 3 码卖 8 格（缺 1 格）。R=3、N=8，2+3=5<8，有压缩收益，矩阵成立。
-const matrixLines = gridLines(['黑色', '白色', '蓝色'], ['S', 'M', 'L'], function (color, size) {
-  return color === '蓝色' && size === 'L'
-})
-const matrixSlip = matrixFixtureSlip(matrixLines)
-const matrixLayout = slipImage.layoutSlip(matrixSlip)
-assert.ok(hasText(matrixLayout, '颜色')) // 行轴名
-;['S', 'M', 'L'].forEach(function (size) {
-  assert.ok(hasText(matrixLayout, size)) // 列轴各取值
-})
-assert.ok(hasText(matrixLayout, '小计'))
-assert.ok(hasText(matrixLayout, '—')) // 缺的那格（蓝色 × L）画 —，不留空白
-
-// 3) 同一份数据 exportStyle: 'detail' -> 没有「小计」、没有「—」、行数回到 8。
-// exportStyle 不是 'summary' 时分节/矩阵判定整段都不跑（见 layoutSlip），直接复用未改动
-// 过的 tableColumns/fitColumns/layoutTable——用两个结构特征证明这一点，而不是「碰巧长得
-// 像」：轴仍分列（颜色、尺码不合并）、全表只有一份表头（「货号」只出现一次，证明没有像
-// 矩阵路径那样按节反复画表头）。
-const detailLayout = slipImage.layoutSlip(matrixSlip, null, { exportStyle: 'detail' })
-assert.ok(!hasText(detailLayout, '小计'))
-assert.ok(!hasText(detailLayout, '—'))
-const detailSkuCells = textCmds(detailLayout).filter(function (item) {
-  return item.text === 'TS-005'
-})
-assert.strictEqual(detailSkuCells.length, matrixLines.length)
-assert.ok(hasText(detailLayout, '颜色'))
-assert.ok(hasText(detailLayout, '尺码'))
-const detailHeadCount = textCmds(detailLayout).filter(function (item) {
-  return item.text === '货号'
-}).length
-assert.strictEqual(detailHeadCount, 1)
-
-// 4) 两种形态总件数、总金额相等——底部汇总区不看表格形态，只看 slip.lines 现算。
-assert.strictEqual(labelValueText(matrixLayout, '总数'), labelValueText(detailLayout, '总数'))
-assert.strictEqual(labelValueText(matrixLayout, '应收'), labelValueText(detailLayout, '应收'))
-assert.strictEqual(labelValueText(matrixLayout, '实收'), labelValueText(detailLayout, '实收'))
-
-// 5) 逐条覆盖矩阵化的否决条件。
-//
-// 【2026-09-03 修】判据换成**翻转测试**：把这条夹具声称在测的那个条件改坏（让它不再
-// return null），这条夹具必须从「平铺」翻成「矩阵化」。改坏了还是平铺，说明另有否决路径
-// 也在拦它，这条夹具就没测到它声称测的东西。
-// 改动前这里 7 条里有 5 条翻不动——夹具只有 1~2 行，全部栽在条件 6（2 + R < N，少于 4 行
-// 的节一律否决）上，注释写的「每条只差这一条」不成立。下面的夹具逐条实测过翻转。
-//
-// 翻转测试的实测结果（2026-09-03，在 bf4c016 + 本次改动上跑；跑法见报告）：
-//   单价不一致    改坏条件4(sectionPriceText 恒返回首行单价) -> 翻转 ✅
-//   轴数为1       改坏条件3(lineAxisPair 允许 1 根轴)        -> 翻转 ✅
-//   轴数为3       改坏条件3(lineAxisPair 只取前两根轴)       -> 翻转 ✅
-//   节内轴名不一致 改坏条件3(sectionAxisPair 不比对轴名)      -> 翻转 ✅
-//   列轴7个取值   改坏条件5(MATRIX_COL_LIMIT 调大)          -> 翻转 ✅
-//   无压缩收益    改坏条件6(去掉压缩收益判定)                -> 翻转 ✅
-//   只有1行       改坏条件2(去掉行数判定)                    -> **翻不动** ❌
-// 「只有1行」翻不动是条件本身的性质，不是夹具没造好：条件 6 要求 2 + R < N，R ≥ 1 时
-// N ≥ 4，行数少于 4 一律否决，所以条件 2 被条件 6 完全吞掉、删掉它结果不变（死条件）。
-// 那一条保留为**行为钉子**，不再声称它隔离了条件 2。
-//
-// 另外给每条配一个**对照组**：把被测的那一条改回满足、其余原样，同一份夹具必须真的
-// 矩阵化。对照组是常驻的防空转保证——翻转测试是一次性的手工验证，对照组每次跑测试都在。
-function assertFlatFallback(lines, label) {
-  const layout = slipImage.layoutSlip(matrixFixtureSlip(lines))
-  assert.ok(!hasText(layout, '小计'), label + '：不该有矩阵小计')
-  assert.ok(!hasText(layout, '—'), label + '：不该有矩阵缺格占位')
-}
-function assertMatrixed(lines, label) {
-  const layout = slipImage.layoutSlip(matrixFixtureSlip(lines))
-  assert.ok(hasText(layout, '小计'), label + '：对照组必须真的矩阵化，否则上面那条否决断言是空转的')
-}
-
-// 条件 2（节行数 ≥ 2）：只有 1 行。翻不动，见上面的说明——这条钉行为，不钉条件。
-assertFlatFallback([
-  specLine({ specParts: [{ name: '颜色', value: '黑色' }, { name: '尺码', value: 'M' }] })
-], '只有1行')
-
-// 条件 4（节内单价逐字相同）：2 色 × 3 码共 6 行，只有最后一行单价不同。
-// R=2、N=6，2+2=4<6，条件 6 满足；对照组 = 同样 6 行、单价全一致。
-const priceControlLines = gridLines(['黑色', '白色'], ['S', 'M', 'L'])
-const priceMismatchLines = priceControlLines.slice(0, 5).concat([
-  Object.assign({}, priceControlLines[5], { priceText: '65.00', amountText: '390.00' })
-])
-assertFlatFallback(priceMismatchLines, '单价不一致')
-assertMatrixed(priceControlLines, '单价不一致-对照组')
-
-// 条件 3 之一（轴恰好 2 根）：只有 1 根轴。
-// 6 行、3 个颜色各 2 行——这样 R=3、N=6，2+3=5<6，条件 6 才不会抢在前面否决；
-// 用 2 行 2 色（改动前那样）时条件 6 也会拦，翻转测试翻不动。
-const oneAxisLines = ['黑色', '白色', '蓝色'].reduce(function (list, color, ci) {
-  return list.concat([0, 1].map(function (k) {
-    const qty = ci * 2 + k + 1
-    return specLine({
-      id: 'q' + ci + '-' + k,
-      specParts: [{ name: '颜色', value: color }],
-      qtyText: String(qty),
-      amountText: (qty * 59).toFixed(2)
-    })
-  }))
-}, [])
-assertFlatFallback(oneAxisLines, '轴数为1')
-
-// 条件 3 之二：轴数为 3。2 色 × 3 码共 6 行，每行多一根恒定的「季节」轴；
-// 对照组 = 同样 6 行、去掉第三根轴。
-const threeAxisLines = gridLines(['黑色', '白色'], ['S', 'M', 'L']).map(function (line) {
-  return Object.assign({}, line, {
-    specParts: line.specParts.concat([{ name: '季节', value: '夏' }])
-  })
-})
-assertFlatFallback(threeAxisLines, '轴数为3')
-assertMatrixed(gridLines(['黑色', '白色'], ['S', 'M', 'L']), '轴数为3-对照组')
-
-// 条件 3 之三：节内轴名不一致。5 行里最后一行把「尺码」换成「克数」。R=2、N=5，2+2=4<5。
-const axisPairControlLines = [
-  specLine({ id: 's1', specParts: [{ name: '颜色', value: '黑色' }, { name: '尺码', value: 'S' }], qtyText: '1', amountText: '59.00' }),
-  specLine({ id: 's2', specParts: [{ name: '颜色', value: '黑色' }, { name: '尺码', value: 'M' }], qtyText: '2', amountText: '118.00' }),
-  specLine({ id: 's3', specParts: [{ name: '颜色', value: '黑色' }, { name: '尺码', value: 'L' }], qtyText: '3', amountText: '177.00' }),
-  specLine({ id: 's4', specParts: [{ name: '颜色', value: '白色' }, { name: '尺码', value: 'S' }], qtyText: '4', amountText: '236.00' }),
-  specLine({ id: 's5', specParts: [{ name: '颜色', value: '白色' }, { name: '尺码', value: 'M' }], qtyText: '5', amountText: '295.00' })
-]
-const axisMismatchLines = axisPairControlLines.slice(0, 4).concat([
-  Object.assign({}, axisPairControlLines[4], {
-    specParts: [{ name: '颜色', value: '白色' }, { name: '克数', value: '50g' }]
-  })
-])
-assertFlatFallback(axisMismatchLines, '节内轴名不一致')
-assertMatrixed(axisPairControlLines, '节内轴名不一致-对照组')
-
-// 条件 5（列轴去重取值 ≤ MATRIX_COL_LIMIT=6）：7 个尺码，R=1、N=7，2+1=3<7。
-// 这条原本就有 7 行，翻转测试本来就过；对照组 = 砍到 6 个尺码。
-const sizeList = ['S', 'M', 'L', 'XL', 'XXL', 'XXXL', '4XL']
-function sizeOnlyLines(sizes) {
-  return sizes.map(function (size, index) {
-    return specLine({
-      id: 'sz' + index,
-      specParts: [{ name: '颜色', value: '黑色' }, { name: '尺码', value: size }],
-      qtyText: String(index + 1),
-      amountText: ((index + 1) * 59).toFixed(2)
-    })
-  })
-}
-assertFlatFallback(sizeOnlyLines(sizeList), '列轴7个取值')
-assertMatrixed(sizeOnlyLines(sizeList.slice(0, 6)), '列轴7个取值-对照组')
-
-// 条件 6（有压缩收益）：2 色 × 2 码卖 3 格，R=2、N=3，2+2=4 不小于 3。
-// 对照组 = 再卖两格（5 行），2+2=4<5。
-assertFlatFallback([
-  specLine({ id: 't1', specParts: [{ name: '颜色', value: '黑色' }, { name: '尺码', value: 'S' }] }),
-  specLine({ id: 't2', specParts: [{ name: '颜色', value: '黑色' }, { name: '尺码', value: 'M' }] }),
-  specLine({ id: 't3', specParts: [{ name: '颜色', value: '白色' }, { name: '尺码', value: 'S' }] })
-], '无压缩收益')
-assertMatrixed(axisPairControlLines, '无压缩收益-对照组')
-
-// 6) 混排：A 货号满足矩阵，B 货号单价不一致退回平铺，两者出现在同一张单里互不干扰。
-const mixedMatrixLines = gridLines(['黑色', '白色'], ['S', 'M', 'L']) // 2 色 × 3 码全卖，R=2、N=6，矩阵成立
-const mixedFlatLines = [
-  specLine({ id: 'bb1', productName: '绿茶', sku: 'GT-1', specParts: [{ name: '口味', value: '原味' }, { name: '克数', value: '50g' }], qtyText: '2', priceText: '20.00', amountText: '40.00' }),
-  specLine({ id: 'bb2', productName: '绿茶', sku: 'GT-1', specParts: [{ name: '口味', value: '原味' }, { name: '克数', value: '100g' }], qtyText: '1', priceText: '25.00', amountText: '25.00' })
-]
-const mixedLayoutBatch1 = slipImage.layoutSlip(matrixFixtureSlip(mixedMatrixLines.concat(mixedFlatLines)))
-assert.ok(hasText(mixedLayoutBatch1, '小计')) // A 节矩阵化
-const teaNameCells = textCmds(mixedLayoutBatch1).filter(function (item) {
-  return item.text === '绿茶'
-})
-assert.strictEqual(teaNameCells.length, mixedFlatLines.length) // B 节仍逐行列出品名，没被矩阵合并
-
-// 7) 货号为空的节：节头只画品名，不出现「未填」（与 blankSku 那条老断言同款要求）
-const blankSkuMatrixLines = gridLines(['黑色', '白色'], ['S', 'M', 'L']).map(function (line) {
-  return Object.assign({}, line, { sku: '未填' })
-})
-const blankSkuMatrixLayout = slipImage.layoutSlip(matrixFixtureSlip(blankSkuMatrixLines))
-const blankSkuMatrixText = textsOf(blankSkuMatrixLayout)
-assert.ok(blankSkuMatrixText.indexOf('未填') < 0)
-assert.ok(blankSkuMatrixText.indexOf('短袖 T恤') >= 0)
-
-// 8) R1（2026-09-02）新增条件 7：矩阵化不得让画布比平铺更宽。用列轴取值的字数控制矩阵节
-// 会把画布撑多宽——原来这里只有一条「6 列 × 4 字」的越界钉子（3 色 × 6 码，每个取值 4 个
-// 中文字，曾经会把「小计」整列画到画布外）；R1 之后这个组合不再矩阵化、直接退回平铺，
-// 越界也就无从谈起，所以拆成三条：
-//   8a) 6 列 × 3 字：撑不过平铺基准（1700），矩阵化仍然成立——越界钉子的原有价值留在
-//       这条组合上：断言矩阵路径没有任何绘制指令画到画布右边界外。
-//   8b) 6 列 × 4 字：会把画布撑宽（方案 R1 实测到 2009），条件 7 生效，退回平铺。
-//   8c) 6 列 × 13 字：病态用例，撑得更宽（方案 R1 实测到 4733），同样退回平铺。
-// 断言越界必须真的抓住越界，不能写成恒真：align:'right' 的指令 x 本身就是右边界，
-// align:'center' 要把文字宽度折算成右边界，align:'left'（含 rect/stroke/line）按左边+宽度算。
-function nCharSizes(n, charCount) {
-  const digits = ['一', '二', '三', '四', '五', '六', '七', '八', '九', '十']
-  const list = []
-  for (let i = 0; i < n; i++) list.push(digits[i] + '码'.repeat(charCount - 1))
-  return list
-}
-function rightEdgeOf(cmd, measure) {
-  if (cmd.type === 'text') {
-    const w = measure(cmd.text, cmd.font)
-    if (cmd.align === 'right') return cmd.x
-    if (cmd.align === 'center') return cmd.x + w / 2
-    return cmd.x + w
-  }
-  if (cmd.type === 'rect' || cmd.type === 'stroke') return cmd.x + cmd.w
-  if (cmd.type === 'line') return Math.max(cmd.x1, cmd.x2)
-  return 0
-}
-
-// 8a) 6 列 × 3 字：矩阵化仍成立，画布不撑宽。
-const col3Lines = gridLines(['黑色', '白色', '蓝色'], nCharSizes(6, 3))
-const col3Layout = slipImage.layoutSlip(matrixFixtureSlip(col3Lines))
-assert.ok(hasText(col3Layout, '小计'), '6列×3字应仍矩阵化')
-assert.strictEqual(col3Layout.width, 1700, '6列×3字不该撑宽画布')
-const col3Offenders = col3Layout.commands.filter(function (cmd) {
-  return rightEdgeOf(cmd, slipImage.estimateWidth) > col3Layout.width + 0.5
-})
-assert.deepStrictEqual(col3Offenders, [], '矩阵节有指令画到画布右边界外: ' + JSON.stringify(col3Offenders))
-
-// 8b) 6 列 × 4 字：条件 7 生效，退回平铺——没有「小计」，画布回落到平铺基准 1700。
-const col4Lines = gridLines(['黑色', '白色', '蓝色'], nCharSizes(6, 4))
-const col4Layout = slipImage.layoutSlip(matrixFixtureSlip(col4Lines))
-assert.ok(!hasText(col4Layout, '小计'), '6列×4字撑宽画布，应退回平铺')
-assert.strictEqual(col4Layout.width, 1700, '退回平铺后画布应回落到平铺基准')
-
-// 8c) 病态用例：6 列 × 13 字，撑宽程度更严重，同样退回平铺。
-const col13Lines = gridLines(['黑色', '白色', '蓝色'], nCharSizes(6, 13))
-const col13Layout = slipImage.layoutSlip(matrixFixtureSlip(col13Lines))
-assert.ok(!hasText(col13Layout, '小计'), '6列×13字应退回平铺')
-assert.strictEqual(col13Layout.width, 1700, '6列×13字退回平铺后画布应回落到平铺基准')
-
-// 9) 本质不变量（R1 明确要求）：汇总态画布永远不比明细态更宽。挑几组已经构造好的矩阵/混排
-// 夹具一起过一遍——这条比逐个阈值断言都硬，不管矩阵内部算法怎么变，只要哪天矩阵化又把
-// 画布撑宽，这条会先红，不用等具体阈值断言凑巧覆盖到那个组合。
-;[
-  matrixSlip,
-  matrixFixtureSlip(col3Lines),
-  matrixFixtureSlip(col4Lines),
-  matrixFixtureSlip(col13Lines),
-  matrixFixtureSlip(mixedMatrixLines.concat(mixedFlatLines))
-].forEach(function (fixtureSlip, index) {
-  const summaryWidth = slipImage.layoutSlip(fixtureSlip).width
-  const detailWidth = slipImage.layoutSlip(fixtureSlip, null, { exportStyle: 'detail' }).width
-  assert.ok(
-    summaryWidth <= detailWidth,
-    '不变量钉子第' + index + '组: summary(' + summaryWidth + ') > detail(' + detailWidth + ')'
-  )
-})
-
-// ---------------------------------------------------------------------------
-// 批 3（2026-09-02）：清空前两批留下的非阻塞项。
-// ---------------------------------------------------------------------------
-
-// 10) 【最要紧】分节路径下的平铺节要复用整表的列定义，不能各节自己算——整表轴数超过
-//     SPEC_AXIS_LIMIT 时会把规格并成一列，某个平铺节自己轴数少，per-section 算法会拆回
-//     两列，比整表口径宽出一截；单行金额位数多时，这一截差值会把内容画到画布右边界外，
-//     画布完整、内容静默消失。这条钉子直接复现该失效形态：矩阵节（服装）+ 平铺节（钢材，
-//     自己只有 2 轴、整表 4 轴）+ 9 位数金额撑窄可用宽度，断言没有任何绘制指令画到画布外。
-const overflowMatrixLines = gridLines(['黑色', '白色'], ['S', 'M', 'L'])
-const overflowFlatLines = [
-  specLine({
-    id: 'steel-1',
-    productName: '钢材钢材钢材钢材钢材',
-    sku: 'ST-00000001',
-    specParts: [{ name: '材质', value: '碳钢A型号' }, { name: '规格', value: '6.0毫米规格' }],
-    qtyText: '123456',
-    priceText: '123456789.00',
-    amountText: '123456789123.00'
-  }),
-  specLine({
-    id: 'steel-2',
-    productName: '钢材钢材钢材钢材钢材',
-    sku: 'ST-00000001',
-    specParts: [{ name: '材质', value: '碳钢A型号' }, { name: '规格', value: '8.0毫米规格' }],
-    qtyText: '654321',
-    priceText: '987654321.00',
-    amountText: '987654321987.00'
-  })
-]
-const overflowLayout = slipImage.layoutSlip(matrixFixtureSlip(overflowMatrixLines.concat(overflowFlatLines)))
-assert.ok(hasText(overflowLayout, '小计'), '服装节应仍矩阵化')
-const overflowOffenders = overflowLayout.commands.filter(function (cmd) {
-  return rightEdgeOf(cmd, slipImage.estimateWidth) > overflowLayout.width + 0.5
-})
-assert.deepStrictEqual(overflowOffenders, [], '平铺节复用整表列宽后不该再有指令画到画布右边界外: ' + JSON.stringify(overflowOffenders))
-
-// 11) 相邻的平铺节要合并成一次 layoutTable，只共用一次表头。两个都是「货号」表头的独立商品
-//     （各自都因为行数不足 2 退回平铺），紧挨着排在一个矩阵节之前——合并后表头只出现一次。
-function singleLineFlat(id, productName, sku) {
-  return specLine({ id: id, productName: productName, sku: sku, qtyText: '1' })
-}
-const mergeFlatFirst = [singleLineFlat('mf-a', 'AA商品', 'AA1')]
-const mergeFlatSecond = [singleLineFlat('mf-b', 'BB商品', 'BB1')]
-const mergeMatrixThird = gridLines(['红色', '蓝色'], ['S', 'M', 'L']).map(function (line) {
-  return Object.assign({}, line, { productName: 'CC商品', sku: 'CC1' })
-})
-const mergedLayout = slipImage.layoutSlip(matrixFixtureSlip(
-  mergeFlatFirst.concat(mergeFlatSecond).concat(mergeMatrixThird)
-))
-const mergedHeadCount = textCmds(mergedLayout).filter(function (item) {
-  return item.text === '货号'
-}).length
-assert.strictEqual(mergedHeadCount, 1, '两个连续的平铺节应合并成一次 layoutTable，只画一次表头')
-assert.ok(hasText(mergedLayout, 'AA商品') && hasText(mergedLayout, 'BB商品'), '合并后两个商品的品名都要画出来')
-assert.ok(hasText(mergedLayout, '小计'), 'CC商品节应矩阵化')
-
-// 12) 不连续的平铺节（被矩阵节隔开）不该被并起来，各自重新画一次表头——读者需要重新对齐列义。
-const splitMatrixFirst = gridLines(['黑色', '白色'], ['S', 'M', 'L']).map(function (line) {
-  return Object.assign({}, line, { productName: 'DD商品', sku: 'DD1' })
-})
-const splitFlatMiddle = [singleLineFlat('sf-a', 'EE商品', 'EE1')]
-const splitMatrixSecond = gridLines(['黄色', '绿色'], ['S', 'M', 'L']).map(function (line) {
-  return Object.assign({}, line, { productName: 'FF商品', sku: 'FF1' })
-})
-const splitFlatLast = [singleLineFlat('sf-b', 'GG商品', 'GG1')]
-const splitLayout = slipImage.layoutSlip(matrixFixtureSlip(
-  splitMatrixFirst.concat(splitFlatMiddle).concat(splitMatrixSecond).concat(splitFlatLast)
-))
-const splitHeadCount = textCmds(splitLayout).filter(function (item) {
-  return item.text === '货号'
-}).length
-assert.strictEqual(splitHeadCount, 2, '矩阵节隔开的两段平铺节不连续，各自应该重新画一次表头')
-const splitSubtotalCount = textCmds(splitLayout).filter(function (item) {
-  return item.text === '小计'
-}).length
-assert.strictEqual(splitSubtotalCount, 2, '两个矩阵节都应矩阵化成立')
-
-// 13) 分节路径下，全表只有平铺节这个组合走不到 layoutSectionedTable（hasMatrix 恒为
-//     false，直接退回批 1 之前没改过的老路径），所以这里只用它证明 flatSectionColumns 的
-//     取值口径没有跑偏：矩阵节 + 单一平铺节混排时，平铺节里各列展示的值必须仍然对应
-//     该节自己的行，不能因为改成读整表的列结构就串到别的行/别的节上。数字故意取跟矩阵节
-//     （qty 1~6、单价 59.00）不重叠的值，货号/品名/数量/单价/金额要按序连续出现——
-//     顺序连续本身就是「index 对上了自己这一行」的证据，串行读到别的行会打断这串连续。
-const columnFidelityFlat = [
-  specLine({ id: 'cf-1', productName: '货品甲', sku: 'JIA-1', qtyText: '777', priceText: '88.88', amountText: '68997.76' })
-]
-const columnFidelityMatrix = gridLines(['黑色', '白色'], ['S', 'M', 'L']).map(function (line) {
-  return Object.assign({}, line, { productName: '货品乙', sku: 'YI-1' })
-})
-const columnFidelityLayout = slipImage.layoutSlip(matrixFixtureSlip(columnFidelityMatrix.concat(columnFidelityFlat)))
-const columnFidelityTexts = textCmds(columnFidelityLayout).map(function (item) {
-  return item.text
-})
-const skuIndex = columnFidelityTexts.indexOf('JIA-1')
-assert.ok(skuIndex >= 0, '平铺节的货号应画出来')
-// 这一行没有 specParts，规格列（不管合没合并成一列）取值都是空串，wrapCell 对空串直接
-// 不产出文字指令——所以货号后面下一个有内容的列就是数量，紧跟着单价、金额。
-assert.deepStrictEqual(
-  columnFidelityTexts.slice(skuIndex, skuIndex + 5),
-  ['JIA-1', '货品甲', '777', '88.88', '68997.76'],
-  '平铺节这一行的货号/品名/数量/单价/金额应按列序连续出现，串到别的行会打断这个序列'
-)
-
-// 14) 同一 (行,列) 组合出现多行时格内要累加，不能被后写的行覆盖先写的——覆盖会导致
-//     「可见格之和 ≠ 行小计」，这种算不平的错在单据上代价很高。(黑色,S) 故意给两行
-//     （件数 2 和 3），断言：格内显示两行之和 5，且行小计、节尾小计都能对上。
-const dupCellLines = [
-  specLine({ id: 'dup-a', specParts: [{ name: '颜色', value: '黑色' }, { name: '尺码', value: 'S' }], qtyText: '2' }),
-  specLine({ id: 'dup-b', specParts: [{ name: '颜色', value: '黑色' }, { name: '尺码', value: 'S' }], qtyText: '3' }),
-  specLine({ id: 'dup-c', specParts: [{ name: '颜色', value: '黑色' }, { name: '尺码', value: 'M' }], qtyText: '4' }),
-  specLine({ id: 'dup-d', specParts: [{ name: '颜色', value: '白色' }, { name: '尺码', value: 'S' }], qtyText: '1' }),
-  specLine({ id: 'dup-e', specParts: [{ name: '颜色', value: '白色' }, { name: '尺码', value: 'M' }], qtyText: '6' })
-]
-const dupLayout = slipImage.layoutSlip(matrixFixtureSlip(dupCellLines))
-assert.ok(hasText(dupLayout, '小计'), '矩阵仍应成立（2+2=4 < 5，有压缩收益）')
-assert.ok(hasText(dupLayout, '5'), '(黑色,S) 两行应合并显示为两行之和 5')
-assert.ok(!hasText(dupLayout, '3'), '格内不该只显示后写行的 3，应合并显示为两行之和')
-assert.ok(hasText(dupLayout, '9'), '黑色行小计应为 2+3+4=9')
-assert.ok(hasText(dupLayout, '7'), '白色行小计应为 1+6=7')
-assert.ok(hasText(dupLayout, '小计 16 件'), '节尾小计应为全部行之和 2+3+4+1+6=16')
-
-// 15) 分节 key 的分隔符一直是 U+0000，U+0000 在源码里要写成转义形式，不要写裸字节
-//     （运行时等价，但从此可见、可 grep——裸字节曾让 grep 把整个 slip-image.js 当二进制）。
-//     这条钉子防的是有人把它退回空格：品名本身含空格时，两个不同的 (品名,货号) 组合会拼出
-//     同一个字符串（'短袖 T'+'TS' 与 '短袖'+'T TS' 都拼成 '短袖 T TS'），那时才会被并成一节。
-//     写清楚这一点是因为「防退化」和「修 bug」不是一回事，别让后来人以为这里修过一个真 bug。
-const collisionLines = [
-  specLine({ id: 'coll-a', productName: '短袖 T', sku: 'TS' }),
-  specLine({ id: 'coll-b', productName: '短袖', sku: 'T TS' })
-]
-const collisionSections = slipImage.sliceLineSections(collisionLines)
-assert.strictEqual(collisionSections.length, 2, '品名+货号拼接后撞车的两个不同商品不该被并成一节')
-
-// ---------------------------------------------------------------------------
-// 批 4（2026-09-03）：把矩阵表印出来的每一个数钉住 + 分节按商品身份 + 节头长品名不越界。
-//
-// 【为什么补】批 3 之前的断言只查「小计」这个**标签字符串**在不在，矩阵里印出来的数几乎
-// 一个都没查。在批 3 的基线（bf4c016）上实测，下面这些改坏法**全部绿着通过**：
-//   · 节尾金额 amountSumText(section.lines) -> '0.00'，或多印一位
-//   · 节头单价 '¥' + matrix.priceText      -> 固定 '¥1.00'
-//   · 数据行行轴取值 matrix.rowValues       -> 一律空串
-//   · 格内件数 qtyTotalText(cellLines)      -> 一律 +1
-// 批 3 的 14 号能抓住「覆盖 / 取第一行 / 行小计换成整节总数」，靠的是 hasText(layout, '5')
-// 这种**全表找一个孤立字符串**的写法：夹具里恰好没有别的地方出现 '5'，换个夹具就抓不住，
-// 而且抓住时报的是 "The expression evaluated to a falsy value"，看不出哪个数错了。
-//
-// 这一批用两条互相独立的路子钉：
-//   A. 逐值断言——把整段矩阵文本序列（节头 / 列表头 / 每个格 / 行小计 / 节尾）按绘制顺序
-//      展开，和手算的期望值 deepStrictEqual，改任何一个数都会红在具体位置上。
-//   B. 算术不变量——从**实际画出来的文本**反解出矩阵，检查四层口径对得上：
-//      各格之和 == 行小计、各行小计之和 == 节尾件数、节尾金额 == 节尾件数 × 节头单价、
-//      各节件数之和 == 单据总数。这条不依赖手算期望值，加夹具不用改断言。
-// ---------------------------------------------------------------------------
-
-// 画布常量。slip-image.js 没导出，这里照抄——和本文件里已有的 1700 硬编码同一个待遇。
-const B4_HEAD_TEXT_X = 36 + 24
-const B4_LINE_H = 65
-
-function b4Texts(layout) {
-  return textCmds(layout).map(function (item) {
-    return item.text
-  })
-}
-
-function b4LeftEdge(cmd, measure) {
-  if (cmd.type === 'text') {
-    const w = measure(cmd.text, cmd.font)
-    if (cmd.align === 'right') return cmd.x - w
-    if (cmd.align === 'center') return cmd.x - w / 2
-    return cmd.x
-  }
-  if (cmd.type === 'rect' || cmd.type === 'stroke') return cmd.x
-  if (cmd.type === 'line') return Math.min(cmd.x1, cmd.x2)
-  return 0
-}
-
-// 越界扫描：任何一条绘制指令都不许画到画布外。画布外的东西在导出图上直接不存在。
-// 批 3 的 10 号钉子已经盖住「混排时平铺节各自算列」那一种形态，这里把同一条判据推到
-// **全部**矩阵/混排夹具上、两态各跑一遍，免得下次换个形态又漏出去。
-function b4AssertInside(layout, label) {
-  const over = layout.commands.filter(function (cmd) {
-    return rightEdgeOf(cmd, slipImage.estimateWidth) > layout.width + 0.5
-  })
-  assert.deepStrictEqual(over, [], label + '：有 ' + over.length + ' 条指令画到画布右边界('
-    + layout.width + ')外 -> ' + JSON.stringify(over.slice(0, 6)))
-  const under = layout.commands.filter(function (cmd) {
-    return b4LeftEdge(cmd, slipImage.estimateWidth) < -0.5
-  })
-  assert.deepStrictEqual(under, [], label + '：有 ' + under.length + ' 条指令画到画布左边界外 -> '
-    + JSON.stringify(under.slice(0, 6)))
-}
-
-// 从画出来的文本序列反解矩阵节。绘制顺序是固定的（见 layoutMatrixSection）：
-//   节头品名(可能折成多行) / ¥单价 / 行轴名 + 各列取值 + 「小计」/ 每行(行轴取值 + 各格 + 行小计) / 「小计 N 件」/ ¥金额
-// 从节尾往回找最近的裸「小计」定位列表头末尾，再往回找最近的「¥」定位节头单价，
-// 两者之间的个数解出列数，剩下的按 (列数+2) 一行行切。
-function b4MatrixSections(layout, label) {
-  const texts = b4Texts(layout)
-  const out = []
-  texts.forEach(function (t, f) {
-    const foot = /^小计 (.+) 件$/.exec(t)
-    if (!foot) return
-    let h = -1
-    for (let i = f - 1; i >= 0; i--) {
-      if (texts[i] === '小计') { h = i; break }
-    }
-    assert.ok(h > 0, label + '：节尾「' + t + '」前面找不到列表头的「小计」')
-    let p = -1
-    for (let i = h - 1; i >= 0; i--) {
-      if (texts[i].charAt(0) === '¥') { p = i; break }
-    }
-    assert.ok(p >= 0, label + '：节尾「' + t + '」前面找不到节头单价')
-    const colCount = h - p - 2
-    assert.ok(colCount >= 1, label + '：解出来的列数不合法 ' + colCount)
-    const stride = colCount + 2
-    const body = texts.slice(h + 1, f)
-    assert.strictEqual(body.length % stride, 0,
-      label + '：数据区 ' + body.length + ' 条文本不是每行 ' + stride + ' 条的整数倍')
-    const rows = []
-    for (let i = 0; i < body.length; i += stride) {
-      rows.push({
-        value: body[i],
-        cells: body.slice(i + 1, i + 1 + colCount),
-        subtotal: body[i + 1 + colCount]
-      })
-    }
-    out.push({
-      priceText: texts[p].slice(1),
-      rowAxis: texts[p + 1],
-      colValues: texts.slice(p + 2, h),
-      rows: rows,
-      footQtyText: foot[1],
-      footAmountText: String(texts[f + 1] || '').slice(1)
-    })
-  })
-  return out
-}
-
-// 四层口径的算术不变量。缺格画的「—」不参与求和（那格没卖过）。
-// priceTimesQty：这批夹具的 amountText 是不是「件数 × 单价」——gridLines 造出来的都是；
-// 只给了 qtyText、amountText 用 specLine 默认值的夹具不是，那种就不查金额这一层。
-function b4AssertArithmetic(layout, label, expectSectionCount, priceTimesQty) {
-  const sections = b4MatrixSections(layout, label)
-  assert.strictEqual(sections.length, expectSectionCount,
-    label + '：矩阵节数不对，期望 ' + expectSectionCount + ' 实际 ' + sections.length)
-  let slipQty = 0
-  sections.forEach(function (section, si) {
-    let sectionQty = 0
-    section.rows.forEach(function (row) {
-      const cellSum = row.cells.reduce(function (sum, cell) {
-        if (cell === '—') return sum
-        const n = Number(cell)
-        assert.ok(isFinite(n),
-          label + '：第' + si + '节「' + row.value + '」行有非数字格 ' + JSON.stringify(cell))
-        return sum + n
-      }, 0)
-      const subtotal = Number(row.subtotal)
-      assert.ok(isFinite(subtotal),
-        label + '：第' + si + '节「' + row.value + '」行小计不是数字 ' + JSON.stringify(row.subtotal))
-      assert.strictEqual(cellSum, subtotal,
-        label + '：第' + si + '节「' + row.value + '」行各格之和 ' + cellSum + ' != 行小计 ' + subtotal
-          + '（各格：' + JSON.stringify(row.cells) + '）')
-      sectionQty += subtotal
-    })
-    const footQty = Number(section.footQtyText)
-    assert.strictEqual(sectionQty, footQty,
-      label + '：第' + si + '节各行小计之和 ' + sectionQty + ' != 节尾件数 ' + footQty)
-    if (priceTimesQty) {
-      const expectAmount = (Math.round(footQty * Number(section.priceText) * 100) / 100).toFixed(2)
-      assert.strictEqual(section.footAmountText, expectAmount,
-        label + '：第' + si + '节节尾金额 ' + section.footAmountText + ' != 节尾件数 ' + footQty
-          + ' × 节头单价 ' + section.priceText + ' = ' + expectAmount)
-    }
-    slipQty += footQty
-  })
-  return slipQty
-}
-
-// 全表都是矩阵节（没有平铺节的「货号」表头）时，各节件数之和必须等于底部汇总区的「总数」。
-function b4AssertQtyClosure(layout, label, expectSectionCount, priceTimesQty) {
-  assert.ok(!hasText(layout, '货号'), label + '：这条闭合断言只对「没有平铺节」的单据成立')
-  const qty = b4AssertArithmetic(layout, label, expectSectionCount, priceTimesQty)
-  assert.strictEqual(qty + ' 件', labelValueText(layout, '总数'),
-    label + '：各节件数之和 ' + qty + ' 件 != 单据总数 ' + labelValueText(layout, '总数'))
-}
-
-// ---- 4-1 逐值断言：3 色 × 3 码缺一格（就是上面 matrixLayout 那张）-----------------
-// matrixLines 的件数按生成顺序 1..8：黑S=1 黑M=2 黑L=3 / 白S=4 白M=5 白L=6 / 蓝S=7 蓝M=8，
-// 蓝L 没卖 -> 画「—」。行小计 6 / 15 / 15，节尾 36 件，单价 59.00，金额 36 × 59 = 2124.00。
-const b4ExpectedMatrix = [
-  'TS-005 短袖 T恤', '¥59.00',
-  '颜色', 'S', 'M', 'L', '小计',
-  '黑色', '1', '2', '3', '6',
-  '白色', '4', '5', '6', '15',
-  '蓝色', '7', '8', '—', '15',
-  '小计 36 件', '¥2124.00'
-]
-const b4MatrixTexts = b4Texts(matrixLayout)
-const b4MatrixStart = b4MatrixTexts.indexOf('TS-005 短袖 T恤')
-assert.ok(b4MatrixStart >= 0, '3色×3码：文本序列里找不到节头「TS-005 短袖 T恤」')
-assert.deepStrictEqual(
-  b4MatrixTexts.slice(b4MatrixStart, b4MatrixStart + b4ExpectedMatrix.length),
-  b4ExpectedMatrix,
-  '3色×3码缺一格：矩阵表画出来的文本序列和逐格手算的期望值不一致'
-)
-b4AssertQtyClosure(matrixLayout, '3色×3码缺一格', 1, true)
-
-// ---- 4-2 算术不变量铺到已有的矩阵夹具 ------------------------------------------
-b4AssertQtyClosure(slipImage.layoutSlip(matrixFixtureSlip(col3Lines)), '6列×3字', 1, true)
-b4AssertQtyClosure(slipImage.layoutSlip(matrixFixtureSlip(blankSkuMatrixLines)), '货号为空的矩阵节', 1, true)
-// 批 3 的 14 号夹具（同一格两行）：它只给了 qtyText，金额一律是 specLine 的默认 59.00，
-// 不是「件数 × 单价」，所以这里不查金额那一层，只查件数三层。
-b4AssertQtyClosure(dupLayout, '同格两行累加', 1, false)
-// 批 3 的 12 号夹具：两个矩阵节被平铺节隔开，含平铺节所以不做总数闭合，只查每节内部。
-b4AssertArithmetic(splitLayout, '矩阵节被平铺节隔开', 2, true)
-
-// ---- 4-3 缺陷 2：分节按 productId，不按「品名 + 货号」 --------------------------
-// 品名没有唯一性校验（createProduct 只校验非空）、货号可空，两个**不同商品**同名且都没填
-// 货号时，旧 key 会把它们并进同一节：节头只印一个品名、小计跨商品求和。
-// pages/sale/sale.js 的 mergeLines 挡不住——它按 product.id + specKey 合并，只在单个商品内去重。
-const b4TwoProductSections = slipImage.sliceLineSections([
+// 分节按 productId，不按「品名 + 货号」。品名没有唯一性校验（createProduct 只校验非空）、
+// 货号可空，两个**不同商品**同名且都没填货号时，旧 key 会把它们并进同一组：一行印一个品名、
+// 合计跨商品求和。pages/sale/sale.js 的 mergeLines 挡不住——它按 product.id + specKey 合并，
+// 只在单个商品内去重，跨商品的同名碰撞它看不见。
+assert.strictEqual(slipImage.sliceLineSections([
   specLine({ id: 'n1', productId: 'p-1', productName: '短袖', sku: '' }),
   specLine({ id: 'n2', productId: 'p-2', productName: '短袖', sku: '' })
-])
-assert.strictEqual(b4TwoProductSections.length, 2,
-  '两个同名且都没填货号的商品必须按 productId 分成两节，实际分了 ' + b4TwoProductSections.length + ' 节')
+]).length, 2, '两个同名且都没填货号的商品必须按 productId 分成两节')
 // 同一个商品被拆成两行（不同规格）仍然只有一节——别把「按 id 分」写成「一行一节」。
 assert.strictEqual(slipImage.sliceLineSections([
   specLine({ id: 'n3', productId: 'p-1', productName: '短袖', sku: '' }),
@@ -1191,8 +928,17 @@ assert.strictEqual(slipImage.sliceLineSections([
   specLine({ id: 'o2', productName: '短袖', sku: '' })
 ]).length, 1, '没有 productId 的老流水必须退回「品名 + 货号」分组，不能一行一节')
 
+// 分节 key 的分隔符一直是 U+0000（源码里写转义形式、不写裸字节，理由见 4-7）。
+// 这条钉子防的是有人把它退回空格：品名本身含空格时，两个不同的 (品名,货号) 组合会拼出
+// 同一个字符串（'短袖 T'+'TS' 与 '短袖'+'T TS' 都拼成 '短袖 T TS'），那时才会被并成一节。
+// 它查的是**分组行为**；4-7 查的是**字节**，两回事，都要留着。
+assert.strictEqual(slipImage.sliceLineSections([
+  specLine({ id: 'coll-a', productName: '短袖 T', sku: 'TS' }),
+  specLine({ id: 'coll-b', productName: '短袖', sku: 'T TS' })
+]).length, 2, '品名+货号拼接后撞车的两个不同商品不该被并成一节')
+
 // withSlipView 要把 productId 带下来，否则上面那条分节永远走不到 id 分支。
-const b4TwoProductSlip = util.withSlipView({
+const twoProductSlip = util.withSlipView({
   id: 'order-two-product',
   createdAt: new Date('2026-08-15T12:00:00').getTime(),
   amount: 118,
@@ -1202,21 +948,246 @@ const b4TwoProductSlip = util.withSlipView({
     { lineId: 'tp2', productId: 'p-2', productName: '短袖', qty: 1, unitPrice: 59, amount: 59 }
   ]
 }, 0)
-assert.strictEqual(b4TwoProductSlip.lines[0].productId, 'p-1', 'withSlipView 要把 productId 带到送货单行上')
-assert.strictEqual(b4TwoProductSlip.lines[1].productId, 'p-2', 'withSlipView 要把 productId 带到送货单行上')
+assert.strictEqual(twoProductSlip.lines[0].productId, 'p-1', 'withSlipView 要把 productId 带到送货单行上')
+assert.strictEqual(twoProductSlip.lines[1].productId, 'p-2', 'withSlipView 要把 productId 带到送货单行上')
 // 只加这一个字段，别的取值一个都不许动。
-assert.strictEqual(b4TwoProductSlip.lines[0].productName, '短袖')
-assert.strictEqual(b4TwoProductSlip.lines[0].qtyText, '1')
-assert.strictEqual(b4TwoProductSlip.lines[0].priceText, '59.00')
-assert.strictEqual(b4TwoProductSlip.lines[0].amountText, '59.00')
-assert.strictEqual(b4TwoProductSlip.lines[0].sku, '')
-assert.strictEqual(slipImage.sliceLineSections(b4TwoProductSlip.lines).length, 2,
+assert.strictEqual(twoProductSlip.lines[0].productName, '短袖')
+assert.strictEqual(twoProductSlip.lines[0].qtyText, '1')
+assert.strictEqual(twoProductSlip.lines[0].priceText, '59.00')
+assert.strictEqual(twoProductSlip.lines[0].amountText, '59.00')
+assert.strictEqual(twoProductSlip.lines[0].sku, '')
+assert.strictEqual(slipImage.sliceLineSections(twoProductSlip.lines).length, 2,
   'withSlipView 出来的两个同名无货号商品要分成两节')
 
-// 端到端：两个同名无货号商品各自 2 色 × 3 码、单价都是 59。
-// 旧 key 会把 12 行并成一节（R=4、N=12，条件全过），画出一张跨商品的矩阵、只印一个品名、
-// 节尾小计 78 件；按 productId 分节则是两节，节尾各 21 / 57 件。
-function b4ProductGrid(productId, colors, startQty) {
+// ---------------------------------------------------------------------------
+// 2) 汇总态的形态：四列，没有货号列和规格列，规格进胶囊。
+// ---------------------------------------------------------------------------
+const gridLines2x2 = gridLines(['黑色', '白色'], ['M', 'L'])
+const layout2x2 = slipImage.layoutSlip(pillFixtureSlip(gridLines2x2))
+
+assert.ok(!hasText(layout2x2, '货号'), '汇总态没有货号列——货号在品名格第二行')
+assert.ok(!hasText(layout2x2, '颜色'), '汇总态没有规格列——「颜色」是轴名，只有明细态当表头印')
+assert.ok(!hasText(layout2x2, '尺码'), '汇总态没有规格列——「尺码」同上')
+;['品名', '数量', '单价', '金额'].forEach(function (title) {
+  assert.strictEqual(textCmds(layout2x2).filter(function (item) {
+    return item.text === title
+  }).length, 1, '汇总态全表恒一份表头，「' + title + '」应当只出现一次')
+})
+
+// 逐值断言：把整张表按绘制顺序展开，和手算的期望值 deepStrictEqual，改任何一个数都会红在
+// 具体位置上。件数按 gridLines 的生成顺序 1..4：黑M=1 黑L=2 白M=3 白L=4，合计 10 件，
+// 单价 59.00，金额 (1+2+3+4) x 59 = 590.00。
+// 这条同时替掉矩阵版的「列口径保真」：品名/货号/胶囊/单价/金额按列序连续出现，
+// 串到别的行会打断这串连续。
+const texts2x2 = textCmds(layout2x2).map(function (item) {
+  return item.text
+})
+const head2x2 = texts2x2.indexOf('品名')
+assert.ok(head2x2 >= 0, '2色x2码：文本序列里找不到表头「品名」')
+assert.deepStrictEqual(
+  texts2x2.slice(head2x2, head2x2 + 13),
+  [
+    '品名', '数量', '单价', '金额',
+    '短袖 T恤', 'TS-005',
+    '黑色/M ×1', '黑色/L ×2', '白色/M ×3', '白色/L ×4', '小计 10 件',
+    '59.00', '590.00'
+  ],
+  '2色x2码：汇总态画出来的文本序列和逐格手算的期望值不一致'
+)
+
+// 同一份数据的明细态：一行一条原始流水、规格分列、货号自成一列、一条 pill 指令都没有。
+const detail2x2 = slipImage.layoutSlip(pillFixtureSlip(gridLines2x2), null, { exportStyle: 'detail' })
+assert.deepStrictEqual(pillCmds(detail2x2), [], '明细态不该有胶囊')
+assert.ok(hasText(detail2x2, '货号') && hasText(detail2x2, '颜色') && hasText(detail2x2, '尺码'),
+  '明细态货号、规格轴各自成列')
+assert.strictEqual(textCmds(detail2x2).filter(function (item) {
+  return item.text === 'TS-005'
+}).length, gridLines2x2.length, '明细态每一行都印一次货号')
+assert.strictEqual(textCmds(detail2x2).filter(function (item) {
+  return item.text === '货号'
+}).length, 1, '明细态也只画一份表头')
+
+// 两种形态总件数、总金额相等——底部汇总区不看表格形态，只看 slip.lines 现算。
+assert.strictEqual(labelValueText(layout2x2, '总数'), labelValueText(detail2x2, '总数'))
+assert.strictEqual(labelValueText(layout2x2, '应收'), labelValueText(detail2x2, '应收'))
+assert.strictEqual(labelValueText(layout2x2, '实收'), labelValueText(detail2x2, '实收'))
+
+// ---------------------------------------------------------------------------
+// 3) 分组：同一商品的多条规格并成一行；**单价不同的规格拆成两行**。
+//    这是矩阵版「条件 4（节内单价逐字相同）」唯一活下来的那条判据，换了身份：
+//    从「不同价就不矩阵化」变成「不同价拆成两行」。理由没变——单价并进一行之后，
+//    客户核单的算式就是「胶囊件数之和 x 单价 = 金额」，单价不统一这条算式不成立。
+// ---------------------------------------------------------------------------
+const twoPriceLines = [
+  specLine({ id: 'pp1', productId: 'P', specParts: [{ name: '颜色', value: '黑色' }, { name: '尺码', value: 'M' }], qtyText: '2', priceText: '59.00', amountText: '118.00' }),
+  specLine({ id: 'pp2', productId: 'P', specParts: [{ name: '颜色', value: '黑色' }, { name: '尺码', value: 'L' }], qtyText: '3', priceText: '59.00', amountText: '177.00' }),
+  specLine({ id: 'pp3', productId: 'P', specParts: [{ name: '颜色', value: '白色' }, { name: '尺码', value: 'M' }], qtyText: '4', priceText: '65.00', amountText: '260.00' })
+]
+const twoPriceLayout = slipImage.layoutSlip(pillFixtureSlip(twoPriceLines))
+const twoPriceRows = summaryRowsOf(twoPriceLayout, '同商品两种单价')
+assert.strictEqual(twoPriceRows.length, 2,
+  '同一商品的两种单价必须拆成两行，实测 ' + twoPriceRows.length + ' 行')
+assert.deepStrictEqual(
+  twoPriceRows.map(function (row) {
+    return { name: row.name, pills: row.pillTexts, price: row.price, amount: row.amount }
+  }),
+  [
+    { name: ['短袖 T恤', 'TS-005'], pills: ['黑色/M ×2', '黑色/L ×3', '小计 5 件'], price: '59.00', amount: '295.00' },
+    { name: ['短袖 T恤', 'TS-005'], pills: ['白色/M ×4'], price: '65.00', amount: '260.00' }
+  ],
+  '拆出来的两行：各自只放自己那个单价的规格，金额是本行各条流水金额之和'
+)
+// 拆开之后**单价列每行恒定一个值**——这就是拆行想换来的那件事，直接钉住：
+// 画出来的那个单价，在这一行对应的流水里必须条条都是它。
+twoPriceRows.forEach(function (row, index) {
+  const own = twoPriceLines.filter(function (line) {
+    return line.priceText === row.price
+  })
+  assert.ok(own.length > 0, '第' + index + '行的单价 ' + row.price + ' 在夹具里找不到对应流水')
+  assert.strictEqual(row.pillTexts.filter(function (text) {
+    return !/^小计 .+ 件$/.test(text)
+  }).length, own.length,
+  '第' + index + '行的规格胶囊数应等于该单价下的流水条数')
+})
+// 同一商品**同一单价**的多条规格必须并成一行（否则上面那条「拆」是空话）。
+assert.strictEqual(summaryRowsOf(layout2x2, '2色x2码').length, 1,
+  '同一商品同一单价的 4 条规格必须并成一行')
+
+// ---------------------------------------------------------------------------
+// 4) 合计胶囊：一格 2 枚以上才出；只有一枚时**不出**（合计等于它自己，纯废话）。
+//    文字是「小计 N 件」，N 等于这一组各胶囊件数之和。
+//    长相也不一样：深底白字，规格胶囊浅底深字；字号字重必须相同——加粗会让文字比量出来的
+//    盒子宽，又变回「文字超出胶囊」。
+// ---------------------------------------------------------------------------
+function totalPillOf(row) {
+  const hits = row.pills.filter(function (item) {
+    return /^小计 .+ 件$/.test(item.text.text)
+  })
+  assert.ok(hits.length <= 1, '一格里最多一枚合计胶囊，实测 ' + hits.length + ' 枚')
+  return hits[0]
+}
+function specPillsOf(row) {
+  return row.pills.filter(function (item) {
+    return !/^小计 .+ 件$/.test(item.text.text)
+  })
+}
+function pillQty(item, label) {
+  const m = / ×(\d+(?:\.\d+)?)$/.exec(item.text.text)
+  assert.ok(m, label + '：胶囊文字「' + item.text.text + '」不是「规格 ×件数」的形状')
+  return Number(m[1])
+}
+function assertTotalPill(row, label) {
+  const spec = specPillsOf(row)
+  const total = totalPillOf(row)
+  if (spec.length < 2) {
+    assert.strictEqual(total, undefined,
+      label + '：这一格只有 ' + spec.length + ' 枚规格胶囊，不该出合计胶囊')
+    return
+  }
+  assert.ok(total, label + '：这一格有 ' + spec.length + ' 枚规格胶囊，应当出合计胶囊')
+  // N 由各枚胶囊文字里的「×件数」相加得出——从**画出来的字**反解，不抄夹具。
+  const sum = spec.reduce(function (acc, item) {
+    return acc + pillQty(item, label)
+  }, 0)
+  assert.strictEqual(total.text.text, '小计 ' + sum + ' 件',
+    label + '：合计胶囊应为各枚胶囊件数之和 ' + sum + '，实测「' + total.text.text + '」')
+  assert.strictEqual(row.pills[row.pills.length - 1], total, label + '：合计胶囊要排在这一格的最后')
+  assert.notStrictEqual(total.box.fill, spec[0].box.fill, label + '：合计胶囊底色应与规格胶囊不同')
+  assert.notStrictEqual(total.text.color, spec[0].text.color, label + '：合计胶囊字色应与规格胶囊不同')
+  assert.strictEqual(total.text.font, spec[0].text.font,
+    label + '：合计胶囊字号字重与规格胶囊必须相同——加粗会让文字比量出来的盒子宽、又出框')
+}
+summaryRowsOf(layout2x2, '2色x2码').forEach(function (row) {
+  assertTotalPill(row, '2色x2码')
+})
+twoPriceRows.forEach(function (row, index) {
+  assertTotalPill(row, '同商品两种单价第' + index + '行')
+})
+// 只有一枚：单商品单规格。**默认导出样式就是汇总，这是最常见的那种单子**，单独钉一条。
+const singleSpecLines = [specLine({
+  specParts: [{ name: '颜色', value: '黑色' }, { name: '尺码', value: 'M' }],
+  qtyText: '2',
+  amountText: '118.00'
+})]
+const singleSpecLayout = slipImage.layoutSlip(pillFixtureSlip(singleSpecLines))
+const singleSpecRows = summaryRowsOf(singleSpecLayout, '单商品单规格')
+assert.strictEqual(singleSpecRows.length, 1)
+assert.deepStrictEqual(singleSpecRows[0].pillTexts, ['黑色/M ×2'],
+  '单商品单规格：只画一枚规格胶囊，不出合计胶囊')
+assertTotalPill(singleSpecRows[0], '单商品单规格')
+
+// ---------------------------------------------------------------------------
+// 5) 货号：**每一组都要印**，包括只有一条规格的组。
+//    上一版为省 65px 写了「只在 >=2 条规格时才印品名格第二行」，结果单商品单规格的单子
+//    货号整个不见了——而默认导出样式就是汇总，那是最常见的单子。省版面不能省掉单据字段。
+// ---------------------------------------------------------------------------
+assert.deepStrictEqual(singleSpecRows[0].name, ['短袖 T恤', 'TS-005'],
+  '单规格的组也要印货号（品名第一行、货号第二行）')
+summaryRowsOf(layout2x2, '2色x2码').forEach(function (row) {
+  assert.deepStrictEqual(row.name, ['短袖 T恤', 'TS-005'], '多规格的组同样印货号')
+})
+// 货号为空的组：只印品名，不出现「未填」（与前面 blankSku 那条老断言同款要求）。
+const blankSkuLines = gridLines(['黑色', '白色'], ['S', 'M', 'L']).map(function (line) {
+  return Object.assign({}, line, { sku: '未填' })
+})
+const blankSkuLayout = slipImage.layoutSlip(pillFixtureSlip(blankSkuLines))
+assert.deepStrictEqual(summaryRowsOf(blankSkuLayout, '货号为空')[0].name, ['短袖 T恤'],
+  '货号为空的组品名格只有一行，不印「未填」')
+assert.ok(textsOf(blankSkuLayout).indexOf('未填') < 0)
+
+// ---------------------------------------------------------------------------
+// 6) 等宽：同一次导出里所有胶囊宽度相同（每排枚数因此固定、上下排对齐成列）。
+// ---------------------------------------------------------------------------
+function assertEqualPillWidth(layout, label) {
+  const pills = pillCmds(layout)
+  assert.ok(pills.length > 0, label + '：一枚胶囊都没有，等宽断言会空转')
+  const widths = uniq(pills.map(function (item) {
+    return item.w
+  }))
+  assert.strictEqual(widths.length, 1,
+    label + '：同一次导出里胶囊宽度应当全部相同，实测 ' + JSON.stringify(widths))
+  const heights = uniq(pills.map(function (item) {
+    return item.h
+  }))
+  assert.strictEqual(heights.length, 1,
+    label + '：胶囊高度应当全部相同（高度是常量，不随文字长短变），实测 ' + JSON.stringify(heights))
+}
+
+// ---------------------------------------------------------------------------
+// 7) 同一规格出现多行时**不许合并、不许覆盖**。矩阵版这里防的是「同一 (行,列) 格被后写的行
+//    覆盖先写的」，代价是「可见格之和 != 小计」。胶囊版没有格，但同一个失效形态换个门进来
+//    仍然可能：有人给胶囊按规格去重，两条 (黑色,S) 就只剩一枚、件数丢一半。
+// ---------------------------------------------------------------------------
+const dupSpecLines = [
+  specLine({ id: 'dup-a', productId: 'D', specParts: [{ name: '颜色', value: '黑色' }, { name: '尺码', value: 'S' }], qtyText: '2', amountText: '118.00' }),
+  specLine({ id: 'dup-b', productId: 'D', specParts: [{ name: '颜色', value: '黑色' }, { name: '尺码', value: 'S' }], qtyText: '3', amountText: '177.00' }),
+  specLine({ id: 'dup-c', productId: 'D', specParts: [{ name: '颜色', value: '黑色' }, { name: '尺码', value: 'M' }], qtyText: '4', amountText: '236.00' })
+]
+const dupLayout = slipImage.layoutSlip(pillFixtureSlip(dupSpecLines))
+assert.deepStrictEqual(
+  summaryRowsOf(dupLayout, '同规格两行')[0].pillTexts,
+  ['黑色/S ×2', '黑色/S ×3', '黑色/M ×4', '小计 9 件'],
+  '同规格的两条流水各出一枚胶囊，不许合并或覆盖；合计是全部之和 2+3+4=9'
+)
+
+// ---------------------------------------------------------------------------
+// 8) 无规格的行：数量格退回纯数字，不画胶囊；和有规格的商品混排时互不干扰。
+//    （矩阵版这里是「A 节矩阵化、B 节退回平铺，两者同表互不干扰」，同一件事换了形态。）
+// ---------------------------------------------------------------------------
+const mixedShapeLines = gridLines(['黑色', '白色'], ['S', 'M', 'L']).concat([
+  specLine({ id: 'milk', productId: 'MILK', productName: '纯牛奶 250ml', sku: 'MK-001', qtyText: '6', priceText: '4.50', amountText: '27.00' })
+])
+const mixedShapeLayout = slipImage.layoutSlip(pillFixtureSlip(mixedShapeLines))
+const mixedShapeRows = summaryRowsOf(mixedShapeLayout, '有规格+无规格混排')
+assert.strictEqual(mixedShapeRows.length, 2)
+assert.strictEqual(mixedShapeRows[0].pillTexts.length, 7, '有规格那组：6 枚规格胶囊 + 1 枚合计')
+assert.deepStrictEqual(mixedShapeRows[1].pillTexts, [], '无规格那组一枚胶囊都不画')
+assert.deepStrictEqual(mixedShapeRows[1].plainQty, ['6'], '无规格那组数量格退回纯数字')
+assert.deepStrictEqual(mixedShapeRows[1].name, ['纯牛奶 250ml', 'MK-001'])
+
+// 两个同名无货号商品各自 2 色 x 3 码：必须各成一组、各自算合计（21 / 57 件），
+// 不能因为品名相同被并成一组求和（78 件）。
+function productGrid(productId, colors, startQty) {
   const lines = []
   let n = startQty
   colors.forEach(function (color) {
@@ -1236,321 +1207,431 @@ function b4ProductGrid(productId, colors, startQty) {
   })
   return lines
 }
-const b4SameNameLines = b4ProductGrid('p-1', ['黑色', '白色'], 1).concat(b4ProductGrid('p-2', ['红色', '蓝色'], 7))
-const b4SameNameLayout = slipImage.layoutSlip(matrixFixtureSlip(b4SameNameLines))
+const sameNameLines = productGrid('p-1', ['黑色', '白色'], 1).concat(productGrid('p-2', ['红色', '蓝色'], 7))
+const sameNameLayout = slipImage.layoutSlip(pillFixtureSlip(sameNameLines))
 assert.deepStrictEqual(
-  b4Texts(b4SameNameLayout).filter(function (t) { return /^小计 .+ 件$/.test(t) }),
+  textCmds(sameNameLayout).filter(function (item) {
+    return /^小计 .+ 件$/.test(item.text)
+  }).map(function (item) {
+    return item.text
+  }),
   ['小计 21 件', '小计 57 件'],
-  '两个同名无货号商品必须各自成节、各自算小计，不能并成一节求和'
+  '两个同名无货号商品必须各自成组、各自算合计，不能并成一组求和'
 )
-b4AssertQtyClosure(b4SameNameLayout, '同名不同商品', 2, true)
 
-// ---- 4-4 缺陷 3：矩阵节头长品名不许压到单价上、更不许画出画布 --------------------
-// 明细态品名走 wrapCell 受列宽约束，节头这一行没有列，得自己算可用宽。
-function b4LongNameLines(name) {
+// ---------------------------------------------------------------------------
+// 9) 算术不变量：从**实际画出来的文本**反解，检查三层口径对得上——
+//      各胶囊件数之和 == 合计胶囊 N（在 assertTotalPill 里）
+//      各行件数之和   == 底部汇总区「总数」
+//      各行金额之和   == 各条流水金额之和
+//    再加一条客户在单子上真会做的算式：**本行金额 == 本行件数之和 x 本行单价**。
+//    最后这条只对「金额 == 件数 x 单价」的夹具成立，所以由调用方声明（priceTimesQty）。
+//    这一层不依赖手算期望值，加夹具不用改断言。
+// ---------------------------------------------------------------------------
+function assertArithmetic(lines, label, priceTimesQty) {
+  const layout = slipImage.layoutSlip(pillFixtureSlip(lines))
+  const rows = summaryRowsOf(layout, label)
+  let slipQty = 0
+  rows.forEach(function (row, index) {
+    const spec = specPillsOf(row)
+    let qty
+    if (spec.length) {
+      qty = spec.reduce(function (acc, item) {
+        return acc + pillQty(item, label + ' 第' + index + '行')
+      }, 0)
+      assertTotalPill(row, label + ' 第' + index + '行')
+    } else {
+      assert.strictEqual(row.plainQty.length, 1,
+        label + '：第' + index + '行没有胶囊，数量格应当恰好一个数字，实测 ' + JSON.stringify(row.plainQty))
+      qty = Number(row.plainQty[0])
+    }
+    if (priceTimesQty) {
+      const expect = (Math.round(qty * Number(row.price) * 100) / 100).toFixed(2)
+      assert.strictEqual(row.amount, expect,
+        label + '：第' + index + '行金额 ' + row.amount + ' != 件数之和 ' + qty
+          + ' x 单价 ' + row.price + ' = ' + expect
+          + '（这就是客户拿着单子核账的那条算式，对不上代价很高）')
+    }
+    slipQty += qty
+  })
+  assert.strictEqual(slipQty + ' 件', labelValueText(layout, '总数'),
+    label + '：各行件数之和 ' + slipQty + ' 件 != 单据总数 ' + labelValueText(layout, '总数'))
+  const drawnSum = rows.reduce(function (acc, row) {
+    return acc + Number(row.amount)
+  }, 0)
+  const lineSum = lines.reduce(function (acc, line) {
+    return acc + Number(line.amountText)
+  }, 0)
+  assert.strictEqual(Math.round(drawnSum * 100), Math.round(lineSum * 100),
+    label + '：各行金额之和 ' + drawnSum.toFixed(2) + ' != 各条流水金额之和 ' + lineSum.toFixed(2))
+}
+
+// ---------------------------------------------------------------------------
+// 夹具定义。下面 10) 和 11) 两节共用。里面既有本节新造的，也有矩阵版留下来、当年抓过真
+// bug 的那几个（钢材 9 位数单价、长品名、6 列长取值）——矩阵形态没了但夹具还危险，留着。
+// ---------------------------------------------------------------------------
+function nCharSizes(n, charCount) {
+  const digits = ['一', '二', '三', '四', '五', '六', '七', '八', '九', '十']
+  const list = []
+  for (let i = 0; i < n; i++) list.push(digits[i] + '码'.repeat(charCount - 1))
+  return list
+}
+const col3Lines = gridLines(['黑色', '白色', '蓝色'], nCharSizes(6, 3))
+const col13Lines = gridLines(['黑色', '白色', '蓝色'], nCharSizes(6, 13))
+// 钢材：长品名 + 长货号 + 9 位数单价 + 12 位数金额，一起把可用宽度挤到底。
+// 金额取整数倍，好让「金额 == 件数 x 单价」那条不变量在这条夹具上也成立。
+const steelLines = [
+  specLine({
+    id: 'steel-1',
+    productId: 'STEEL',
+    productName: '钢材钢材钢材钢材钢材',
+    sku: 'ST-00000001',
+    specParts: [{ name: '材质', value: '碳钢A型号' }, { name: '规格', value: '6.0毫米规格' }],
+    qtyText: '1000',
+    priceText: '123456789.00',
+    amountText: '123456789000.00'
+  }),
+  specLine({
+    id: 'steel-2',
+    productId: 'STEEL',
+    productName: '钢材钢材钢材钢材钢材',
+    sku: 'ST-00000001',
+    specParts: [{ name: '材质', value: '碳钢A型号' }, { name: '规格', value: '8.0毫米规格' }],
+    qtyText: '2000',
+    priceText: '123456789.00',
+    amountText: '246913578000.00'
+  })
+]
+const longName20 = '超'.repeat(20)
+const longName36 = '超长'.repeat(18)
+const longName60 = '超长'.repeat(30)
+function longNameLines(name) {
   return gridLines(['黑色', '白色'], ['S', 'M', 'L']).map(function (line) {
-    return Object.assign({}, line, { productName: name, sku: '' })
+    return Object.assign({}, line, { productName: name, sku: 'TS-005' })
   })
 }
-// 取节头那几行文字：从 ¥单价 往回收，收到不是「贴左边距的 left 文本」为止。
-function b4AssertHeadFits(layout, priceText, fullName, label) {
-  const cmds = textCmds(layout)
-  const at = cmds.findIndex(function (c) {
-    return c.align === 'right' && c.text === '¥' + priceText
+const grid3x4 = gridLines(['黑色', '白色', '灰色'], ['S', 'M', 'L', 'XL'])
+const grid5x6 = gridLines(['黑', '白', '灰', '红', '蓝'].map(function (c) {
+  return c + '色'
+}), ['S', 'M', 'L', 'XL', '2XL', '3XL'])
+
+// ---------------------------------------------------------------------------
+// 10) 长品名：不许压到数量列的胶囊上，更不许画出画布。
+//     矩阵版这条钉的是「节头长品名压到节头单价上」。胶囊版没有节头、品名回到了列里，
+//     但**同一个失效形态换了个门进来**：汇总态品名格走的是 col.textLines（品名 / 货号两行），
+//     而 layoutTable 原本对 textLines 是照搬不折行的——列宽是 fitColumns 压过的，
+//     20 个汉字就已经盖住数量列（实测右边界 1180 > 品名列右边界 868），
+//     36 个字直接画到画布外（右边界 2076 > 画布 1700），导出图上那截字就没了。
+//     明细态品名走 wrapCell 没这个毛病，是汇总态改用 textLines 之后新出的。
+//     **这是本次迁移逮到的实现缺陷，已在 utils/slip-image.js 的 layoutTable 里修掉。**
+// ---------------------------------------------------------------------------
+function assertNameCellFits(layout, fullName, label) {
+  // 品名列的右边界 = 最左边那条竖分隔线（layoutTable 给 defs.slice(1) 每列画一条）。
+  const bounds = layout.commands.filter(function (item) {
+    return item.type === 'line' && item.x1 === item.x2
+  }).map(function (item) {
+    return item.x1
+  }).sort(function (a, b) {
+    return a - b
   })
-  assert.ok(at > 0, label + '：找不到矩阵节头单价 ¥' + priceText)
-  const price = cmds[at]
-  const pieces = []
-  for (let i = at - 1; i >= 0; i--) {
-    if (cmds[i].align !== 'left' || cmds[i].x !== B4_HEAD_TEXT_X) break
-    pieces.unshift(cmds[i])
-  }
-  assert.ok(pieces.length > 0, label + '：节头没画出品名')
-  assert.strictEqual(pieces.map(function (c) { return c.text }).join(''), fullName,
-    label + '：节头品名被截断/改写了，画出来的是 '
-      + JSON.stringify(pieces.map(function (c) { return c.text })))
-  const priceLeft = price.x - slipImage.estimateWidth(price.text, price.font)
+  assert.ok(bounds.length >= 3, label + '：四列表格应当有三条竖分隔线，实测 ' + bounds.length + ' 条')
+  const nameRight = bounds[0]
+  const pieces = textCmds(layout).filter(function (item) {
+    return item.align === 'left' && item.x === PAD + CELL_PAD_X && /^[超长]+$/.test(item.text)
+  })
+  assert.ok(pieces.length > 0, label + '：品名一个字都没画出来')
+  assert.strictEqual(pieces.map(function (item) {
+    return item.text
+  }).join(''), fullName,
+  label + '：品名被截断/改写了，画出来的是 ' + JSON.stringify(pieces.map(function (c) {
+    return c.text
+  })))
+  const bands = tableBands(layout, label).bands
   pieces.forEach(function (piece, index) {
     const right = piece.x + slipImage.estimateWidth(piece.text, piece.font)
-    assert.ok(right <= priceLeft + 0.5,
-      label + '：节头第' + index + '行右边界 ' + right.toFixed(1)
-        + ' 压到单价左边界 ' + priceLeft.toFixed(1) + ' 上了')
+    assert.ok(right <= nameRight + 0.5,
+      label + '：品名第' + index + '行右边界 ' + right.toFixed(1)
+        + ' 越过品名列右边界 ' + nameRight + '，盖到数量列的胶囊上了')
     assert.ok(right <= layout.width + 0.5,
-      label + '：节头第' + index + '行右边界 ' + right.toFixed(1)
+      label + '：品名第' + index + '行右边界 ' + right.toFixed(1)
         + ' 画到画布(' + layout.width + ')外了')
+    // 竖向也要装得下：品名折出来的行不许越过本行下沿。
+    // **别把这条当成「行高跟着行数长」的守卫**——那件事真正的守卫是下面 90 字品名那条
+    // contentHeight 断言（实测过：把品名块的量高改坏，先红的是它）。这一条是**冗余的**：
+    // summaryRowsOf 按横分隔线分带取内容，任何一行文字跑出自己那一带都会让 row.name 变形，
+    // 上面每一条 row.name 断言都会先响。留着它只是为了在长品名这几个夹具上把「文字在本行内」
+    // 这句话直接写出来、失败时报的是坐标而不是「名字数组对不上」。
+    const band = bands.find(function (b) {
+      return piece.y > b.top - 0.5 && piece.y < b.bottom + 0.5
+    })
+    assert.ok(band, label + '：品名第' + index + '行 y=' + piece.y + ' 落在任何一行的上下沿之外')
+    assert.ok(piece.y + LINE_H <= band.bottom + 0.5,
+      label + '：品名第' + index + '行底端 ' + (piece.y + LINE_H)
+        + ' 越过本行下沿 ' + band.bottom + '（行高没跟着折行的行数长）')
   })
-  // 折出来的行不许压到下面那行列表头上：节头高度要跟着行数长。
-  const last = pieces[pieces.length - 1]
-  assert.ok(last.y + B4_LINE_H <= cmds[at + 1].y + 0.5,
-    label + '：节头最后一行 y=' + last.y + ' 压到列表头 y=' + cmds[at + 1].y
-      + ' 上了（节头高度没跟着行数长）')
   return pieces
 }
-// 阈值是实测出来的，不是估的：在改动前那版「51px 单行硬画」上扫 1..60 个汉字，
-// 单价 ¥59.00、画布 1700 时 **28 字起**节头右边界压过单价左边界、**33 字起**画出画布。
-// 所以下面挑 28（压单价的第一个）和 36（已经出画布）两个点，外加 60 个字看折行。
-// 别把这两个数当常量用：阈值随单价位数走，单价越长越早出事。
-const b4Name28 = '超'.repeat(28)
-const b4Long28 = slipImage.layoutSlip(matrixFixtureSlip(b4LongNameLines(b4Name28)))
-b4AssertHeadFits(b4Long28, '59.00', b4Name28, '28字品名节头')
-b4AssertInside(b4Long28, '28字品名节头')
-// 36 个汉字：改动前整段画到画布 1700 外。
-const b4Name36 = '超长'.repeat(18)
-const b4Long36 = slipImage.layoutSlip(matrixFixtureSlip(b4LongNameLines(b4Name36)))
-b4AssertHeadFits(b4Long36, '59.00', b4Name36, '36字品名节头')
-b4AssertInside(b4Long36, '36字品名节头')
-// 60 个汉字：降到最小字号也塞不下，必须折行，节头跟着变高。
-const b4Name60 = '超长'.repeat(30)
-const b4Long60 = slipImage.layoutSlip(matrixFixtureSlip(b4LongNameLines(b4Name60)))
-const b4Long60Pieces = b4AssertHeadFits(b4Long60, '59.00', b4Name60, '60字品名节头')
-assert.ok(b4Long60Pieces.length >= 2,
-  '60字品名节头：应当折行，实际只画了 ' + b4Long60Pieces.length + ' 行')
-b4AssertInside(b4Long60, '60字品名节头')
-assert.ok(b4Long60.contentHeight > b4Long36.contentHeight,
-  '60字品名节头：折行把节头撑高了，整张图应当更高')
-// 短品名不受影响：还是单行、还是 FONT.head，不许被这条改动顺手降了字号。
-const b4ShortHead = textCmds(matrixLayout).find(function (c) {
-  return c.text === 'TS-005 短袖 T恤'
+const long20Layout = slipImage.layoutSlip(pillFixtureSlip(longNameLines(longName20)))
+const long36Layout = slipImage.layoutSlip(pillFixtureSlip(longNameLines(longName36)))
+const long60Layout = slipImage.layoutSlip(pillFixtureSlip(longNameLines(longName60)))
+const long20Pieces = assertNameCellFits(long20Layout, longName20, '20字品名')
+const long36Pieces = assertNameCellFits(long36Layout, longName36, '36字品名')
+const long60Pieces = assertNameCellFits(long60Layout, longName60, '60字品名')
+assert.ok(long20Pieces.length >= 2, '20字品名：应当折行，实际只画了 ' + long20Pieces.length + ' 行')
+assert.ok(long60Pieces.length > long36Pieces.length,
+  '60字品名：折出来的行数应当比 36 字更多，实测 ' + long60Pieces.length + ' vs ' + long36Pieces.length)
+// **这里不能写「品名越长图越高」**：这批夹具的行高是**胶囊块**决定的（6 枚规格 + 1 枚合计
+// 一枚一排 = 7 排 x 74 = 518），品名折到 7 行（455）都还没顶到它，36 / 60 字实测**一样高**
+// （contentHeight 都是 1364）。要看到「行高跟着品名长」，得让品名块真的超过胶囊块：
+// 90 个汉字折 7 行 = 455 + 上下内边距，这时整张图才多出 2px（实测 1364 -> 1366）。
+const longName90 = '超长'.repeat(45)
+const long90Layout = slipImage.layoutSlip(pillFixtureSlip(longNameLines(longName90)))
+assertNameCellFits(long90Layout, longName90, '90字品名')
+assert.strictEqual(long36Layout.contentHeight, long60Layout.contentHeight,
+  '36 字和 60 字品名的行高都由胶囊块决定，整张图应当一样高')
+assert.ok(long90Layout.contentHeight > long60Layout.contentHeight,
+  '90字品名：品名块终于超过胶囊块，行高必须跟着长，实测 '
+    + long90Layout.contentHeight + ' vs ' + long60Layout.contentHeight)
+// 短品名不受影响：还是一行、还是 FONT.name，不许被这条改动顺手降了字号。
+const shortNameCmd = textCmds(layout2x2).find(function (item) {
+  return item.text === '短袖 T恤'
 })
-assert.strictEqual(b4ShortHead.font, slipImage.FONT.head, '短品名节头不该被降字号')
+assert.strictEqual(shortNameCmd.font, slipImage.FONT.name, '短品名不该被降字号')
 
-// ---- 4-5 越界扫描铺到全部矩阵/混排夹具（含平铺节），两态各跑一遍 ------------------
-;[
-  ['3色×3码缺一格', matrixSlip],
-  ['6列×3字', matrixFixtureSlip(col3Lines)],
-  ['6列×4字(退回平铺)', matrixFixtureSlip(col4Lines)],
-  ['6列×13字(退回平铺)', matrixFixtureSlip(col13Lines)],
-  ['混排:矩阵节+平铺节', matrixFixtureSlip(mixedMatrixLines.concat(mixedFlatLines))],
-  ['混排:钢材9位数金额', matrixFixtureSlip(overflowMatrixLines.concat(overflowFlatLines))],
-  ['两个平铺节合并', matrixFixtureSlip(mergeFlatFirst.concat(mergeFlatSecond).concat(mergeMatrixThird))],
-  ['矩阵节隔开两段平铺', matrixFixtureSlip(splitMatrixFirst.concat(splitFlatMiddle).concat(splitMatrixSecond).concat(splitFlatLast))],
-  ['列口径保真', matrixFixtureSlip(columnFidelityMatrix.concat(columnFidelityFlat))],
-  ['货号为空的矩阵节', matrixFixtureSlip(blankSkuMatrixLines)],
-  ['同格两行累加', matrixFixtureSlip(dupCellLines)],
-  ['同名不同商品各成一节', matrixFixtureSlip(b4SameNameLines)],
-  ['28字品名节头', matrixFixtureSlip(b4LongNameLines(b4Name28))],
-  ['36字品名节头', matrixFixtureSlip(b4LongNameLines(b4Name36))],
-  ['60字品名节头', matrixFixtureSlip(b4LongNameLines(b4Name60))],
-  ['单价不一致(平铺)', matrixFixtureSlip(priceMismatchLines)],
-  ['轴数为3(平铺)', matrixFixtureSlip(threeAxisLines)],
-  ['列轴7个取值(平铺)', matrixFixtureSlip(sizeOnlyLines(sizeList))]
-].forEach(function (entry) {
-  b4AssertInside(slipImage.layoutSlip(entry[1]), '越界扫描/' + entry[0])
-  b4AssertInside(slipImage.layoutSlip(entry[1], null, { exportStyle: 'detail' }), '越界扫描(detail)/' + entry[0])
-})
-// 上面这批里必须真有「矩阵节 + 平铺节」同时出现的，否则「盖到平铺节」是空话。
-;[
-  ['混排:矩阵节+平铺节', mixedMatrixLines.concat(mixedFlatLines)],
-  ['混排:钢材9位数金额', overflowMatrixLines.concat(overflowFlatLines)],
-  ['矩阵节隔开两段平铺', splitMatrixFirst.concat(splitFlatMiddle).concat(splitMatrixSecond).concat(splitFlatLast)]
-].forEach(function (entry) {
-  const layout = slipImage.layoutSlip(matrixFixtureSlip(entry[1]))
-  assert.ok(hasText(layout, '小计'), entry[0] + '：应当有矩阵节')
-  assert.ok(hasText(layout, '货号'), entry[0] + '：应当有平铺节（平铺节才画「货号」表头）')
+// ---------------------------------------------------------------------------
+// 11) 夹具清单扫描：几何自检 / 等宽 / 越界扫描 / 算术闭合铺到全部夹具上，越界扫描两态各跑
+//     一遍。**放在 10) 之后**：越界扫描是粗筛（只看画布边界），长品名那条是细筛（还看列
+//     边界）；顺序反过来的话 36 字品名会先红在越界扫描上，那条专用钉子永远轮不到自己响。
+// ---------------------------------------------------------------------------
+const PILL_FIXTURES = [
+  ['单商品单规格', singleSpecLines],
+  ['2色x2码', gridLines2x2],
+  ['3色x4码', grid3x4],
+  ['5色x6码', grid5x6],
+  ['同商品两种单价', twoPriceLines],
+  ['同规格两行', dupSpecLines],
+  ['货号为空', blankSkuLines],
+  ['同名不同商品', sameNameLines],
+  ['有规格+无规格混排', mixedShapeLines],
+  ['6列x3字', col3Lines],
+  ['6列x13字', col13Lines],
+  ['钢材9位数单价', gridLines(['黑色', '白色'], ['S', 'M', 'L']).concat(steelLines)],
+  ['20字品名', longNameLines(longName20)],
+  ['36字品名', longNameLines(longName36)],
+  ['60字品名', longNameLines(longName60)]
+]
+
+PILL_FIXTURES.forEach(function (entry) {
+  const label = entry[0]
+  const layout = slipImage.layoutSlip(pillFixtureSlip(entry[1]))
+  assertPillGeometry(layout, '几何自检/' + label)
+  assertEqualPillWidth(layout, '等宽/' + label)
+  assertInside(layout, '越界扫描/' + label)
+  assertInside(slipImage.layoutSlip(pillFixtureSlip(entry[1]), null, { exportStyle: 'detail' }),
+    '越界扫描(detail)/' + label)
+  // 夹具全部满足「金额 == 件数 x 单价」：gridLines 是这么造的，手写的几条也照着对齐了。
+  assertArithmetic(entry[1], '算术闭合/' + label, true)
 })
 
-// ---- 4-6 缺陷 5：exportStyle 的取值语义按事实钉住 ------------------------------
-// 老注释写「不传 = 老路径、一条分节逻辑都不会跑」，实际是「不传 -> summary -> 照样分节」。
+
+// ---------------------------------------------------------------------------
+// 12) 高度：这就是改动想换来的东西。**按实测钉，不钉一个没验证过的不等式。**
+//     一组里有 2 条以上规格时汇总态更矮（规格并进一行，省掉的是行）。
+//     **单商品单规格反而更高，而且正好高一个 LINE_H(65px)**——那是货号第二行的钱：
+//     明细态货号自成一列、和品名同一行；汇总态货号在品名格第二行，行高多一行。
+//     一分不多一分不少，所以用严格相等钉，不写「大约」。
+// ---------------------------------------------------------------------------
+;[
+  ['2色x2码', gridLines2x2],
+  ['3色x4码', grid3x4],
+  ['5色x6码', grid5x6],
+  ['同名不同商品', sameNameLines],
+  ['货号为空', blankSkuLines]
+].forEach(function (entry) {
+  const su = slipImage.layoutSlip(pillFixtureSlip(entry[1]))
+  const de = slipImage.layoutSlip(pillFixtureSlip(entry[1]), null, { exportStyle: 'detail' })
+  assert.ok(su.contentHeight < de.contentHeight,
+    '高度/' + entry[0] + '：每组都有 2 条以上规格，汇总态应当更矮，'
+      + '实测 汇总 ' + su.contentHeight + ' vs 明细 ' + de.contentHeight)
+})
+;[
+  ['单商品单规格', singleSpecLines],
+  ['单商品单规格(长货号)', [specLine({
+    id: 'z',
+    productId: 'Z',
+    productName: '纯牛奶 250ml',
+    sku: 'MK-000123',
+    specParts: [{ name: '口味', value: '原味' }],
+    qtyText: '6',
+    priceText: '4.50',
+    amountText: '27.00'
+  })]]
+].forEach(function (entry) {
+  const su = slipImage.layoutSlip(pillFixtureSlip(entry[1]))
+  const de = slipImage.layoutSlip(pillFixtureSlip(entry[1]), null, { exportStyle: 'detail' })
+  assert.strictEqual(su.contentHeight - de.contentHeight, LINE_H,
+    '高度/' + entry[0] + '：单规格的组，汇总态比明细态**正好高一个 LINE_H(' + LINE_H + ')**，'
+      + '那是货号第二行的高度，别的开销一分都不该有。实测 汇总 ' + su.contentHeight
+      + ' - 明细 ' + de.contentHeight + ' = ' + (su.contentHeight - de.contentHeight))
+})
+
+// 行高不许无声长高。矩阵版这条钉的是「单行节头的底色条严格等于 98」——当年一个
+// Math.max(headH, CELL_PAD_Y*2 + n*LINE_H) 让每一张既有单据的节头无条件长了 13px，而旁边
+// 的注释声称「单行时逐字相同」，没有任何断言拦。胶囊版没有节头，等价物是**表头带 + 行高**：
+// 这两个数一动，每一张单据都跟着变高。
+// 用**字面量严格相等**，不写「!= 某个坏值」——后者只是针对那一个坏值的绊线；也不从常量
+// 重新推一遍——那等于把生产代码抄进测试再断言自己写的东西。
+;[['汇总态', layout2x2], ['明细态', detail2x2]].forEach(function (entry) {
+  const headRects = entry[1].commands.filter(function (item) {
+    return item.type === 'rect' && item.fill === '#F3F4F6'
+  })
+  // 阳性对照：过滤一旦失效，下面那条就是假绿。
+  assert.strictEqual(headRects.length, 1,
+    entry[0] + '：应当恰好抓到 1 条 #F3F4F6 的表头底色条，实测 ' + headRects.length
+      + ' 条。抓不到就说明过滤失效，下面那条断言是假绿')
+  assert.strictEqual(headRects[0].h, 98, entry[0] + '：表头带高度必须严格等于 98')
+  assert.strictEqual(tableBands(entry[1], entry[0]).headH, 98,
+    entry[0] + '：表头下沿到表格上沿的距离也必须是 98（底色条和分隔线不许对不上）')
+})
+function rowHeightsOf(layout, label) {
+  return summaryRowsOf(layout, label).map(function (row) {
+    return row.band.bottom - row.band.top
+  })
+}
+assert.deepStrictEqual(rowHeightsOf(layout2x2, '2色x2码'), [194],
+  '2色x2码汇总行高必须严格等于 194（= 上下内边距 46 + 两排胶囊 2x74）。'
+    + '胶囊高度或排距一动，每一张汇总单都跟着变高，这条会红')
+assert.deepStrictEqual(rowHeightsOf(singleSpecLayout, '单商品单规格'), [176],
+  '单商品单规格汇总行高必须严格等于 176（= 46 + 品名格两行 2x65；两行品名比一排胶囊的 74 高，'
+    + '所以是品名格决定行高）')
+assert.deepStrictEqual(rowHeightsOf(detail2x2, '2色x2码明细'), [111, 111, 111, 111],
+  '明细态行高必须严格等于 111（= 46 + 一行文字 65），一行一条流水')
+
+// ---------------------------------------------------------------------------
+// 13) 画布宽度：汇总态不该比明细态更宽（更宽 = 全单字号变小，那是这次改动最不想付的代价）。
+//     矩阵版这条是「R1 明确要求」的本质不变量。胶囊版**只在常规规格取值下成立**：胶囊列的
+//     下限是「最宽的那一枚」（再窄就要截断规格，单据上不许），所以规格串长到一定程度就会把
+//     画布撑宽。实测（2026-09-07，3 个行取值 x 6 个列取值）：
+//       每个规格取值 <= 13 个汉字 -> 汇总 1700 == 明细 1700
+//       14 个汉字起              -> 汇总 1732 >  明细 1700
+//     所以这条钉在 <=13 字这一段上（含 6列x13字 这个已经很极端的组合）。14 字以上撑宽是
+//     **已知且尚未定夺的取舍**，不在这里钉一个假的不等式；越界扫描仍然盖着那一段，
+//     所以撑宽只会让字变小，不会让内容消失。
+// ---------------------------------------------------------------------------
+;[
+  ['单商品单规格', singleSpecLines],
+  ['2色x2码', gridLines2x2],
+  ['3色x4码', grid3x4],
+  ['同商品两种单价', twoPriceLines],
+  ['有规格+无规格混排', mixedShapeLines],
+  ['6列x3字', col3Lines],
+  ['6列x13字', col13Lines],
+  ['60字品名', longNameLines(longName60)]
+].forEach(function (entry) {
+  const su = slipImage.layoutSlip(pillFixtureSlip(entry[1])).width
+  const de = slipImage.layoutSlip(pillFixtureSlip(entry[1]), null, { exportStyle: 'detail' }).width
+  assert.ok(su <= de, '画布宽度/' + entry[0] + '：汇总(' + su + ') 不该比明细(' + de + ')更宽')
+})
+
+// ---------------------------------------------------------------------------
+// 14) exportStyle 的取值语义：**只认字面 'detail'**，其余一切取值——包括不传 options、
+//     传 undefined、传别的字符串——都解析成 'summary'。这条从矩阵版就成立，换成胶囊之后照旧。
+// ---------------------------------------------------------------------------
+const styleSlip = pillFixtureSlip(gridLines2x2)
 assert.deepStrictEqual(
-  slipImage.layoutSlip(matrixSlip),
-  slipImage.layoutSlip(matrixSlip, null, { exportStyle: 'summary' }),
+  slipImage.layoutSlip(styleSlip),
+  slipImage.layoutSlip(styleSlip, null, { exportStyle: 'summary' }),
   '不传 options 必须和显式 summary 逐字段相同'
 )
 assert.deepStrictEqual(
-  slipImage.layoutSlip(matrixSlip),
-  slipImage.layoutSlip(matrixSlip, null, { exportStyle: '不认识的值' }),
+  slipImage.layoutSlip(styleSlip),
+  slipImage.layoutSlip(styleSlip, null, { exportStyle: '不认识的值' }),
   '不认识的 exportStyle 必须夹成 summary'
 )
 assert.notDeepStrictEqual(
-  slipImage.layoutSlip(matrixSlip),
-  slipImage.layoutSlip(matrixSlip, null, { exportStyle: 'detail' }),
-  '不传 options 不等于 detail —— 它会分节、会矩阵化'
+  slipImage.layoutSlip(styleSlip),
+  slipImage.layoutSlip(styleSlip, null, { exportStyle: 'detail' }),
+  '不传 options 不等于 detail'
 )
-assert.ok(hasText(slipImage.layoutSlip(matrixSlip), '小计'),
-  '不传 options 时矩阵化照跑（这就是「不传 != 老路径」的直接证据）')
+// 直接证据：不传 options 时胶囊照画。上面那条 notDeepStrictEqual 只说明「两者不同」，
+// 不说明「默认走的是汇总态」。
+assert.ok(pillCmds(slipImage.layoutSlip(styleSlip)).length > 0,
+  '不传 options 时胶囊照画——这就是「不传 = summary」的直接证据')
 
-// ---- 4-6b 规格取值撞上 Object.prototype 的成员名 ------------------------
-// 矩阵格子用 `grid[行轴值][列轴值]` 寻址，而规格取值是店主自由输入的字符串。
-// 用 `{}` 做容器时，取值正好叫 `constructor` / `toString` / `valueOf` /
-// `hasOwnProperty` / `__proto__` 会从原型上读到一个真值，
-// `if (!grid[r][c])` 判假、不初始化成数组，下一行 `.push` 直接抛
-// `grid[r][c].push is not a function`——**整张送货单导不出来**。
+// ---------------------------------------------------------------------------
+// 15) 单价 / 规格取值撞上 Object.prototype 的成员名。
+//     矩阵版这里防的是 grid[行轴值][列轴值]：用 {} 做容器时，取值正好叫 constructor /
+//     toString / valueOf / hasOwnProperty / __proto__ 会从原型上读到一个真值，
+//     `if (!grid[r][c])` 判假、不初始化成数组，下一行 .push 直接抛——**整张送货单导不出来**；
+//     __proto__ 那一支还会把格子写到 Object.prototype 上，泄到下一张单，
+//     客户可能在自己的单子上看到别人的货。
+//     grid 随交叉表一起删了，但**拿用户数据当对象键这件事胶囊版还在做一次**：
+//     slicePillGroups 按 priceText 分组。所以判据整条搬过来，钉到那个键上。
+//     （实测：把 slicePillGroups 里的 Object.create(null) 改回 {}，下面这批当场抛
+//      "Cannot read properties of undefined (reading 'push')"。）
 //
-// **会抛异常的只有列轴**——这是下面两轴都要测的原因。
-// **但行轴不是无害**（这里曾经写的是「行轴撞上无害」，错的，而且它读起来
-// 像结论）：`__proto__` 那一支会把格子数组写到 `Object.prototype` 上，
-// **同一张单当场就印错**（两行都印 5/7/9）、且会泄到下一张。
-// `constructor` 那一支不印错、也不跨单泄漏，只污染全局 `Object`。
-// 详见下面 assertNoCrossSlipLeak 那段的说明。
-// 所以下面两轴都要测：只测行轴会结构性地漏掉真正会崩的那一支。
+//     sliceLineSections 的 key 带 'id' / 'name' 前缀，撞不上原型成员名，所以那一处不在这条
+//     断言的射程里——但品名和规格取值仍然是店主自由输入，一并跑一遍「不崩且真的画出来」，
+//     防的是有人哪天把前缀去掉。
+// ---------------------------------------------------------------------------
 const PROTO_NAMES = ['constructor', 'toString', 'valueOf', 'hasOwnProperty', '__proto__']
 
 PROTO_NAMES.forEach(function (name) {
-  // 列轴（规格二）取名为原型名——会崩的那一支
-  const colLines = gridLines(['黑色', '白色'], [name, 'M', 'L'])
+  // 单价撞名——会崩的那一支（slicePillGroups 的分组键）。
+  // 两条流水、单价一个正常一个叫原型名：分组要真的分成两行，不能崩、也不能并成一行。
+  const priceLines = [
+    specLine({ id: 'pn1', productId: 'PN', specParts: [{ name: '颜色', value: '黑色' }], qtyText: '1', priceText: '59.00', amountText: '59.00' }),
+    specLine({ id: 'pn2', productId: 'PN', specParts: [{ name: '颜色', value: '白色' }], qtyText: '2', priceText: name, amountText: '0.00' })
+  ]
+  let priceLayout
   assert.doesNotThrow(function () {
-    slipImage.layoutSlip(matrixFixtureSlip(colLines))
-  }, '列轴取值叫「' + name + '」时不得抛异常：'
-    + 'grid 用 {} 会从原型读到真值、跳过数组初始化，'
+    priceLayout = slipImage.layoutSlip(pillFixtureSlip(priceLines))
+  }, '单价叫「' + name + '」时不得抛异常：分组容器用 {} 会从原型读到真值、跳过数组初始化，'
     + '.push 当场抛，整张送货单导不出来')
+  assert.strictEqual(summaryRowsOf(priceLayout, '单价撞名/' + name).length, 2,
+    '单价叫「' + name + '」时仍应分成两行，不能并成一行')
+  assert.ok(hasText(priceLayout, name),
+    '单价叫「' + name + '」时这一行必须真的印出来，不能靠静默丢行来"不报错"')
 
-  // 行轴（规格一）取名为原型名——当前不崩，一并钉住防回归
-  const rowLines = gridLines([name, '白色'], ['S', 'M', 'L'])
+  // 规格取值 / 品名撞名——当前不崩，一并钉住防回归；并且要求真的画出来
+  // （否则"不抛异常"可以靠静默丢掉这一枚来满足，那是另一种丢数）。
+  const specLines = gridLines(['黑色', '白色'], [name, 'M', 'L'])
+  let specLayout
   assert.doesNotThrow(function () {
-    slipImage.layoutSlip(matrixFixtureSlip(rowLines))
-  }, '行轴取值叫「' + name + '」时不得抛异常')
+    specLayout = slipImage.layoutSlip(pillFixtureSlip(specLines))
+  }, '规格取值叫「' + name + '」时不得抛异常')
+  assert.ok(hasText(specLayout, '黑色/' + name + ' ×1'),
+    '规格取值叫「' + name + '」时这一枚胶囊必须真的画出来，不能靠静默丢掉来"不报错"')
+  assert.doesNotThrow(function () {
+    slipImage.layoutSlip(pillFixtureSlip([
+      specLine({ id: 'pn3', productName: name, sku: '', specParts: [{ name: '颜色', value: '黑色' }] })
+    ]))
+  }, '品名叫「' + name + '」时不得抛异常')
 })
 
-// 行轴撞上原型名不崩，但危害更隐蔽：`grid['constructor']` 拿到的是全局
-// `Object` 构造函数，于是 `grid[r][c] = []` 直接**写到全局 `Object` 身上**。
-// 后果分两支（别混）：
-//   · `__proto__` 写到 `Object.prototype`——下一张单新建的 `{}` 会从原型继承到
-//     上一张的行，**客户可能在自己的单子上看到别人的货**。静默、持续整个 app 会话。
-//   · `constructor` 写到 `Object` 本体，**不跨单泄漏**，只污染全局 `Object`。
-// （上一版把「客户看到别人的货」这个后果用逗号接在「不跨单泄漏」后面，
-//   按标点读等于说不泄漏的那一支会让客户看到别人的货。实测不会。）
+// 直接钉全局污染：同时查 Object 本体和 Object.prototype——写坏的那一支写到前者
+// （grid['constructor'] 拿到的是 Object 函数本体），另一支写到后者（grid['__proto__']）。
+// 后者才是会跨单据泄漏的那支：下一张单新建的 {} 从 Object.prototype 继承，上一张单的数会
+// 印到这一张上。只查一个会漏，所以两个都查。
 //
-// ---- 单行节头不得变高 ------------------------------------------------
-// 节头折行那一改曾经把高度写成 `Math.max(headH, CELL_PAD_Y*2 + n*LINE_H)`，
-// n=1 时是 `max(98, 111)` = 111——**每一张既有矩阵单的节头都无条件长高 13px**，
-// 而旁边的注释声称「单行时与改动前逐字相同」。审计逐条指令对比拉出来的：
-// 49 条里 31 条不同、contentHeight 1218→1231。
+// **查的是「本单的数据值有没有变成 Object 上的属性名」**，不是 PROTO_NAMES 本身——
+// constructor / toString / valueOf / hasOwnProperty / __proto__ 本来就是 Object.prototype
+// 自己的属性，把它们列进来这条断言会恒红（写这一版时当场踩到）。污染发生时冒出来的是
+// **内层的 key**：上面那些夹具里当过键或取值的字符串。
 //
-// 当时这个回归**没有任何断言拦**——改对了行为不补守卫，下次还会回来。
-;(function assertSingleLineHeadUnchanged() {
-  const lines = gridLines(['\u9ed1\u8272', '\u767d\u8272'], ['S', 'M', 'L'])
-  const layout = slipImage.layoutSlip(matrixFixtureSlip(lines))
-
-  // 按**对象字段**过滤，不对 JSON.stringify 跑正则——rect 的字段序是
-  // {type,x,y,w,h,fill}，`"type":"rect"[^}]*"h":(\d+)` 这种写法在 fill 之前就停了，
-  // 拿不到颜色。节头用 COLORS.header (#F3F4F6)，列表头/合计用 COLORS.total (#FAFAFA)。
-  //
-  // 【为什么这段重写了两次】最早那版是把**全表所有** rect 的 h 收进来、
-  // 再断言「98 在里面」——而列表头本来就是 98，所以那条**恒真**；
-  // 真正干活的只有「不得出现 111」，而它只是一条**针对字面量 111 的牲线**：
-  // 实测 `sectionHeadH = headH + 5`（=103）或 `headH - 10`（=88）时，不但这条绿，
-  // **整个 `npm test` 都是 exit 0**——因为折行那条断言比的是两张图的**相对**高度，
-  // 均匀平移时两边同增同减、差值不变，结构上就抓不到。
-  const headRects = layout.commands.filter(function (c) {
-    return c.type === 'rect' && c.fill === '#F3F4F6'
-  })
-
-  // 阳性对照：过滤一旦失效，下面的 forEach 会空跑、一条不断——那就是假绿。
-  assert.strictEqual(
-    headRects.length, 1,
-    '前提：这张单只有一个矩阵节，应当恰好抓到 1 条 #F3F4F6 的节头底色条，'
-      + '实测 ' + headRects.length + ' 条。抓不到就说明过滤失效，下面那条断言是假绿'
-  )
-  assert.strictEqual(
-    headRects[0].h, 98,
-    '单行节头的底色条高度必须**严格等于** 98（与折行改动前逐字相同），'
-      + '实测 ' + headRects[0].h + '。写成 Math.max(headH, CELL_PAD_Y*2 + n*LINE_H) 的话 '
-      + 'n=1 也会得到 111，每一张既有矩阵单都会无声息长高 13px。'
-      + '（用严格相等而不是「≠111」：后者只是针对 111 的牲线，103 / 88 都能溦过去。）'
-  )
-})()
-
-// 这一段重写过（2026-09-03）——上一版的「第二张单不得继承第一张」那条是**空转**的，
-// 而注释还把真正在干活的那条（全局污染）贬为「实现细节」。成因：
-// 夹具用的行轴名是 `constructor`，`grid['constructor']` 拿到的是 **`Object` 这个函数对象**，
-// 于是写到 `Object.S`；而第二张单新建的 `{}` 是从 **`Object.prototype`** 找属性，
-// 根本找不到 `Object.S`——所以那条断言在任何实现下都恒绿，**结构性不可能红**。
-//
-// 真正会跨单据泄漏的是 `__proto__` 当行轴：它写到 `Object.prototype`，而那正是
-// 下一张单的 `{}` 会继承的地方。实测（修复前）：
-//   干净的第二张单：  ["100","101","102","303","103","104","105","312"]
-//   被污染的第二张：  ["208","212","216","303","208","212","216","312"]
-// 格子印的是**上一张单的数**，而行小计还是本单的——格之和 ≠ 小计。
-//
-// 教训：断言文案声称自己在盯「实际危害」，不等于它真的盯得住。
-// 判据仍然是那句：**存不存在一个状态，能让正确实现和错误实现给出不同结果？**
-//
-// 下面两条断言**各守一种变异**，不是一条主一条副（实测出来的，不是推的）：
-//   · **只把外层改回 `{}`**：`grid['__proto__']` 读到 `Object.prototype`，写成
-//     `Object.prototype.S`——但第二张单的**内层仍是 null 原型**，找不到它，
-//     所以**不会跨单泄漏**。这一支的实际危害就是全局污染本身，
-//     能抳住它的只有下面那条 `dirty` 断言。
-//   · **两处都改回 `{}`**：第二张单的内层 `{}` 从 `Object.prototype` 继承到
-//     上一张的格子数组，这才是跨单泄漏。**但在完整套件里轮不到它来抳**：
-//     上游那条列轴 `doesNotThrow` 会先响、进程当场退出。数字序列这条是**纵深防御**：
-//     列轴那条哪天被放宽了它顶上（实测：删掉列轴那条后，它单独能红）。
-// 两条都不能删。
-;(function assertNoCrossSlipLeak() {
-  // 用 __proto__ 而不是 constructor：只有它写到 Object.prototype，才会被下一张单继承。
-  const rowName = '__proto__'
-  // 两张单的**列取值必须重叠**（都是 S/M/L），否则继承来的格子 key 对不上、泄漏不可观测。
-  const cols = ['S', 'M', 'L']
-  const first = slipImage.layoutSlip(
-    matrixFixtureSlip(gridLines([rowName, '\u767d\u8272'], cols))
-  )
-  assert.ok(first, '第一张单应当能正常排版')
-
-  // 第二张：不同的行轴取值，相同的列轴取值。把它画出来的数字序列拿出来比。
-  function digitsOf(layout) {
-    const out = []
-    JSON.stringify(layout).replace(/"text":"([^"]*)"/g, function (_, t) {
-      if (/^[0-9]+$/.test(t)) out.push(t)
-      return ''
-    })
-    return out
-  }
-  const secondLines = gridLines(['\u7ea2\u8272', '\u7eff\u8272'], cols)
-  const second = digitsOf(slipImage.layoutSlip(matrixFixtureSlip(secondLines)))
-
-  // 基准：同一份第二张单在**没有跑过第一张**时的数字序列。
-  // 这里不能重新跑一遍（环境已经被污染了），所以直接拿这份夹具自己的件数算。
-  // 按**序列逐位**比，不是「值出现过就算」——后者在泄漏后的数值恰好覆盖
-  // 得住期望集时会假绿（复审指出：上一版里 `'6'` 其实是被行小计满足的、
-  // 并非格子里的数，只是恰好还有别的值缺失才红）。
-  // 期望序列要按真实版式构造：**行小计是夹在格子中间的**
-  // （一行的几个格 → 该行小计 → 下一行…）。直接 slice 前 N 个会对不上——
-  // 我第一版就是那么写的，当场红在 ["1","2","3","6"] vs ["1","2","3","4"]。
-  const byRow = {}
-  const rowOrder = []
-  secondLines.forEach(function (l) {
-    const rv = l.specParts[0].value
-    if (!byRow[rv]) { byRow[rv] = []; rowOrder.push(rv) }
-    byRow[rv].push(l.qtyText)
-  })
-  const expected = []
-  rowOrder.forEach(function (rv) {
-    byRow[rv].forEach(function (q) { expected.push(q) })
-    expected.push(String(byRow[rv].reduce(function (a, b) { return a + Number(b) }, 0)))
-  })
-  assert.ok(expected.length > 0, '前提：第二张单夹具要有行')
-  const head = second.slice(0, expected.length)
-  assert.deepStrictEqual(
-    head, expected,
-    '第二张单的矩阵数字序列（格子 + 行小计）应当是 ' + JSON.stringify(expected)
-      + '，实测 ' + JSON.stringify(head)
-      + '——对不上就是上一张单的格子通过 Object.prototype 泄漏过来了'
-  )
-
-  // 直接钉全局污染：同时查 Object 本体和 Object.prototype——
-  // constructor 那一支污染前者，__proto__ 那一支污染后者，只查一个会漏。
+// 胶囊版的 slicePillGroups 只有一层键（priceText），单层写坏只会当场抛、不会污染全局，
+// 所以这条现在是**纵深防御**：哪天有人再引入「用户数据当两层键」的容器，它顶上。
+;(function assertNoGlobalPollution() {
+  const suspects = ['59.00', '0.00', '65.00', '4.50', 'S', 'M', 'L', '黑色', '白色', '红色', '蓝色']
   const dirty = []
   ;[Object, Object.prototype].forEach(function (target, i) {
     Object.getOwnPropertyNames(target).forEach(function (k) {
-      if (cols.indexOf(k) >= 0) dirty.push((i === 0 ? 'Object.' : 'Object.prototype.') + k)
+      if (suspects.indexOf(k) >= 0) dirty.push((i === 0 ? 'Object.' : 'Object.prototype.') + k)
     })
   })
-  assert.deepStrictEqual(
-    dirty, [],
-    '排版不得在全局 Object / Object.prototype 上写属性（实测多出：'
-      + dirty.join(', ') + '）'
-  )
+  assert.deepStrictEqual(dirty, [],
+    '排版不得在全局 Object / Object.prototype 上写属性（实测多出：' + dirty.join(', ') + '）')
 })()
-
-// 不只要求不崩，还要求真的把那一列画出来（否则“不抛异常”可以靠
-// 静默丢掉这列来满足，那是另一种丢数）。
-const protoColLayout = slipImage.layoutSlip(
-  matrixFixtureSlip(gridLines(['黑色', '白色'], ['constructor', 'M', 'L']))
-)
-assert.ok(
-  hasText(protoColLayout, 'constructor'),
-  '列轴取值叫「constructor」时，这一列必须真的被画出来，'
-    + '不能靠静默丢列来“不报错”'
-)
 
 // ---- 4-7 源码钉子：这两个文件里都不许出现裸 NUL 字节 ----------------------------
 // 裸 NUL 会让 grep / rg 把整个文件判成 binary、拒绝输出任何匹配，搜的人会以为里面什么

@@ -15,11 +15,6 @@ const NAME_MIN_CHARS = 3
 // 比合并后的 216 宽出一大截，字号反而比四轴还小，所以三轴起就合并。
 const SPEC_AXIS_LIMIT = 2
 
-// 汇总态矩阵表的列轴（第二轴）去重取值数上限。理由同上一条注释：列一多画布被撑宽，
-// 整张单的字号反而更小，只是这次是横向撑宽而不是纵向多列。
-// R1（2026-09-02）之后这条只是提前退出的快速否决——列数不多但列值字数长照样能撑宽画布，
-// 真正兜底是 layoutSlip 里「矩阵节画布下限 <= 平铺基准」的条件 7。这条注释记的推理仍然
-// 成立（列数本身也是撑宽的一个来源），所以保留，不删。
 // 规格胶囊（汇总态数量列）。画布是 1700 宽的高清图，这几个数跟 LINE_H(65) 同一量级。
 // 胶囊高度必须 **>= 字号 + 上下内边距**。上一版写死 52 而胶囊文字是 56px 的 FONT.num——
 // 胶囊比字还矮，textTop 算出来的顶端比胶囊顶端还高 2px，文字上下都露在灰底外面；
@@ -484,8 +479,16 @@ function layoutTable(cmds, slip, cols, y, measure) {
       }
       const fixed = col.textLines && col.textLines[index]
       const raw = col.values[index]
+      // textLines（汇总态品名格的「品名 / 货号」两行）也要过 wrapCell。直接照搬会绕过折行：
+      // 列宽是 fitColumns 压过的，长品名画成一整行会盖住数量列的胶囊，再长直接画到画布外
+      // ——导出图上那截字就没了。明细态品名走 wrapCell 没这个毛病，是汇总态改用 textLines
+      // 之后新出的（tests/slip-image.test.js「汇总态长品名」那条钉子）。
       const texts = fixed && fixed.length
-        ? fixed
+        ? (canWrapColumn(col)
+          ? fixed.reduce(function (out, text) {
+            return out.concat(wrapCell(text, col, measure))
+          }, [])
+          : fixed)
         : (canWrapColumn(col) ? wrapCell(raw, col, measure) : [raw == null ? '' : String(raw)])
       cells[col.key] = texts
       blockH = Math.max(blockH, texts.length * LINE_H)
@@ -549,12 +552,11 @@ function layoutTable(cmds, slip, cols, y, measure) {
 }
 
 // ---------------------------------------------------------------------------
-// 汇总态：按商品分节，能矩阵化的节画成「行=规格一取值、列=规格二取值、格内件数」的交叉表，
-// 不能矩阵化的节退回平铺。
+// 汇总态：按商品分节，一个商品一行，规格进数量格的胶囊。
 //
 // 分节只在 exportStyle 解析成 'summary' 时跑。解析规则见 layoutSlip：**只有字面 'detail'**
 // 走明细态，其余一切取值——包括不传 options、传 undefined、传别的字符串——都解析成
-// 'summary'，照样分节、照样矩阵化。实测 `不传 === summary` 为 true、`不传 === detail`
+// 'summary'，照样分节、照样出胶囊。实测 `不传 === summary` 为 true、`不传 === detail`
 // 为 false。所以「不传 = 老路径、一条分节逻辑都不会跑」是错的，别照着这个前提改代码。
 // 常驻断言只钉住两件事（tests/slip-image.test.js）：不传 ≡ 显式 'summary'、且 ≠ 'detail'。
 // 「detail 与改动前逐字节相同」没有常驻断言，只在评审期比过 baseline 模块，别当保证读。
@@ -564,7 +566,7 @@ function layoutTable(cmds, slip, cols, y, measure) {
 // inventory.recordLines 的 item.productId 带下来。
 // 为什么不能只用「品名 + 货号」：品名没有唯一性校验（utils/inventory.js 的 createProduct
 // 只校验非空），货号可空，所以两个**不同商品**同名且都没填货号时会被并进同一节——节头只
-// 印一个品名、小计跨商品求和，叠加矩阵格就会印出错数。
+// 印一个品名、合计胶囊跨商品求和，屏上那个「小计 N 件」就是个错数。
 // pages/sale/sale.js 的 mergeLines 挡不住这条：它按 product.id + specKey(color,size) 合并，
 // 只在**单个商品内**去重，跨商品的同名碰撞它看不见。
 // productId 缺失（老流水、页面自己拼的预览数据）才退回「品名 + 货号」，sku 用 skuText 统一
@@ -593,14 +595,6 @@ function sliceLineSections(lines) {
   return sections
 }
 
-// 判定条件 4：节内单价必须逐字相同，单价要提到节头，不同价就提不上去。
-function sectionPriceText(section) {
-  const first = section.lines[0] && section.lines[0].priceText
-  const same = section.lines.every(function (line) {
-    return line.priceText === first
-  })
-  return same ? first : null
-}
 
 // 汇总一节金额：明细行 amountText 相加，口径同 utils/util.js 的 money()（四舍五入到分），
 // 但这里不 require 那个模块——slip-image.js 一直是零依赖的纯渲染层，不为这一处开先例。
@@ -1188,7 +1182,7 @@ function canvasToFile(canvas, destWidth, destHeight) {
 
 // 第三个参数原样透传给 layoutSlip，这一层不加分支。取值语义以 layoutSlip 为准：
 // 只有字面 'detail' 走明细态，不传或传别的值一律按 'summary' 渲染——也就是**会**分节、
-// **会**矩阵化，不是「与改动前完全一致」的老路径。
+// **会**出胶囊，不是「与改动前完全一致」的老路径。
 function exportToTempFile(page, slip, exportStyle) {
   const probe = createOffscreen(16, 16)
   const measure = makeMeasure(probe && probe.getContext ? probe.getContext('2d') : null)
