@@ -156,13 +156,17 @@ Page({
       })
       return
     }
-    if (!(await store.ready())) {
-      // store.ready() 内部已经用 util.showError 报过一次具体原因（utils/store.js:789），
-      // 这里不再报第二遍，只把屏留在可重试的错误态上。
+    const failure = await store.readyOrFailure()
+    if (failure) {
+      // store 内部已经用 util.showError 报过一次具体原因，这里不再报第二遍。
+      // **两类失败要分开**（G322）：没选店 / 被移出店铺那一类点重试不会好，
+      // 从前一律写「检查网络后重试」，对它们是错的诊断 —— 对的诊断当时只在那个
+      // 一闪而过的 toast 里。可重试那一半保留本页自己的话：它说的是「这张单」，
+      // 比 store 给的通用那句更准。
       this.setData({
         pageLoading: false,
-        loadErrorText: '账本没读到，检查网络后重试。',
-        loadErrorRetry: true
+        loadErrorText: failure.retryable ? '账本没读到，检查网络后重试。' : failure.text,
+        loadErrorRetry: failure.retryable
       })
       return
     }

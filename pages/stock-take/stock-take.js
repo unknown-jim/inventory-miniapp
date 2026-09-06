@@ -38,6 +38,13 @@ function diffTextOf(diff) {
 Page({
   data: {
     pageLoading: true,
+    // `store.readyOrFailure()` 失败时屏上留的错误卡（稿 state/error 3:759 /
+    // state/error/blocking（不可重试）4:1041）。`loadErrorText` 空串 = 没出错。
+    // 可重试与不可重试是**两种**错误态，不可重试的那种不给重试按钮
+    //（docs/ui-scale.md「新页面要」第 5 条）。三句话都由 store 给，本页不自己写。
+    loadErrorTitle: '',
+    loadErrorText: '',
+    loadErrorRetry: false,
     productId: '',
     productName: '',
     rows: [],
@@ -83,9 +90,21 @@ Page({
   // **只在第一次读到账本时装数据。** 这一页的输入框是店主一格一格数出来的，
   // 每次 onShow 重载会把数了一半的结果冲掉。装过一次就不再动，退出重进才重带账面。
   async onShow() {
+    // 上一轮的错误卡先收掉：onShow 每次都跑，留着它会盖在这次取回来的数据上。
+    if (this.data.loadErrorText) this.setData({ loadErrorTitle: '', loadErrorText: '', loadErrorRetry: false })
     if (!store.isReady()) this.setData({ pageLoading: true })
-    if (!(await store.ready())) {
-      this.setData({ pageLoading: false })
+    // `ready()` 只说「不行」；`readyOrFailure()` 还说为什么 —— 没选店 / 被移出店铺
+    // 那一类点重试不会好，对它们写「检查网络后重试」是错的诊断。文案与看板的阻断卡
+    // 同源，取舍写在 utils/store.js 的 readyOrFailure 上。报错仍然只报一次：
+    // showError 在 store 里已经报过，这里只负责别把屏留成一张空列表。
+    const failure = await store.readyOrFailure()
+    if (failure) {
+      this.setData({
+        pageLoading: false,
+        loadErrorTitle: failure.title,
+        loadErrorText: failure.text,
+        loadErrorRetry: failure.retryable
+      })
       return
     }
     const id = this.pendingId
@@ -95,6 +114,12 @@ Page({
     }
     this.pendingId = ''
     this.loadProduct(id)
+  },
+
+  // 错误卡上那枚「重试」。整条 onShow 重走一遍，不另开一条加载路径 —— 另开一条就
+  // 会有「重试成功了但页面没按 onShow 的样子装好」这种两说。
+  reload() {
+    return this.onShow()
   },
 
   // 行的取法与 pages/product-detail 的 stockRowsOf 同源，判据一个字都不新造：

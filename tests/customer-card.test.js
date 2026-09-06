@@ -579,6 +579,21 @@ function loadPage(stub) {
   // 但它看不见模板里那枚按钮到底绑的是谁。
   assert.ok(body.indexOf('bindtap="retryLoad"') >= 0,
     '错误态里那枚按钮应当绑 retryLoad，否则屏上这条路没有出口')
+
+  // G322 第二轮：可重试与不可重试是两种错误态，那枚「重试」必须挂在
+  // loadErrorRetry 上（docs/ui-scale.md「新页面要」第 5 条）。没选店 / 被移出店铺
+  // 时点几次都不会好，摆一枚重试按钮就是骗人。
+  // 【盖不到什么】同上：只看子串先后，不解析 wxml。它挡的是「有人把 wx:if 摘掉，
+  // 让重试按钮无条件出现」这类误改；屏上最终渲染哪一支要 test:ui 才知道。
+  const retryGate = body.indexOf('wx:if="{{loadErrorRetry}}"')
+  assert.ok(retryGate >= 0,
+    '那枚「重试」要挂在 loadErrorRetry 上：没选店 / 被移出店铺点几次都不会好')
+  assert.ok(retryGate > guard,
+    'loadErrorRetry 那个判据要在 loadErrorText 这一支里面，不是另一支')
+  assert.ok(retryGate < hero, '同上：它属于错误态那一支，不属于首卡')
+  const back = body.indexOf('bindtap="goBack"', guard)
+  assert.ok(back >= 0 && back < hero,
+    '不可重试那一半也要有出口：稿 state/error/blocking 4:1041 上那枚按钮，本页是「返回」')
 })()
 
 ;(function assertReadyFailureSetsErrorState() {
@@ -586,10 +601,16 @@ function loadPage(stub) {
   // 「成功时 loadErrorText 被清成空串」那条断言落在新页面的初值 '' 上、恒真——
   // 变异实测：把 fillCustomer 里那行 `loadErrorText: ''` 整个删掉，全套仍然绿。
   // 摆设钉子和没有钉子是一回事。
-  const seq = [false, true]
+  // seq 里是 store.readyOrFailure() 的返回：失败给一个描述，成功给 null。
+  // （G322 第二轮把页面从 `store.ready()` 换到 `store.readyOrFailure()` ——
+  //  ready() 那个 false 说不出是「网络断了」还是「你已经不在这家店」。）
+  const seq = [
+    { retryable: true, title: '加载失败', text: '网络异常，请检查网络后重试' },
+    null
+  ]
   const store = {
     isReady: function () { return false },
-    ready: function () { return Promise.resolve(seq.shift()) },
+    readyOrFailure: function () { return Promise.resolve(seq.shift()) },
     getCustomer: function () {
       // 一个**真欠钱**的客户：首卡初值会对他说「已结清 ¥0.00」，这条路要挡的就是这个。
       return { id: 'c1', name: '张三',
@@ -613,6 +634,8 @@ function loadPage(stub) {
         + '而这条路上客户很可能好好的，只是账本没读到')
     assert.strictEqual(page.data.cardLabel, '已结清',
       '前置条件：失败时首卡字段还停在初值上——正是这个初值不能给人看见')
+    assert.strictEqual(page.data.loadErrorRetry, true,
+      '网络那一类要给重试按钮')
     // 走重试按钮那条真路径，不是直接再调 onShow：按钮绑的是 retryLoad。
     return page.retryLoad()
   }).then(function () {
@@ -625,5 +648,41 @@ function loadPage(stub) {
         + '留着的话错误态会盖在填好的数据上（失败后把小程序切后台再切回来也会走到这里）')
   })
 })().then(function () {
+  return assertPermanentReadyFailureSaysWhyAndDropsRetry()
+}).then(function () {
   console.log('customer-card tests passed')
 })
+
+// 「没选店 / 被移出店铺」这一类：屏上既不能写「检查网络后重试」（错的诊断），
+// 也不能摆一枚点了不会好的重试按钮。
+//
+// **反向控制不在 data 初值上**：初值 loadErrorRetry 就是 false，只断言它是 false
+// 等于什么都没断言。所以这一条同时钉住正文——正文必须是 store 给的那句真原因，
+// 而页面里那句本地文案（「检查网络后重试」）一个字都不许出现。
+// 上面那条可重试的用例负责另一半：同一段代码在 retryable 为真时必须给出 true。
+function assertPermanentReadyFailureSaysWhyAndDropsRetry() {
+  const reason = '你已经不在这家店里了，看不到这家店的账。要回来请把你的身份发给店主，让他把你加进店里。'
+  const store = {
+    isReady: function () { return false },
+    readyOrFailure: function () {
+      return Promise.resolve({ retryable: false, title: '还不能记账', text: reason })
+    },
+    getCustomer: function () {
+      return { id: 'c1', name: '张三', account: { receivable: 84, prepay: 0, count: 0, amount: 0 } }
+    }
+  }
+  const page = loadPage(store)
+  page.setData = function (o, cb) { Object.assign(page.data, o); if (cb) cb() }
+  page.reloadLedger = function () {}
+  page.openPay = function () {}
+  page.data.id = 'c1'
+  return Promise.resolve(page.onShow()).then(function () {
+    assert.strictEqual(page.data.loadErrorText, reason,
+      '不可重试那一类的正文要逐字用 store 给的真原因，实为「' + page.data.loadErrorText + '」')
+    assert.strictEqual(page.data.loadErrorText.indexOf('检查网络'), -1,
+      '被移出店铺跟网络没关系——「检查网络后重试」是错的诊断，也是 G322 要消灭的那句')
+    assert.strictEqual(page.data.loadErrorRetry, false,
+      '这一类不给重试按钮：点几次都不会好')
+    assert.strictEqual(page.data.pageLoading, false, '也不能把屏留在加载态上')
+  })
+}

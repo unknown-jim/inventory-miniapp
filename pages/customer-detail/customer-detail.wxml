@@ -19,13 +19,23 @@
 
   <!-- 稿 state/error 3:759：标题 + 一句话 + 一枚按钮。
        ready() 失败时首卡的初值是「已结清 ¥0.00」，对一个可能真欠钱的客户那是一句
-       肯定的假话，所以这条路不渲染首卡（G322）。这条错误态只有可重试一种：
-       ready() 内部已经用 util.showError 报过具体原因，这里只负责别说谎。 -->
+       肯定的假话，所以这条路不渲染首卡（G322）。
+       **两种错误态**：网络那类给「重试」（3:759），没选店 / 被移出店铺那类给「返回」
+       （state/error/blocking 4:1041）—— 对后者点重试不会好，摆一枚重试按钮是骗人。 -->
   <view wx:elif="{{loadErrorText}}" class="card empty js-detail-load-error">
     <view class="empty-title">账本没读到</view>
     <view class="muted">{{loadErrorText}}</view>
     <view class="empty-actions">
-      <button class="btn-primary js-detail-retry" bindtap="retryLoad">重试</button>
+      <button
+        wx:if="{{loadErrorRetry}}"
+        class="btn-primary js-detail-retry"
+        bindtap="retryLoad"
+      >重试</button>
+      <button
+        wx:else
+        class="btn-primary js-detail-error-back"
+        bindtap="goBack"
+      >返回</button>
     </view>
   </view>
 

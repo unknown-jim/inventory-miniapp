@@ -6,6 +6,18 @@
 <view class="page">
   <page-loading wx:if="{{pageLoading}}" />
 
+  <!-- 稿 state/error 3:759（可重试：标题 + 一句话 + 一枚 primary）与
+       state/error/blocking（不可重试）4:1041。标题和正文由 store.readyOrFailure()
+       给，**不在这里写死**：「被移出店铺」和「网络断了」不是同一句话，
+       而这一支两种都要落。 -->
+  <view wx:elif="{{loadErrorText}}" class="card empty js-load-error">
+    <view class="empty-title js-load-error-title">{{loadErrorTitle}}</view>
+    <view class="muted js-load-error-text">{{loadErrorText}}</view>
+    <view wx:if="{{loadErrorRetry}}" class="empty-actions">
+      <button class="btn-primary js-load-error-retry" bindtap="reload">重试</button>
+    </view>
+  </view>
+
   <block wx:else>
     <!-- 稿 row/搜索与新增 7:40：searchbar 占满 + 44x44 描边圆钮，横排 gap 10 -->
     <view class="tool-row">

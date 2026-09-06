@@ -76,6 +76,22 @@ const RULES = [
     modal: false
   },
   {
+    // 被移出店铺。**这条不是从状态门回来的**：getLedger 自己也过 requireMember
+    // （cloudfunctions/ledger/ledger-core.js:956），所以人被移出之后本机的 shopId
+    // 还在、getStatus().canBookkeep 仍是真，错误是从「取账本」那条路回来的。
+    // 没有这条规则时，店员在每一页看到的是「不是该店成员」五个字 —— 准确，
+    // 但没说他该做什么。
+    source: 'cloudfunctions/ledger/ledger-core.js',
+    literal: '不是该店成员',
+    match: /不是该店成员/,
+    title: '',
+    // modal 跟着隔壁「还没有选择店铺」那条走（也是一句店铺归属的长话、也是 toast）。
+    // 这一句现在还会同时出现在页面的错误卡上（utils/store.js 的 readyOrFailure），
+    // 卡上不截断，所以 toast 被腰斩的代价比从前小。
+    text: '你已经不在这家店里了，看不到这家店的账。要回来请把你的身份发给店主，让他把你加进店里。',
+    modal: false
+  },
+  {
     source: 'utils/store.js',
     literal: '还没有选择店铺',
     match: /还没有选择店铺/,
@@ -166,6 +182,30 @@ const BLOCKING = [
 // 「店铺」那一格，去掉按钮等于把人关在一个没有出口的屏上。
 const BLOCKING_FALLBACK = { kind: 'generic', title: '还不能记账', action: '去店铺页' }
 
+// 「点重试不会好」的那几条：话术说的是账本或身份的**状态**，不是这一次请求的运气。
+// 用它的是 utils/store.js 的 readyOrFailure —— 决定加载失败的卡上给不给「重试」。
+//
+// **它不是「RULES 里有没有这一条」的同义词。** RULES 里的
+// 「账本没取到，请重试」恰恰是最该给重试按钮的一条：「我们知道这是什么毛病」和
+// 「再点一次有没有用」是两个问题，别拿 matched 当这个判据。
+//
+// 只列 `ready()` 这条路上够得着的。提交路径那两条（库存刚被别人改过 / 这张单牵连的
+// 记录太多）不进来：它们的重试语义由提交处自己判，那里还拿得到「这一单记没记上」。
+const PERMANENT = [
+  // 被移出店铺。本机的 shopId 还在，状态门看不出来，只有服务端知道。
+  /不是该店成员/,
+  // 版本过旧：话术自己写的第一步是退出小程序重开，页面上再点几次都不会变。
+  /请更新小程序到最新版本/
+]
+
+function isPermanent(errorOrMessage) {
+  const raw = rawOf(errorOrMessage)
+  for (let i = 0; i < PERMANENT.length; i++) {
+    if (PERMANENT[i].test(raw)) return true
+  }
+  return false
+}
+
 // 接受 Error 或字符串。永远返回 { text, title, modal, raw, matched }。
 // raw 永远是原文（给日志和排查用，不显示给店员）。
 // matched 为假时 text === raw —— 翻译不出来就原样透传，不吞。
@@ -230,6 +270,8 @@ function blockingFor(errorOrMessage, kindHint) {
 module.exports = {
   RULES: RULES,
   BLOCKING: BLOCKING,
+  PERMANENT: PERMANENT,
+  isPermanent: isPermanent,
   forStaff: forStaff,
   blockingFor: blockingFor,
   rawOf: rawOf
