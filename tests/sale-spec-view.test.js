@@ -1084,9 +1084,11 @@ assert.strictEqual(switchCell.data.skuId, pBlackL.id, 'skuId 也要跟上')
 // 说成「只从这一个漏」而 (7i) 补进来之后它就不成立了，第三次是 2026-09-05：
 // 上一版写的变异是 `sameRefCell && (isMulti || priceTouched || (hasSpecs && !sku))`，
 // 而 `isMulti` 那一项已经从实现里删掉了（多选态不再豁免，见 (7k)）。照着新实现改写成
-// `sameRefCell && (priceTouched || (hasSpecs && !sku))` 之后它**同时打红 (7k) 与 (7l)**——多选态
+// `sameRefCell && (priceTouched || (hasSpecs && !sku))` 之后它**同时打红 (7k)、(7l) 与 (7n)**
+// （(7n) 是 2026-09-06 补的，红集合跟着又变了一次，逐条停掉重跑确认）——多选态
 // 下 `!sku` 也为真，那一项把多选态一并豁免了。要还原成「只有本条红」，变异必须再带上
-// `!isMulti`，就是上面那一行。**加断言会让旧的杀伤陈述过期**，不重跑就会留下一句错话。）
+// `!isMulti`，就是上面那一行（带上 `!isMulti` 的那个变异 2026-09-06 重跑过，仍然只红本条）。
+// **加断言会让旧的杀伤陈述过期**，不重跑就会留下一句错话。）
 //
 // 上一版这里两处都写错了，一起记下来当反面教材：
 //   1. 夹具用 singleOnBlackM（skuId = 该格 id）——那是**不可达形态**。全不选只在多选态
@@ -1309,14 +1311,24 @@ assert.deepStrictEqual(multiBack.data.selectedSizes, ['M', 'L'], '回填不该�
 // 手搭一个 `skuId: ''` 的多选态也能过，但那样测的是我自己写的形状；这里让真代码去写
 // skuId / unitPrice，顺带把「T4 之后的进入态到底长什么样」也钉住了。
 //
-// 杀伤（2026-09-05 实测，写清跑过什么，不写穷不尽的断言）：
+// 杀伤（2026-09-05 实测；2026-09-06 (7n) 补进来之后重测，后两条的红集合变了）：
 //   · 拿 e8bc617 的 sale.js 跑，**只留本条**也红（'69' !== '79'）——不是靠别的组带红的。
 //   · 把豁免加回去（`keepPrice = sameRefCell && (isMulti || priceTouched)`）本条红，
-//     但 (7l) **同时**也红。所以本条不是**那个**变异的独占闸。
-//   · 但它确实有独占杀伤，换个变异就现出来了——只红本条这三条断言，(7l) 绿：
+//     但 (7l) 与 (7n) **同时**也红（逐条停掉重跑，红的正好是这三条）。所以本条不是
+//     **那个**变异的独占闸。
+//   · 下面这个变异在 2026-09-05 时只红本条、(7l) 绿，当时写成了本条的独占杀伤：
 //
 //         keepPrice = sameRefCell && (priceTouched || (isMulti && this.data.selectedColor === color))
 //
+//     **(7n) 补进来之后它不再独占**：(7n) 那个形态里 `data.selectedColor === color` 同样
+//     成立，现在红的是本条与 (7n)（(7l) 仍绿，2026-09-06 实测）。
+//   · 再带一项 `!!refSku` 才还原成独占——只红本条，其余全绿（2026-09-06 实测）：
+//
+//         keepPrice = sameRefCell && (priceTouched || (isMulti && !!refSku && this.data.selectedColor === color))
+//
+//     （(7n) 的参照格是 null，这一项把它排掉；(7l) 的 `color` 与 `data.selectedColor`
+//     不相等，本来就排掉。**加断言会让旧的杀伤陈述过期**，这一条就是又一次——
+//     不重跑就会在这儿留下一句错话。）
 //     （上一版这里写的是「没去找只让本条红的变异」。复审替我找到了、我自己复现确认。
 //     诚实的自陈不算错，但**能找到就该写进去**：一条被标成「只是正面陈述」的断言，
 //     后人清理时会先删它。本仓在 (7f) 上正反两个方向都栽过。）
@@ -1439,6 +1451,187 @@ assert.deepStrictEqual(multiBack.data.selectedSizes, ['M', 'L'], '回填不该�
     assert.strictEqual(line.unitPrice, whiteM.salePrice,
       '「' + line.size + '」这一行应当按 ' + whiteM.salePrice + ' 记账，实为 ' + line.unitPrice)
   })
+})()
+
+// --- (7n) 多选态**取不到参照格** → 退回商品档价（(7f) 的多选版）---------------
+// 审计指出这是 #139 B 线删掉 `isMulti ||` 豁免时**悄悄换掉、没人守**的一格：多选态
+// 取不到参照格（refSku 为 null）时，行为从「保留框里的原值」变成了「退回商品档价」。
+// 方向对——那个原值的正主（第一枚选中格）已经不存在了——但当时没有断言分得出这两种选择。
+//
+// 缺口是真的，2026-09-06 自己复现过：在 5c2c635 的实现上把判据改成
+//     keepPrice = sameRefCell && (priceTouched || (isMulti && !refSku))
+// （**本条补进来之前**）整个 `npm test` **exit=0，全套绿**。
+//
+// **量级先说清**：这个形态**记不了账**（见本组末尾那两条断言——两格都填了数也一行都
+// push 不出来），所以本条守的是屏上那个数该显示成什么，不是「按错价出货」。别把它
+// 读成 (7k)/(7l) 那一档；也别因此删掉它——没人守的行为下一次会被反着改回去。
+//
+// 杀伤（2026-09-06 实测，写跑过的，不写穷不尽的断言）：
+//   · 上面那个变异是本条的**独占杀伤**：去掉本条时全套绿（上一段），带上本条只有本条红
+//     （红文 '69' !== '39'）。
+//   · 另外三个变异也让本条红，但都**不是**本条独占——记下来是为了标出本条盖到哪儿。
+//     红集合是逐条停掉重跑数出来的，不是推的：
+//         sameRefCell && (isMulti || priceTouched)                     → 红 (7k)(7l)(7n)
+//         sameRefCell && (priceTouched || (hasSpecs && !sku))          → 红 (7f)(7k)(7l)(7n)
+//         sameRefCell && (priceTouched || (isMulti && this.data.selectedColor === color))
+//                                                                      → 红 (7k)(7n)
+//   · 有两个变异**不**让本条红，正好画出本条与邻居的边界：把 `firstSelectedSku` 的第三个
+//     实参去掉（那是 (7l) 的闸）——本条里归一化之后的 `color` 与 `data.selectedColor` 是
+//     同一个值，读哪个都取不到格子；(7f) 那个带 `!isMulti` 的变异——本条恰恰在 isMulti 里。
+;(function assertMultiRefillWithoutRefCellFallsBackToProductPrice() {
+  // 三色夹具。两色夹具（repriceFixture）做不出这个形态：删掉黑色只剩白色时
+  // `colors.length === 1` 那条归一化会把 `color` 换成白色、参照格取得到，那是 (7l)。
+  // 还剩**两个**色时归一化够不着，`color` 停在 data 里那个已经不存在的黑色上——
+  // 这才是「|Z| >= 2 但 refSku 为 null」的可达形态。
+  //
+  // 黑色两格 stock 0：删一个规格一取值有两道闸都要求该色各格库存为 0
+  // （pages/product-edit/product-edit.js:381 的 removeColor、
+  // utils/inventory.js:535 的 applyProductSkus 抛「还有库存，不能删除该规格」），
+  // 下面那一步删色**走的就是真 applyProductSkus**，不是手工 splice，闸是真过的。
+  const base = inv.createProduct({
+    name: '短袖', costPrice: 28, salePrice: 39, stock: 0, alertQty: 4,
+    colors: ['黑色', '白色', '红色'], sizes: ['M', 'L']
+  }, 3000, 'p-noref')
+  const built = inv.applyProductSkus(base, [], [
+    { color: '黑色', size: 'M', stock: 0, costPrice: 28, salePrice: 69, alertQty: 4 },
+    { color: '黑色', size: 'L', stock: 0, costPrice: 28, salePrice: 65, alertQty: 4 },
+    { color: '白色', size: 'M', stock: 9, costPrice: 28, salePrice: 59, alertQty: 4 },
+    { color: '白色', size: 'L', stock: 9, costPrice: 28, salePrice: 49, alertQty: 4 },
+    { color: '红色', size: 'M', stock: 9, costPrice: 28, salePrice: 45, alertQty: 4 },
+    { color: '红色', size: 'L', stock: 9, costPrice: 28, salePrice: 35, alertQty: 4 }
+  ], 3100, idFactory())
+  const fx = { product: built.product, skus: built.skus }
+  fx.cell = function (color, size) {
+    const found = inv.findSkuBySpec(fx.skus, fx.product.id, color, size)
+    assert.ok(found, '夹具前提：找得到「' + color + ' · ' + size + '」这一格')
+    return found
+  }
+  const blackM = fx.cell('黑色', 'M')
+  assert.strictEqual(blackM.salePrice, 69, '夹具前提：黑 M 档价 69')
+  assert.strictEqual(fx.product.salePrice, 39, '夹具前提：商品档价 39')
+  assert.strictEqual(inv.toNumber(fx.cell('黑色', 'M').stock), 0,
+    '夹具前提：黑 M 库存要是 0，否则下面那道删色闸会 throw——那是崩溃红不是断言红，'
+      + '诊断信息会差一截')
+  assert.strictEqual(inv.toNumber(fx.cell('黑色', 'L').stock), 0,
+    '夹具前提：黑 L 库存也要是 0，理由同上')
+
+  // 进入态由真入口造：单选态选中黑 M → 点 L 进多选（T4，走 applySizeSelection）。
+  const page = singleOnBlackM(fx, { qty: '1' })
+  tapSize(page, 'L')
+  assert.deepStrictEqual(page.data.selectedSizes, ['M', 'L'], '前提：这一下应当进多选形态')
+  assert.strictEqual(page.data.multiMode, true, '前提：|Z| 1→2')
+  assert.strictEqual(page.data.skuId, '', '前提：多选态 skuId 由真代码写成空串')
+  assert.strictEqual(page.data.unitPrice, String(blackM.salePrice),
+    '前提：整批价是第一枚选中格黑 M 的档价 ' + blackM.salePrice)
+  assert.strictEqual(page.data.priceTouched, false, '前提：这个值是系统写的，店主没动过')
+
+  // 店主去商品编辑删掉「黑色」这个取值（走真 applyProductSkus，黑色两枚 SKU 一并消失）。
+  // data.skus 与 fx.skus 是同一个数组引用（saleHarness 里 `skus: fixture.skus`），
+  // 所以要**就地**换掉内容，才等价于 onShow 重新 store.getSkus()。
+  const removed = inv.applyProductSkus(
+    Object.assign({}, fx.product, { colors: ['白色', '红色'] }), fx.skus, null, 3200, idFactory())
+  fx.product = removed.product
+  fx.skus.length = 0
+  removed.skus.forEach(function (item) { fx.skus.push(item) })
+  assert.deepStrictEqual(fx.product.colors, ['白色', '红色'],
+    '前提：黑色没了，但还剩**两个**色——只剩一个的话归一化会接管，那是 (7l)')
+  assert.strictEqual(inv.findSkuBySpec(fx.skus, fx.product.id, '黑色', 'M'), null,
+    '前提：黑 M 这一格已经不存在了，参照格取不到')
+  assert.notStrictEqual(page.data.unitPrice, String(fx.product.salePrice),
+    '前提：进入值（' + page.data.unitPrice + '）不许等于期望值（' + fx.product.salePrice
+      + '），相等的话这条断言恒真，实现什么都不做也能过')
+
+  page.selectProduct(fx.product.id)   // onShow 的原路
+  assert.strictEqual(page.data.selectedColor, '黑色',
+    '前提：还剩两个色，`colors.length === 1` 那条归一化够不着，选中色停在已经不存在的'
+      + '黑色上——这正是 refSku 取不到格子的成因，也是本条与 (7l) 的分界')
+  assert.strictEqual(page.data.multiMode, true, '前提：回填之后仍在多选形态（|Z| = 2）')
+  assert.strictEqual(page.data.unitPrice, String(fx.product.salePrice),
+    '多选态下参照格取不到（当前色被删、还剩两个色）时，回填应当退回商品档价 '
+      + fx.product.salePrice + '，实为 ' + page.data.unitPrice + '——保留 '
+      + blackM.salePrice + ' 是把一个已经不存在的格子的价继续挂在屏上，'
+      + '而屏上那两格现在一格都对不上任何 SKU')
+  assert.strictEqual(page.data.priceTouched, false,
+    '退回档价是系统写的，归属仍在系统手里')
+
+  // 这个形态**记不了账**，本条守的是屏上那个数，不是错账：currentLines 的多选支按
+  // selectedColor 逐格找 SKU，黑色那两格已经没了，两格都填了数也一行都 push 不出来。
+  // 记在这里是为了让后人知道本条的量级——它不是 (7k)/(7l) 那种「按错价出货」的闸。
+  const qtys = {}
+  qtys[page.cellKey('M')] = '1'
+  qtys[page.cellKey('L')] = '1'
+  page.setData({ cellQtys: qtys })
+  const lines = page.currentLines()
+  assert.strictEqual(lines.error, '',
+    '选中色非空（虽然它已经不在 colors 里了），多选支不走 specSelectHint 那一支')
+  assert.strictEqual(lines.lines.length, 0,
+    '两格都填了数，但两格都找不到 SKU，一行都出不来——这条记的是本形态的量级：'
+      + '上面那个数错了也出不了货。哪天它出得了行，本条的量级就得重估')
+})()
+
+// --- (7o) 同一形态但**手改过** → 保留他填的（(7n) 的另一半）--------------------
+// (7n) 只断「没手改过」那一半。复审实测另一半没人守：变异
+//     keepPrice = !(isMulti && !refSku) && sameRefCell && !!priceTouched
+// （多选态取不到参照格时**丢掉**店主手填的批价）下红集合是**空**的，完整 npm test 绿。
+//
+// 这是 (7j) 之于 (7i)、(7b) 之于 (7a) 的同一种配对缺口，baseline 上就漏。(7f) 在同样
+// 位置写了免责句说明自己只断一半，(7n) 作为「(7f) 的多选版」没写——与其只补一句免责，
+// 不如把另一半也钉上。
+;(function assertMultiRefillWithoutRefCellKeepsTypedPrice() {
+  const base = inv.createProduct({
+    name: '短袖', costPrice: 28, salePrice: 39, stock: 0, alertQty: 4,
+    colors: ['黑色', '白色', '红色'], sizes: ['M', 'L']
+  }, 3000, 'p-7o')
+  const built = inv.applyProductSkus(base, [], [
+    { color: '黑色', size: 'M', stock: 0, costPrice: 28, salePrice: 69, alertQty: 4 },
+    { color: '黑色', size: 'L', stock: 0, costPrice: 28, salePrice: 65, alertQty: 4 },
+    { color: '白色', size: 'M', stock: 9, costPrice: 28, salePrice: 59, alertQty: 4 },
+    { color: '白色', size: 'L', stock: 9, costPrice: 28, salePrice: 49, alertQty: 4 },
+    { color: '红色', size: 'M', stock: 9, costPrice: 28, salePrice: 45, alertQty: 4 },
+    { color: '红色', size: 'L', stock: 9, costPrice: 28, salePrice: 35, alertQty: 4 }
+  ], 3100, idFactory())
+  const fx = { product: built.product, skus: built.skus }
+  fx.cell = function (color, size) {
+    const found = inv.findSkuBySpec(fx.skus, fx.product.id, color, size)
+    assert.ok(found, '夹具前提：找得到「' + color + ' · ' + size + '」')
+    return found
+  }
+  assert.strictEqual(inv.toNumber(fx.cell('黑色', 'M').stock), 0, '夹具前提：黑 M 库存 0')
+  assert.strictEqual(inv.toNumber(fx.cell('黑色', 'L').stock), 0, '夹具前提：黑 L 库存 0')
+
+  const page = singleOnBlackM(fx, { qty: '1' })
+  tapSize(page, 'L')
+  assert.strictEqual(page.data.multiMode, true, '前提：进多选形态')
+
+  // 与 (7n) 唯一的差别：店主手打了一个批价。
+  const typed = '88'
+  typePrice(page, typed)
+  assert.strictEqual(page.data.priceTouched, true, '前提：手打过，归属在店主手里')
+  assert.notStrictEqual(typed, String(fx.product.salePrice),
+    '前提：手填价不许等于商品档价 ' + fx.product.salePrice + '，否则分不出「保留」和「退回」')
+
+  const removed = inv.applyProductSkus(
+    Object.assign({}, fx.product, { colors: ['白色', '红色'] }), fx.skus, null, 3200, idFactory())
+  fx.product = removed.product
+  fx.skus.length = 0
+  removed.skus.forEach(function (item) { fx.skus.push(item) })
+  assert.strictEqual(inv.findSkuBySpec(fx.skus, fx.product.id, '黑色', 'M'), null,
+    '前提：参照格已经取不到了——与 (7n) 同一个形态')
+  // 照抄 (7n) 的两条「形态没跑偏」前提。缺了它们夹具一漂本条就无声失去杀伤：复审实测，
+  // 把红色两格也清零、删到只剩白色，归一化接管、refSku 变成白 M，本条**仍然全绿**，
+  // 而那个逃逸变异下整文件也跟着变绿。
+  assert.deepStrictEqual(fx.product.colors, ['白色', '红色'],
+    '前提：删完还剩**两个**色——只剩一个的话归一化会接管，参照格就取得到了，测的不是这条')
+
+  page.selectProduct(fx.product.id)   // onShow 的原路
+
+  assert.strictEqual(page.data.selectedColor, '黑色',
+    '前提：回填后 selectedColor 仍停在已被删掉的黑色——归一化没接管，参照格才真的取不到')
+  assert.strictEqual(page.data.unitPrice, typed,
+    '多选态参照格取不到、但店主手打过批价时，应当保留他填的 ' + typed
+      + '，实为 ' + page.data.unitPrice + '——退回商品档价 ' + fx.product.salePrice
+      + ' 等于把他填的数无声抹掉，那是 (7n) 那一半的规则，不是这一半的')
+  assert.strictEqual(page.data.priceTouched, true, '归属仍在店主手里，不该被复位')
 })()
 
 // ===========================================================================
