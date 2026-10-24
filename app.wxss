@@ -172,12 +172,18 @@ button::after {
   background: var(--color-brand-accent);
 }
 
-/* detail-QA：sheet 内 hairline 左右通栏，避免被 sheet padding 切成短线 */
+/* detail-QA：sheet 内 hairline 左右通栏，避免被 sheet padding 切成短线。
+   全局 hairline 的 margin-bottom:--space-lg 是给页顶 search/tool-row 留缝的；
+   sheet 已有 flex gap，再叠 space-lg 会把「记一笔」面板 chrome 从 ~389rpx 撑到
+   431rpx，击穿 UI 测试 400rpx 预算（列表区被吃）。sheet 内清零底边距，并用
+   负 margin-top 抵掉与 grabber 之间那一格 gap，让绿线贴在 grabber 下。 */
 .sheet > .accent-hairline,
 .rs-sheet > .accent-hairline {
   margin-left: calc(-1 * var(--space-xl));
   margin-right: calc(-1 * var(--space-xl));
   width: auto;
+  margin-top: calc(-1 * var(--space-md));
+  margin-bottom: 0;
 }
 
 
