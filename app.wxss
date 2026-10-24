@@ -172,6 +172,13 @@ button::after {
   background: var(--color-brand-accent);
 }
 
+/* detail-QA：sheet 内 hairline 左右通栏，避免被 sheet padding 切成短线 */
+.sheet > .accent-hairline,
+.rs-sheet > .accent-hairline {
+  margin-left: calc(-1 * var(--space-xl));
+  margin-right: calc(-1 * var(--space-xl));
+  width: auto;
+}
 
 
 .accent-rail-wrap {
