@@ -354,6 +354,12 @@
   font-weight: 600;
 }
 
+/* ardot-718738 round4：欠款变体 7:84 debt-rows-wrap 用全局 accent-rail*；
+   sheet 顶 hairline 与 sale 四 sheet 同形。 */
+.money-debt-wrap {
+  width: 100%;
+}
+
 /* ardot-718738 B5·E Screen/07：单据信息/实收卡 subtle；正向金额 accent；单据卡左 rail */
 .info-card-accent {
   position: relative;

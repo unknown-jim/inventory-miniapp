@@ -45,44 +45,51 @@
         <view class="line-title">{{item.productName}}</view>
         <view class="line-sub">{{item.subText}}</view>
       </view>
-      <view class="line-amount">¥{{item.amountText}}</view>
+      <view class="line-amount accent-fg">¥{{item.amountText}}</view>
     </view>
   </view>
 
   <!-- ============ 只读态：实收卡（稿 card/实收 4:212 / 欠款变体 7:84） ============ -->
+  <!-- 已清：4:212 subtle、无 rail。未清：7:84 debt-rows-wrap + accent-rail，去收款在 wrap 外。 -->
   <view class="card money-card accent-subtle" wx:if="{{!editing && isOut}}">
-    <view class="kv">
-      <view class="kv-k grow">应收</view>
-      <view class="money-v accent-fg">¥{{amountText}}</view>
-    </view>
-    <view class="kv">
-      <view class="kv-k grow">实收</view>
-      <view class="money-v accent-fg">¥{{paidAmount}}</view>
-    </view>
-    <!-- 稿 4:213 那一档没有这行；有抵扣才出（B6 的 G1 契约：prepayUsed 为 0 时
-         逐字段与改动前相同）。 -->
-    <view class="kv" wx:if="{{hasPrepayUsed}}">
-      <view class="kv-k grow">抵预收</view>
-      <view class="money-v accent-fg js-prepay-used">¥{{prepayUsedText}}</view>
-    </view>
-    <!-- 稿 row/已退 4:279 + 已退去向 13:273。UX注释 n6 4:282：
-         「有退货的单：实收卡加冲减行（已退 = 冲欠款 + 退现金）」。 -->
-    <block wx:if="{{hasReturned}}">
-      <view class="kv">
-        <view class="kv-k grow">已退</view>
-        <view class="money-v js-returned">−¥{{returnedText}}</view>
+    <view class="{{hasDebtNow ? 'accent-rail-wrap money-debt-wrap' : 'money-rows'}}">
+      <view wx:if="{{hasDebtNow}}" class="accent-rail"></view>
+      <view class="{{hasDebtNow ? 'accent-rail-body' : ''}}">
+        <view class="kv">
+          <view class="kv-k grow">应收</view>
+          <view class="money-v accent-fg">¥{{amountText}}</view>
+        </view>
+        <view class="kv">
+          <view class="kv-k grow">实收</view>
+          <view class="money-v accent-fg">¥{{paidAmount}}</view>
+        </view>
+        <!-- 稿 4:213 那一档没有这行；有抵扣才出（B6 的 G1 契约：prepayUsed 为 0 时
+             逐字段与改动前相同）。 -->
+        <view class="kv" wx:if="{{hasPrepayUsed}}">
+          <view class="kv-k grow">抵预收</view>
+          <view class="money-v accent-fg js-prepay-used">¥{{prepayUsedText}}</view>
+        </view>
+        <!-- 稿 row/已退 4:279 + 已退去向 13:273。UX注释 n6 4:282：
+             「有退货的单：实收卡加冲减行（已退 = 冲欠款 + 退现金）」。 -->
+        <block wx:if="{{hasReturned}}">
+          <view class="kv">
+            <view class="kv-k grow">已退</view>
+            <view class="money-v js-returned">−¥{{returnedText}}</view>
+          </view>
+          <view class="money-note">{{returnSplitText}}</view>
+        </block>
+        <view class="money-div"></view>
+        <view class="kv">
+          <view class="kv-k grow">欠款（当前）</view>
+          <view class="money-v {{hasDebtNow ? 'debt' : 'muted-v'}} js-debt-now">{{debtNowText}}</view>
+        </view>
       </view>
-      <view class="money-note">{{returnSplitText}}</view>
-    </block>
-    <view class="money-div"></view>
-    <view class="kv">
-      <view class="kv-k grow">欠款（当前）</view>
-      <view class="money-v {{hasDebtNow ? 'debt' : 'muted-v'}} js-debt-now">{{debtNowText}}</view>
     </view>
     <!-- 「去收款」桥。稿 btn/去收款 13:446 在 card/操作区·欠款变体 7:84 里，
          UX注释 n8 7:87 原话：「去收款在实收卡内、欠款行下方（变体 7:84 画的是
          对的），**不要把钮搬到操作区**」。
-         docs/design-file.md 的铁律：只在**仍有剩余欠款**时出现，冲完即清不带桥。 -->
+         docs/design-file.md 的铁律：只在**仍有剩余欠款**时出现，冲完即清不带桥。
+         钮在 debt-rows-wrap / accent-rail 之外，不染 accent。 -->
     <button
       wx:if="{{canCollect}}"
       class="btn-primary collect-btn js-go-collect"
@@ -92,33 +99,33 @@
   </view>
 
   <!-- 收款 / 期初：只有金额卡（稿 n4 4:233）。 -->
-  <view class="card money-card" wx:if="{{!editing && (isPay || isOpening)}}">
+  <view class="card money-card accent-subtle" wx:if="{{!editing && (isPay || isOpening)}}">
     <view class="kv">
       <view class="kv-k grow">{{isOpening ? '期初欠款' : '收款金额'}}</view>
-      <view class="money-v">¥{{amountText}}</view>
+      <view class="money-v accent-fg">¥{{amountText}}</view>
     </view>
   </view>
 
   <!-- 进货 / 改规格 / 退货（单行）/ 调整：金额或件数（稿 n4 4:233）。 -->
-  <view class="card money-card" wx:if="{{!editing && !isOut && !isPay && !isOpening && !(isReturn && isMulti)}}">
+  <view class="card money-card accent-subtle" wx:if="{{!editing && !isOut && !isPay && !isOpening && !(isReturn && isMulti)}}">
     <view class="kv">
       <view class="kv-k grow">数量</view>
       <view class="money-v">{{qty}} 件</view>
     </view>
     <view class="kv" wx:if="{{!isAdjust}}">
       <view class="kv-k grow">{{isIn ? '进价' : '退货单价'}}</view>
-      <view class="money-v">¥{{priceText}}</view>
+      <view class="money-v accent-fg">¥{{priceText}}</view>
     </view>
     <view class="kv" wx:if="{{!isAdjust}}">
       <view class="kv-k grow">金额</view>
-      <view class="money-v">¥{{amountText}}</view>
+      <view class="money-v accent-fg">¥{{amountText}}</view>
     </view>
   </view>
 
-  <view class="card money-card" wx:if="{{!editing && isReturn && isMulti}}">
+  <view class="card money-card accent-subtle" wx:if="{{!editing && isReturn && isMulti}}">
     <view class="kv">
       <view class="kv-k grow">本单金额</view>
-      <view class="money-v">¥{{amountText}}</view>
+      <view class="money-v accent-fg">¥{{amountText}}</view>
     </view>
   </view>
 
@@ -296,6 +303,7 @@
 
   <view wx:if="{{showCustomerPicker}}" class="mask" bindtap="closeCustomerPicker">
     <view class="sheet" catchtap="closePickerKeep">
+      <view class="accent-hairline"></view>
       <view class="sheet-head">
         <view class="sheet-title">选择客户</view>
         <text class="link" catchtap="goAddCustomer">新增</text>
