@@ -1,5 +1,15 @@
 <view class="page">
   <view class="accent-hairline"></view>
+  <!-- 稿 searchbar/default 7:73：顶栏搜索，占位「搜索单号 / 客户 / 商品」。
+       本地过滤已加载 list（visibleList），不新开云端 keyword 参数。 -->
+  <input
+    class="search records-search js-records-search"
+    placeholder="搜索单号 / 客户 / 商品"
+    value="{{keyword}}"
+    confirm-type="search"
+    bindinput="onSearch"
+  />
+
   <!-- 时间段 pill。稿 row/汇总切换 4:835 的右半 pill/时间段（可选区间）4:1007：
        白底 + 黑描边 + r999 + h44 + padding-x 14，label「本月 ⌄」13px。
        稿上这一行左侧还有「导出 ›」（4:1006）→ 底部账本导出 sheet（4:872），
@@ -69,12 +79,19 @@
     <view class="muted">记一笔就有了</view>
   </view>
 
+  <!-- 有数据但本地搜索没命中。与商品页「没有匹配的商品」同形。 -->
+  <view wx:elif="{{loaded && list.length && !visibleList.length}}" class="card empty js-records-search-empty">
+    <view class="empty-icon empty-icon-records"></view>
+    <view class="empty-title">没有匹配的流水</view>
+    <view class="muted">换个单号、客户或商品再搜；也可上滑加载更多后再试。</view>
+  </view>
+
   <!-- 流水列表。稿 card/流水列表 4:152：成组包卡 + 行间 hairline。 -->
-  <view wx:elif="{{list.length}}" class="card records-card">
+  <view wx:elif="{{visibleList.length}}" class="card records-card">
     <view
       class="record-row js-record-item {{item.isOut ? 'js-record-out' : ''}}"
       hover-class="press"
-      wx:for="{{list}}"
+      wx:for="{{visibleList}}"
       wx:key="id"
       data-id="{{item.id}}"
       bindtap="onRecordTap"

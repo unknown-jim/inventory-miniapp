@@ -11,6 +11,17 @@
   padding-bottom: 176rpx;
 }
 
+
+/* ---- 搜索框（稿 searchbar/default 7:73） ----
+   共用 .search：灰底 / body 字号；稿 h44=--tap-min、r999、占位「搜索单号 / 客户 / 商品」。
+   全局 .search 高是 --tap-md（输入框热区档），本页按稿压到 --tap-min（88rpx=44px）。 */
+.records-search {
+  height: var(--tap-min);
+  margin-bottom: var(--space-lg);
+  border-radius: 999rpx;
+  box-sizing: border-box;
+}
+
 /* ---- 时间段 pill（稿 row/汇总切换 4:835 / pill/时间段 4:1007） ---- */
 
 .window-row {
@@ -271,7 +282,8 @@
 }
 
 .type-chip.on {
+  /* 稿 chip/selected 4:145：subtle 底 + brand 字 + 黑描边（border-brand） */
   background: var(--color-brand-accent-subtle);
   color: var(--color-brand-accent);
-  border-color: transparent;
+  border-color: var(--color-border-brand);
 }

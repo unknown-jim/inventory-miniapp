@@ -660,6 +660,49 @@ require.cache[require.resolve('../utils/cloud-config')].exports = {
   }
 
   // -------------------------------------------------------------------------
+  // 9b) records local search (ardot searchbar 7:73): filter loaded list only.
+  //     list stays the pagination source; visibleList is the display surface.
+  // -------------------------------------------------------------------------
+  {
+    const h = newHarness({ ids: idFactory('sr') })
+    await openShop(h)
+    seedRecords(h, PAGE_SIZE * 2, { prefix: 'srch', types: ['out', 'in'] })
+    const store = loadStore(h)
+    await store.ready()
+
+    const page = mountPage(loadPage(RECORDS_PATH), { windowKey: 'all', windowLabel: '全部' })
+    await page.onShow()
+    assert.strictEqual(page.data.list.length, PAGE_SIZE)
+    assert.strictEqual(page.data.visibleList.length, PAGE_SIZE,
+      'empty keyword => visibleList equals loaded list')
+    assert.strictEqual(countCalls(h, 'listRecords'), 1)
+
+    const before = countCalls(h, 'listRecords')
+    page.onSearch({ detail: { value: 'srch-3' } })
+    assert.strictEqual(countCalls(h, 'listRecords'), before,
+      'local search must not call listRecords')
+    assert.ok(page.data.visibleList.length >= 1, 'id keyword hits at least one')
+    page.data.visibleList.forEach(function (item) {
+      assert.ok(String(item.id).indexOf('srch-3') >= 0, 'hit row id contains keyword')
+    })
+    assert.strictEqual(page.data.list.length, PAGE_SIZE)
+
+    page.onSearch({ detail: { value: 'zzz-no-match-zzz' } })
+    assert.strictEqual(page.data.visibleList.length, 0, 'miss => visibleList empty')
+    assert.strictEqual(page.data.list.length, PAGE_SIZE, 'source list intact')
+
+    page.onSearch({ detail: { value: '' } })
+    assert.strictEqual(page.data.visibleList.length, PAGE_SIZE, 'clear search restores display')
+
+    page.onSearch({ detail: { value: 'srch-2' } })
+    const hitBefore = page.data.visibleList.length
+    await page.onReachBottom()
+    assert.strictEqual(page.data.list.length, PAGE_SIZE * 2, 'pagination still appends to list')
+    assert.ok(page.data.visibleList.length >= hitBefore,
+      'after load-more, keyword refilter must not shrink hits')
+  }
+
+  // -------------------------------------------------------------------------
   // 10) 打开一张**不在任何已加载页里**的单。
   //     分页之后 store 缓存里必然没有它（recent 只有一页），所以 record-edit
   //     必须按 id 去服务端取。缓存里找就是随机报「流水不存在」。

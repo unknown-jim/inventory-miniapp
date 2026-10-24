@@ -152,13 +152,54 @@ function rowView(record, now) {
   })
 }
 
+
+// 稿 searchbar/default 7:73：本地过滤已加载的 list，不新开云端 keyword API。
+// 命中面覆盖占位文案「搜索单号 / 客户 / 商品」—— id / 客户名 / 商品名 / 副行 / 备注 / 货号。
+function normalizeKeyword(value) {
+  return String(value || '').trim().toLowerCase()
+}
+
+function recordMatchesKeyword(item, keyword) {
+  const q = normalizeKeyword(keyword)
+  if (!q) return true
+  const parts = [
+    item.id,
+    item.customerText,
+    item.customerName,
+    item.productName,
+    item.rowTitle,
+    item.rowSub,
+    item.noteText,
+    item.typeText,
+    item.sku,
+    item.amountText,
+    item.amountSigned
+  ]
+  const hay = parts.map(function (part) {
+    return part == null ? '' : String(part)
+  }).join(' ').toLowerCase()
+  return hay.indexOf(q) >= 0
+}
+
+function filterRecordsByKeyword(list, keyword) {
+  const q = normalizeKeyword(keyword)
+  if (!q) return list.slice()
+  return (list || []).filter(function (item) {
+    return recordMatchesKeyword(item, q)
+  })
+}
+
 Page({
   data: {
     type: 'all',
     typeOptions: TYPE_OPTIONS,
     windowKey: DEFAULT_WINDOW,
     windowLabel: WINDOW_LABELS[DEFAULT_WINDOW],
+    // list = 云端已加载页；visibleList = 本地 keyword 过滤后的展示列表。
+    // 分页 / store.test 断言仍盯 list；wxml 只绑 visibleList。
     list: [],
+    visibleList: [],
+    keyword: '',
     cursor: '',
     hasMore: false,
     loading: false,
@@ -249,7 +290,7 @@ Page({
     // 整份丢弃。没有这道保护，切类型切得快一点就会把上一个筛选的流水拼进来。
     this.reqToken = (this.reqToken || 0) + 1
     this.loadingLock = false
-    this.setData({ list: [], cursor: '', hasMore: false, loaded: false })
+    this.setData({ list: [], visibleList: [], cursor: '', hasMore: false, loaded: false })
     return this.loadPage(true)
   },
 
@@ -275,10 +316,12 @@ Page({
         to: range.to
       })
       if (token !== this.reqToken) return
+      const nextList = this.data.list.concat(res.records.map(function (record) {
+        return rowView(record, now)
+      }))
       this.setData({
-        list: this.data.list.concat(res.records.map(function (record) {
-          return rowView(record, now)
-        })),
+        list: nextList,
+        visibleList: filterRecordsByKeyword(nextList, this.data.keyword),
         // 本页为空时服务端回 ''，直接赋值会把游标冲回开头、从第一页重来。
         // 总数正好是 PAGE_SIZE 整数倍时最后一页必然是空页，必然踩到。
         cursor: res.cursor || this.data.cursor,
@@ -307,6 +350,15 @@ Page({
   // 这个按钮是列表翻页的唯一出路。锁和 hasMore 判断都在 loadPage 里，连点安全。
   onLoadMore() {
     return this.loadPage(false)
+  },
+
+  // 稿 searchbar 7:73。只滤已加载 list，不打云端；加载更多仍往 list 追加后再滤。
+  onSearch(e) {
+    const keyword = e.detail.value
+    this.setData({
+      keyword: keyword,
+      visibleList: filterRecordsByKeyword(this.data.list, keyword)
+    })
   },
 
   setType(e) {
