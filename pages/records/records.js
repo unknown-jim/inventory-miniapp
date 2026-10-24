@@ -1,6 +1,7 @@
 const store = require('../../utils/store')
 const util = require('../../utils/util')
 const inventory = require('../../utils/inventory')
+const exportPreview = require('../../utils/ledger-export-preview')
 
 // 一页 20 条 = RECORD_PAGE_DEFAULT。limit 不传 / 非法（NaN、0、负数）时服务端
 // 一律给缺省 20，超过上限才钳到 100（apply.clampPageLimit）。
@@ -195,6 +196,22 @@ Page({
     typeOptions: TYPE_OPTIONS,
     windowKey: DEFAULT_WINDOW,
     windowLabel: WINDOW_LABELS[DEFAULT_WINDOW],
+    showExport: false,
+    exportWindowKey: 'follow',
+    exportWindowOptions: [
+      { key: 'month', label: '本月' },
+      { key: 'lastMonth', label: '上月' },
+      { key: 'all', label: '全部' },
+      { key: 'follow', label: '跟随' }
+    ],
+    exportTypeOptions: [],
+    exportSelectedTypes: ['all'],
+    exportPreviewTitle: '',
+    exportPreviewLines: [],
+    exportPreviewHint: '生成后再分享或保存',
+    exportBusy: false,
+    exportCanvasCssW: 375,
+    exportCanvasCssH: 520,
     // list = 云端已加载页；visibleList = 本地 keyword 过滤后的展示列表。
     // 分页 / store.test 断言仍盯 list；wxml 只绑 visibleList。
     list: [],
@@ -373,6 +390,271 @@ Page({
   // 纵向预算打架，每一项的热区由平台保证。
   // **不要**改成 .seg 分段开关：那会再吃掉一整行高度，而本页的纵向预算正是
   // 「类型 chip 折行会吃掉列表」这条本页专属裁定要省下来的东西。
+
+  // ---- 账本导出 sheet（稿 4:872）----
+  keepExportSheet() {},
+
+  openExportSheet() {
+    const self = this
+    const typeOptions = exportPreview.EXPORT_TYPE_ORDER.map(function (key) {
+      return {
+        key: key,
+        label: exportPreview.EXPORT_TYPE_LABELS[key],
+        on: true
+      }
+    })
+    // 「全部」多选勾：与各类型同亮表示全选
+    typeOptions.unshift({ key: 'all', label: '全部', on: true })
+    this.setData({
+      showExport: true,
+      exportWindowKey: 'follow',
+      exportTypeOptions: typeOptions,
+      exportSelectedTypes: ['all']
+    }, function () {
+      self.refreshExportPreview()
+    })
+  },
+
+  closeExportSheet() {
+    if (this.data.exportBusy) return
+    this.setData({ showExport: false })
+  },
+
+  onExportWindow(e) {
+    const key = e.currentTarget.dataset.key
+    if (!key || key === this.data.exportWindowKey) return
+    const self = this
+    this.setData({ exportWindowKey: key }, function () {
+      self.refreshExportPreview()
+    })
+  },
+
+  onExportType(e) {
+    const key = e.currentTarget.dataset.key
+    if (!key) return
+    let selected = (this.data.exportSelectedTypes || []).slice()
+    const options = (this.data.exportTypeOptions || []).map(function (o) {
+      return { key: o.key, label: o.label, on: o.on }
+    })
+
+    if (key === 'all') {
+      const turnOn = !options[0].on
+      options.forEach(function (o) { o.on = turnOn })
+      selected = turnOn ? ['all'] : []
+    } else {
+      const hit = options.find(function (o) { return o.key === key })
+      if (!hit) return
+      hit.on = !hit.on
+      // 关掉「全部」
+      const allOpt = options.find(function (o) { return o.key === 'all' })
+      if (allOpt) allOpt.on = false
+      selected = options.filter(function (o) {
+        return o.key !== 'all' && o.on
+      }).map(function (o) { return o.key })
+      // 若具体类型全开，回到全部
+      const concretes = options.filter(function (o) { return o.key !== 'all' })
+      if (concretes.every(function (o) { return o.on })) {
+        if (allOpt) allOpt.on = true
+        selected = ['all']
+      }
+      if (!selected.length) {
+        // 不允许空选：弹回全部
+        options.forEach(function (o) { o.on = true })
+        selected = ['all']
+      }
+    }
+
+    const self = this
+    this.setData({
+      exportTypeOptions: options,
+      exportSelectedTypes: selected
+    }, function () {
+      self.refreshExportPreview()
+    })
+  },
+
+  exportRangeNow() {
+    return exportPreview.exportWindowRange(
+      this.data.exportWindowKey,
+      Date.now(),
+      this.data.windowKey
+    )
+  },
+
+  exportWindowLabelNow() {
+    return exportPreview.exportWindowLabel(
+      this.data.exportWindowKey,
+      this.data.windowKey,
+      this.data.windowLabel
+    )
+  },
+
+  /** 拉取导出窗口内全部分页流水（limit 100），供分型聚合。 */
+  async fetchExportRecords() {
+    const range = this.exportRangeNow()
+    let cursor = ''
+    let hasMore = true
+    const all = []
+    let guard = 0
+    while (hasMore && guard < 50) {
+      guard += 1
+      const res = await store.listRecords({
+        type: '',
+        cursor: cursor,
+        limit: 100,
+        from: range.from,
+        to: range.to
+      })
+      const batch = res.records || []
+      for (let i = 0; i < batch.length; i++) all.push(batch[i])
+      hasMore = !!res.hasMore
+      cursor = res.cursor || ''
+      if (!batch.length) break
+    }
+    return all
+  },
+
+  async refreshExportPreview() {
+    if (!this.data.showExport) return
+    const token = (this.exportPreviewToken = (this.exportPreviewToken || 0) + 1)
+    const windowLabel = this.exportWindowLabelNow()
+    const selected = this.data.exportSelectedTypes
+    try {
+      const records = await this.fetchExportRecords()
+      if (token !== this.exportPreviewToken) return
+      const buckets = exportPreview.aggregateByType(records, selected)
+      const lines = exportPreview.previewLines(buckets, function (n) {
+        return '¥' + util.money(n)
+      })
+      this.setData({
+        exportPreviewTitle: exportPreview.previewTitle(windowLabel, selected),
+        exportPreviewLines: lines,
+        exportPreviewHint: '生成后再分享或保存'
+      })
+    } catch (error) {
+      if (token !== this.exportPreviewToken) return
+      util.showError(error)
+      this.setData({
+        exportPreviewTitle: exportPreview.previewTitle(windowLabel, selected),
+        exportPreviewLines: ['预览加载失败'],
+        exportPreviewHint: '请稍后重试'
+      })
+    }
+  },
+
+  async onExportShare() {
+    if (this.data.exportBusy) return
+    this.setData({ exportBusy: true })
+    try {
+      const records = await this.fetchExportRecords()
+      const selected = this.data.exportSelectedTypes
+      const windowLabel = this.exportWindowLabelNow()
+      const buckets = exportPreview.aggregateByType(records, selected)
+      const lines = exportPreview.previewLines(buckets, function (n) {
+        return '¥' + util.money(n)
+      })
+      const text = exportPreview.shareText(windowLabel, selected, lines)
+      const self = this
+      await new Promise(function (resolve, reject) {
+        wx.setClipboardData({
+          data: text,
+          success: function () { resolve() },
+          fail: function (err) { reject(err || new Error('复制失败')) }
+        })
+      })
+      this.setData({
+        exportPreviewTitle: exportPreview.previewTitle(windowLabel, selected),
+        exportPreviewLines: lines,
+        showExport: false,
+        exportBusy: false
+      })
+      wx.showToast({ title: '已复制，可粘贴分享', icon: 'none' })
+    } catch (error) {
+      this.setData({ exportBusy: false })
+      util.showError(error)
+    }
+  },
+
+  async onExportSaveImage() {
+    if (this.data.exportBusy) return
+    this.setData({ exportBusy: true })
+    try {
+      const records = await this.fetchExportRecords()
+      const selected = this.data.exportSelectedTypes
+      const windowLabel = this.exportWindowLabelNow()
+      const buckets = exportPreview.aggregateByType(records, selected)
+      const lines = exportPreview.previewLines(buckets, function (n) {
+        return '¥' + util.money(n)
+      })
+      const title = exportPreview.previewTitle(windowLabel, selected)
+      const path = await this.renderExportImage(title, lines)
+      await new Promise(function (resolve, reject) {
+        wx.saveImageToPhotosAlbum({
+          filePath: path,
+          success: function () { resolve() },
+          fail: function (err) { reject(err || new Error('保存失败')) }
+        })
+      })
+      this.setData({ showExport: false, exportBusy: false })
+      wx.showToast({ title: '已保存到相册', icon: 'none' })
+    } catch (error) {
+      this.setData({ exportBusy: false })
+      // 权限拒绝时给一句可读提示
+      const msg = (error && (error.errMsg || error.message)) || ''
+      if (msg.indexOf('auth') >= 0 || msg.indexOf('authorize') >= 0) {
+        wx.showToast({ title: '需要相册权限才能保存', icon: 'none' })
+      } else {
+        util.showError(error)
+      }
+    }
+  },
+
+  renderExportImage(title, lines) {
+    const self = this
+    const cssW = 375
+    const lineH = 28
+    const pad = 24
+    const cssH = pad * 2 + 36 + (lines.length + 1) * lineH + 24
+    this.setData({ exportCanvasCssW: cssW, exportCanvasCssH: cssH })
+    return new Promise(function (resolve, reject) {
+      const query = wx.createSelectorQuery()
+      query.select('#exportCanvas').fields({ node: true, size: true }).exec(function (res) {
+        if (!res || !res[0] || !res[0].node) {
+          reject(new Error('画布不可用'))
+          return
+        }
+        const canvas = res[0].node
+        const ctx = canvas.getContext('2d')
+        const dpr = (wx.getWindowInfo && wx.getWindowInfo().pixelRatio) || 2
+        canvas.width = cssW * dpr
+        canvas.height = cssH * dpr
+        ctx.scale(dpr, dpr)
+        ctx.fillStyle = '#FFFFFF'
+        ctx.fillRect(0, 0, cssW, cssH)
+        ctx.fillStyle = '#0F756E'
+        ctx.fillRect(0, 0, cssW, 3)
+        ctx.fillStyle = '#0F141A'
+        ctx.font = '600 16px sans-serif'
+        ctx.fillText(title, pad, pad + 20)
+        ctx.fillStyle = '#0F756E'
+        ctx.font = '14px sans-serif'
+        let y = pad + 52
+        ;(lines || []).forEach(function (line) {
+          ctx.fillText(String(line), pad, y)
+          y += lineH
+        })
+        ctx.fillStyle = '#6B7280'
+        ctx.font = '12px sans-serif'
+        ctx.fillText('进销存 · 账本导出', pad, cssH - 16)
+        wx.canvasToTempFilePath({
+          canvas: canvas,
+          success: function (r) { resolve(r.tempFilePath) },
+          fail: function (err) { reject(err || new Error('导出图片失败')) }
+        })
+      })
+    })
+  },
+
   openWindowPicker() {
     const self = this
     wx.showActionSheet({

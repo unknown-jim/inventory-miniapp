@@ -10,12 +10,14 @@
     bindinput="onSearch"
   />
 
-  <!-- 时间段 pill。稿 row/汇总切换 4:835 的右半 pill/时间段（可选区间）4:1007：
-       白底 + 黑描边 + r999 + h44 + padding-x 14，label「本月 ⌄」13px。
-       稿上这一行左侧还有「导出 ›」（4:1006）→ 底部账本导出 sheet（4:872），
-       本批**不做**：后端给不出它要的数（多选类型 + 分型笔数 + 分型金额），
-       理由与缺口写在规格 §6 与 [OPEN-Q-1]。不做就整个不画，不留一个点了没反应的入口。 -->
+  <!-- 时间段 pill。稿 row/汇总切换 4:835：左「导出 ›」(4:1006) → sheet/账本导出 4:872；
+       右 pill/时间段 4:1007。分型笔数由客户端聚合已加载/导出拉取的流水（OPEN-Q-1 不改云函数）。 -->
   <view class="window-row">
+    <view
+      class="export-link js-export-open"
+      hover-class="export-link-press"
+      bindtap="openExportSheet"
+    >导出 ›</view>
     <view
       class="window-pill js-window-pill"
       hover-class="window-pill-press"
@@ -122,6 +124,77 @@
 
   <!-- 流水页 FAB（稿 fab/记一笔 4:985：56×56 实心黑圆钮，右下角，距右缘和 tabBar 各 16px）。
        0c 批已落地，本批**几何一个数都不动**，只是原样搬过来。 -->
+
+  <!-- 稿 sheet/账本导出 4:872 -->
+  <view wx:if="{{showExport}}" class="mask js-export-sheet" bindtap="closeExportSheet">
+    <view class="sheet export-sheet" catchtap="keepExportSheet">
+      <view class="grabber"></view>
+      <view class="accent-hairline"></view>
+      <view class="sheet-title">导出账本</view>
+
+      <view class="sheet-label">时间段</view>
+      <view class="chips export-window-chips">
+        <view
+          wx:for="{{exportWindowOptions}}"
+          wx:key="key"
+          class="chip {{exportWindowKey === item.key ? 'on' : ''}} js-export-window"
+          data-key="{{item.key}}"
+          bindtap="onExportWindow"
+        >{{item.key === 'follow' ? windowLabel : item.label}}</view>
+      </view>
+
+      <view class="sheet-label">类型</view>
+      <view class="chips export-type-chips">
+        <view
+          wx:for="{{exportTypeOptions}}"
+          wx:key="key"
+          class="chip export-type-chip {{item.on ? 'on' : ''}} js-export-type"
+          data-key="{{item.key}}"
+          bindtap="onExportType"
+        >
+          <text class="export-check">{{item.on ? '✓' : ''}}</text>
+          <text>{{item.label}}</text>
+        </view>
+      </view>
+
+      <view class="export-preview accent-subtle">
+        <view class="accent-rail-wrap">
+          <view class="accent-rail"></view>
+          <view class="accent-rail-body">
+            <view class="export-preview-title">{{exportPreviewTitle}}</view>
+            <view
+              wx:for="{{exportPreviewLines}}"
+              wx:key="*this"
+              class="export-preview-line"
+            >{{item}}</view>
+            <view class="export-preview-hint muted">{{exportPreviewHint}}</view>
+          </view>
+        </view>
+      </view>
+
+      <button
+        class="btn-primary sheet-cta js-export-share"
+        bindtap="onExportShare"
+        loading="{{exportBusy}}"
+        disabled="{{exportBusy}}"
+      >生成并分享</button>
+      <button
+        class="btn-ghost sheet-cta export-save-btn js-export-save"
+        bindtap="onExportSaveImage"
+        loading="{{exportBusy}}"
+        disabled="{{exportBusy}}"
+      >保存图片</button>
+      <view class="sheet-cancel js-export-cancel" bindtap="closeExportSheet">取消</view>
+    </view>
+  </view>
+
+  <canvas
+    type="2d"
+    id="exportCanvas"
+    class="export-canvas"
+    style="width: {{exportCanvasCssW}}px; height: {{exportCanvasCssH}}px;"
+  ></canvas>
+
   <view class="record-fab js-record-fab" hover-class="record-fab-press" bindtap="openRecordSheet">＋</view>
 
   <record-sheet id="record-sheet" show="{{showRecordSheet}}" bindclose="closeRecordSheet" />
