@@ -229,3 +229,4 @@
     <button class="btn-primary save-btn js-pe-save" disabled="{{saving}}" bindtap="save">{{saving ? '保存中…' : '保存'}}</button>
   </view>
 </view>
+<confirm-dialog id="confirmDialog" />

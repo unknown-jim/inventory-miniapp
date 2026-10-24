@@ -147,3 +147,4 @@
     <button class="btn-primary save-btn js-ce-save" bindtap="save">保存</button>
   </view>
 </view>
+<confirm-dialog id="confirmDialog" />

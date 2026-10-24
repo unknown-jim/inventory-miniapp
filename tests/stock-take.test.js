@@ -59,6 +59,15 @@ function loadPage(storeStub, wxStub) {
   const inst = Object.assign({}, captured)
   inst.data = JSON.parse(JSON.stringify(captured.data))
   inst.setData = function (patch) { Object.assign(inst.data, patch) }
+  // confirm-dialog 自绘层：单测里没有组件树，用 open() 记账代替 wx.showModal
+  inst.selectComponent = function () {
+    return {
+      open: function (opts) {
+        wxStub.calls.push(['confirmDialog', opts && opts.title])
+        return Promise.resolve({ confirm: false })
+      }
+    }
+  }
   return inst
 }
 
@@ -237,7 +246,7 @@ okInst.submit().then(function () {
         const failInst = primed(failStore, failWx, [[8, '5'], [23, '20'], [15, '17']])
         return failInst.submit().then(function () {
           assert.strictEqual(failStore.sent.length, 2, '第二条失败就停，不再发第三条')
-          const modal = failWx.calls.filter(function (c) { return c[0] === 'showModal' })
+          const modal = failWx.calls.filter(function (c) { return c[0] === 'confirmDialog' })
           assert.strictEqual(modal.length, 1, '部分成功要弹「只记上了一部分」')
           assert.strictEqual(modal[0][1], '只记上了一部分')
           assert.strictEqual(failInst.data.submitting, false, '失败之后闸要放开，能再点一次')

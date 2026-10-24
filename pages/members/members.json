@@ -1,6 +1,7 @@
 {
   "navigationBarTitleText": "成员名单",
   "usingComponents": {
-    "page-loading": "/components/page-loading/index"
+    "page-loading": "/components/page-loading/index",
+    "confirm-dialog": "/components/confirm-dialog/index"
   }
 }

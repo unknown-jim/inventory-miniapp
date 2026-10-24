@@ -155,6 +155,14 @@
       {
         "type": "file",
         "value": "utils/messages.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/confirm-dialog.js"
+      },
+      {
+        "type": "file",
+        "value": "utils/ledger-export-preview.js"
       }
     ]
   },

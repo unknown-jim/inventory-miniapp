@@ -1,5 +1,6 @@
 const store = require('../../utils/store')
 const util = require('../../utils/util')
+const confirmDialogUtil = require('../../utils/confirm-dialog')
 
 // 与 pages/shop/shop.js 同一个理由：wx.showModal 的 confirmColor 只吃字面量。
 // 稿 red/600 3:37 = #DB2626（= app.wxss 的 --color-red-600）。
@@ -160,31 +161,21 @@ Page({
   // 挡不住点错人，而列表里两行名字可能只差一个字。
   // 第二条影响稿上写的是「历史流水里经手人仍显示「小陈」」，这里改成不带名字的说法：
   // 没写称呼的成员会读成「仍显示「还没写称呼」」，而不带名字的句子在所有情况下都成立。
-  removeMember(e) {
+  async removeMember(e) {
     const openid = e.currentTarget.dataset.openid
     const member = this.data.members.find(function (item) {
       return item.openid === openid
     })
     const who = (member && member.displayName) || '这位店员'
-    wx.showModal({
-      title: '移出成员' + who + '？',
-      content: '移出后' + who + '将无法进入这家店的账本。移出后会连带发生：\n'
-        + '· ' + who + '的账号不再关联本店\n'
-        + '· 历史流水里的经手人仍显示原来的称呼\n'
-        + '· 把身份码再发给店主即可加回\n\n'
-        + '移出不影响已经记下的账。',
-      confirmText: '移出',
-      confirmColor: DANGER_RED,
-      success: async (res) => {
-        if (!res.confirm) return
-        try {
-          await store.removeMember(openid)
-          wx.showToast({ title: '已移出', icon: 'success' })
-          this.onShow()
-        } catch (error) {
-          util.showError(error)
-        }
-      }
-    })
+    const dlg = this.selectComponent('#confirmDialog')
+    const res = await dlg.open(confirmDialogUtil.removeMemberOpts(who))
+    if (!res.confirm) return
+    try {
+      await store.removeMember(openid)
+      wx.showToast({ title: '已移出', icon: 'success' })
+      this.onShow()
+    } catch (error) {
+      util.showError(error)
+    }
   }
 })

@@ -77,3 +77,4 @@
     </view>
   </block>
 </view>
+<confirm-dialog id="confirmDialog" />

@@ -220,24 +220,25 @@ Page({
   //
   // 危险视觉因此落在三级里最轻的一档（红字链，稿 4:643），确认只做一层
   // （稿 n3 4:648 逐字「删除模板 danger 红 + 二次确认」，没有「输入名字确认」那半句）。
-  remove() {
-    wx.showModal({
+  async remove() {
+        const dlg = this.selectComponent('#confirmDialog')
+    const res = await dlg.open({
       title: '删除种类「' + (this.data.name || '未命名种类') + '」？',
-      content: '只删模板，已经建好的商品不会动。删掉之后，新建商品时少一组待选项。',
+      body: '只删模板，已经建好的商品不会动。删掉之后，新建商品时少一组待选项。',
       confirmText: '删除',
-      confirmColor: DANGER_RED,
-      success: async (res) => {
-        if (!res.confirm) return
-        try {
-          await store.deleteCategory(this.data.id)
-          wx.showToast({ title: '已删除', icon: 'success' })
-          setTimeout(function () {
-            wx.navigateBack()
-          }, 400)
-        } catch (error) {
-          util.showError(error)
-        }
-      }
+      cancelText: '取消',
+      confirmTone: 'danger',
+      note: '删除不可撤销。'
     })
+    if (!res.confirm) return
+      try {
+        await store.deleteCategory(this.data.id)
+        wx.showToast({ title: '已删除', icon: 'success' })
+        setTimeout(function () {
+          wx.navigateBack()
+        }, 400)
+      } catch (error) {
+        util.showError(error)
+      }
   }
 })

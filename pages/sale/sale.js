@@ -4,6 +4,7 @@ const inventory = require('../../utils/inventory')
 const saleSpecView = require('../../utils/sale-spec-view')
 const slipActions = require('../../utils/slip-actions')
 const memberChips = require('../../utils/member-chips').memberChips
+const confirmDialogUtil = require('../../utils/confirm-dialog')
 
 // 规格取值是店主自由输入的（docs/blank-process.md：取值可改、可删、可追加，不预置行业
 // 取值），直接拿它当 cellQtys 的对象 key 会撞上 Object.prototype 上的名字：取值叫
@@ -1344,9 +1345,13 @@ Page({
   },
 
   // 稿 n-删行 10:90：仅剩 1 行时 × 禁用，清空整单走放弃开单。
-  removeCart(e) {
+  async removeCart(e) {
+    // 稿 n-删行 10:90：仅剩 1 行时 × 走「放弃开单」确认（7:456），不清空后留空车。
     if (this.data.cart.length <= 1) {
-      wx.showToast({ title: '只剩一行了，清空整单请直接退出', icon: 'none' })
+      const dlg = this.selectComponent('#confirmDialog')
+      const res = await dlg.open(confirmDialogUtil.discardOpts())
+      if (!res.confirm) return
+      wx.navigateBack({ fail: function () { wx.switchTab({ url: '/pages/index/index' }) } })
       return
     }
     const key = e.currentTarget.dataset.key

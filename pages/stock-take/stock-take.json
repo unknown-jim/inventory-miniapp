@@ -1,6 +1,7 @@
 {
   "navigationBarTitleText": "盘点",
   "usingComponents": {
-    "page-loading": "/components/page-loading/index"
+    "page-loading": "/components/page-loading/index",
+    "confirm-dialog": "/components/confirm-dialog/index"
   }
 }

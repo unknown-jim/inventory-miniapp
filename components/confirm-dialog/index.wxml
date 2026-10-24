@@ -1,0 +1,41 @@
+<!-- 稿 dialog/confirm-danger 4:1017；实例：删销售单 10:126/10:128、移出成员 7:267、放弃改动 7:456 -->
+<view wx:if="{{show}}" class="cd-mask js-confirm-dialog" catchtouchmove="noop" bindtap="onMask">
+  <view class="cd-card" catchtap="noop">
+    <view class="accent-hairline"></view>
+    <view class="cd-title">{{title}}</view>
+    <view wx:if="{{body}}" class="cd-body">{{body}}</view>
+
+    <view wx:if="{{impactLines.length}}" class="cd-impact accent-subtle">
+      <view
+        wx:for="{{impactLines}}"
+        wx:key="*this"
+        class="cd-impact-line"
+      >{{item}}</view>
+    </view>
+
+    <view wx:if="{{note}}" class="cd-note">{{note}}</view>
+
+    <view wx:if="{{editable}}" class="cd-input-wrap">
+      <input
+        class="cd-input js-confirm-input"
+        value="{{inputValue}}"
+        placeholder="{{placeholder}}"
+        bindinput="onInput"
+        focus="{{show}}"
+      />
+    </view>
+
+    <view class="cd-btn-row">
+      <button
+        class="cd-btn cd-btn-cancel js-confirm-cancel"
+        bindtap="onCancel"
+      >{{cancelText}}</button>
+      <button
+        wx:if="{{showConfirm}}"
+        class="cd-btn cd-btn-confirm {{confirmTone === 'action' ? 'cd-btn-action' : 'cd-btn-danger'}} js-confirm-ok"
+        bindtap="onConfirm"
+        disabled="{{confirmDisabled}}"
+      >{{confirmText}}</button>
+    </view>
+  </view>
+</view>

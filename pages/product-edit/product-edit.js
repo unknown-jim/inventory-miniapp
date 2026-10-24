@@ -407,24 +407,26 @@ Page({
   // 两根轴都空了 = 这件商品变回普通商品。服务端 applyProductSkus 的 !productHasSpecs
   // 分支会把各规格格和半成品池的件数合并回商品自己身上（productStockFromSkus 把
   // 半成品那条 sku 也算进去），并且把 blankProcess 关掉。这是不可逆的合并，先问一句。
-  applySpecRemoval(colors, sizes) {
+  async applySpecRemoval(colors, sizes) {
     if (colors.length || sizes.length) {
       this.rebuildSkuRows(colors, sizes)
       return
     }
-    wx.showModal({
+    const dlg = this.selectComponent('#confirmDialog')
+    const res = await dlg.open({
       title: '改为普通商品',
-      content: '规格会去掉，半成品池和各规格库存合并到这件商品上。',
-      success: (res) => {
-        if (!res.confirm) return
-        this.rebuildSkuRows([], [], {
-          blankPool: false,
-          blankOpen: false,
-          specAxis1: '',
-          specAxis2: ''
-        })
-      }
+      body: '规格会去掉，半成品池和各规格库存合并到这件商品上。',
+      confirmText: '继续',
+      cancelText: '取消',
+      confirmTone: 'danger'
     })
+    if (!res.confirm) return
+      this.rebuildSkuRows([], [], {
+        blankPool: false,
+        blankOpen: false,
+        specAxis1: '',
+        specAxis2: ''
+      })
   },
 
   // 半成品池开关（稿 3:461）。两道门都是后端既有约束的前置提示，不是新规矩：
@@ -490,14 +492,17 @@ Page({
     }
   },
 
-  removeImage() {
-    wx.showModal({
+  async removeImage() {
+    const dlg = this.selectComponent('#confirmDialog')
+    const res = await dlg.open({
       title: '删除图片',
-      content: '保存后将从商品上移除这张图。',
-      success: (res) => {
-        if (res.confirm) this.setData({ image: '' })
-      }
+      body: '保存后将从商品上移除这张图。',
+      confirmText: '删除',
+      cancelText: '取消',
+      confirmTone: 'danger'
     })
+    if (!res.confirm) return
+    this.setData({ image: '' })
   },
 
   onImageError() {
@@ -557,23 +562,25 @@ Page({
     }
   },
 
-  remove() {
-    wx.showModal({
+  async remove() {
+    const dlg = this.selectComponent('#confirmDialog')
+    const res = await dlg.open({
       title: '删除商品',
-      content: '历史流水会保留，只是不再显示这个商品。',
-      confirmColor: '#DC2626',
-      success: async (res) => {
-        if (!res.confirm) return
-        try {
-          await store.deleteProduct(this.data.id)
-          wx.showToast({ title: '已删除', icon: 'success' })
-          setTimeout(function () {
-            wx.navigateBack()
-          }, 400)
-        } catch (error) {
-          util.showError(error)
-        }
-      }
+      body: '历史流水会保留，只是不再显示这个商品。',
+      confirmText: '删除',
+      cancelText: '取消',
+      confirmTone: 'danger',
+      note: '删除不可撤销。'
     })
+    if (!res.confirm) return
+    try {
+      await store.deleteProduct(this.data.id)
+      wx.showToast({ title: '已删除', icon: 'success' })
+      setTimeout(function () {
+        wx.navigateBack()
+      }, 400)
+    } catch (error) {
+      util.showError(error)
+    }
   }
 })

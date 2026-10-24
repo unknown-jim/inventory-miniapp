@@ -1,0 +1,127 @@
+/* dialog/confirm-danger 4:1017：宽 300、pad 20、r16、顶 accent-hairline */
+.cd-mask {
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  z-index: 3000;
+  background: rgba(15, 20, 26, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 48rpx;
+  box-sizing: border-box;
+}
+
+.cd-card {
+  position: relative;
+  width: 600rpx;
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 40rpx;
+  background: var(--color-bg-card);
+  border-radius: 32rpx;
+  box-shadow: 0 16rpx 48rpx rgba(15, 20, 26, 0.16);
+  overflow: hidden;
+}
+
+.cd-card > .accent-hairline {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  margin: 0;
+}
+
+.cd-title {
+  margin-top: 8rpx;
+  font-size: var(--fs-title);
+  font-weight: 600;
+  color: var(--color-text-primary);
+  line-height: 1.35;
+}
+
+.cd-body {
+  margin-top: 24rpx;
+  font-size: var(--fs-body);
+  color: var(--color-text-primary);
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.cd-impact {
+  margin-top: 24rpx;
+  padding: 24rpx;
+  border-radius: 20rpx;
+}
+
+.cd-impact-line {
+  font-size: var(--fs-caption);
+  color: var(--color-text-muted);
+  line-height: 1.45;
+  margin-bottom: 4rpx;
+}
+.cd-impact-line:last-child {
+  margin-bottom: 0;
+}
+
+.cd-note {
+  margin-top: 24rpx;
+  font-size: var(--fs-caption);
+  color: var(--color-text-muted);
+  line-height: 1.4;
+}
+
+.cd-input-wrap {
+  margin-top: 24rpx;
+}
+.cd-input {
+  height: var(--tap-md);
+  padding: 0 24rpx;
+  border: 2rpx solid var(--color-border-default);
+  border-radius: 16rpx;
+  font-size: var(--fs-body);
+  color: var(--color-text-primary);
+  background: var(--color-bg-card);
+  box-sizing: border-box;
+}
+
+.cd-btn-row {
+  margin-top: 32rpx;
+  display: flex;
+  gap: 24rpx;
+}
+
+.cd-btn {
+  flex: 1;
+  margin: 0;
+  height: var(--tap-md);
+  line-height: var(--tap-md);
+  padding: 0 16rpx;
+  border-radius: 16rpx;
+  font-size: var(--fs-body);
+  font-weight: 500;
+}
+.cd-btn::after {
+  border: none;
+}
+
+.cd-btn-cancel {
+  background: var(--color-fill-ghost);
+  color: var(--color-text-primary);
+  border: 2rpx solid var(--color-border-default);
+}
+
+.cd-btn-danger {
+  background: var(--color-red-600);
+  color: #FFFFFF;
+}
+.cd-btn-danger[disabled] {
+  opacity: 0.45;
+}
+
+.cd-btn-action {
+  background: var(--color-fill-action);
+  color: var(--color-text-on-action);
+}

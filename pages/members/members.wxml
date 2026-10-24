@@ -117,3 +117,4 @@
     <view wx:else class="safe-area"></view>
   </block>
 </view>
+<confirm-dialog id="confirmDialog" />

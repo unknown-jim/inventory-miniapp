@@ -4,6 +4,7 @@ const inventory = require('../../utils/inventory')
 const slipActions = require('../../utils/slip-actions')
 const memberChips = require('../../utils/member-chips').memberChips
 const repriceHintView = require('../../utils/reprice-hint')
+const confirmDialogUtil = require('../../utils/confirm-dialog')
 
 function navTitle(view, editing) {
   if (view.isPay) return editing ? '修改收款' : '收款详情'
@@ -626,17 +627,17 @@ Page({
         const hint = repriceHintView.repriceHint(
           this.saleBefore, this.data.lines, this.data.paidAmount)
         if (hint && !this.repriceConfirmed) {
-          wx.showModal({
+          const dlg = this.selectComponent('#confirmDialog')
+          const res = await dlg.open({
             title: '这张单有退货',
-            content: hint,
+            body: hint,
             confirmText: '继续保存',
             cancelText: '再想想',
-            success: (res) => {
-              if (!res.confirm) return
-              this.repriceConfirmed = true
-              this.save()
-            }
+            confirmTone: 'action'
           })
+          if (!res.confirm) return
+          this.repriceConfirmed = true
+          this.save()
           return
         }
         await store.updateRecord(this.data.id, {
@@ -707,10 +708,28 @@ Page({
     })
   },
 
-  remove() {
-    wx.showModal({
-      title: '删除流水',
-      content: this.data.isPay
+  async remove() {
+    const dlg = this.selectComponent('#confirmDialog')
+    let opts
+    if (this.data.isOut) {
+      const debtBefore = this.data.hasDebtNow
+        ? inventory.toNumber(String(this.data.debtNowAmountText || '0').replace(/,/g, ''))
+        : 0
+      // 删单后本单欠款归零；客户总欠会少本单剩余欠
+      const saleRec = this.saleBefore || {}
+      opts = confirmDialogUtil.deleteSaleOpts({
+        hasReturned: !!this.data.hasReturned,
+        returnCount: this.data.hasReturned ? 1 : 0,
+        customerName: this.data.customerName || '散客',
+        docNo: (this.data.docNoText || '').replace(/^单号\s*/, ''),
+        timeText: this.data.timeText || '',
+        amount: inventory.toNumber(saleRec.amount),
+        paidAmount: inventory.toNumber(this.data.paidAmount),
+        debtBefore: debtBefore,
+        debtAfter: 0
+      })
+    } else {
+      const body = this.data.isPay
         ? '删除后这笔收款会从欠款里去掉。'
         : (this.data.isOpening
           ? '删除后这笔期初欠款会从欠款里去掉。若已经收过款，可能要先改收款。'
@@ -720,22 +739,26 @@ Page({
             ? '删除后规格会改回原来的那一格。'
             : (this.data.isAdjust
               ? '删除后会把这件商品这一格的件数改回去。'
-            : (this.data.isOut
-              ? '删除后会把本单全部商品的库存改回去。记错商品时用这个，然后重新开单。'
-              : '删除后会把库存改回去。记错商品时用这个，然后重新开单。'))))),
-      confirmColor: '#DC2626',
-      success: async (res) => {
-        if (!res.confirm) return
-        try {
-          await store.deleteRecord(this.data.id)
-          wx.showToast({ title: '已删除', icon: 'success' })
-          setTimeout(function () {
-            wx.navigateBack()
-          }, 400)
-        } catch (error) {
-          util.showError(error)
-        }
+              : '删除后会把库存改回去。记错商品时用这个，然后重新开单。'))))
+      opts = {
+        title: '删除流水',
+        body: body,
+        note: '删除不可撤销。',
+        confirmText: '删除',
+        cancelText: '取消',
+        confirmTone: 'danger'
       }
-    })
+    }
+    const res = await dlg.open(opts)
+    if (!res.confirm) return
+    try {
+      await store.deleteRecord(this.data.id)
+      wx.showToast({ title: '已删除', icon: 'success' })
+      setTimeout(function () {
+        wx.navigateBack()
+      }, 400)
+    } catch (error) {
+      util.showError(error)
+    }
   }
 })

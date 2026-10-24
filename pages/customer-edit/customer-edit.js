@@ -115,25 +115,27 @@ Page({
     }
   },
 
-  remove() {
+  async remove() {
     // 不可删时按钮压根不渲染；这一句是防御，不是判据
     if (!this.data.canDelete) return
-    wx.showModal({
+        const dlg = this.selectComponent('#confirmDialog')
+    const res = await dlg.open({
       title: '删除客户',
-      content: '「' + this.data.name + '」从没记过账，删掉不影响任何流水。删了不能撤销。',
-      confirmColor: '#DC2626',
-      success: async (res) => {
-        if (!res.confirm) return
-        try {
-          await store.deleteCustomer(this.data.id)
-          wx.showToast({ title: '已删除', icon: 'success' })
-          setTimeout(function () {
-            wx.navigateBack()
-          }, 400)
-        } catch (error) {
-          util.showError(error)
-        }
-      }
+      body: '「' + this.data.name + '」从没记过账，删掉不影响任何流水。删了不能撤销。',
+      confirmText: '删除',
+      cancelText: '取消',
+      confirmTone: 'danger',
+      note: '删除不可撤销。'
     })
+    if (!res.confirm) return
+      try {
+        await store.deleteCustomer(this.data.id)
+        wx.showToast({ title: '已删除', icon: 'success' })
+        setTimeout(function () {
+          wx.navigateBack()
+        }, 400)
+      } catch (error) {
+        util.showError(error)
+      }
   }
 })

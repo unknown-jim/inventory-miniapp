@@ -311,12 +311,13 @@ Page({
       this.setData({ submitting: false })
       this.refreshBook()
       if (done > 0) {
-        wx.showModal({
+        const dlg = this.selectComponent('#confirmDialog')
+        await dlg.open({
           title: '只记上了一部分',
-          content: '已记 ' + done + ' 处，还有 ' + (jobs.length - done)
+          body: '已记 ' + done + ' 处，还有 ' + (jobs.length - done)
             + ' 处没记上。页面上的账面数已经按最新账本对过，再点一次「确认调整」只补记剩下的。',
-          showCancel: false,
-          confirmText: '知道了'
+          showConfirm: false,
+          cancelText: '知道了'
         })
       } else {
         util.showError(error)
