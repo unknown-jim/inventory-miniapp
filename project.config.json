@@ -57,6 +57,46 @@
       {
         "type": "folder",
         "value": ".cursor"
+      },
+      {
+        "type": "folder",
+        "value": ".mimosa"
+      },
+      {
+        "type": "folder",
+        "value": ".tmp-design-review"
+      },
+      {
+        "type": "folder",
+        "value": ".claude"
+      },
+      {
+        "type": "folder",
+        "value": ".zcode"
+      },
+      {
+        "type": "folder",
+        "value": "design-review-screenshots"
+      },
+      {
+        "type": "suffix",
+        "value": ".map"
+      },
+      {
+        "type": "suffix",
+        "value": ".keep"
+      },
+      {
+        "type": "suffix",
+        "value": ".bak"
+      },
+      {
+        "type": "file",
+        "value": "cloudbaserc.json"
+      },
+      {
+        "type": "file",
+        "value": ".mcp.json"
       }
     ],
     "include": [

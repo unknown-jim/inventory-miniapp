@@ -117,8 +117,15 @@
     <view class="sheet" catchtap="keepSheet">
       <view class="grabber"></view>
       <view class="accent-hairline"></view>
-<view class="sheet-title">收款 · {{name}}</view>
-      <view class="sheet-note">当前欠款 ¥{{receivableText}}</view>
+      <view class="sheet-title">收款 · {{name}}</view>
+      <view class="pay-preview accent-subtle">
+        <view class="accent-rail-wrap">
+          <view class="accent-rail"></view>
+          <view class="accent-rail-body">
+            <view class="sheet-note pay-debt-note">当前欠款 ¥{{receivableText}}</view>
+          </view>
+        </view>
+      </view>
       <view class="sheet-label">收到多少</view>
       <input
         class="amount-input js-pay-amount"

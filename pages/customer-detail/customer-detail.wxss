@@ -373,3 +373,22 @@
 }
 /* debt amount stays danger — do not override */
 
+/* ardot-718738 B6·E round2：收款 sheet 欠款金额预览 subtle+rail；快捷 chip.on 走 brand-accent。
+   不改黑 CTA / 欠款红 / grabber。 */
+.pay-preview {
+  margin: 0 0 var(--space-md);
+  padding: var(--space-md);
+  border-radius: var(--radius-md, 16rpx);
+}
+.pay-preview .sheet-note,
+.pay-preview .pay-debt-note {
+  margin: 0;
+  color: var(--color-brand-accent);
+  font-weight: 600;
+}
+.pay-chips .chip.on {
+  background: var(--color-brand-accent-subtle);
+  color: var(--color-brand-accent);
+  border-color: var(--color-brand-accent);
+}
+

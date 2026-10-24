@@ -710,3 +710,44 @@
   pointer-events: none;
   opacity: 0;
 }
+
+/* ardot-718738 B3·E Screen/05 销售开单：hairline；客户卡 subtle+rail；
+   金额 accent；选中 chip；实收 sheet 合计预览 subtle+rail。
+   不改 qty-box / has-unit / cell-grid（cbfeb07 数量布局）。不改黑 CTA。 */
+.cust-card-accent {
+  position: relative;
+  padding-left: calc(var(--card-pad, var(--space-lg)) + 6rpx + var(--space-md));
+}
+.cust-card-accent::before {
+  content: "";
+  position: absolute;
+  left: var(--card-pad, var(--space-lg));
+  top: var(--card-pad, 12rpx);
+  bottom: var(--card-pad, 12rpx);
+  width: 6rpx;
+  background: var(--color-brand-accent);
+  border-radius: 3rpx;
+}
+.chip.on,
+.chip.on .chip-label {
+  background: var(--color-brand-accent-subtle);
+  color: var(--color-brand-accent);
+}
+.batch-total-amount.accent-fg,
+.line-amount.accent-fg,
+.cart-total.accent-fg,
+.paid-v.accent-fg,
+.pay-total.accent-fg,
+.cart-amount.accent-fg {
+  color: var(--color-brand-accent);
+}
+.pay-preview {
+  margin: 0 0 var(--space-md);
+  padding: var(--space-md);
+  border-radius: var(--radius-md, 16rpx);
+}
+.pay-preview .pay-row {
+  margin: 0;
+  padding: 0;
+}
+
