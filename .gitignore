@@ -12,3 +12,7 @@ project.private.config.json
 
 # Mimosa 安全扫描插件的本地状态（hook 基线、扫描历史等）
 .mimosa/
+
+# local tooling / design review caches (not for miniapp pack)
+.tmp-design-review/
+.claude/
