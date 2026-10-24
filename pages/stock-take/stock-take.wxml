@@ -17,6 +17,7 @@
   </view>
 
   <block wx:else>
+    <view class="accent-hairline"></view>
     <!-- 稿 hint 4:898 逐字。稿上左边还有一枚 12x12 的 info 图标，本仓没有图标体系，
          本批不为一枚装饰单独造 svg（规格「与稿的已知偏差」第 4 条）。 -->
     <view class="take-hint muted js-take-hint">只盘这一个商品：账面数自动带出，只改不一样的；没碰的规格不会动</view>

@@ -175,3 +175,43 @@
   min-width: 0;
   margin: 0;
 }
+
+/* ardot-718738 B2·E 盘点焦点行 */
+.row-focus, .focus-row, .spec-row.is-focus, .spec-row.focus {
+  background: var(--color-brand-accent-subtle);
+  position: relative;
+  padding-left: calc(var(--space-lg) + 6rpx + var(--space-md));
+}
+.row-focus::before, .focus-row::before, .spec-row.is-focus::before, .spec-row.focus::before {
+  content: "";
+  position: absolute;
+  left: var(--space-lg);
+  top: 12rpx;
+  bottom: 12rpx;
+  width: 6rpx;
+  background: var(--color-brand-accent);
+  border-radius: 3rpx;
+}
+.diff-pos, .diff-accent, .spec-diff {
+  color: var(--color-brand-accent);
+}
+
+/* ardot-718738 B2·E 盘点焦点/差额行 */
+.take-row-diff {
+  background: var(--color-brand-accent-subtle);
+  position: relative;
+  padding-left: calc(var(--space-lg) + 6rpx + var(--space-md));
+}
+.take-row-diff::before {
+  content: "";
+  position: absolute;
+  left: var(--space-lg);
+  top: 12rpx;
+  bottom: 12rpx;
+  width: 6rpx;
+  background: var(--color-brand-accent);
+  border-radius: 3rpx;
+}
+.take-diff {
+  color: var(--color-brand-accent);
+}

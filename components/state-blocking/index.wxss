@@ -33,15 +33,22 @@
 }
 
 .sb-icon-outdated,
-.sb-icon-no-shop,
 .sb-icon-generic {
   background: var(--color-slate-100);
 }
 
 .sb-icon-outdated .sb-glyph,
-.sb-icon-no-shop .sb-glyph,
 .sb-icon-generic .sb-glyph {
   color: var(--color-slate-700);
+}
+
+/* ardot-718738 B1·E Screen/01c：无店 icon 浅青绿底 + 青绿字形 */
+.sb-icon-no-shop {
+  background: var(--color-brand-accent-subtle);
+}
+
+.sb-icon-no-shop .sb-glyph {
+  color: var(--color-brand-accent);
 }
 
 /* 40rpx = 稿上的 20px。docs/ui-scale.md 的字号表里没有「图标字形」这一档，

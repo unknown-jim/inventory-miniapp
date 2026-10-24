@@ -164,3 +164,15 @@
   line-height: 124rpx;
   margin: 0;
 }
+
+/* ardot-718738 B2·E 种类模板 */
+.chip.on, .seg-item.on {
+  background: var(--color-brand-accent-subtle);
+  color: var(--color-brand-accent);
+}
+.card.template-first, .tpl-card.is-first, .kind-card:first-child {
+  background: var(--color-brand-accent-subtle);
+}
+.empty.accent-subtle, .card.empty {
+  /* empty may already be card; prefer explicit class when present */
+}

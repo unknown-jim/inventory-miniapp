@@ -19,6 +19,7 @@
   </view>
 
   <block wx:else>
+    <view class="accent-hairline"></view>
     <!-- 稿 row/搜索与新增 7:40：searchbar 占满 + 44x44 描边圆钮，横排 gap 10 -->
     <view class="tool-row">
       <input
@@ -54,7 +55,7 @@
     <!-- 稿 card/客户列表 4:302：整卡内边距 0，行自己带 12，行间 1px 分隔线 4:318 -->
     <view wx:else class="card list-card">
       <view
-        class="crow js-customer-item"
+        class="crow js-customer-item {{index===0 ? 'crow-first accent-selected' : ''}}"
         wx:for="{{list}}"
         wx:key="id"
         data-id="{{item.id}}"

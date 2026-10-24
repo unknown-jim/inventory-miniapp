@@ -293,3 +293,42 @@
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='%23171717' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2.5 5.4h15M2.5 10h15M2.5 14.6h15'/%3E%3Ccircle cx='7' cy='5.4' r='1.6'/%3E%3Ccircle cx='13' cy='10' r='1.6'/%3E%3Ccircle cx='9' cy='14.6' r='1.6'/%3E%3C/svg%3E");
 }
 
+
+/* ardot-718738 B8·E：记一笔首卡（销售）subtle+rail；空态 subtle；hairline 见 grabber 后 */
+.rs-row-accent {
+  background: var(--color-brand-accent-subtle);
+  gap: var(--space-md);
+}
+
+.rs-row-accent .accent-rail {
+  margin: 4rpx 0;
+}
+
+.rs-row-accent.rs-row-press,
+.rs-row-accent:active {
+  /* 按下仍可见 subtle，略压在全局 press opacity 上 */
+}
+
+.rs-empty[data-tone="accent"], .rs-empty-accent {
+  margin: 0 calc(-1 * var(--space-sm));
+  padding: var(--space-xl) var(--space-lg);
+  background: var(--color-brand-accent-subtle);
+  border-radius: var(--space-md);
+  color: var(--color-text-primary);
+}
+
+.rs-order.accent-selected {
+  background: var(--color-brand-accent-subtle);
+  border-radius: var(--space-md);
+  border-bottom-color: transparent;
+}
+
+.rs-order.accent-selected .rs-label,
+.rs-order.accent-selected .rs-order-amount {
+  color: var(--color-brand-accent);
+}
+
+.rs-option-accent {
+  background: var(--color-brand-accent-subtle);
+  border-color: transparent;
+}

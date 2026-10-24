@@ -100,15 +100,15 @@
   height: 40rpx;
   margin-right: 20rpx;
   border-radius: 999rpx;
-  background: var(--color-fill-ghost);
-  color: var(--color-text-primary);
+  background: var(--color-brand-accent-subtle);
+  color: var(--color-brand-accent);
   font-size: var(--fs-caption);
   line-height: 40rpx;
   text-align: center;
 }
 
 .guide-dot-done {
-  background: var(--color-fill-action);
+  background: var(--color-brand-accent);
   color: var(--color-text-on-action);
 }
 
@@ -326,7 +326,7 @@
 
 /* 红只给警报，阈值不是警报（稿 UX注释 7:261 逐字） */
 .restock-remain {
-  color: var(--color-red-600);
+  color: var(--color-brand-accent);
 }
 
 .restock-threshold {
@@ -454,4 +454,26 @@
 
 .skel-records {
   height: 126rpx;
+}
+
+/* ardot-718738 B1·E：hero / 要补货卡左 rail；空店引导 subtle 见 .accent-subtle */
+.hero-rail {
+  margin-top: var(--space-xs);
+}
+
+.hero-rail .hero-body {
+  margin-top: 0;
+}
+
+.restock-card {
+  padding-left: 0;
+  padding-right: 28rpx;
+}
+
+.restock-card .accent-rail-wrap {
+  padding-left: 22rpx;
+}
+
+.restock-card .restock-row {
+  padding-right: 0;
 }

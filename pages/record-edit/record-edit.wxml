@@ -1,9 +1,10 @@
 <view class="page">
+  <view class="accent-hairline"></view>
   <!-- 单据信息卡。稿 card/单据信息 4:195：row/type（tag + 单号）+ 三行 kv。
        kv 的 k 定宽 56px = 112rpx（稿 4:200 / 4:203 / 4:206 逐个实读）。
        时间用**绝对日期**（稿 4:204「2026-08-25 14:32」；演示账对照表 9:18：
        「流水列表用相对时间，单据详情与原单用绝对日期」）。 -->
-  <view class="card info-card">
+  <view class="card info-card accent-subtle info-card-accent">
     <view class="info-head">
       <text class="tag {{tagClass}}">{{isAdjust ? directionTagText : typeText}}</text>
       <text class="doc-no js-doc-no">{{docNoText}}</text>
@@ -49,20 +50,20 @@
   </view>
 
   <!-- ============ 只读态：实收卡（稿 card/实收 4:212 / 欠款变体 7:84） ============ -->
-  <view class="card money-card" wx:if="{{!editing && isOut}}">
+  <view class="card money-card accent-subtle" wx:if="{{!editing && isOut}}">
     <view class="kv">
       <view class="kv-k grow">应收</view>
-      <view class="money-v">¥{{amountText}}</view>
+      <view class="money-v accent-fg">¥{{amountText}}</view>
     </view>
     <view class="kv">
       <view class="kv-k grow">实收</view>
-      <view class="money-v">¥{{paidAmount}}</view>
+      <view class="money-v accent-fg">¥{{paidAmount}}</view>
     </view>
     <!-- 稿 4:213 那一档没有这行；有抵扣才出（B6 的 G1 契约：prepayUsed 为 0 时
          逐字段与改动前相同）。 -->
     <view class="kv" wx:if="{{hasPrepayUsed}}">
       <view class="kv-k grow">抵预收</view>
-      <view class="money-v js-prepay-used">¥{{prepayUsedText}}</view>
+      <view class="money-v accent-fg js-prepay-used">¥{{prepayUsedText}}</view>
     </view>
     <!-- 稿 row/已退 4:279 + 已退去向 13:273。UX注释 n6 4:282：
          「有退货的单：实收卡加冲减行（已退 = 冲欠款 + 退现金）」。 -->

@@ -149,3 +149,60 @@
 .empty-icon-customers {
   background-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='48'%20height='48'%3E%3Ccircle%20fill='none'%20stroke='%230F756E'%20stroke-width='1.5'%20transform='matrix(1%200%200%201%2016.8%208.8)'%20cx='7.2'%20cy='7.2'%20r='7.2'/%3E%3Cpath%20fill='%230F756E'%20transform='matrix(1%200%200%201%2010.4%2028.8)'%20d='M4.2975%202.2496Q0.243%205.4256%20-0.7389%2011.0715Q-0.8017%2011.3797%20-0.6133%2011.6316Q-0.4398%2011.894%20-0.1285%2011.9389Q0.1797%2012.0017%200.4316%2011.8134Q0.694%2011.6398%200.7389%2011.3285Q1.622%206.2508%205.2225%203.4304Q8.6443%200.75%2013.6%200.75Q18.5557%200.75%2021.9775%203.4304Q25.578%206.2508%2026.4611%2011.3285Q26.5061%2011.6398%2026.7684%2011.8134Q27.0203%2012.0017%2027.3285%2011.9389Q27.6398%2011.894%2027.8134%2011.6316Q28.0017%2011.3797%2027.9389%2011.0715Q26.957%205.4256%2022.9025%202.2496Q19.0732%20-0.75%2013.6%20-0.75Q8.1268%20-0.75%204.2975%202.2496Z'%20fill-rule='evenodd'/%3E%3C/svg%3E");
 }
+
+/* ardot-718738 B6·E：客户首行 subtle+rail（辨识，非多选） */
+.customer-row:first-child, .list-row:first-child, .cust-row:first-child {
+  background: var(--color-brand-accent-subtle);
+  position: relative;
+  padding-left: calc(var(--space-lg) + 6rpx + var(--space-md));
+}
+.customer-row:first-child::before, .list-row:first-child::before, .cust-row:first-child::before {
+  content: "";
+  position: absolute;
+  left: var(--space-lg);
+  top: 12rpx;
+  bottom: 12rpx;
+  width: 6rpx;
+  background: var(--color-brand-accent);
+  border-radius: 3rpx;
+}
+
+/* ardot-718738 B6·E 客户列表首行 accent */
+.crow.js-customer-item:first-of-type,
+.list .crow:first-child,
+.crow:first-of-type {
+  background: var(--color-brand-accent-subtle);
+  position: relative;
+  padding-left: calc(var(--space-lg) + 6rpx + var(--space-md));
+}
+.crow.js-customer-item:first-of-type::before,
+.list .crow:first-child::before,
+.crow:first-of-type::before {
+  content: "";
+  position: absolute;
+  left: var(--space-lg);
+  top: 12rpx;
+  bottom: 12rpx;
+  width: 6rpx;
+  background: var(--color-brand-accent);
+  border-radius: 3rpx;
+}
+/* debt-v stays danger — do not accent */
+
+/* ardot crow-first */
+.crow-first, .crow.accent-selected {
+  background: var(--color-brand-accent-subtle);
+  position: relative;
+  padding-left: calc(var(--space-lg) + 6rpx + var(--space-md));
+}
+.crow-first::before, .crow.accent-selected::before {
+  content: "";
+  position: absolute;
+  left: var(--space-lg);
+  top: 12rpx;
+  bottom: 12rpx;
+  width: 6rpx;
+  background: var(--color-brand-accent);
+  border-radius: 3rpx;
+}
+

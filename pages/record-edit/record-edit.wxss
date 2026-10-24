@@ -353,3 +353,29 @@
   color: var(--color-text-debt);
   font-weight: 600;
 }
+
+/* ardot-718738 B5·E Screen/07：单据信息/实收卡 subtle；正向金额 accent；单据卡左 rail */
+.info-card-accent {
+  position: relative;
+  padding-left: calc(var(--card-pad) + 6rpx + var(--space-md));
+}
+
+.info-card-accent::before {
+  content: "";
+  position: absolute;
+  left: var(--card-pad);
+  top: var(--card-pad);
+  bottom: var(--card-pad);
+  width: 6rpx;
+  background: var(--color-brand-accent);
+  border-radius: 3rpx;
+}
+
+.money-v.accent-fg {
+  color: var(--color-brand-accent);
+}
+
+.chip.on {
+  background: var(--color-brand-accent-subtle);
+  color: var(--color-brand-accent);
+}

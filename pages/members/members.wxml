@@ -22,6 +22,7 @@
     </view>
   </view>
   <block wx:else>
+    <view class="accent-hairline"></view>
     <!-- 稿 section/成员 15:218「金秋布艺 · 成员」16px SemiBold -->
     <view class="section-title">
       <text>{{shopName || '本店'}} · 成员</text>

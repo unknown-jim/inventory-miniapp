@@ -438,3 +438,25 @@
   height: 600px;
   pointer-events: none;
 }
+
+/* ardot-718738 B2·E 编辑：毛利预览 accent；选中 chip subtle+accent；编辑卡不加 rail */
+.margin-preview, .profit-preview, .preview-margin {
+  color: var(--color-brand-accent);
+}
+.chip.on, .seg-item.on, .type-chip.on {
+  background: var(--color-brand-accent-subtle);
+  color: var(--color-brand-accent);
+}
+
+/* ardot-718738 B2 edit margin */
+.margin-preview, .profit-preview, .hint-profit, .preview-margin {
+  color: var(--color-brand-accent);
+}
+.chip.on, .chip.on .chip-label {
+  background: var(--color-brand-accent-subtle);
+  color: var(--color-brand-accent);
+}
+
+
+/* ardot margin-line */
+.margin-line.accent-fg, .margin-line { color: var(--color-brand-accent); }

@@ -151,3 +151,40 @@
 .actions .action-strip {
   margin-top: var(--space-md);
 }
+
+/* ardot-718738 B2·E：详情主卡 subtle+rail；价 accent；库存卡 subtle */
+.main-card-accent {
+  position: relative;
+  padding-left: calc(var(--card-pad) + 6rpx + var(--space-md));
+}
+.main-card-accent::before {
+  content: "";
+  position: absolute;
+  left: var(--card-pad);
+  top: var(--card-pad);
+  bottom: var(--card-pad);
+  width: 6rpx;
+  background: var(--color-brand-accent);
+  border-radius: 3rpx;
+}
+.stock-card.accent-subtle { }
+.accent-fg, .price.accent-fg, .price-num.accent-fg {
+  color: var(--color-brand-accent);
+}
+
+/* ardot-718738 B2 detail rail */
+.main-card-accent {
+  position: relative;
+  padding-left: calc(var(--card-pad, var(--space-lg)) + 6rpx + var(--space-md));
+}
+.main-card-accent::before {
+  content: "";
+  position: absolute;
+  left: var(--card-pad, var(--space-lg));
+  top: var(--card-pad, 12rpx);
+  bottom: var(--card-pad, 12rpx);
+  width: 6rpx;
+  background: var(--color-brand-accent);
+  border-radius: 3rpx;
+}
+

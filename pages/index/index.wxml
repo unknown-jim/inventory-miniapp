@@ -18,6 +18,7 @@
   </block>
 
   <block wx:elif="{{blocked}}">
+    <view class="accent-hairline"></view>
     <state-blocking
       kind="{{blockedKind}}"
       title="{{blockedTitle}}"
@@ -27,7 +28,7 @@
     />
     <!-- 稿 Screen/01c 无店 15:255：阻断卡下面还有一张三步全「待做」的引导卡 15:260。
          只有 no-shop 这一档有；维护 / 搬家中 / 版本过旧那三档下建店也做不了任何事。 -->
-    <view wx:if="{{blockedKind === 'no-shop'}}" class="card guide">
+    <view wx:if="{{blockedKind === 'no-shop'}}" class="card guide accent-subtle">
       <view class="guide-title">新手引导</view>
       <view class="guide-step" wx:for="{{guideSteps}}" wx:key="n">
         <view class="guide-dot {{item.done ? 'guide-dot-done' : ''}}">{{item.done ? '✓' : item.n}}</view>
@@ -39,9 +40,10 @@
   </block>
 
   <block wx:else>
+    <view class="accent-hairline"></view>
     <!-- 稿 hero/今日实收 3:557。空店时下半身换成新手引导卡（UX注释 3:568 / 4:828），
          店名行保留：它是店铺设置的唯一入口，A3 之后 tabBar 没有「店铺」那一格。 -->
-    <view class="card hero">
+    <view class="card hero {{isEmpty ? 'accent-subtle' : ''}}">
       <view class="hero-head js-shop" hover-class="press" bindtap="goShop">
         <view class="hero-shop">{{shopName || '未命名店铺'}} ›</view>
         <view class="hero-date">{{dateText}}</view>
@@ -62,10 +64,15 @@
       </block>
 
       <block wx:else>
-        <view class="hero-body" hover-class="press" bindtap="goRecords">
-          <view class="hero-label">今日实收（元）</view>
-          <view class="hero-num {{receivedClass}}">{{receivedText}}</view>
-          <view wx:if="{{todaySubText}}" class="hero-sub">{{todaySubText}}</view>
+        <view class="accent-rail-wrap hero-rail">
+          <view class="accent-rail"></view>
+          <view class="accent-rail-body">
+            <view class="hero-body" hover-class="press" bindtap="goRecords">
+              <view class="hero-label">今日实收（元）</view>
+              <view class="hero-num {{receivedClass}}">{{receivedText}}</view>
+              <view wx:if="{{todaySubText}}" class="hero-sub">{{todaySubText}}</view>
+            </view>
+          </view>
         </view>
       </block>
     </view>
@@ -103,24 +110,29 @@
       <block wx:if="{{lowStockCount}}">
         <view class="restock-head">
           <view class="restock-title">要补货</view>
-          <view class="restock-count">{{lowStockCount}} 种</view>
+          <view class="restock-count accent-fg">{{lowStockCount}} 种</view>
           <view class="restock-all js-low-stock-all" hover-class="press" bindtap="goLowStock">全部 ›</view>
         </view>
-        <view class="card list-card">
-          <view
-            class="restock-row js-restock-row"
-            hover-class="press"
-            wx:for="{{lowStockTop}}"
-            wx:key="key"
-            data-id="{{item.productId}}"
-            bindtap="onRestockTap"
-          >
-            <view class="restock-name">{{item.name}}</view>
-            <view class="restock-qty">
-              <text class="restock-remain">{{item.remainText}}</text>
-              <text class="restock-threshold">{{item.thresholdText}}</text>
+        <view class="card list-card restock-card">
+          <view class="accent-rail-wrap">
+            <view class="accent-rail restock-rail"></view>
+            <view class="accent-rail-body">
+              <view
+                class="restock-row js-restock-row"
+                hover-class="press"
+                wx:for="{{lowStockTop}}"
+                wx:key="key"
+                data-id="{{item.productId}}"
+                bindtap="onRestockTap"
+              >
+                <view class="restock-name">{{item.name}}</view>
+                <view class="restock-qty">
+                  <text class="restock-remain">{{item.remainText}}</text>
+                  <text class="restock-threshold">{{item.thresholdText}}</text>
+                </view>
+                <view class="restock-chevron">›</view>
+              </view>
             </view>
-            <view class="restock-chevron">›</view>
           </view>
         </view>
       </block>

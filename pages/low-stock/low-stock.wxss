@@ -41,7 +41,7 @@
 }
 
 .restock-remain {
-  color: var(--color-red-600);
+  color: var(--color-brand-accent);
 }
 
 .restock-threshold {

@@ -16,6 +16,7 @@
   </view>
 
   <block wx:else>
+    <view class="accent-hairline"></view>
     <!-- 稿 Screen/01b 7:274：「共 3 种低于预警线 · 点行进商品详情」 -->
     <view class="summary js-low-stock-summary">{{summaryText}}</view>
 

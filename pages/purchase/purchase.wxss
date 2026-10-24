@@ -153,3 +153,22 @@
   margin-bottom: 6rpx;
   font-weight: 600;
 }
+
+/* ardot-718738 B4·E 进货：合计 accent；选中 chip */
+.total-bar, .purchase-total, .sum-text, .footer-sum {
+  color: var(--color-brand-accent);
+}
+.chip.on { background: var(--color-brand-accent-subtle); color: var(--color-brand-accent); }
+
+/* ardot-718738 B4 purchase */
+.chip.on, .chip.on .chip-label {
+  background: var(--color-brand-accent-subtle);
+  color: var(--color-brand-accent);
+}
+.field-sum, .sum-text, .total-text, .purchase-sum {
+  color: var(--color-brand-accent);
+}
+
+
+/* ardot total-num */
+.total-num { color: var(--color-brand-accent); }

@@ -101,6 +101,13 @@ page {
   --color-amber-600: #D97805;
   --color-red-600: #DB2626;
   --color-green-700: #057857;
+  /* ardot-718738 §0：brand-accent 与毛利 green-700 分列。
+     fill/brand-accent $4:973 = brand/700 #0F756E；
+     bg/brand-accent-subtle $4:974 = brand/50 #F0FCFA。
+     黑主 CTA（--color-fill-action / fill/brand $3:88）不动；
+     危险红 / 欠款红不动。勿把毛利数字改绑到 brand-accent。 */
+  --color-brand-accent: #0F756E;
+  --color-brand-accent-subtle: #F0FCFA;
   /* 1a 批新增。动效 token 取自稿「Section/动效与层级」13:90 的 b1MotionTokens（13:60），
      原话是「实现用这些名，不要在页面里另写毫秒数」。
      层级 token（sticky 10 · fab 100 · overlay 1000 · sheet 1001 · dialog 1100）本批不加：
@@ -150,6 +157,54 @@ button::after {
 .press {
   opacity: 0.72;
 }
+
+
+/* ardot-718738 §0 utilities：hairline / rail / selected·subtle
+   尺寸按稿 1px=2rpx：hairline h=2px→4rpx；rail w=3px→6rpx。
+   黑主 CTA / 危险红消费点不要套这些类。 */
+.accent-hairline {
+  display: block;
+  width: 100%;
+  height: 4rpx;
+  flex-shrink: 0;
+  background: var(--color-brand-accent);
+}
+
+.accent-rail-wrap {
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-md);
+}
+
+.accent-rail {
+  flex-shrink: 0;
+  width: 6rpx;
+  align-self: stretch;
+  background: var(--color-brand-accent);
+  border-radius: 3rpx;
+}
+
+.accent-rail-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.accent-subtle {
+  background: var(--color-brand-accent-subtle);
+}
+
+.accent-fg {
+  color: var(--color-brand-accent);
+}
+
+.accent-selected {
+  background: var(--color-brand-accent-subtle);
+}
+
+.accent-selected .accent-selected-fg {
+  color: var(--color-brand-accent);
+}
+
 
 .page {
   padding: var(--page-pad) var(--page-pad) calc(var(--page-pad) * 2);

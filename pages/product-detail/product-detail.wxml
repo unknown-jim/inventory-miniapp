@@ -13,7 +13,8 @@
     </view>
   </view>
   <block wx:else>
-  <view class="card main-card">
+    <view class="accent-hairline"></view>
+  <view class="card main-card accent-subtle main-card-accent">
     <view class="thumb" bindtap="previewThumb">
       <image class="thumb-img" wx:if="{{image && !imageFailed}}" src="{{image}}" mode="aspectFill" binderror="onThumbError" />
       <view class="thumb-empty" wx:else>
@@ -22,12 +23,12 @@
     </view>
     <view class="main-col">
       <view class="name js-detail-name">{{name}}</view>
-      <view class="price js-detail-price">¥{{priceText}}</view>
+      <view class="price js-detail-price accent-fg">¥{{priceText}}</view>
       <view wx:if="{{metaText}}" class="meta js-detail-meta">{{metaText}}</view>
     </view>
   </view>
 
-  <view class="card stock-card">
+  <view class="card stock-card accent-subtle">
     <view class="stock-title">库存全景</view>
     <view wx:if="{{hasSpecs}}" class="gate-row" bindtap="goAdjust">
       <text class="gate-hint">点规格改件数 · 换规格 / 盘点</text>

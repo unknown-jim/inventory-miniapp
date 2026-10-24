@@ -6,6 +6,7 @@
      新增入口 = 搜索行右端的 ＋（稿 15:70），不留 FAB：稿 n1 15:154 逐字
      「FAB 全站只服务「记一笔」（流水页），与商品/客户列表同构」。 -->
 <view class="page">
+  <view class="accent-hairline"></view>
   <!-- 稿 row/搜索与新增 15:68：searchbar 占满 + 44x44 描边圆钮，横排 gap 10。
        与 pages/customers 和 pages/products 的 tool-row 是同一份写法（同一枚稿组件）。
        它在空态卡外面，所以三个态都有搜索框和 ＋。 -->
@@ -23,7 +24,7 @@
          total 为 0            = 真空态，走 state/empty/cta 15:168；
          total 不为 0 而 list 空 = 搜索无结果，走 state/empty 15:205 + 清空搜索退路。
        改版前两态共用一张「还没有种类模板」卡，搜不到时那是假话 —— 他明明有模板。 -->
-  <view wx:if="{{!list.length}}" class="card empty">
+  <view wx:if="{{!list.length}}" class="card empty accent-subtle">
     <view class="empty-icon empty-icon-products"></view>
     <block wx:if="{{total > 0}}">
       <view class="empty-title">没有匹配的种类</view>
@@ -47,7 +48,7 @@
        点整卡进编辑（稿 n2 15:155）；无左滑删除（稿 9:24 与 n1 4:646）。
        类型 tag 是彩色浅底的**状态标识**，chip 铁律里不可点的那一档（稿 n3 15:156）。 -->
   <view
-    class="card cat-card js-category-item"
+    class="card cat-card js-category-item {{index===0 ? 'accent-selected cat-first' : ''}}"
     wx:for="{{list}}"
     wx:key="id"
     data-id="{{item.id}}"

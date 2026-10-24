@@ -51,3 +51,6 @@
 .cta-inner {
   padding: var(--space-sm) var(--page-pad) calc(env(safe-area-inset-bottom) + var(--space-lg));
 }
+
+/* ardot-718738 B6·E 编辑主卡 subtle；不加 input rail */
+.chip.on { background: var(--color-brand-accent-subtle); color: var(--color-brand-accent); }

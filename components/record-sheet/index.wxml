@@ -11,12 +11,14 @@
     >
       <view class="rs-grabber"></view>
     </view>
+    <view class="accent-hairline"></view>
 
     <!-- 一级：记一笔 -->
     <block wx:if="{{step === 'main'}}">
       <view class="rs-title">记一笔</view>
 
-      <view class="rs-row js-rs-sale" data-action="sale" bindtap="onAction" hover-class="rs-row-press">
+      <view class="rs-row rs-row-accent js-rs-sale" data-action="sale" bindtap="onAction" hover-class="rs-row-press">
+        <view class="accent-rail"></view>
         <view class="rs-icon rs-icon-sale"></view>
         <view class="rs-col">
           <view class="rs-label">销售</view>
@@ -68,7 +70,7 @@
     <block wx:elif="{{step === 'adjust'}}">
       <view class="rs-title">库存修正</view>
 
-      <view class="rs-option js-rs-convert" data-action="convert" bindtap="onAdjustAction" hover-class="rs-option-press">
+      <view class="rs-option rs-option-accent js-rs-convert" data-action="convert" bindtap="onAdjustAction" hover-class="rs-option-press">
         <view class="rs-col">
           <view class="rs-label">换规格 / 加工（总数不变）</view>
           <view class="rs-desc">成品换规格、半成品做成成品</view>
@@ -155,7 +157,7 @@
         </view>
         </scroll-view>
         </block>
-        <view wx:else class="rs-empty">没有可退的销售单</view>
+        <view wx:else class="rs-empty" data-tone="accent">没有可退的销售单</view>
       </view>
     </block>
 

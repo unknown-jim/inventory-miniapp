@@ -1,4 +1,5 @@
 <view class="page">
+  <view class="accent-hairline"></view>
   <!-- 时间段 pill。稿 row/汇总切换 4:835 的右半 pill/时间段（可选区间）4:1007：
        白底 + 黑描边 + r999 + h44 + padding-x 14，label「本月 ⌄」13px。
        稿上这一行左侧还有「导出 ›」（4:1006）→ 底部账本导出 sheet（4:872），
@@ -15,19 +16,20 @@
   <!-- 期间摘要条。稿 row/本月摘要 13:118：白底 + hairline 描边 + r10 + h44，三等分。
        三列 = 进货 / 销售（应收）/ 毛利，**没有欠款**（稿 4:190 原话：「欠款是存量，
        不在本页重复」；服务端 windowTotalsOf 也压根不回 receivable）。 -->
-  <view class="summary-row">
+  <view class="summary-row summary-accent accent-subtle accent-rail-wrap"><view class="accent-rail"></view><view class="accent-rail-body summary-row-body">
     <view class="summary-col">
       <view class="summary-label">进货</view>
-      <view class="summary-num js-summary-purchase">{{purchaseText}}</view>
+      <view class="summary-num accent-fg js-summary-purchase">{{purchaseText}}</view>
     </view>
     <view class="summary-col">
       <view class="summary-label">销售（应收）</view>
-      <view class="summary-num js-summary-sales">{{salesText}}</view>
+      <view class="summary-num accent-fg js-summary-sales">{{salesText}}</view>
     </view>
     <view class="summary-col">
       <view class="summary-label">毛利</view>
-      <view class="summary-num profit js-summary-profit">{{profitText}}</view>
+      <view class="summary-num profit accent-fg js-summary-profit">{{profitText}}</view>
     </view>
+  </view>
   </view>
 
   <!-- 聚合漂移哨兵。稿 hint/汇总核对中·样张 13:131，caption 13:137 写明

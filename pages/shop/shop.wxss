@@ -184,3 +184,63 @@
 .safe-area {
   height: calc(env(safe-area-inset-bottom) + 68rpx);
 }
+
+/* ardot-718738 B7·E：建店表单 subtle 无 rail；身份码/怎么进店/改名 subtle+rail；步骤圈 accent */
+.form-card.accent-subtle, .create-card, .join-card, .invite-card, .howto-card, .rename-card {
+  background: var(--color-brand-accent-subtle);
+}
+.code-card, .invite-card, .howto-card, .rename-card, .identity-card {
+  position: relative;
+}
+.code-rail, .howto-rail, .rename-rail {
+  /* applied when wxml adds accent-rail-wrap */
+}
+.step-dot, .guide-dot, .join-step-num {
+  background: var(--color-brand-accent-subtle);
+  color: var(--color-brand-accent);
+}
+
+.rename-card-accent {
+  position: relative;
+  padding-left: calc(var(--card-pad) + 6rpx + var(--space-md));
+}
+.rename-card-accent::before {
+  content: "";
+  position: absolute;
+  left: var(--card-pad);
+  top: var(--card-pad);
+  bottom: var(--card-pad);
+  width: 6rpx;
+  background: var(--color-brand-accent);
+  border-radius: 3rpx;
+}
+
+.code-card-accent {
+  position: relative;
+  padding-left: calc(var(--card-pad) + 6rpx + var(--space-md));
+}
+.code-card-accent::before {
+  content: "";
+  position: absolute;
+  left: var(--card-pad);
+  top: var(--card-pad);
+  bottom: var(--card-pad);
+  width: 6rpx;
+  background: var(--color-brand-accent);
+  border-radius: 3rpx;
+}
+
+.howto-card-accent {
+  position: relative;
+  padding-left: calc(var(--card-pad) + 6rpx + var(--space-md));
+}
+.howto-card-accent::before {
+  content: "";
+  position: absolute;
+  left: var(--card-pad);
+  top: var(--card-pad);
+  bottom: var(--card-pad);
+  width: 6rpx;
+  background: var(--color-brand-accent);
+  border-radius: 3rpx;
+}

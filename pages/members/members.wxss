@@ -79,3 +79,6 @@
 .safe-area {
   height: calc(env(safe-area-inset-bottom) + 68rpx);
 }
+
+/* ardot-718738 B7 成员相关点缀（基线 Screen/14 不重画；仅附属态） */
+.chip.on { background: var(--color-brand-accent-subtle); color: var(--color-brand-accent); }

@@ -322,3 +322,54 @@
   font-size: var(--fs-body);
   color: var(--color-neutral-600);
 }
+
+/* ardot-718738 B6·E：欠款卡 subtle+rail（未包收款 CTA）；联系卡 subtle；欠款数字仍红 */
+.debt-card-accent {
+  position: relative;
+  padding-left: calc(var(--card-pad) + 6rpx + var(--space-md));
+}
+.debt-card-accent::before {
+  content: "";
+  position: absolute;
+  left: var(--card-pad);
+  top: var(--card-pad);
+  bottom: var(--card-pad);
+  width: 6rpx;
+  background: var(--color-brand-accent);
+  border-radius: 3rpx;
+}
+/* 不要覆盖 .debt / 欠款红 */
+
+/* ardot-718738 B6 hero */
+.hero-card.accent-subtle {
+  position: relative;
+  padding-left: calc(var(--card-pad) + 6rpx + var(--space-md));
+}
+.hero-card.accent-subtle::before {
+  content: "";
+  position: absolute;
+  left: var(--card-pad);
+  top: var(--card-pad);
+  bottom: var(--card-pad);
+  width: 6rpx;
+  background: var(--color-brand-accent);
+  border-radius: 3rpx;
+}
+
+/* ardot-718738 B6 debt/contact rail */
+.debt-card-accent, .contact-card-accent, .hero-card.accent-subtle {
+  position: relative;
+  padding-left: calc(var(--card-pad, var(--space-lg)) + 6rpx + var(--space-md));
+}
+.debt-card-accent::before, .contact-card-accent::before, .hero-card.accent-subtle::before {
+  content: "";
+  position: absolute;
+  left: var(--card-pad, var(--space-lg));
+  top: var(--card-pad, 12rpx);
+  bottom: var(--card-pad, 12rpx);
+  width: 6rpx;
+  background: var(--color-brand-accent);
+  border-radius: 3rpx;
+}
+/* debt amount stays danger — do not override */
+

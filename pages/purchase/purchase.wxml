@@ -20,6 +20,7 @@
     </view>
   </view>
   <block wx:else>
+    <view class="accent-hairline"></view>
     <!-- 稿 4:693 + 注 4:713：点选带出商品 + 规格 + 上次进价，只改数量即可确认 -->
     <block wx:if="{{recent.length}}">
       <view class="muted recent-label">最近进货（点选带出，只改数量）</view>
@@ -75,7 +76,7 @@
       </view>
 
       <!-- 稿 row/合计 4:709「共 25 件 · ¥2,375.00」 -->
-      <view class="total">
+      <view class="total accent-fg">
         <text class="muted">合计</text>
         <text class="total-num">{{totalText}}</text>
       </view>

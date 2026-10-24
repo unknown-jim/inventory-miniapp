@@ -22,3 +22,12 @@
 .spec-block .chips {
   margin-bottom: 8rpx;
 }
+
+/* ardot-718738 B2·E 数量调整：预览 subtle+accent；选中 chip */
+.preview-block, .adjust-preview {
+  background: var(--color-brand-accent-subtle);
+  color: var(--color-brand-accent);
+  border-radius: var(--space-md);
+  padding: var(--space-lg);
+}
+.chip.on { background: var(--color-brand-accent-subtle); color: var(--color-brand-accent); }

@@ -30,8 +30,9 @@
   </view>
 
   <block wx:else>
+    <view class="accent-hairline"></view>
     <!-- 稿 card/原单信息 4:235：三行 k/v，k 13px muted 定宽 56，v 14px。只读。 -->
-    <view class="card info-card">
+    <view class="card info-card accent-subtle info-card-accent">
       <view class="kv">
         <text class="kv-k">原单号</text>
         <text class="kv-v js-return-docno">{{docNoText}}</text>
@@ -84,7 +85,7 @@
     <!-- 稿 state/empty · 全退0 13:653：纸箱 48 + 「这张单已经退完」+ 「没有可退的件数」。
          稿上这枚实例的 cta-row 3:756 是 visible:false —— 按钮只在底栏，
          caption 7:365 原话「返回销售详情只在底栏」。 -->
-    <view wx:if="{{allZero}}" class="card empty ret-empty js-return-empty">
+    <view wx:if="{{allZero}}" class="card empty ret-empty accent-subtle js-return-empty">
       <view class="empty-icon empty-icon-products"></view>
       <view class="empty-title">这张单已经退完</view>
       <view class="muted">没有可退的件数</view>
@@ -93,7 +94,7 @@
     <block wx:else>
       <!-- 稿 退货金额预览 4:284 + 措辞样张 7:352。段的拼装规则写在 sale-return.js
            的 previewOf 上方；冲欠款那一格用 text/debt 红（稿 7:362 绑 $7:346）。 -->
-      <view class="preview js-return-preview">
+      <view class="preview accent-subtle js-return-preview">
         <view class="preview-line">
           <block wx:for="{{previewParts}}" wx:key="t">
             <text class="preview-t">{{item.t}}</text>

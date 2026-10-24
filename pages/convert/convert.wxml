@@ -6,6 +6,7 @@
      from.isBlank 直接 throw，本批不做（规格 §6-2 / OPEN-Q-2）。
      本屏一个金额都不出现（稿注 4:473「不产生金额」）。 -->
 <view class="page">
+  <view class="accent-hairline"></view>
   <view class="card">
     <view class="field last">
       <view class="field-label">商品</view>
@@ -72,7 +73,7 @@
     </view>
 
     <!-- 稿 card/换规格预览 4:786：白卡 + hairline，两行，数字随来源/目标/数量联动 -->
-    <view class="card preview" wx:if="{{previewFrom && previewTo}}">
+    <view class="card preview accent-subtle preview-accent" wx:if="{{previewFrom && previewTo}}">
       <view class="preview-line js-convert-preview-from">{{previewFrom}}</view>
       <view class="preview-div"></view>
       <view class="preview-line js-convert-preview-to">{{previewTo}}</view>

@@ -252,3 +252,26 @@
 .record-fab-press {
   background: var(--color-fill-action-pressed);
 }
+
+/* ardot-718738 B5·E Screen/06：摘要 subtle+rail+数字 accent；选中 chip subtle+accent */
+.summary-accent {
+  padding: var(--space-lg);
+  border-radius: 24rpx;
+  margin-bottom: var(--space-md);
+}
+
+.summary-row-body {
+  display: flex;
+  width: 100%;
+}
+
+.summary-accent .summary-num,
+.summary-accent .summary-num.profit {
+  color: var(--color-brand-accent);
+}
+
+.type-chip.on {
+  background: var(--color-brand-accent-subtle);
+  color: var(--color-brand-accent);
+  border-color: transparent;
+}

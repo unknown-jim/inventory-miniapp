@@ -258,12 +258,39 @@
   font-weight: 600;
 }
 
-/* 稿 unit 7:6：12px neutral/500 */
+/* 稿 unit 7:6：12px neutral/500。
+   .has-unit：长「可出 N（现货 · 待加工）」时改为框内上下排布，
+   输入保持整行可点宽度，提示完整换行（不截成「待加...」）。 */
 .qty-unit {
   flex: none;
   margin-left: var(--space-xs);
   font-size: var(--fs-caption);
   color: var(--color-neutral-500);
+}
+
+.qty-box.has-unit {
+  flex-direction: column;
+  align-items: stretch;
+  height: auto;
+  min-height: var(--tap-md);
+  padding-top: var(--space-sm);
+  padding-bottom: var(--space-sm);
+  gap: var(--space-xs);
+}
+
+.qty-box.has-unit .qty-input {
+  flex: none;
+  width: 100%;
+  min-width: 0;
+  height: 56rpx;
+}
+
+.qty-box.has-unit .qty-unit {
+  margin-left: 0;
+  white-space: normal;
+  word-break: break-word;
+  line-height: 1.35;
+  pointer-events: none;
 }
 
 .line-amount {

@@ -5,8 +5,9 @@
      三个入口：客户列表右上角 ＋（无参 = 新增）、销售 / 流水详情的「＋ 新增客户」
      （?select=1，存完回选）、客户详情的「编辑客户资料」（?id=）。 -->
 <view class="page">
+  <view class="accent-hairline"></view>
   <!-- 稿 card/基础信息 4:1120：四组「label + 输入框」，label 13px neutral/500 -->
-  <view class="card">
+  <view class="card accent-subtle">
     <view class="field">
       <view class="field-label">客户名称 · 必填</view>
       <input

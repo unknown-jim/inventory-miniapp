@@ -202,11 +202,12 @@
   <!-- 单选形态：既有数量+售价/本行金额/红字/加入清单，一个字不改。
        多选形态把这些内容画进了上面的 spec-card，这里整段不出。 -->
   <block wx:if="{{!multiMode}}">
-    <!-- 稿 field-row/数量+售价 7:1：数量框内右侧带「件 · 可出 N」（unit 7:6） -->
+    <!-- 稿 field-row/数量+售价 7:1：数量框内带「件 · 可出 N」（unit 7:6）。
+         待加工长文案时改为框内上下两行，避免挤没输入宽度（截断 + 点不进）。 -->
     <view class="field-row">
       <view class="field half">
         <view class="field-label">数量</view>
-        <view class="qty-box">
+        <view class="qty-box has-unit">
           <input class="qty-input js-qty" type="digit" data-field="qty" value="{{qty}}" bindinput="onField" placeholder="0" hidden="{{showPicker || showCustomerPicker || showSlip || showPaid || showCart}}" />
           <text class="qty-unit">件 · 可出 {{stockText}}</text>
         </view>

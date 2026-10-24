@@ -11,6 +11,7 @@
      删除在内容区末尾、底栏只留保存：稿 n6 7:71 逐字
      「删除模板在内容区末尾，不进底栏；底栏只留保存。内容可滚，开关与删除必须完整可见。」 -->
 <view class="page">
+  <view class="accent-hairline"></view>
   <!-- 稿 field/模板名 4:611：label 12px muted + 44 高输入框。 -->
   <view class="field">
     <view class="field-label">种类名称</view>
