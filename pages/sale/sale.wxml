@@ -17,11 +17,9 @@
     </view>
   </view>
   <block wx:else>
-    <view class="accent-hairline"></view>
-
-  <!-- 稿 card/客户 3:708：白卡 r12，左名称 + 副行账户句，右 chevron。
+  <!-- 稿 card/客户 3:708：白卡 r12 + accent-rail 40:1（无 subtle 底、content 无顶 hairline）
        副行口径见 n-客户卡预收 10:155：有欠款只写欠款，无欠款有预收才写「预收可抵」。 -->
-  <view class="cust-card accent-subtle cust-card-accent js-customer-picker" bindtap="openCustomerPicker">
+  <view class="cust-card cust-card-accent js-customer-picker" bindtap="openCustomerPicker">
     <view class="cust-col">
       <view class="cust-name">{{customerName}}</view>
       <view class="cust-sub">{{customerSub}}</view>

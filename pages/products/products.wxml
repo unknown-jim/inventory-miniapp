@@ -13,6 +13,8 @@
     </view>
   </view>
   <block wx:else>
+  <!-- 稿 content 3:582 首子：accent-hairline 40:2（brand $4:973，h=2） -->
+  <view class="accent-hairline"></view>
   <view class="tools">
     <view class="tool-row">
       <input

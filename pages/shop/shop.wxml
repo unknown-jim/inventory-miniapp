@@ -46,8 +46,8 @@
       <button class="btn-primary gap-top js-shop-create" bindtap="createShop">创建并进入</button>
     </view>
 
-    <view class="card">
-      <view class="card-label accent-subtle code-card-accent">我的身份码（发给店主，用于被添加为店员）</view>
+    <view class="card accent-subtle">
+      <view class="card-label">我的身份码（发给店主，用于被添加为店员）</view>
       <view class="code" selectable="true">{{openid || '加载中…'}}</view>
       <button class="action gap-top" bindtap="copyOpenid">复制</button>
       <view class="muted gap-top">没有邀请码。把这串身份码发给店主，店主添加后你就在店里了。</view>
@@ -59,7 +59,7 @@
          就是身份码卡下面这一张，最需要它的人（还没有店的店员）才看得到。
          三行不带状态列、不可点：进度在店主侧，本人推不出来（稿 15:210 n1）。 -->
     <view class="card">
-      <view class="card-title accent-subtle howto-card-accent">怎么进店</view>
+      <view class="card-title">怎么进店</view>
       <view class="step-row" wx:for="{{joinSteps}}" wx:key="n">
         <view class="step-dot">{{item.n}}</view>
         <view class="step-name">{{item.name}}</view>
@@ -70,7 +70,7 @@
   </block>
 
   <block wx:else>
-    <view class="accent-hairline"></view>
+    <!-- 稿 content 4:525 无顶 hairline；首卡即 card/当前店 4:536（白底，无 rail） -->
     <view wx:if="{{shopsLoadError}}" class="card empty">
       <view class="muted">{{shops.length ? '店铺列表没刷新成功，下面仍是上次看到的店。' : '店铺列表没加载成功。'}}</view>
       <button class="btn-ghost gap-top" bindtap="retryShops">重试</button>
@@ -88,7 +88,7 @@
          逐条对齐 —— 两者是同一档动作，隔着一次 navigateTo 用两套交互是纯损失。
          展开体套的是本页已有的 .fold-body（hairline + 上下留白），等价于稿上
          店名行下面那条 div 4:930，所以不用新写一条 wxss。 -->
-    <view wx:if="{{hasCurrentShop}}" class="card accent-subtle rename-card-accent">
+    <view wx:if="{{hasCurrentShop}}" class="card">
       <view class="shop-head">
         <view class="shop-name js-shop-current">{{shopName || '未命名店铺'}}</view>
         <view
@@ -174,10 +174,10 @@
       </view>
     </view>
 
-    <!-- 稿 card/身份码 4:556。main 上这块藏在「加入别人的店」折叠里，
-         而且屏上会出现两枚「复制我的身份」；稿把它做成常驻卡，本批照办、收成一枚。
+    <!-- 稿 card/身份码 4:556：fill $4:974 brand-accent-subtle（无 rail）。
+         main 上这块原藏在「加入别人的店」折叠里；稿做成常驻卡，本批照办。
          码不截断：真 openid 是 28 字符，店员要能长按选中。 -->
-    <view class="card">
+    <view class="card accent-subtle">
       <view class="card-label">我的身份码（发给店主，用于被添加为店员）</view>
       <view class="code" selectable="true">{{openid || '加载中…'}}</view>
       <button class="action gap-top" bindtap="copyOpenid">复制</button>

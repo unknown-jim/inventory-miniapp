@@ -185,8 +185,10 @@
   height: calc(env(safe-area-inset-bottom) + 68rpx);
 }
 
-/* ardot-718738 B7·E：建店表单 subtle 无 rail；身份码/怎么进店/改名 subtle+rail；步骤圈 accent */
-.form-card.accent-subtle, .create-card, .join-card, .invite-card, .howto-card, .rename-card {
+/* ardot-718738 Round7 / Screen/14：稿 card/当前店 4:536 白底无 rail；
+   card/身份码 4:556 走 .accent-subtle（$4:974）；建店空态表单仍可 subtle。
+   rename-card-accent / code-card-accent / howto-card-accent 的 ::before rail 已不再挂 wxml。 */
+.form-card.accent-subtle, .create-card, .join-card, .invite-card {
   background: var(--color-brand-accent-subtle);
 }
 .code-card, .invite-card, .howto-card, .rename-card, .identity-card {

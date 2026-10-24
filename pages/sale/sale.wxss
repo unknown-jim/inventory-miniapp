@@ -306,16 +306,15 @@
   color: var(--color-red-600);
 }
 
-/* 稿 btn 加入清单 4:65：44 高（本仓归 --tap-md）、r8（= 16rpx）、neutral/100 底。
-   启用态用正文黑字；禁用态走 app.wxss 的 .btn-primary[disabled] 那一档配方
-   （neutral/100 底 + neutral/500 字 + opacity 1），稿 13:615 就是这一档。 */
+/* 稿 btn/加入清单 4:65：fill $4:973 brand-accent + 字/icon $3:81 白；高 $4:937（本仓 --tap-md）、r8。
+   禁用态走稿拦截样张 13:615：neutral/100 底 + neutral/500 字 + opacity 1（同 .btn-primary[disabled]）。 */
 .add-btn {
   height: var(--tap-md);
   line-height: var(--tap-md);
   margin: var(--space-md) 0 0;
-  background: var(--color-fill-ghost);
+  background: var(--color-brand-accent);
   border-radius: 16rpx;
-  color: var(--color-text-primary);
+  color: var(--color-text-on-action);
   font-size: var(--fs-title);
   font-weight: 500;
 }
@@ -719,12 +718,7 @@
   padding-left: calc(var(--card-pad, var(--space-lg)) + 6rpx + var(--space-md));
 }
 
-/* detail-QA：.cust-card 白底盖掉 accent-subtle */
-.cust-card.accent-subtle,
-.cust-card-accent {
-  background: var(--color-brand-accent-subtle);
-}
-
+/* 稿 card/客户 3:708：白底（.cust-card）+ rail；不再涂 accent-subtle */
 .cust-card-accent::before {
   content: "";
   position: absolute;
