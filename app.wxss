@@ -172,6 +172,8 @@ button::after {
   background: var(--color-brand-accent);
 }
 
+
+
 .accent-rail-wrap {
   display: flex;
   align-items: stretch;
@@ -218,6 +220,14 @@ button::after {
   border-radius: 24rpx;
   padding: var(--card-pad);
   box-shadow: 0 8rpx 24rpx rgba(15, 20, 26, 0.04);
+}
+
+/* accent-subtle 必须压过 .card / 页级白底；原定义在 .card 之前会被盖掉 */
+.accent-subtle {
+  background: var(--color-brand-accent-subtle);
+}
+.accent-selected {
+  background: var(--color-brand-accent-subtle);
 }
 
 .section-title {

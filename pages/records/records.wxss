@@ -271,6 +271,14 @@
   margin-bottom: var(--space-md);
 }
 
+/* detail-QA：.summary-row 白底会盖掉 accent-subtle；摘要稿位要 subtle 底 */
+.summary-row.accent-subtle,
+.summary-accent {
+  background: var(--color-brand-accent-subtle);
+  border-color: transparent;
+}
+
+
 .summary-row-body {
   display: flex;
   width: 100%;

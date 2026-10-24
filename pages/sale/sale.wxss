@@ -718,6 +718,13 @@
   position: relative;
   padding-left: calc(var(--card-pad, var(--space-lg)) + 6rpx + var(--space-md));
 }
+
+/* detail-QA：.cust-card 白底盖掉 accent-subtle */
+.cust-card.accent-subtle,
+.cust-card-accent {
+  background: var(--color-brand-accent-subtle);
+}
+
 .cust-card-accent::before {
   content: "";
   position: absolute;
