@@ -526,6 +526,43 @@ async function tapWhen(page, selector) {
   await tap(page, selector)
 }
 
+
+async function confirmDialogHost(page) {
+  const host = await page.$('#confirmDialog')
+  if (!host) {
+    throw new Error('页面 ' + page.path + ' 上找不到 #confirmDialog 宿主节点：'
+      + '页面 json 是否漏了 confirm-dialog 组件？')
+  }
+  if (typeof host.$ !== 'function') {
+    throw new Error('#confirmDialog 拿到的不是自定义组件实例（没有 $）：'
+      + '和 #record-sheet / #slip-overlay 同一路，必须走宿主上的查询')
+  }
+  return host
+}
+
+// round6 起危险确认改自绘 confirm-dialog，不再走 wx.showModal。
+// mockWxMethod('showModal') 罩不住它 —— 必须点组件里的 .js-confirm-ok。
+async function waitConfirmDialog(page, label) {
+  label = label || '确认弹层'
+  await waitFor(page, async function () {
+    const host = await page.$('#confirmDialog')
+    if (!host || typeof host.$ !== 'function') return false
+    const mask = await host.$('.js-confirm-dialog')
+    return !!mask
+  }, '出现 ' + label)
+  return confirmDialogHost(page)
+}
+
+async function tapConfirmOk(page, label) {
+  const host = await waitConfirmDialog(page, label || '确认弹层')
+  const ok = await host.$('.js-confirm-ok')
+  if (!ok) {
+    throw new Error((label || '确认弹层') + ' 没有 .js-confirm-ok（showConfirm 被关了？）')
+  }
+  await ok.tap()
+}
+
+
 async function waitGone(page, selector) {
   await waitFor(page, async function () {
     const list = await page.$$(selector)
@@ -2461,7 +2498,7 @@ async function runCustomerLedgerLoadMore(miniProgram) {
 }
 
 async function runNativeClearModal(miniProgram) {
-  step('店铺页：点清空（原生弹窗用 mock 自动确认）')
+  step('店铺页：点清空（自绘 confirm-dialog 点确认）')
   // 上一步停在客户页（runCustomerLedgerLoadMore 结尾退过栈），直接 reLaunch 会超时，
   // 见 backToTabRoot。
   // 这一整段逐条打了 mark：两轮 UI 测试都在本函数里以「timeout waiting for automator
@@ -2482,6 +2519,7 @@ async function runNativeClearModal(miniProgram) {
   await waitFor(shop, '.js-clear', '出现 .js-clear')
   mark('runNativeClearModal: tap(.js-clear) 之前')
   await tap(shop, '.js-clear')
+  await tapConfirmOk(shop, '清空本店数据确认')
   mark('runNativeClearModal: tap(.js-clear) 之后 / 等 isEmpty')
   await waitFor(shop, async function () {
     const data = await shop.data()
@@ -3492,7 +3530,7 @@ async function runProductEdit(miniProgram) {
   // 把搜索框清回去，不给后面的用例留一个只剩一条的列表。
   await typeInto(listAfterSave, '.js-product-search', '', '清空商品搜索', 'keyword')
 
-  // 删掉自己造的这件商品：既覆盖删除路径（wx.showModal 由 mockWxMethod 自动确认），
+  // 删掉自己造的这件商品：既覆盖删除路径（自绘 confirm-dialog，点 .js-confirm-ok），
   // 也不给后面的用例留垃圾。
   const back = await goto(miniProgram, 'navigateTo',
     '/pages/product-edit/product-edit?id=' + created.id, '商品编辑页（删除）')
@@ -3500,6 +3538,7 @@ async function runProductEdit(miniProgram) {
     return d.id === created.id && d.isEdit === true
   }, '编辑页停在刚建的这件商品上')
   await tapWhen(back, '.js-pe-remove')
+  await tapConfirmOk(back, '删除商品确认')
   const cleaned = await waitForLists(miniProgram, function (lists) {
     return !lists.products.some(function (item) { return item.id === created.id })
   }, '这件商品从账本里删掉')
@@ -3616,6 +3655,7 @@ async function runCategories(miniProgram) {
     return d.id === createdCat.id && d.isEdit === true
   }, '停在刚新增的那个种类上')
   await tapWhen(toRemove, '.js-ce-remove')
+  await tapConfirmOk(toRemove, '删除种类确认')
   const finalLists = await waitForLists(miniProgram, function (lists) {
     return !lists.categories.some(function (item) { return item.id === createdCat.id })
   }, '临时种类从账本里删掉')
@@ -4323,7 +4363,8 @@ function printChecklist() {
   console.error('   _CLOSE_TIMEOUT（收尾关工具，默认 20 秒）/ _SCRIPT_TIMEOUT（整个脚本，默认 45 分钟）覆盖')
   console.error('7. 工具刚打开项目时 Tool.getInfo 不带 SDKVersion，automator 的版本校验会崩，')
   console.error('   脚本里已经等它出现再校验')
-  console.error('8. wx.showModal 是系统弹窗，自动化点不到内部按钮，脚本里用 mockWxMethod 自动确认')
+  console.error('8. 危险确认已改自绘 confirm-dialog（#confirmDialog / .js-confirm-ok）；'
+    + '仍 mock 着 showModal 只兜底还没迁完的路径。点删除/清空后必须 tapConfirmOk')
   console.error('9. 【2026-08-31 已解除】送货单弹层曾经开着 virtualHost，页面级选择器够不着')
   console.error('   （page.$$ / >>> / selectComponent 实测都是 0），那时用例只能核对页面数据里的 slip。')
   console.error('   现在 virtualHost 已摘掉、两个引用点带上了 id="slip-overlay"，用例升回核对渲染：')
