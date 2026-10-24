@@ -17,10 +17,11 @@
     </view>
   </view>
   <block wx:else>
+    <view class="accent-hairline"></view>
 
   <!-- 稿 card/客户 3:708：白卡 r12，左名称 + 副行账户句，右 chevron。
        副行口径见 n-客户卡预收 10:155：有欠款只写欠款，无欠款有预收才写「预收可抵」。 -->
-  <view class="cust-card js-customer-picker" bindtap="openCustomerPicker">
+  <view class="cust-card accent-subtle cust-card-accent js-customer-picker" bindtap="openCustomerPicker">
     <view class="cust-col">
       <view class="cust-name">{{customerName}}</view>
       <view class="cust-sub">{{customerSub}}</view>
@@ -144,7 +145,7 @@
       <!-- 合计行。裁定 C：N = 有正数量的格数（不是选中格数），N = 0 时整行不出 -->
       <view wx:if="{{batchLineCount > 0}}" class="batch-total">
         <text class="batch-total-label">本批 {{batchLineCount}} 格 · 合计</text>
-        <text class="batch-total-amount">¥{{lineAmountText}}</text>
+        <text class="batch-total-amount accent-fg">¥{{lineAmountText}}</text>
       </view>
 
       <!-- 卡级红字：只出一句（后端抛的第一条），逐字取 error.message，不许另编 -->
@@ -219,7 +220,7 @@
         </view>
       </view>
     </view>
-    <view class="line-amount">本行 ¥{{lineAmountText}}</view>
+    <view class="line-amount accent-fg">本行 ¥{{lineAmountText}}</view>
 
     <!-- 稿 13:614：清单累计超出现货且半成品不够时的红字拦截（n16 7:33） -->
     <view wx:if="{{overNote}}" class="over-note js-over-note">{{overNote}}</view>
@@ -231,7 +232,7 @@
   <!-- 稿 row/销售清单·折叠 7:11：点开走弹层，不在首屏内联撑开（n15 7:32） -->
   <view wx:if="{{cart.length}}" class="fold-row cart-row js-cart-row" bindtap="openCart">
     <text class="fold-title">{{cartHead}}</text>
-    <text class="cart-total">合计 ¥{{amountText}}</text>
+    <text class="cart-total accent-fg">合计 ¥{{amountText}}</text>
     <view class="chev"></view>
   </view>
 
@@ -244,7 +245,7 @@
       <view class="paid-row js-paid-row" bindtap="openPaid">
         <view class="paid-left">
           <text class="paid-k">实收</text>
-          <text class="paid-v">¥{{paidAmount || '0.00'}}</text>
+          <text class="paid-v accent-fg">¥{{paidAmount || '0.00'}}</text>
         </view>
         <text class="paid-hint">{{summaryHint}}</text>
         <view class="chev"></view>
@@ -256,10 +257,18 @@
   <!-- ============ 实收 sheet。稿 7:25 / 7:404 / 10:180 / 7:230 四态同一套结构 ============ -->
   <view wx:if="{{showPaid}}" class="mask" bindtap="closePaid">
     <view class="sheet" catchtap="closePickerKeep">
+      <view class="accent-hairline"></view>
       <view class="sheet-title center">{{sheetTitle}}</view>
-      <view class="pay-row">
-        <view class="pay-total">合计 ¥{{amountText}}</view>
-        <view class="muted">共 {{qtyTotal}} 件</view>
+      <view class="pay-preview accent-subtle">
+        <view class="accent-rail-wrap">
+          <view class="accent-rail"></view>
+          <view class="accent-rail-body">
+            <view class="pay-row">
+              <view class="pay-total accent-fg">合计 ¥{{amountText}}</view>
+              <view class="muted">共 {{qtyTotal}} 件</view>
+            </view>
+          </view>
+        </view>
       </view>
 
       <!-- 稿 hint/预收未用 13:330：抵扣关且客户有余额时出现，整行可点打开抵扣 -->
@@ -294,6 +303,7 @@
   <!-- ============ 清单展开 sheet。稿 card/销售清单·展开态 3:746 + 清单行 3:722 ============ -->
   <view wx:if="{{showCart}}" class="mask" bindtap="closeCart">
     <view class="sheet" catchtap="closePickerKeep">
+      <view class="accent-hairline"></view>
       <view class="sheet-title">{{cartHead}}</view>
       <scroll-view scroll-y class="sheet-list">
         <view class="cart-item" wx:for="{{cart}}" wx:key="key">
@@ -302,7 +312,7 @@
               <view class="item-name">{{item.name}}</view>
               <view class="muted"><block wx:if="{{item.specText}}">{{item.specText}}</block></view>
             </view>
-            <text class="cart-amount">¥{{item.amountText}}</text>
+            <text class="cart-amount accent-fg">¥{{item.amountText}}</text>
           </view>
           <view class="cart-ctrl">
             <view class="step-btn js-cart-minus" data-key="{{item.key}}" bindtap="stepDown">−</view>
@@ -320,6 +330,7 @@
   <!-- ============ 商品 picker。稿 sheet/商品picker 4:667 ============ -->
   <view wx:if="{{showPicker}}" class="mask" bindtap="closePicker">
     <view class="sheet" catchtap="closePickerKeep">
+      <view class="accent-hairline"></view>
       <view class="sheet-title">选择商品</view>
       <input class="search" placeholder="搜索商品" value="{{keyword}}" bindinput="onSearch" />
       <scroll-view scroll-y class="sheet-list">
@@ -354,6 +365,7 @@
   <!-- ============ 客户 picker。稿 sheet/select 7:90 与散客置灰变体 7:325 ============ -->
   <view wx:if="{{showCustomerPicker}}" class="mask" bindtap="closeCustomerPicker">
     <view class="sheet" catchtap="closePickerKeep">
+      <view class="accent-hairline"></view>
       <view class="sheet-head">
         <view class="sheet-title">选择客户</view>
         <text class="link" catchtap="goAddCustomer">新增</text>
