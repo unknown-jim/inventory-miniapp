@@ -456,6 +456,19 @@
   height: 126rpx;
 }
 
+
+/* 稿 3:557：非空 hero rail 贯通店名+金额，左贴边（同 restock-card） */
+.hero-with-rail {
+  padding-left: 0;
+  padding-right: 28rpx;
+}
+.hero-with-rail .hero-rail {
+  margin-top: 0;
+  padding-left: 22rpx;
+}
+.hero-with-rail .hero-head {
+  margin-bottom: var(--space-xs);
+}
 /* ardot-718738 B1·E：hero / 要补货卡左 rail；空店引导 subtle 见 .accent-subtle */
 .hero-rail {
   margin-top: var(--space-xs);

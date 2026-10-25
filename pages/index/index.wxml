@@ -43,13 +43,12 @@
     <view class="accent-hairline"></view>
     <!-- 稿 hero/今日实收 3:557。空店时下半身换成新手引导卡（UX注释 3:568 / 4:828），
          店名行保留：它是店铺设置的唯一入口，A3 之后 tabBar 没有「店铺」那一格。 -->
-    <view class="card hero {{isEmpty ? 'accent-subtle' : ''}}">
-      <view class="hero-head js-shop" hover-class="press" bindtap="goShop">
-        <view class="hero-shop">{{shopName || '未命名店铺'}} ›</view>
-        <view class="hero-date">{{dateText}}</view>
-      </view>
-
+    <view class="card hero {{isEmpty ? 'accent-subtle' : 'hero-with-rail'}}">
       <block wx:if="{{isEmpty}}">
+        <view class="hero-head js-shop" hover-class="press" bindtap="goShop">
+          <view class="hero-shop">{{shopName || '未命名店铺'}} ›</view>
+          <view class="hero-date">{{dateText}}</view>
+        </view>
         <view class="guide-title">新手引导</view>
         <view class="guide-step" wx:for="{{guideSteps}}" wx:key="n">
           <view class="guide-dot {{item.done ? 'guide-dot-done' : ''}}">{{item.done ? '✓' : item.n}}</view>
@@ -63,10 +62,15 @@
         </view>
       </block>
 
+      <!-- 稿 3:557：rail 贯通店名行 + 今日实收整卡，左 pad 0 贴边 -->
       <block wx:else>
         <view class="accent-rail-wrap hero-rail">
           <view class="accent-rail"></view>
           <view class="accent-rail-body">
+            <view class="hero-head js-shop" hover-class="press" bindtap="goShop">
+              <view class="hero-shop">{{shopName || '未命名店铺'}} ›</view>
+              <view class="hero-date">{{dateText}}</view>
+            </view>
             <view class="hero-body" hover-class="press" bindtap="goRecords">
               <view class="hero-label">今日实收（元）</view>
               <view class="hero-num {{receivedClass}}">{{receivedText}}</view>
