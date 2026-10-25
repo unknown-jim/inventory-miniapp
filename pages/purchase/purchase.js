@@ -16,6 +16,7 @@ Page({
     products: [],
     skus: [],
     recent: [],
+    recentKey: '',
     productId: '',
     productName: '请选择商品',
     stockText: '-',
@@ -271,16 +272,21 @@ Page({
     this.refreshAmount()
   },
 
-  selectProduct(id, skuId) {
+  selectProduct(id, skuId, opts) {
     const product = store.getProduct(id)
     if (!product) return
     const same = this.data.productId === id
+    // 换商品时清「最近进货」选中态；pickRecent 传 keepRecent 避免与后续 setData 竞态。
+    if (!(opts && opts.keepRecent) && this.data.recentKey) {
+      this.setData({ recentKey: '' })
+    }
     this.applyProductState(product, skuId || (same ? this.data.skuId : ''))
   },
 
   pickSku(e) {
     const product = store.getProduct(this.data.productId)
     if (!product) return
+    if (this.data.recentKey) this.setData({ recentKey: '' })
     this.applyProductState(product, e.currentTarget.dataset.id)
   },
 
@@ -295,12 +301,12 @@ Page({
     // 先清空是既有写法：清掉之后 applyProductState 的 keepPrice 判假，整套状态照
     // 新商品/新格重建，不留上一次的残值。
     this.setData({ qty: '', unitPrice: '', priceTouched: false })
-    this.selectProduct(hit.productId, hit.skuId)
+    this.selectProduct(hit.productId, hit.skuId, { keepRecent: true })
     // 「上次进价」的归属算**店主**的：这个数是他点这枚 chip 主动要来的，不是系统
     // 追平出来的。标 false 的话，他去别的页面转一圈回来，onShow 回填就会把这个数
     // 无声换成档案进价 —— 那正是本次要修的那种静默改数，只是换了个方向。
     // （旧实现里这个值靠身份判据也能活过回填，标 true 是把那份行为原样接住。）
-    this.setData({ unitPrice: hit.unitPrice, priceTouched: true })
+    this.setData({ unitPrice: hit.unitPrice, priceTouched: true, recentKey: hit.key })
     this.refreshAmount()
   },
 

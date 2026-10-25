@@ -26,7 +26,7 @@
       <view class="muted recent-label">最近进货（点选带出，只改数量）</view>
       <view class="chips recent-chips">
         <view
-          class="chip js-purchase-recent"
+          class="chip js-purchase-recent {{recentKey === item.key ? 'on' : ''}}"
           wx:for="{{recent}}"
           wx:key="key"
           data-key="{{item.key}}"
