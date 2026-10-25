@@ -69,7 +69,7 @@
 .cd-note {
   margin-top: 24rpx;
   font-size: var(--fs-caption);
-  color: var(--color-text-muted);
+  color: var(--color-text-debt); /* 稿 4:1024 text/debt */
   line-height: 1.4;
 }
 
@@ -108,9 +108,10 @@
 }
 
 .cd-btn-cancel {
+  /* 稿 btn/取消 13:43：neutral/100 实底，无描边 */
   background: var(--color-fill-ghost);
   color: var(--color-text-primary);
-  border: 2rpx solid var(--color-border-default);
+  border: none;
 }
 
 .cd-btn-danger {
